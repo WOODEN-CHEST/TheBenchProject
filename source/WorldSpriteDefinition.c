@@ -130,7 +130,7 @@ static Error ReadSpriteAnimation(const ParseContext* context, JSONCompound* root
     return Error_CreateSuccess();
 }
 
-/* Whether the root holds @p key. */
+/* Whether a compound of the definition holds @p key. */
 static Error HasKey(const ParseContext* context, JSONCompound* root, const unsigned char* key, bool* outFound)
 {
     JSONObjectValue Value;
@@ -166,7 +166,8 @@ static Error ReadSettings(const ParseContext* context, JSONCompound* root)
     return Result;
 }
 
-/* "render": the render flags, through the render table (a key left out keeps its default). */
+/* "render": the render flags, through the render table (a key left out keeps its default). A shadow_distance given
+ * without has_shadow_distance is the world sprite's own (the hand-written form), as the root's draw distance. */
 static Error ReadRender(const ParseContext* context, JSONCompound* root)
 {
     JSONObjectValue Value;
@@ -193,6 +194,20 @@ static Error ReadRender(const ParseContext* context, JSONCompound* root)
         {
             Result = WrapError(context, &Result);
         }
+    }
+    bool HasFlag = false;
+    bool HasValue = false;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = HasKey(context, Render, (const unsigned char*)u8"has_shadow_distance", &HasFlag);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = HasKey(context, Render, (const unsigned char*)u8"shadow_distance", &HasValue);
+    }
+    if ((Result.Code == ErrorCode_Success) && !HasFlag && HasValue)
+    {
+        context->Definition->Settings.Render.HasShadowDistance = true;
     }
     return Result;
 }

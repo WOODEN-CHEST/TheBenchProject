@@ -186,3 +186,37 @@ WorldRenderCascade WorldRenderSpace_GetCascade(Vector3Double origin, Vector3Doub
  */
 WorldRenderCascade WorldRenderSpace_StepCascade(WorldRenderCascadeGrid* grid, Vector3Double origin, Vector3 towardLight,
     const WorldRenderCascadeShape* shape);
+
+/** @brief A cascade's light looks at its box with world +Y as its up vector, or +Z while the light stands this close to
+ *  straight up or down (the absolute y of its unit direction above it), so the light's view never degenerates. Near
+ *  that switch the box's axes turn fastest about the light: up to 1 + 1 / sqrt(1 - y^2) radians per radian the light
+ *  turns. */
+#define WORLD_RENDER_SPACE_CASCADE_STRAIGHT_UP_Y 0.99f
+
+/**
+ * @brief Whether two lights give their cascades the same up vector (WORLD_RENDER_SPACE_CASCADE_STRAIGHT_UP_Y): across
+ *        the switch a box turns about the light by as much as its light stands off world +Z, so boxes kept from before
+ *        it and boxes built after it no longer line up.
+ * @param a The unit direction toward one light.
+ * @param b The unit direction toward the other.
+ * @returns true when both take the same up vector.
+ */
+bool WorldRenderSpace_HasSameCascadeUp(Vector3 a, Vector3 b);
+
+/**
+ * @brief A cascade's matrices for a box centred exactly at a point of the world, relative to a frame's origin: the box
+ *        a map was rendered with in an earlier frame (its Anchor then, and the light it was rendered from), for a frame
+ *        that reads the map without rendering it again.
+ *
+ * The light's axes are WorldRenderSpace_GetCascade's for @p towardLight; nothing is snapped: the box's centre in render
+ * space (Center) is @p center minus @p origin, subtracted in double (a camera that moved since puts it off the origin,
+ * along the light too). A point of the world keeps the light clip coordinates it had in the frame the box was built
+ * for, up to float rounding, however the origin moved. Constant time; no allocation.
+ * @param origin The frame's origin (the camera's world position).
+ * @param center The box's centre in the world (a WorldRenderCascade's Anchor).
+ * @param towardLight The unit direction toward the light the box looks along.
+ * @param shape The cascade's size; must not be NULL.
+ * @returns The cascade's matrices and centre in render space; its Anchor is @p center.
+ */
+WorldRenderCascade WorldRenderSpace_GetCascadeAt(Vector3Double origin, Vector3Double center, Vector3 towardLight,
+    const WorldRenderCascadeShape* shape);

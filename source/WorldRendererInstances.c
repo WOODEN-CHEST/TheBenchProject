@@ -45,9 +45,10 @@ _Static_assert(offsetof(WorldInstanceRecord, Random) == (offsetof(WorldInstanceR
 
 // Types.
 /* How one pass draws the copies of a cell: the pass the C mirror evaluates for; the instanced twin, its uniforms and
- * (in the lit pass) its PBR program, or NULL to draw one at a time; and for the one-at-a-time draws the ordinary
- * shaders, their dither (NULL: solid) and whether the pass is lit. A plain value type; everything in it is borrowed for
- * the pass. */
+ * (in the lit pass) its PBR program, or NULL to draw one at a time; for the one-at-a-time draws the ordinary shaders,
+ * their dither (NULL: solid) and whether the pass is lit; and for a light's shadow pass (IsCast: a shadow level, Level,
+ * or the cube shadow, Level NULL) what its copies cast with: their shadow distance and shadow LOD, the level's size cut
+ * and LOD distance. A plain value type; everything in it is borrowed for the pass. */
 typedef struct CopyPassStruct
 {
     WorldInstancePass Pass;
@@ -57,6 +58,8 @@ typedef struct CopyPassStruct
     WorldRendererMeshShaders OrdinaryShaders;
     const WorldRendererDitherLocations* OrdinaryDither;
     bool IsLit;
+    bool IsCast;
+    const WorldRendererShadowLevelFrame* Level;
 } CopyPass;
 
 
@@ -67,18 +70,41 @@ static float SanitizeZoomFactor(float zoomFactor)
     return (isfinite(zoomFactor) && (zoomFactor > 0.0f)) ? zoomFactor : 1.0f;
 }
 
-/* What every copy of an entry needs this frame (the instanced vertex stage's uniforms, the C mirror's view). */
-static WorldInstanceView GetView(const WorldRenderInstances* entry, float zoomFactor, float drawDistanceScale)
+/* What every copy of an entry needs this frame in a pass (the instanced vertex stage's uniforms, the C mirror's view): in
+ * a light's shadow pass also the shadow distance in effect (the visibility's rule, so a copy's shadow ends where its
+ * cell's does), its own shadow LOD, and the level's size cut and zoomed LOD distance; elsewhere none of them limits a
+ * copy. */
+static WorldInstanceView GetView(const WorldRenderer* self, const CopyPass* pass, const WorldRenderInstances* entry,
+    float zoomFactor, float drawDistanceScale)
 {
     WorldInstanceView View;
     Memory_Zero(&View, sizeof(View));
     View.ZoomFactor = SanitizeZoomFactor(zoomFactor);
-    WorldInstancing_SetDrawDistance(&View, WorldVisibility_ScaleDrawDistance(entry->DrawDistance,
-        entry->IsDrawDistanceFixed, drawDistanceScale));
+    float DrawDistance = WorldVisibility_ScaleDrawDistance(entry->DrawDistance, entry->IsDrawDistanceFixed,
+        drawDistanceScale);
+    WorldInstancing_SetDrawDistance(&View, DrawDistance);
     View.ObjectOpacity = (float)entry->Tint.a / 255.0f;
     View.BoundsCenter = entry->Bounds.Center;
     View.BoundsRadius = entry->Bounds.Radius * entry->WorldStretch;
     View.Bands = entry->Bands;
+    WorldInstancing_SetShadowDistance(&View, INFINITY);
+    View.ShadowLod = -1;
+    if (pass->IsCast)
+    {
+        WorldInstancing_SetShadowDistance(&View, WorldVisibility_ScaleShadowDistance(DrawDistance,
+            entry->HasShadowDistance, entry->ShadowDistance, entry->IsDrawDistanceFixed, entry->IsShadowDistanceFixed,
+            drawDistanceScale, WorldRendererCommon_ConfigShadowDistanceScale(self)));
+        if (entry->HasShadowLod && (View.Bands.LodCount > 0U))
+        {
+            size_t LastLod = View.Bands.LodCount - 1U;
+            View.ShadowLod = (int)((entry->ShadowLod < LastLod) ? (size_t)entry->ShadowLod : LastLod);
+        }
+        if (pass->Level != NULL)
+        {
+            View.ShadowMinRadius = 0.5f * WORLD_SHADOW_SIZE_CUT_TEXELS * pass->Level->Texel;
+            View.ShadowLodDistance = pass->Level->LodDistance * View.ZoomFactor;
+        }
+    }
     return View;
 }
 
@@ -115,6 +141,12 @@ static void PrepareInstancing(Shader shader, WorldInstancePass pass, WorldRender
     outLocations->_locBoundsCenter = GetShaderLocation(shader, "instanceBoundsCenter");
     outLocations->_locBoundsRadius = GetShaderLocation(shader, "instanceBoundsRadius");
     outLocations->_locLodTransform = GetShaderLocation(shader, "instanceLodTransform");
+    outLocations->_locShadowDistance = GetShaderLocation(shader, "instanceShadowDistance");
+    outLocations->_locShadowFadeStart = GetShaderLocation(shader, "instanceShadowFadeStart");
+    outLocations->_locShadowFadeBand = GetShaderLocation(shader, "instanceShadowFadeBand");
+    outLocations->_locShadowMinRadius = GetShaderLocation(shader, "instanceShadowMinRadius");
+    outLocations->_locShadowLodDistance = GetShaderLocation(shader, "instanceShadowLodDistance");
+    outLocations->_locShadowLod = GetShaderLocation(shader, "instanceShadowLod");
     int Pass = (int)pass;
     SetShaderValue(shader, GetShaderLocation(shader, "instancePass"), &Pass, SHADER_UNIFORM_INT);
 }
@@ -153,6 +185,12 @@ static void UploadView(Shader shader, const WorldRendererInstancingLocations* lo
     SetShaderValue(shader, locations->_locObjectOpacity, &view->ObjectOpacity, SHADER_UNIFORM_FLOAT);
     SetShaderValue(shader, locations->_locBoundsCenter, BoundsCenter, SHADER_UNIFORM_VEC3);
     SetShaderValue(shader, locations->_locBoundsRadius, &view->BoundsRadius, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, locations->_locShadowDistance, &view->ShadowDistance, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, locations->_locShadowFadeStart, &view->ShadowFadeStart, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, locations->_locShadowFadeBand, &view->ShadowFadeBand, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, locations->_locShadowMinRadius, &view->ShadowMinRadius, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, locations->_locShadowLodDistance, &view->ShadowLodDistance, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, locations->_locShadowLod, &view->ShadowLod, SHADER_UNIFORM_INT);
 }
 
 /* Points the instance attributes at a cell's records (from @p firstRecord in @p buffer), one record per copy. The
@@ -325,7 +363,7 @@ static void DrawCellLodInstanced(WorldRenderer* self, const CopyPass* pass, cons
  * then every LOD of the cell's mask the pass draws it with, dithered as the instanced draw would. The copy's tint
  * multiplies the object's (its opacity is in the fade). */
 static void DrawCellCopies(WorldRenderer* self, const CopyPass* pass, const WorldRenderInstances* entry,
-    const WorldRenderInstanceCell* cell, const WorldInstanceView* view)
+    const WorldRenderInstanceCell* cell, const WorldInstanceView* view, uint32_t lodMask)
 {
     size_t RecordCount = 0U;
     const WorldInstanceRecord* Records = WorldInstanceCells_GetRecords(entry->Cells, &RecordCount);
@@ -337,14 +375,16 @@ static void DrawCellCopies(WorldRenderer* self, const CopyPass* pass, const Worl
     for (size_t Record = cell->FirstRecord; Record < (cell->FirstRecord + cell->RecordCount); Record++)
     {
         const WorldInstanceRecord* Source = &Records[Record];
-        WorldInstanceState State = WorldInstancing_Evaluate(view, &cell->RenderMatrix, Source);
+        WorldInstanceState State = (pass->Pass == WorldInstancePass_Shadow)
+            ? WorldInstancing_EvaluateShadow(view, &cell->RenderMatrix, Source)
+            : WorldInstancing_Evaluate(view, &cell->RenderMatrix, Source);
         Copy.RenderMatrix = MatrixMultiply(WorldInstanceRecord_GetMatrix(Source), cell->RenderMatrix);
         Copy.Tint = WorldRendererGeometry_MultiplyColor(entry->Tint,
             (Color){ Source->Tint.r, Source->Tint.g, Source->Tint.b, 255 });
         for (size_t Lod = 0U; Lod < view->Bands.LodCount; Lod++)
         {
             WorldInstanceDraw Draw = WorldInstancing_GetDraw(&State, pass->Pass, Lod);
-            if (!Draw.IsDrawn || ((cell->LodMask & ((uint32_t)1U << Lod)) == 0U))
+            if (!Draw.IsDrawn || ((lodMask & ((uint32_t)1U << Lod)) == 0U))
             {
                 continue;
             }
@@ -377,23 +417,46 @@ static bool DrawCell(WorldRenderer* self, const CopyPass* pass, const WorldRende
         return false;
     }
     const WorldRenderInstances* Entry = &Entries[cell->Entry];
-    WorldInstanceView View = GetView(Entry, zoomFactor, drawDistanceScale);
-    unsigned int Buffer = GetEntryBuffer(self, cell->Entry);
-    if ((pass->InstancedShader == NULL) || (Buffer == 0U))
+    WorldInstanceView View = GetView(self, pass, Entry, zoomFactor, drawDistanceScale);
+    uint32_t LodMask = cell->LodMask;
+    if (pass->Pass == WorldInstancePass_Shadow)
     {
-        DrawCellCopies(self, pass, Entry, cell, &View);
-        return false;
+        // The LODs the pass's copies can cast with: the cell's range of zoomed distances, each raised to the level's LOD
+        // distance, or the shadow LOD alone.
+        float CenterDistance = Vector3Length(cell->RenderCenter);
+        LodMask = WorldInstancing_GetShadowLodMask(&View, cell->LodMask,
+            fmaxf(CenterDistance - cell->Radius, 0.0f) * View.ZoomFactor, (CenterDistance + cell->Radius) * View.ZoomFactor);
     }
-    UploadView(*pass->InstancedShader, pass->Instancing, &View);
-    WorldRenderModel Placement = MakeCopyModel(Entry);
-    for (size_t Lod = 0U; Lod < View.Bands.LodCount; Lod++)
+    // A two-sided component's copies cast from both faces (the pass culls one otherwise).
+    bool IsTwoSided = pass->IsCast && Entry->HasTwoSidedShadows;
+    if (IsTwoSided)
     {
-        if ((cell->LodMask & ((uint32_t)1U << Lod)) != 0U)
+        rlDisableBackfaceCulling();
+    }
+    unsigned int Buffer = GetEntryBuffer(self, cell->Entry);
+    bool IsInstanced = (pass->InstancedShader != NULL) && (Buffer != 0U);
+    if (!IsInstanced)
+    {
+        DrawCellCopies(self, pass, Entry, cell, &View, LodMask);
+    }
+    else
+    {
+        UploadView(*pass->InstancedShader, pass->Instancing, &View);
+        WorldRenderModel Placement = MakeCopyModel(Entry);
+        for (size_t Lod = 0U; Lod < View.Bands.LodCount; Lod++)
         {
-            DrawCellLodInstanced(self, pass, &Placement, Lod, cell, Buffer);
+            if ((LodMask & ((uint32_t)1U << Lod)) != 0U)
+            {
+                DrawCellLodInstanced(self, pass, &Placement, Lod, cell, Buffer);
+            }
         }
     }
-    return true;
+    if (IsTwoSided)
+    {
+        rlEnableBackfaceCulling();
+        rlSetCullFace((pass->Level != NULL) ? RL_CULL_FACE_FRONT : RL_CULL_FACE_BACK);
+    }
+    return IsInstanced;
 }
 
 /* Finds the buffer holding a build, looking at @p cursor first (the buffers follow the entries' order) and moving it
@@ -499,7 +562,7 @@ void WorldRendererInstances_LoadShaders(WorldRenderer* self)
         State->_normalLocHazeMultiplier = GetShaderLocation(GameShader_GetRaylibShader(State->_normalShader),
             "hazeMultiplier");
     }
-    State->_depthShader = (self->_cascades._depthShader != NULL) ? LoadTwin(self, DEPTH_INSTANCED_SHADER_ASSET_NAME,
+    State->_depthShader = (self->_shadowLevels._depthShader != NULL) ? LoadTwin(self, DEPTH_INSTANCED_SHADER_ASSET_NAME,
         WorldInstancePass_Shadow, &State->_depthDither, &State->_depthInstancing) : NULL;
     State->_cubeDepthShader = (self->_pointShadow._shader != NULL) ? LoadTwin(self,
         CUBE_DEPTH_INSTANCED_SHADER_ASSET_NAME, WorldInstancePass_Shadow, &State->_cubeDither, &State->_cubeInstancing)
@@ -683,7 +746,7 @@ void WorldRendererInstances_DrawNormals(WorldRenderer* self, const WorldRenderFr
 }
 
 void WorldRendererInstances_DrawCasters(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
-    const WorldRendererDitherLocations* dither, WorldVisibilityPass pass)
+    const WorldRendererDitherLocations* dither, WorldVisibilityPass pass, const WorldRendererShadowLevelFrame* level)
 {
     WorldRendererInstanceState* State = &self->_instances;
     bool IsCube = (pass == WorldVisibilityPass_PointShadow);
@@ -706,7 +769,9 @@ void WorldRendererInstances_DrawCasters(WorldRenderer* self, const WorldRenderFr
         .InstancedLitProgram = NULL,
         .OrdinaryShaders = { .Rigid = &shader, .Skinned = NULL, .Palette = NULL, .IsCameraView = false },
         .OrdinaryDither = dither,
-        .IsLit = false
+        .IsLit = false,
+        .IsCast = !IsSky,
+        .Level = level
     };
     float DrawDistanceScale = WorldRendererCommon_ConfigDrawDistanceScale(self);
     size_t CellCount = 0U;
@@ -767,7 +832,8 @@ void WorldRendererInstances_LogStatus(const WorldRenderer* self)
         {
             continue;
         }
-        WorldInstanceView View = GetView(Entry, self->_instances._lastZoomFactor,
+        const CopyPass LitPass = { .Pass = WorldInstancePass_Lit };
+        WorldInstanceView View = GetView(self, &LitPass, Entry, self->_instances._lastZoomFactor,
             self->_instances._lastDrawDistanceScale);
         for (size_t Record = Cell->FirstRecord; Record < (Cell->FirstRecord + Cell->RecordCount); Record++)
         {

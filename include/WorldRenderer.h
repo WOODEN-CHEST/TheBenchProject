@@ -21,8 +21,8 @@
  * PIPELINE. The world is drawn into an internal floating-point (HDR) "scene" target, then tonemapped into the
  * caller's frame target. With pixelation enabled (default) the scene target is sized to the low pixel
  * resolution (~640 on the long axis, square pixels) and point-upscaled, giving the game's chunky pixel look.
- * In order: the shadow cascades of the sky's shadow light (the sun by day, the moon on bright nights) and the
- * point-light cube shadow; a normal/flag G-buffer and screen-space ambient occlusion (applied to the ambient term
+ * In order: the shadow levels of the sky's shadow light (the sun by day, the moon on bright nights: nested maps around
+ * the camera, each four times as wide as the one before, out to the world's reach) and the point-light cube shadow; a normal/flag G-buffer and screen-space ambient occlusion (applied to the ambient term
  * only); the scene pass (atmospheric sky with the moon, the moonlit sky, the Milky Way and light pollution's skyglow,
  * the star field, PBR-lit models with the sun, the moon and forward-shaded point lights in the haze, lit sprites
  * (cutout, then decals, then blended and additive ones back to front), debug grid and light gizmos; the sky's dim light
@@ -33,11 +33,11 @@
  * RENDER SPACE. Everything is drawn relative to the camera: the camera's position (a double) is each frame's origin,
  * every position the GPU sees is a position minus that origin, subtracted in double and rounded once, and the view only
  * turns. So nothing shakes far from the world's origin (the sky's rays come from the rotation alone), and the shadow
- * cascades, centred on the camera, snap to their texel grids so their edges stand still while the camera moves.
+ * levels, centred on the camera, snap to their texel grids so their edges stand still while the camera moves.
  *
- * VISIBILITY. Each frame the camera's passes draw only what is in the camera's view; each shadow cascade draws the
- * casters in its own box (a caster behind the camera still shadows what is in view), the cube shadow the casters in its
- * light's reach. Every object has its own draw distance (its world model's or world sprite's, a sprite's kind's when
+ * VISIBILITY. Each frame the camera's passes draw only what is in the camera's view; each shadow level draws the
+ * casters in its own box that are large enough for its texels (a caster behind the camera still shadows what is in
+ * view), within their shadow distances and the world's reach, the cube shadow the casters in its light's reach. Every object has its own draw distance (its world model's or world sprite's, a sprite's kind's when
  * its world sprite gives none: 150 m, decals 60 m, or its placement's own; times the config's draw_distance_scale unless
  * it is fixed, and pushed out by a narrower field of view): beyond it the object is not drawn, and over its last tenth
  * (at least 3 m) it fades out. An object's opacity (its tint's) fades it the same way. Models and cutout sprites show
@@ -92,6 +92,8 @@ typedef struct WorldRendererStruct WorldRenderer;
 /** @brief How many slices the haze's volume has (WorldRenderer_SetHazeView): WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT
  *  (source/WorldAtmosphere.h, checked there). */
 #define WORLD_RENDERER_HAZE_SLICE_COUNT 32
+/** @brief The most shadow levels the status reports on (the most there may be). */
+#define WORLD_RENDERER_STATUS_MAX_SHADOW_LEVELS 8U
 
 
 // Types.
@@ -106,7 +108,8 @@ typedef enum WorldRendererFeatureEnum
     WorldRendererFeature_Tonemap,
     /** @brief The sprites: the lit sprite shader and the sprite quad. Without them sprites are not drawn at all. */
     WorldRendererFeature_SpriteShading,
-    /** @brief The two shadow cascades, cast by the sun (inactive while the moon casts them, or neither). */
+    /** @brief The shadow levels, cast by the sun (inactive while the moon casts them, or neither; unavailable without
+     *  their depth shader or the GL functions of their maps). */
     WorldRendererFeature_SunShadows,
     /** @brief The cube shadow of the shadow-casting point light nearest the camera. */
     WorldRendererFeature_PointLightShadow,
@@ -125,8 +128,7 @@ typedef enum WorldRendererFeatureEnum
     WorldRendererFeature_Stars,
     /** @brief The Milky Way in the sky (unavailable without its texture; inactive while it cannot be seen). */
     WorldRendererFeature_MilkyWay,
-    /** @brief The two shadow cascades, cast by the moon (on bright nights, once it is the brighter light and high
-     *  enough). */
+    /** @brief The shadow levels, cast by the moon (on bright nights, once it is the brighter light and high enough). */
     WorldRendererFeature_MoonShadows,
     /** @brief The moon's disc in the sky (inactive while it is below the horizon, near the sun, or switched off; drawn
      *  flat grey without its texture). */
@@ -189,10 +191,10 @@ typedef enum WorldRendererFeatureEnum
      *  while the camera is inside. Unavailable without the PBR shader; active while interior lighting is on and a shown
      *  object has an ambient zone. */
     WorldRendererFeature_AmbientZones,
-    /** @brief Contact shadows: from the camera's pixels, a short march toward the light the shadow cascades are rendered
-     *  from closes the seam the cascades' texels leave at the foot of every caster. Unavailable without the ambient
+    /** @brief Contact shadows: from the camera's pixels, a short march toward the light the shadow levels are rendered
+     *  from closes the seam the levels' texels leave at the foot of every caster. Unavailable without the ambient
      *  pre-pass (the same needs as ambient occlusion: its shaders and a G-buffer with samplable depth); active while
-     *  the cascades run and contact shadows are switched on (WorldRenderer_SetContactShadowsEnabled). */
+     *  the levels run and contact shadows are switched on (WorldRenderer_SetContactShadowsEnabled). */
     WorldRendererFeature_ContactShadows,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
@@ -292,7 +294,7 @@ typedef struct WorldRendererStatusStruct
     size_t LightCount;
     /** @brief Stars in the star catalogue (from the environment's StarDensity), whether or not they show now. */
     size_t StarCount;
-    /** @brief Whether the camera's frustum and the cascades' boxes culled (WorldRenderer_SetCullingEnabled). */
+    /** @brief Whether the camera's frustum and the shadow levels' boxes culled (WorldRenderer_SetCullingEnabled). */
     bool IsCullingEnabled;
     /** @brief Models and sprites the camera's passes drew. */
     size_t DrawnModelCount;
@@ -390,6 +392,17 @@ typedef struct WorldRendererStatusStruct
     float CameraSceneLuminance;
     float ExposureBias;
     WorldRendererInteriorView InteriorView;
+    /** @brief The sun's and the moon's shadow levels in the last render (while they ran): how many were used and which
+     *  rendered (bit k for level k), the reach (metres), the maps' size (texels a side), each used level's width (metres)
+     *  and the casters each rendering level drew (models, instance cells, terrain chunks and sprites together), and
+     *  whether the debug view was on (WorldRenderer_SetShadowLevelViewEnabled). */
+    uint32_t ShadowLevelCount;
+    uint32_t ShadowLevelRenderedMask;
+    float ShadowReach;
+    int ShadowMapSize;
+    float ShadowLevelSizes[WORLD_RENDERER_STATUS_MAX_SHADOW_LEVELS];
+    size_t ShadowLevelCasterCounts[WORLD_RENDERER_STATUS_MAX_SHADOW_LEVELS];
+    bool IsShadowLevelViewEnabled;
     /** @brief How long the render took on the CPU, in milliseconds (WorldRenderer_RenderToTarget from its start to its
      *  return; the GPU works on after it, and its share shows in the frame time when it is the slower), and the time
      *  since the render before, as the caller gave it (its deltaSeconds; 0 when that was not above 0). */
@@ -623,19 +636,36 @@ void WorldRenderer_SetPostEffectsEnabled(WorldRenderer* self, bool enabled);
 bool WorldRenderer_ArePostEffectsEnabled(const WorldRenderer* self);
 
 /**
- * @brief Enables or disables the contact shadows (an A/B for the seam the shadow cascades leave at the foot of what
+ * @brief Enables or disables the contact shadows (an A/B for the seam the shadow levels leave at the foot of what
  *        casts a shadow). Default enabled. Applied on the next render.
  * @param self The renderer; must not be NULL.
- * @param enabled true to draw contact shadows while the cascades run.
+ * @param enabled true to draw contact shadows while the levels run.
  */
 void WorldRenderer_SetContactShadowsEnabled(WorldRenderer* self, bool enabled);
 
 /**
  * @brief Reports whether contact shadows are enabled.
  * @param self The renderer; must not be NULL.
- * @returns true if they are drawn while the cascades run (given the ambient pre-pass is available).
+ * @returns true if they are drawn while the levels run (given the ambient pre-pass is available).
  */
 bool WorldRenderer_AreContactShadowsEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Switches the shadow levels' debug view: every lit surface tinted by the level its shadow comes from (red, green,
+ *        blue, yellow, magenta, cyan, orange, white from the first level out), mixed across the bands between levels,
+ *        and darkened where no level reaches (beyond the levels or the world's reach). Off by default. Applied on the next
+ *        render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true to show it.
+ */
+void WorldRenderer_SetShadowLevelViewEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether the shadow levels' debug view is on (see WorldRenderer_SetShadowLevelViewEnabled).
+ * @param self The renderer; must not be NULL.
+ * @returns true if on.
+ */
+bool WorldRenderer_IsShadowLevelViewEnabled(const WorldRenderer* self);
 
 /**
  * @brief Enables or disables the eye's night vision: dim reflected and scattered light losing its colour into a faintly
@@ -675,7 +705,7 @@ bool WorldRenderer_IsSpriteLightingEnabled(const WorldRenderer* self);
 
 /**
  * @brief Enables or disables frustum culling: the camera's passes drawing only what is in its view, and each shadow
- *        cascade only the casters in its box.
+ *        level only the casters in its box.
  *
  * A code-side toggle for A/B-ing it: when disabled every object within its draw distance is drawn (the GPU clips what
  * lies outside the view); the image must not change, only the frame time. Draw distances,

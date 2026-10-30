@@ -119,6 +119,10 @@ typedef struct WorldRenderModelStruct
     /** @brief The LOD drawn and the cross-fade (WorldLod.h), kept across frames: picked by WorldRenderCache_UpdateLods,
      *  started afresh when the world model is resolved again or the entry was not drawn. */
     WorldLodState Lod;
+    /** @brief The LOD settings in effect this frame (WorldModelComponent_ResolveLodSettings, by
+     *  WorldRenderCache_UpdateLods; zeroed while the entry is not drawn): the shadow levels pick their casters' LODs with
+     *  them. */
+    WorldModelLodSettings LodSettings;
     /** @brief Whether the placement's own LOD distances were refused last frame (its list does not fit the world model):
      *  the warning is logged when this turns true. */
     bool IsLodListRefused;
@@ -142,8 +146,19 @@ typedef struct WorldRenderModelStruct
      *  override flags are on (WorldModelComponent_ResolveSettings). */
     bool HasOutline;
     bool OmitsPixelation;
-    WorldShadowTier ShadowTier;
     bool CastsShadows;
+    /** @brief The shadows' settings in effect (WorldModelSettings): whether the shadow distance is one of its own, the
+     *  distance (metres, times the component's multiplier; without one of its own, the draw distance in effect times it,
+     *  which the renderer scales as a draw distance), whether the player's shadow_distance_scale leaves it as it is,
+     *  whether the model only casts and is not drawn, whether it casts from both faces, and the LOD it casts with while
+     *  HasShadowLod (the raw index: past the last LOD, the last). */
+    bool HasShadowDistance;
+    float ShadowDistance;
+    bool IsShadowDistanceFixed;
+    bool IsShadowOnly;
+    bool HasTwoSidedShadows;
+    bool HasShadowLod;
+    uint32_t ShadowLod;
     /** @brief The haze multiplier in effect: the lit passes multiply the haze in front of the model by it. */
     float Haze;
     /** @brief Whether it keeps the sky's light off what lies under it (in effect): the sky's occupancy volume draws it. */
@@ -214,6 +229,14 @@ typedef struct WorldRenderSpriteStruct
     float DecalOffset;
     /** @brief Whether it casts shadows (only cutout sprites that are not decals cast). */
     bool CastsShadows;
+    /** @brief The shadows' settings in effect (WorldSpriteRenderSettings): whether the shadow distance is one of its own,
+     *  the distance (metres, times the component's multiplier; without one of its own, the draw distance in effect times
+     *  it, which the renderer scales as a draw distance), whether the player's shadow_distance_scale leaves it as it is,
+     *  and whether the sprite only casts and is not drawn. */
+    bool HasShadowDistance;
+    float ShadowDistance;
+    bool IsShadowDistanceFixed;
+    bool IsShadowOnly;
     /** @brief The outline setting. */
     bool HasOutline;
     /** @brief Whether it is drawn crisp: omit_pixelation on a cutout sprite that is not a decal (the crisp overlay
@@ -282,8 +305,13 @@ typedef struct WorldRenderTerrainChunkStruct
     /** @brief The settings in effect (this frame): the terrain's, or the placement's own while their override flags are
      *  on (WorldTerrainComponent_ResolveSettings). Terrain is never crisp. */
     bool HasOutline;
-    WorldShadowTier ShadowTier;
     bool CastsShadows;
+    /** @brief The shadow distance in effect (TerrainRenderSettings): whether it is one of its own, the distance (metres,
+     *  times the placement's multiplier; without one of its own, the draw distance in effect times it, which the
+     *  renderer scales as a draw distance) and whether the player's shadow_distance_scale leaves it as it is. */
+    bool HasShadowDistance;
+    float ShadowDistance;
+    bool IsShadowDistanceFixed;
     /** @brief The haze multiplier in effect. */
     float Haze;
     /** @brief The draw distance in effect, in metres, times the placement's multiplier (>= 0: +infinity never fades),
@@ -343,10 +371,17 @@ typedef struct WorldRenderInstancesStruct
      *  and visible. */
     bool IsDrawn;
     /** @brief The settings in effect (this frame; WorldModelInstancesComponent_ResolveSettings, never crisp): the
-     *  haze multiplier among them, which the lit pass takes for every cell of the entry. */
+     *  haze multiplier among them, which the lit pass takes for every cell of the entry; the shadows' as a model's
+     *  (WorldRenderModel). */
     bool HasOutline;
-    WorldShadowTier ShadowTier;
     bool CastsShadows;
+    bool HasShadowDistance;
+    float ShadowDistance;
+    bool IsShadowDistanceFixed;
+    bool IsShadowOnly;
+    bool HasTwoSidedShadows;
+    bool HasShadowLod;
+    uint32_t ShadowLod;
     float Haze;
     bool OccludesSky;
     float DrawDistance;
@@ -372,10 +407,16 @@ typedef struct WorldRenderInstanceCellStruct
     /** @brief Its records in the entry's cells: RecordCount of them from FirstRecord. */
     size_t FirstRecord;
     size_t RecordCount;
-    /** @brief The entry's settings in effect, for the visibility. */
+    /** @brief The entry's settings in effect, for the visibility and the passes (the shadows' as a model's). */
     bool HasOutline;
-    WorldShadowTier ShadowTier;
     bool CastsShadows;
+    bool HasShadowDistance;
+    float ShadowDistance;
+    bool IsShadowDistanceFixed;
+    bool IsShadowOnly;
+    bool HasTwoSidedShadows;
+    bool HasShadowLod;
+    uint32_t ShadowLod;
     bool OccludesSky;
     float DrawDistance;
     bool IsDrawDistanceFixed;

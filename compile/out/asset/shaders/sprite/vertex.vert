@@ -18,9 +18,9 @@ uniform mat4 matProjection;
 
 uniform vec4 uvRect;        // the animation frame's area in its texture, normalized: x, y (top left), width, height
 
-// Lit pass only (world_sprite): the sprite as the cascades' light and as the cube shadow's light see it. A billboard's
-// shadow-map entry faces the light, so its shadow is read on that light-facing quad, at the point matching this one;
-// the sprite then never shadows itself where its two quads cross.
+// Lit pass only (world_sprite): the sprite as the shadow levels' light and as the cube shadow's light see it. A
+// billboard's shadow-map entry faces the light, so its shadow is read on that light-facing quad, at the point matching
+// this one; the sprite then never shadows itself where its two quads cross.
 uniform mat4 matShadowModel;
 uniform mat4 matPointShadowModel;
 // Lit pass only: metres a decal is pushed off its surface along its normal, toward the side the camera is on (0 for
@@ -30,7 +30,7 @@ uniform float decalOffset;
 out vec3 fragPosition;            // render-space position (with a decal's push)
 out vec2 fragTexCoord;
 out vec3 fragNormal;              // world normal of the quad (not yet turned toward the viewer)
-out vec3 fragShadowPosition;      // where the cascades are read
+out vec3 fragShadowPosition;      // where the shadow levels are read
 out vec3 fragShadowNormal;
 out vec3 fragPointShadowPosition; // where the cube shadow is read
 out vec3 fragPointShadowNormal;

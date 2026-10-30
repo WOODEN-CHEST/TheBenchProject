@@ -60,6 +60,8 @@
 /** Default forward scattering of the ground haze (the phase function's g): a mist's droplets are larger than the air's
  *  haze, and their glow around the sun tighter. */
 #define DEFAULT_GROUND_HAZE_GLOW 0.8f
+/** How far the sun's and the moon's shadows reach by default, in metres. */
+#define DEFAULT_SHADOW_REACH 4000.0f
 /** Default post-effect strength multiplier applied to bloom/sunshafts/shadows. */
 #define DEFAULT_EFFECT_STRENGTH 1.0f
 /** Default night vision strength: the eye's. */
@@ -105,7 +107,7 @@
 #define SHADOW_LIGHT_HANDOVER_RATIO 4.0f
 /** A shadow light dimmer than this luminance (relative: the sun at noon is about 0.9, the default full moon high up
  *  about 0.025) casts no shadows, fading in to full at twice it: a thin crescent's shadow could not show against the
- *  night's ambient light, and skipping it saves the cascade pass. */
+ *  night's ambient light, and skipping it saves the shadow levels' passes. */
 #define SHADOW_LIGHT_MIN_LUMINANCE 0.0006f
 
 /* The inspector's categories. */
@@ -572,6 +574,14 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_EFFECTS,
         .DisplayName = u8"Shadow strength",
         .Description = u8"Multiplies how dark shadows are (with the player's own setting).", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"shadow_reach", .WireId = 63U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, ShadowReach), .Default.FloatValue = DEFAULT_SHADOW_REACH,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_SHADOW_REACH), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_EFFECTS, .DisplayName = u8"Shadow reach",
+        .Description = u8"How far from the camera the sun's and the moon's shadows reach, in metres (they fade out over "
+            u8"its last tenth; 0: none). The player's shadow quality may end them nearer.", .SinceVersion = 1U
     },
     {
         .Key = u8"is_ambient_occlusion_enabled", .WireId = 24U, .Type = PropertyType_Bool,

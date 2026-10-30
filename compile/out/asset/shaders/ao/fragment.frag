@@ -3,7 +3,7 @@
 // The ambient pre-pass, run before the scene's colour pass from the low-resolution normal/flag G-buffer's samplable
 // depth and surface flag. Per pixel it writes what the lit passes take off their light: in R the screen-space ambient
 // occlusion, a multiplier of the ambient term (1 fully open, < 1 occluded), never of the sun, the moon or lamps; in B
-// the contact light, what the contact shadows leave of the light the shadow cascades were rendered from (1 lit, 0 in a
+// the contact light, what the contact shadows leave of the light the shadow levels were rendered from (1 lit, 0 in a
 // contact shadow); in G the sky's visibility (common/interior: what keeps the sky out around the surface, its march turned
 // by the pixel's pattern), 1 while the occupancy volume is not drawn. The pass after it (ao_blur) blurs R and G into the
 // texture the lit passes read and passes B through.
@@ -19,8 +19,8 @@
 //
 // THE CONTACT SHADOWS: from each pixel, pixel by pixel along the line toward the shadow light on screen and over
 // contactLength metres, whether what the camera sees lies in front of that line (within CONTACT_THICKNESS of it). They
-// are exact at the scene's pixels where the cascades' texels and filter leave a seam: at the foot of every caster, where
-// a wall meets a roof. Only what the camera sees casts them, so they add to the cascades and never replace them.
+// are exact at the scene's pixels where the shadow levels' texels and filter leave a seam: at the foot of every caster,
+// where a wall meets a roof. Only what the camera sees casts them, so they add to the levels and never replace them.
 //
 // All sampling uses gl_FragCoord, as the other post passes do.
 
@@ -36,7 +36,7 @@ uniform vec2 resolution;         // G-buffer size in pixels
 uniform mat4 invProjection;      // inverse of the perspective projection used by the scene pass
 uniform mat4 projection;         // the perspective projection used by the scene pass (its scale gives pixels a metre)
 uniform float aoStrength;        // effective AO strength (config x world); 0 disables (R stays 1 = open)
-uniform vec3 contactLightDirection; // unit, view space: toward the light the shadow cascades were rendered from
+uniform vec3 contactLightDirection; // unit, view space: toward the light the shadow levels were rendered from
 uniform float contactLength;     // how far the contact shadows' march reaches, metres; 0 disables (B stays 1 = lit)
 uniform mat4 viewToRender;       // view space -> render space (the view's rotation undone), for the sky's visibility
 #include "common/depth"

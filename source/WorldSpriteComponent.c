@@ -63,6 +63,13 @@ typedef enum SpritePropertyEnum
     SpriteProperty_DrawDistanceMultiplier,
     SpriteProperty_OverridesIsDrawDistanceFixed,
     SpriteProperty_IsDrawDistanceFixed,
+    SpriteProperty_OverridesShadowDistance,
+    SpriteProperty_ShadowDistance,
+    SpriteProperty_ShadowDistanceMultiplier,
+    SpriteProperty_OverridesIsShadowDistanceFixed,
+    SpriteProperty_IsShadowDistanceFixed,
+    SpriteProperty_OverridesIsShadowOnly,
+    SpriteProperty_IsShadowOnly,
     SpriteProperty_Count
 } SpriteProperty;
 
@@ -71,8 +78,9 @@ typedef enum SpritePropertyEnum
 /* Every property, in inspector order: each override flag sits right before the value it switches on, and the values
  * share their rows with the world sprite's tables (WorldSpriteInternal.h). The wire ids are the save schema: never
  * renumber or reuse one; a removed property's id goes into the table's retired list. They do not follow the rows'
- * order: 1 is world_sprite, 2 to 16 the placement's own values and 17 to 31 their override flags, and the haze's pair
- * is 37 and 38 (the haze's id the world sprite's render table's). The next free wire id is 39. */
+ * order: 1 is world_sprite, 2 to 16 the placement's own values and 17 to 31 their override flags, the haze's pair is 37
+ * and 38 (the haze's id the world sprite's render table's), and the shadows' rows are 39 to 45 (their values' ids the
+ * render table's too). The next free wire id is 46. */
 static const PropertyDescriptor SpriteProperties[SpriteProperty_Count] =
 {
     [SpriteProperty_WorldSprite] =
@@ -213,6 +221,37 @@ static const PropertyDescriptor SpriteProperties[SpriteProperty_Count] =
         WORLD_SPRITE_ROW_IS_DRAW_DISTANCE_FIXED, .WireId = 36U,
         PROPERTY_MEMBER(WorldSpriteComponent, _isDrawDistanceFixed), .SinceVersion = 1U
     },
+    [SpriteProperty_OverridesShadowDistance] = OVERRIDE_ROW(WorldSpriteSetting_ShadowDistance, "shadow_distance", 39U,
+        WORLD_SPRITE_CATEGORY_SHADOWS, "shadow distance"),
+    [SpriteProperty_ShadowDistance] =
+    {
+        WORLD_SPRITE_ROW_SHADOW_DISTANCE, .WireId = 40U, PROPERTY_MEMBER(WorldSpriteComponent, _shadowDistance),
+        .SinceVersion = 1U
+    },
+    [SpriteProperty_ShadowDistanceMultiplier] =
+    {
+        .Key = u8"shadow_distance_multiplier", .WireId = 41U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldSpriteComponent, _shadowDistanceMultiplier), .Default.FloatValue = 1.0f,
+        .Rules = PROPERTY_RULES_ABOVE(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = WORLD_SPRITE_CATEGORY_SHADOWS,
+        .DisplayName = u8"Shadow distance multiplier",
+        .Description = u8"Multiplies the shadow distance in effect, the world sprite's or this object's, or the draw "
+            u8"distance when neither gives one: 0.5 casts half as far.",
+        .SinceVersion = 1U
+    },
+    [SpriteProperty_OverridesIsShadowDistanceFixed] = OVERRIDE_ROW(WorldSpriteSetting_IsShadowDistanceFixed,
+        "is_shadow_distance_fixed", 42U, WORLD_SPRITE_CATEGORY_SHADOWS, "fixed shadow distance"),
+    [SpriteProperty_IsShadowDistanceFixed] =
+    {
+        WORLD_SPRITE_ROW_IS_SHADOW_DISTANCE_FIXED, .WireId = 43U,
+        PROPERTY_MEMBER(WorldSpriteComponent, _isShadowDistanceFixed), .SinceVersion = 1U
+    },
+    [SpriteProperty_OverridesIsShadowOnly] = OVERRIDE_ROW(WorldSpriteSetting_IsShadowOnly, "is_shadow_only", 44U,
+        WORLD_SPRITE_CATEGORY_SHADOWS, "shadow only setting"),
+    [SpriteProperty_IsShadowOnly] =
+    {
+        WORLD_SPRITE_ROW_IS_SHADOW_ONLY, .WireId = 45U, PROPERTY_MEMBER(WorldSpriteComponent, _isShadowOnly),
+        .SinceVersion = 1U
+    },
 };
 
 static const PropertyTable SpriteTable =
@@ -249,6 +288,9 @@ static const SpriteProperty OverrideFlagRows[WorldSpriteSetting_Count] =
     [WorldSpriteSetting_Haze] = SpriteProperty_OverridesHaze,
     [WorldSpriteSetting_DrawDistance] = SpriteProperty_OverridesDrawDistance,
     [WorldSpriteSetting_IsDrawDistanceFixed] = SpriteProperty_OverridesIsDrawDistanceFixed,
+    [WorldSpriteSetting_ShadowDistance] = SpriteProperty_OverridesShadowDistance,
+    [WorldSpriteSetting_IsShadowDistanceFixed] = SpriteProperty_OverridesIsShadowDistanceFixed,
+    [WorldSpriteSetting_IsShadowOnly] = SpriteProperty_OverridesIsShadowOnly,
 };
 
 
@@ -501,6 +543,14 @@ static void ResolveDecalAndRender(const WorldSpriteComponent* self, WorldSpriteS
     if (self->_overrides[WorldSpriteSetting_Haze])
     {
         settings->Render.Haze = self->_haze;
+    }
+    if (self->_overrides[WorldSpriteSetting_IsShadowDistanceFixed])
+    {
+        settings->Render.IsShadowDistanceFixed = self->_isShadowDistanceFixed;
+    }
+    if (self->_overrides[WorldSpriteSetting_IsShadowOnly])
+    {
+        settings->Render.IsShadowOnly = self->_isShadowOnly;
     }
 }
 
@@ -759,6 +809,43 @@ Error WorldSpriteComponent_SetIsDrawDistanceFixed(WorldSpriteComponent* self, bo
     return SetBoolProperty(self, SpriteProperty_IsDrawDistanceFixed, &self->_isDrawDistanceFixed, isFixed);
 }
 
+Error WorldSpriteComponent_SetShadowDistance(WorldSpriteComponent* self, float shadowDistance)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldSpriteComponent_SetShadowDistance");
+    }
+    return SetFloatProperty(self, SpriteProperty_ShadowDistance, &self->_shadowDistance, shadowDistance);
+}
+
+Error WorldSpriteComponent_SetShadowDistanceMultiplier(WorldSpriteComponent* self, float multiplier)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldSpriteComponent_SetShadowDistanceMultiplier");
+    }
+    return SetFloatProperty(self, SpriteProperty_ShadowDistanceMultiplier, &self->_shadowDistanceMultiplier,
+        multiplier);
+}
+
+Error WorldSpriteComponent_SetIsShadowDistanceFixed(WorldSpriteComponent* self, bool isFixed)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldSpriteComponent_SetIsShadowDistanceFixed");
+    }
+    return SetBoolProperty(self, SpriteProperty_IsShadowDistanceFixed, &self->_isShadowDistanceFixed, isFixed);
+}
+
+Error WorldSpriteComponent_SetIsShadowOnly(WorldSpriteComponent* self, bool isShadowOnly)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldSpriteComponent_SetIsShadowOnly");
+    }
+    return SetBoolProperty(self, SpriteProperty_IsShadowOnly, &self->_isShadowOnly, isShadowOnly);
+}
+
 WorldSpriteSettings WorldSpriteComponent_ResolveSettings(const WorldSpriteComponent* self,
     const WorldSpriteSettings* spriteSettings)
 {
@@ -783,5 +870,16 @@ WorldSpriteSettings WorldSpriteComponent_ResolveSettings(const WorldSpriteCompon
     {
         Settings.IsDrawDistanceFixed = self->_isDrawDistanceFixed;
     }
+    // The shadow distance in effect, after the draw distance (which stands for it without one), as a model's.
+    if (self->_overrides[WorldSpriteSetting_ShadowDistance])
+    {
+        Settings.Render.ShadowDistance = self->_shadowDistance;
+        Settings.Render.HasShadowDistance = true;
+    }
+    if (!Settings.Render.HasShadowDistance)
+    {
+        Settings.Render.ShadowDistance = Settings.DrawDistance;
+    }
+    Settings.Render.ShadowDistance *= self->_shadowDistanceMultiplier;
     return Settings;
 }

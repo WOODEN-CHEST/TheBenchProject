@@ -654,7 +654,8 @@ static void ComponentRevisionsAdvanceOnEveryChange(TestRun* run)
         TEST_CHECK(run, (WorldModelComponent_GetWorldModel(ModelComponent) == NULL)
             && WorldModelComponent_HasOutline(ModelComponent)
             && !WorldModelComponent_OmitsPixelation(ModelComponent) && WorldModelComponent_CastsShadows(ModelComponent)
-            && (WorldModelComponent_GetShadowTier(ModelComponent) == WorldShadowTier_Both));
+            && (WorldModelComponent_GetShadowDistance(ModelComponent) == WORLD_MODEL_DEFAULT_SHADOW_DISTANCE)
+            && !WorldModelComponent_IsShadowOnly(ModelComponent));
         TEST_CHECK(run, (WorldLightComponent_GetIntensity(Light) == WORLD_LIGHT_COMPONENT_DEFAULT_INTENSITY)
             && (WorldLightComponent_GetRange(Light) == WORLD_LIGHT_COMPONENT_DEFAULT_RANGE)
             && !WorldLightComponent_CastsShadows(Light));
@@ -664,13 +665,14 @@ static void ComponentRevisionsAdvanceOnEveryChange(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetWorldModel(ModelComponent, (const unsigned char*)u8"crate"));
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHasOutline(ModelComponent, false));
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOmitsPixelation(ModelComponent, true));
-        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowTier(ModelComponent, WorldShadowTier_Far));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowDistance(ModelComponent, 40.0f));
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetCastsShadows(ModelComponent, false));
         TEST_CHECK(run, WorldComponent_GetRevision(&ModelComponent->Base) == (Revision + 5U));
-        PropertyValue Tier = PropertyValue_FromEnum(WorldShadowTier_Near);
-        TEST_CHECK_SUCCESS(run, Properties_Set(WorldModelComponent_GetPropertyTable(), ModelComponent, u8"shadow_tier",
-            &Tier));
-        TEST_CHECK(run, (WorldModelComponent_GetShadowTier(ModelComponent) == WorldShadowTier_Near)
+        PropertyValue Lod = PropertyValue_FromUInt32(2U);
+        TEST_CHECK_SUCCESS(run, Properties_Set(WorldModelComponent_GetPropertyTable(), ModelComponent, u8"shadow_lod",
+            &Lod));
+        TEST_CHECK(run, (WorldModelComponent_GetShadowLod(ModelComponent) == 2U)
+            && (WorldModelComponent_GetShadowDistance(ModelComponent) == 40.0f)
             && (WorldComponent_GetRevision(&ModelComponent->Base) == (Revision + 6U)));
         TEST_CHECK(run, WorldObject_GetRevision(Object) == ObjectRevision); // a component is not its object
 
@@ -678,7 +680,8 @@ static void ComponentRevisionsAdvanceOnEveryChange(TestRun* run)
         Revision = WorldComponent_GetRevision(&ModelComponent->Base);
         TEST_CHECK_ERROR(run, WorldModelComponent_SetWorldModel(ModelComponent, (const unsigned char*)u8"Not A Name"),
             ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK_ERROR(run, WorldModelComponent_SetShadowTier(ModelComponent, (WorldShadowTier)9),
+        TEST_CHECK_ERROR(run, WorldModelComponent_SetShadowDistance(ModelComponent, 0.0f), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldModelComponent_SetShadowDistanceMultiplier(ModelComponent, NAN),
             ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, WorldLightComponent_SetRange(Light, -1.0f), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, WorldLightComponent_SetIntensity(Light, NAN), ErrorCode_ArgumentOutOfRange);

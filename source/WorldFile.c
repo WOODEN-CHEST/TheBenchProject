@@ -40,15 +40,15 @@
 
 // Static functions: loading.
 /* The version of @p table that files of @p formatVersion were written with (PropertyReadOptions.DataVersion). Format 1
- * wrote every table at its first version. */
-// TODO: when a table's Version rises (its Migrate converting older data), raise WORLD_FILE_FORMAT_VERSION with it and
-// return here the versions older formats wrote; tests/WorldFileTests.c checks that every table a world file holds is
-// still at version 1.
+ * wrote every table at its first version; format 2, the current one, writes every table at its current version (the
+ * model, model instances and terrain components' 2, every other table's 1), and its tables' migrations read format 1's
+ * data. */
+// TODO: when a table's Version rises again (its Migrate converting older data), raise WORLD_FILE_FORMAT_VERSION with it
+// and return here the versions format 2 wrote (the ones above); tests/WorldFileTests.c checks that every table a world
+// file holds is still at the version format 2 maps it to.
 static uint32_t GetTableVersion(uint32_t formatVersion, const PropertyTable* table)
 {
-    UNUSED(formatVersion);
-    UNUSED(table);
-    return WORLD_FILE_FIRST_FORMAT_VERSION;
+    return (formatVersion <= WORLD_FILE_FIRST_FORMAT_VERSION) ? WORLD_FILE_FIRST_FORMAT_VERSION : table->Version;
 }
 
 /* Whether @p candidate is @p root or inside its subtree. */
@@ -231,7 +231,10 @@ PropertyReadOptions WorldFileLoad_GetTableOptions(const WorldFileLoad* self, con
 {
     PropertyReadOptions Options = PropertyReadOptions_CreateDefault();
     Options.UnknownKeyMode = PropertyUnknownKeyMode_Ignore;
+    Options.Logger = self->Options->Logger;
     Options.DataVersion = GetTableVersion(self->FormatVersion, table);
+    Options.Pool = self->JSONPool;
+    Options.GHDFPool = self->GHDFPool;
     Options.Keys = self->Options->Keys;
     Options.DefaultNamespace = self->Options->DefaultNamespace;
     return Options;

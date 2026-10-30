@@ -128,9 +128,12 @@ The thirteenth standard asset type ([AssetManager.md](AssetManager.md)): JSON de
 `AssetManager_LoadTerrain`. `source` picks the mesh's origin explicitly: `model` (a `.glb` imported when it loads, with
 the `weights` and `densities` mappings, `normals` and `blend_slot`) or `data` (the binary form). `materials` (1 to 16
 names) is the palette, `density_channels` (up to 8) the channels, `chunk_size` the cells, and `render` and `collision`
-the defaults of its placements (`TerrainSettings`: outline, shadow tier, casts shadows, the haze multiplier
-(`render.haze`, default 1), a 4 km draw distance kept fixed against the quality setting; colliding on `world` with the
-layer's default mask unless the definition gives one).
+the defaults of its placements (`TerrainSettings`: outline, casts shadows, its shadow distance (`render.has_shadow_distance`
+and `render.shadow_distance`, by default none: it casts as far as its chunks are drawn; `shadow_distance` alone turns its
+flag on) and whether the player's shadow scale leaves it as it is (`render.is_shadow_distance_fixed`, default false), the
+haze multiplier (`render.haze`, default 1), a 4 km draw distance kept fixed against the quality setting; colliding on
+`world` with the layer's default mask unless the definition gives one). An older definition's `render.shadow_tier` is
+read as a world model's is, with one warning ([WorldModels.md](WorldModels.md), "Shadows").
 Unknown keys are refused everywhere and every rule is checked when the definitions are read; the file when it loads. The
 asset owns its mesh, its names (`TerrainAsset_GetName` is the terrain's own, for messages) and its `rules`
 (`TerrainAsset_GetRules`, at most `TERRAIN_MAX_RULES`, 8); its palette's materials are its **dependencies**
@@ -220,19 +223,23 @@ height maps where the GPU blends mip levels with distance: the same near the cam
 `terrain` names the asset (none places nothing; changing the name swaps the terrain and keeps the object). Each default
 of the asset a placement may change is two rows, as the model component's ([WorldModels.md](WorldModels.md)): an
 override flag and the placement's own value, kept (and saved) while the flag is off; `draw_distance_multiplier`
-multiplies whichever draw distance applies. `WorldTerrainComponent_ResolveSettings` gives the settings in effect (a mask
-neither the asset nor the placement gives becomes the default mask of the layer in effect). The object's transform
+multiplies whichever draw distance applies, `shadow_distance_multiplier` whichever shadow distance.
+`WorldTerrainComponent_ResolveSettings` gives the settings in effect (a mask neither the asset nor the placement gives
+becomes the default mask of the layer in effect; the shadow distance is the placement's own while overridden, else the
+asset's while it has one, else the resolved draw distance, times the multiplier, as for world models). The object's transform
 places the terrain's space; it is static by default (moving a terrain works: the collision world moves its chunks, with
 its warning for a static object that moved). Not a transform driver.
 
-The table, `terrain_component` (version 1):
+The table, `terrain_component` (version 2):
 
 | Key | Wire | Type | Default |
 |---|---|---|---|
 | `terrain` | 1 | AssetName (at most 128 bytes) | none |
 | `overrides_has_outline`, `has_outline` | 2, 3 | Bool, Bool | false, true |
-| `overrides_shadow_tier`, `shadow_tier` | 4, 5 | Bool, Enum (`near`, `far`, `both`) | false, `both` |
 | `overrides_casts_shadows`, `casts_shadows` | 6, 7 | Bool, Bool | false, true |
+| `overrides_shadow_distance`, `shadow_distance` | 21, 22 | Bool, Float > 0 | false, 4000 |
+| `shadow_distance_multiplier` | 23 | Float > 0 | 1 |
+| `overrides_is_shadow_distance_fixed`, `is_shadow_distance_fixed` | 24, 25 | Bool, Bool | false, false |
 | `overrides_haze`, `haze` | 19, 20 | Bool, Float in [0, 1000] | false, 1 |
 | `overrides_draw_distance`, `draw_distance` | 8, 9 | Bool, Float > 0 | false, 4000 |
 | `draw_distance_multiplier` | 10 | Float > 0 | 1 |
@@ -241,7 +248,9 @@ The table, `terrain_component` (version 1):
 | `overrides_collision_layer`, `collision_layer` | 15, 16 | Bool, Enum (the layers) | false, `world` |
 | `overrides_collides_with`, `collides_with` | 17, 18 | Bool, EnumSet (the layers) | false, world's default mask |
 
-Its next free wire id is 21. `haze` multiplies the haze in front of the terrain ([WorldRuntime.md](WorldRuntime.md),
+Wire ids 4 and 5 are retired (version 1's shadow tier pair, which the table's migration reads: "near" becomes an
+overridden 16 m shadow distance when its flag was on, a kept one when it was off; "far" is dropped with a warning; see
+[WorldFile.md](WorldFile.md), "Versions"). Its next free wire id is 26. `haze` multiplies the haze in front of the terrain ([WorldRuntime.md](WorldRuntime.md),
 "Haze"): 1 the real air's, 0 as if the air were clear.
 
 ## Collision
@@ -258,8 +267,9 @@ placed again when the object moves. Characters stand and walk on it as on any me
   chunk's world matrix (the object's world matrix times the translation to the chunk's centre) and its sphere, in
   double and in render space, the settings in effect and the object's tint ([WorldRuntime.md](WorldRuntime.md),
   "Per-component render cache").
-- **Visibility** puts the chunks in every pass's list as models: the camera's frustum, each cascade's box by shadow
-  tier, the cube's reach, the draw distance with the zoom, and the fade.
+- **Visibility** puts the chunks in every pass's list as models: the camera's frustum, each shadow level as a caster
+  (its box, ring and size cut, within the chunk's shadow distance and the shadow reach), the cube's reach, the draw
+  distance with the zoom, and the fade.
 - **GPU meshes** (`WorldRendererTerrain.c`) are the renderer's own, one record per terrain asset with one mesh per chunk,
   built from the chunk's surface in parts of at most 65536 vertices: positions (relative to the chunk's centre),
   normals (the terrain vertices'), the 16 weights as four normalized `u8 x 4` attributes at locations 9 to 12 (the
@@ -283,12 +293,13 @@ placed again when the object moves. Characters stand and walk on it as on any me
   unloaded (a hidden terrain's are kept: it may show again).
 - **The passes:** the lit pass draws each chunk with the `world_terrain` shader (`shaders/terrain/`): its vertex stage
   is rigid; its fragment stage blends the materials ("The blend" above) and lights them as `world_pbr` lights a
-  dielectric (the sun and the moon with the cascades' shadow, the cube-shadow light, up to 8 forward lights per chunk by
+  dielectric (the sun and the moon with the shadow levels' shadow, the cube-shadow light, up to 8 forward lights per chunk by
   its sphere, the ambient with the map's and the screen's AO, the night vision and the haze in front of it at the
   chunk's own haze multiplier), dithered by the chunk's fade, before the sprites (decals lie on it). Without the
   shader the chunks draw unlit and solid through raylib's default shader. The G-buffer (`world_normal`, the outline
-  flag in effect), the cascades (`world_depth`, back faces: a hill's far side shades what lies behind it) and the cube
-  shadow (`world_cube_depth`) draw the chunks with the shared shaders. Terrain is never crisp, never skinned, never
+  flag in effect), the shadow levels (`world_depth`, back faces: a hill's far side shades what lies behind it) and the
+  cube shadow (`world_cube_depth`) draw the chunks with the shared shaders (the depth passes through
+  `WorldRendererCommon_DrawDepthMesh`, the program bound once for all the chunks). Terrain is never crisp, never skinned, never
   instanced.
 - **The chunk key** (minus in the test frame, `WorldRenderer_SetTerrainKeyEnabled`): each chunk mixes a colour by its
   cell (X and Z each modulo 3: neighbours always differ) into its lit colour, and the wireframe of the chunks in view is

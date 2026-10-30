@@ -7,23 +7,39 @@
 #include "raylib/raymath.h"
 
 
-// Macros.
-/** A light this close to straight up (the y of its unit direction) looks at its box with +Z as its up instead of +Y, so
- *  the light's view never degenerates. */
-#define CASCADE_STRAIGHT_UP_Y 0.99f
-
-
 // Static functions.
 /* The up vector the light's view is built with (MatrixLookAt's third argument). */
 static Vector3 GetCascadeUp(Vector3 towardLight)
 {
-    return (fabsf(towardLight.y) > CASCADE_STRAIGHT_UP_Y) ? (Vector3){ 0.0f, 0.0f, 1.0f } : (Vector3){ 0.0f, 1.0f, 0.0f };
+    return (fabsf(towardLight.y) > WORLD_RENDER_SPACE_CASCADE_STRAIGHT_UP_Y) ? (Vector3){ 0.0f, 0.0f, 1.0f }
+        : (Vector3){ 0.0f, 1.0f, 0.0f };
 }
 
 /* @p coordinate rounded to the nearest whole multiple of @p step. */
 static double SnapToGrid(double coordinate, double step)
 {
     return floor((coordinate / step) + 0.5) * step;
+}
+
+/* The light's unit direction in double, as the axes are built from it. */
+static Vector3Double GetCascadeAxisZ(Vector3 towardLight)
+{
+    return Vector3Double_NormalizeOr(GameMath_FromVector3(towardLight), Vector3Double_Create(0.0, 1.0, 0.0));
+}
+
+/* A cascade's matrices around its render-space centre (cascade->Center, set by the caller): an explicit tight
+ * orthographic box around the centre (rather than BeginMode3D, which would force raylib's global cull distances and make
+ * the depth bias unintuitive), so depth is linear across the near and far planes and the shaders' bias maps to a small,
+ * world-relative offset. */
+static void BuildCascadeMatrices(WorldRenderCascade* cascade, Vector3Double axisZ, Vector3 up,
+    const WorldRenderCascadeShape* shape)
+{
+    Vector3 Eye = Vector3Add(cascade->Center, Vector3Scale(GameMath_ToVector3(axisZ), shape->LightDistance));
+    cascade->View = MatrixLookAt(Eye, cascade->Center, up);
+    double HalfSize = (double)shape->Size * 0.5;
+    cascade->Projection = MatrixOrtho(-HalfSize, HalfSize, -HalfSize, HalfSize, (double)shape->NearPlane,
+        (double)shape->FarPlane);
+    cascade->ViewProjection = MatrixMultiply(cascade->View, cascade->Projection);
 }
 
 
@@ -92,7 +108,7 @@ WorldRenderCascade WorldRenderSpace_GetCascade(Vector3Double origin, Vector3Doub
     // The light's frame as MatrixLookAt builds it from the eye toward the box: Z toward the light, X = up x Z, Y = Z x X.
     // In double, so the camera's coordinates along X and Y keep their precision however far out the camera is.
     Vector3 Up = GetCascadeUp(towardLight);
-    Vector3Double AxisZ = Vector3Double_NormalizeOr(GameMath_FromVector3(towardLight), Vector3Double_Create(0.0, 1.0, 0.0));
+    Vector3Double AxisZ = GetCascadeAxisZ(towardLight);
     Vector3Double AxisX = Vector3Double_NormalizeOr(Vector3Double_Cross(GameMath_FromVector3(Up), AxisZ),
         Vector3Double_Create(1.0, 0.0, 0.0));
     Vector3Double AxisY = Vector3Double_Cross(AxisZ, AxisX);
@@ -109,20 +125,29 @@ WorldRenderCascade WorldRenderSpace_GetCascade(Vector3Double origin, Vector3Doub
     Vector3Double Offset = Vector3Double_Add(Vector3Double_Scale(AxisX, StepX - AlongX),
         Vector3Double_Scale(AxisY, StepY - AlongY));
 
-    // An explicit tight orthographic box around the centre (rather than BeginMode3D, which would force raylib's global
-    // cull distances and make the depth bias unintuitive): depth is linear across the near and far planes, so the
-    // shaders' bias maps to a small, world-relative offset.
     WorldRenderCascade Cascade;
     Vector3Double Moved = Vector3Double_AddScaled(anchor, AxisX, StepX);
     Moved = Vector3Double_AddScaled(Moved, AxisY, StepY);
     Cascade.Anchor = Vector3Double_AddScaled(Moved, AxisZ, Vector3Double_Dot(FromAnchor, AxisZ));
     Cascade.Center = GameMath_ToVector3(Offset);
-    Vector3 Eye = Vector3Add(Cascade.Center, Vector3Scale(GameMath_ToVector3(AxisZ), shape->LightDistance));
-    Cascade.View = MatrixLookAt(Eye, Cascade.Center, Up);
-    double HalfSize = (double)shape->Size * 0.5;
-    Cascade.Projection = MatrixOrtho(-HalfSize, HalfSize, -HalfSize, HalfSize, (double)shape->NearPlane,
-        (double)shape->FarPlane);
-    Cascade.ViewProjection = MatrixMultiply(Cascade.View, Cascade.Projection);
+    BuildCascadeMatrices(&Cascade, AxisZ, Up, shape);
+    return Cascade;
+}
+
+bool WorldRenderSpace_HasSameCascadeUp(Vector3 a, Vector3 b)
+{
+    bool IsAUp = fabsf(a.y) > WORLD_RENDER_SPACE_CASCADE_STRAIGHT_UP_Y;
+    bool IsBUp = fabsf(b.y) > WORLD_RENDER_SPACE_CASCADE_STRAIGHT_UP_Y;
+    return IsAUp == IsBUp;
+}
+
+WorldRenderCascade WorldRenderSpace_GetCascadeAt(Vector3Double origin, Vector3Double center, Vector3 towardLight,
+    const WorldRenderCascadeShape* shape)
+{
+    WorldRenderCascade Cascade;
+    Cascade.Anchor = center;
+    Cascade.Center = GameMath_ToVector3Relative(center, origin);
+    BuildCascadeMatrices(&Cascade, GetCascadeAxisZ(towardLight), GetCascadeUp(towardLight), shape);
     return Cascade;
 }
 

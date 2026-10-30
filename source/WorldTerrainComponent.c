@@ -1,5 +1,6 @@
 #include "WorldTerrainComponent.h"
 #include "WorldInternal.h"
+#include "WorldModelComponentInternal.h"
 #include "wr/WRMemory.h"
 
 /*
@@ -10,11 +11,19 @@
 
 
 // Macros.
-/** The format version of the terrain component's property table. */
-#define TERRAIN_TABLE_VERSION 1U
+/** The format version of the terrain component's property table: 2 since the shadow distance's rows replaced the shadow
+ *  tier, which version 1 held (as the model component's). */
+#define TERRAIN_TABLE_VERSION 2U
+#define LEGACY_SHADOW_TIER_VERSION 1U
+/** The wire ids of version 1's shadow tier pair (retired) and of the shadow distance's pair a "near" tier becomes. */
+#define WIRE_OVERRIDES_SHADOW_TIER 4U
+#define WIRE_SHADOW_TIER 5U
+#define WIRE_OVERRIDES_SHADOW_DISTANCE 21U
+#define WIRE_SHADOW_DISTANCE 22U
 /** The inspector's categories. */
 #define CATEGORY_TERRAIN ((const unsigned char*)u8"Terrain")
 #define CATEGORY_RENDERING ((const unsigned char*)u8"Rendering")
+#define CATEGORY_SHADOWS ((const unsigned char*)u8"Shadows")
 #define CATEGORY_DRAW_DISTANCE ((const unsigned char*)u8"Draw distance")
 #define CATEGORY_COLLISION ((const unsigned char*)u8"Collision")
 /** The world layer's default mask (CollisionLayer_GetDefaultMask(CollisionLayer_World)), as a constant for the table. */
@@ -30,10 +39,13 @@ typedef enum TerrainPropertyEnum
     TerrainProperty_Terrain,
     TerrainProperty_OverridesHasOutline,
     TerrainProperty_HasOutline,
-    TerrainProperty_OverridesShadowTier,
-    TerrainProperty_ShadowTier,
     TerrainProperty_OverridesCastsShadows,
     TerrainProperty_CastsShadows,
+    TerrainProperty_OverridesShadowDistance,
+    TerrainProperty_ShadowDistance,
+    TerrainProperty_ShadowDistanceMultiplier,
+    TerrainProperty_OverridesIsShadowDistanceFixed,
+    TerrainProperty_IsShadowDistanceFixed,
     TerrainProperty_OverridesHaze,
     TerrainProperty_Haze,
     TerrainProperty_OverridesDrawDistance,
@@ -54,7 +66,8 @@ typedef enum TerrainPropertyEnum
 // Fields.
 /* Every property, in inspector order: each override flag sits right before the value it switches on. The wire ids are
  * the save schema: never renumber or reuse one; a removed property's id goes into the table's retired list. The haze's
- * pair is 19 and 20, out of the rows' order. The next free wire id is 21. */
+ * pair is 19 and 20 and the shadow distance's rows 21 to 25, out of the rows' order; 4 and 5, the shadow tier's pair, are
+ * retired. The next free wire id is 26. */
 static const PropertyDescriptor TerrainProperties[TerrainProperty_Count] =
 {
     [TerrainProperty_Terrain] =
@@ -81,38 +94,67 @@ static const PropertyDescriptor TerrainProperties[TerrainProperty_Count] =
         .Description = u8"Draws a 1-pixel outline around the terrain's silhouettes (while \"Override outline\" is on).",
         .SinceVersion = 1U
     },
-    [TerrainProperty_OverridesShadowTier] =
-    {
-        .Key = u8"overrides_shadow_tier", .WireId = 4U, .Type = PropertyType_Bool,
-        PROPERTY_MEMBER(WorldTerrainComponent, _overridesShadowTier), .Default.BoolValue = false,
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RENDERING, .DisplayName = u8"Override shadow range",
-        .Description = u8"Uses this object's shadow range instead of its terrain's.", .SinceVersion = 1U
-    },
-    [TerrainProperty_ShadowTier] =
-    {
-        .Key = u8"shadow_tier", .WireId = 5U, .Type = PropertyType_Enum,
-        PROPERTY_MEMBER(WorldTerrainComponent, _shadowTier), .Default.EnumValue = WorldShadowTier_Both,
-        .EnumTable = &WORLD_SHADOW_TIER_ENUM, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RENDERING,
-        .DisplayName = u8"Shadow range",
-        .Description = u8"Which shadows the terrain casts: \"near\" only up close, \"far\" only the coarse "
-            u8"long-range one, \"both\" everywhere (while \"Override shadow range\" is on).",
-        .SinceVersion = 1U
-    },
     [TerrainProperty_OverridesCastsShadows] =
     {
         .Key = u8"overrides_casts_shadows", .WireId = 6U, .Type = PropertyType_Bool,
         PROPERTY_MEMBER(WorldTerrainComponent, _overridesCastsShadows), .Default.BoolValue = false,
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RENDERING, .DisplayName = u8"Override casts shadows",
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SHADOWS, .DisplayName = u8"Override casts shadows",
         .Description = u8"Uses this object's \"Casts shadows\" instead of its terrain's.", .SinceVersion = 1U
     },
     [TerrainProperty_CastsShadows] =
     {
         .Key = u8"casts_shadows", .WireId = 7U, .Type = PropertyType_Bool,
         PROPERTY_MEMBER(WorldTerrainComponent, _castsShadows), .Default.BoolValue = true,
-        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RENDERING, .DisplayName = u8"Casts shadows",
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SHADOWS, .DisplayName = u8"Casts shadows",
         .Description = u8"When off, the terrain casts no shadow; it still receives them (while \"Override casts "
             u8"shadows\" is on).",
         .SinceVersion = 1U
+    },
+    [TerrainProperty_OverridesShadowDistance] =
+    {
+        .Key = u8"overrides_shadow_distance", .WireId = WIRE_OVERRIDES_SHADOW_DISTANCE, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldTerrainComponent, _overridesShadowDistance), .Default.BoolValue = false,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SHADOWS, .DisplayName = u8"Override shadow distance",
+        .Description = u8"Uses this object's shadow distance instead of its terrain's (by default as far as its chunks are "
+            u8"drawn).",
+        .SinceVersion = 2U
+    },
+    [TerrainProperty_ShadowDistance] =
+    {
+        .Key = u8"shadow_distance", .WireId = WIRE_SHADOW_DISTANCE, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldTerrainComponent, _shadowDistance), .Default.FloatValue = TERRAIN_DEFAULT_SHADOW_DISTANCE,
+        .Rules = PROPERTY_RULES_ABOVE(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SHADOWS,
+        .DisplayName = u8"Shadow distance",
+        .Description = u8"How far from the camera each chunk still casts, in metres, before the shadow quality setting "
+            u8"and the zoom (while \"Override shadow distance\" is on); beyond it its shadow fades out, and never past its "
+            u8"draw distance.",
+        .SinceVersion = 2U
+    },
+    [TerrainProperty_ShadowDistanceMultiplier] =
+    {
+        .Key = u8"shadow_distance_multiplier", .WireId = 23U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldTerrainComponent, _shadowDistanceMultiplier), .Default.FloatValue = 1.0f,
+        .Rules = PROPERTY_RULES_ABOVE(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SHADOWS,
+        .DisplayName = u8"Shadow distance multiplier",
+        .Description = u8"Multiplies the shadow distance in effect, the terrain's or this object's, or the draw distance "
+            u8"when neither gives one: 0.5 casts half as far.",
+        .SinceVersion = 2U
+    },
+    [TerrainProperty_OverridesIsShadowDistanceFixed] =
+    {
+        .Key = u8"overrides_is_shadow_distance_fixed", .WireId = 24U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldTerrainComponent, _overridesIsShadowDistanceFixed), .Default.BoolValue = false,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SHADOWS, .DisplayName = u8"Override fixed shadow distance",
+        .Description = u8"Uses this object's \"Fixed shadow distance\" instead of its terrain's.", .SinceVersion = 2U
+    },
+    [TerrainProperty_IsShadowDistanceFixed] =
+    {
+        .Key = u8"is_shadow_distance_fixed", .WireId = 25U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldTerrainComponent, _isShadowDistanceFixed), .Default.BoolValue = false,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_SHADOWS, .DisplayName = u8"Fixed shadow distance",
+        .Description = u8"Keeps the shadow distance as it is when the player lowers or raises the shadow distance "
+            u8"quality setting (while \"Override fixed shadow distance\" is on).",
+        .SinceVersion = 2U
     },
     [TerrainProperty_OverridesHaze] =
     {
@@ -224,6 +266,37 @@ static const PropertyDescriptor TerrainProperties[TerrainProperty_Count] =
     },
 };
 
+/* The shadow tier's pair, which version 1 held. */
+static const uint16_t TerrainRetiredWireIds[] = { WIRE_OVERRIDES_SHADOW_TIER, WIRE_SHADOW_TIER };
+
+/* The wire ids the GHDF migration of the shadow tier reads and writes. */
+static const WorldModelPlacementTierIds TerrainTierIds =
+{
+    .OverridesShadowTier = WIRE_OVERRIDES_SHADOW_TIER, .ShadowTier = WIRE_SHADOW_TIER,
+    .OverridesShadowDistance = WIRE_OVERRIDES_SHADOW_DISTANCE, .ShadowDistance = WIRE_SHADOW_DISTANCE
+};
+
+
+// Static functions: the migrations of older data (the model component's reading of the shadow tier).
+/* Version 1's JSON: the shadow tier read into the shadow distance. */
+static Error MigrateTerrainJSON(uint32_t fromVersion, JSONCompound* compound, JSONObjectPool* pool, Logger* logger)
+{
+    (void)pool;
+    return (fromVersion <= LEGACY_SHADOW_TIER_VERSION)
+        ? WorldModelPlacement_MigrateShadowTierJSON(compound, logger, "terrain_component") : Error_CreateSuccess();
+}
+
+/* Version 1's GHDF: the same, by wire ids. */
+static Error MigrateTerrainGHDF(uint32_t fromVersion, GHDFCompound* compound, GHDFObjectPool* pool, Logger* logger)
+{
+    (void)pool;
+    return (fromVersion <= LEGACY_SHADOW_TIER_VERSION)
+        ? WorldModelPlacement_MigrateShadowTierGHDF(compound, &TerrainTierIds, logger, "terrain_component")
+        : Error_CreateSuccess();
+}
+
+
+// Fields: the table (it refers to the migrations above).
 static const PropertyTable TerrainTable =
 {
     .Name = u8"terrain_component",
@@ -231,10 +304,11 @@ static const PropertyTable TerrainTable =
     .StructSize = sizeof(WorldTerrainComponent),
     .Descriptors = TerrainProperties,
     .DescriptorCount = TerrainProperty_Count,
-    .RetiredWireIds = NULL,
-    .RetiredWireIdCount = 0U,
+    .RetiredWireIds = TerrainRetiredWireIds,
+    .RetiredWireIdCount = sizeof(TerrainRetiredWireIds) / sizeof(TerrainRetiredWireIds[0]),
     .AfterSet = WorldInternal_ComponentAfterSet,
-    .Migrate = NULL
+    .Migrate = MigrateTerrainJSON,
+    .MigrateGHDF = MigrateTerrainGHDF
 };
 
 
@@ -266,6 +340,19 @@ static void SetBool(WorldTerrainComponent* self, bool* field, bool value, Terrai
     WorldInternal_ComponentAfterSet(self, &TerrainProperties[property]);
 }
 
+/* Sets a float field after checking it against its row, and reports the change. */
+static Error SetFloat(WorldTerrainComponent* self, float* field, float value, TerrainProperty property)
+{
+    Error Result = CheckProperty(property, PropertyValue_FromFloat(value));
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    *field = value;
+    WorldInternal_ComponentAfterSet(self, &TerrainProperties[property]);
+    return Error_CreateSuccess();
+}
+
 /* A setting's override flag and its row; false for a value outside the enum. */
 static bool TryGetOverrideFlag(WorldTerrainComponent* self, WorldTerrainSetting setting, bool** outFlag,
     TerrainProperty* outProperty)
@@ -275,10 +362,6 @@ static bool TryGetOverrideFlag(WorldTerrainComponent* self, WorldTerrainSetting 
         case WorldTerrainSetting_HasOutline:
             *outFlag = &self->_overridesHasOutline;
             *outProperty = TerrainProperty_OverridesHasOutline;
-            return true;
-        case WorldTerrainSetting_ShadowTier:
-            *outFlag = &self->_overridesShadowTier;
-            *outProperty = TerrainProperty_OverridesShadowTier;
             return true;
         case WorldTerrainSetting_CastsShadows:
             *outFlag = &self->_overridesCastsShadows;
@@ -307,6 +390,14 @@ static bool TryGetOverrideFlag(WorldTerrainComponent* self, WorldTerrainSetting 
         case WorldTerrainSetting_Haze:
             *outFlag = &self->_overridesHaze;
             *outProperty = TerrainProperty_OverridesHaze;
+            return true;
+        case WorldTerrainSetting_ShadowDistance:
+            *outFlag = &self->_overridesShadowDistance;
+            *outProperty = TerrainProperty_OverridesShadowDistance;
+            return true;
+        case WorldTerrainSetting_IsShadowDistanceFixed:
+            *outFlag = &self->_overridesIsShadowDistanceFixed;
+            *outProperty = TerrainProperty_OverridesIsShadowDistanceFixed;
             return true;
         case WorldTerrainSetting_Count:
             break;
@@ -364,16 +455,17 @@ bool WorldTerrainComponent_IsOverridden(const WorldTerrainComponent* self, World
 {
     switch (setting)
     {
-        case WorldTerrainSetting_HasOutline:          return self->_overridesHasOutline;
-        case WorldTerrainSetting_ShadowTier:          return self->_overridesShadowTier;
-        case WorldTerrainSetting_CastsShadows:        return self->_overridesCastsShadows;
-        case WorldTerrainSetting_DrawDistance:        return self->_overridesDrawDistance;
-        case WorldTerrainSetting_IsDrawDistanceFixed: return self->_overridesIsDrawDistanceFixed;
-        case WorldTerrainSetting_IsCollisionEnabled:  return self->_overridesIsCollisionEnabled;
-        case WorldTerrainSetting_CollisionLayer:      return self->_overridesCollisionLayer;
-        case WorldTerrainSetting_CollidesWith:        return self->_overridesCollidesWith;
-        case WorldTerrainSetting_Haze:                return self->_overridesHaze;
-        case WorldTerrainSetting_Count:               break;
+        case WorldTerrainSetting_HasOutline:            return self->_overridesHasOutline;
+        case WorldTerrainSetting_CastsShadows:          return self->_overridesCastsShadows;
+        case WorldTerrainSetting_DrawDistance:          return self->_overridesDrawDistance;
+        case WorldTerrainSetting_IsDrawDistanceFixed:   return self->_overridesIsDrawDistanceFixed;
+        case WorldTerrainSetting_IsCollisionEnabled:    return self->_overridesIsCollisionEnabled;
+        case WorldTerrainSetting_CollisionLayer:        return self->_overridesCollisionLayer;
+        case WorldTerrainSetting_CollidesWith:          return self->_overridesCollidesWith;
+        case WorldTerrainSetting_Haze:                  return self->_overridesHaze;
+        case WorldTerrainSetting_ShadowDistance:        return self->_overridesShadowDistance;
+        case WorldTerrainSetting_IsShadowDistanceFixed: return self->_overridesIsShadowDistanceFixed;
+        case WorldTerrainSetting_Count:                 break;
     }
     // Only reachable with a value outside the enum: nothing is overridden.
     return false;
@@ -406,22 +498,6 @@ Error WorldTerrainComponent_SetHasOutline(WorldTerrainComponent* self, bool hasO
     return Error_CreateSuccess();
 }
 
-Error WorldTerrainComponent_SetShadowTier(WorldTerrainComponent* self, WorldShadowTier shadowTier)
-{
-    if (self == NULL)
-    {
-        return CreateNullSelfError("WorldTerrainComponent_SetShadowTier");
-    }
-    Error Result = CheckProperty(TerrainProperty_ShadowTier, PropertyValue_FromEnum((int32_t)shadowTier));
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-    self->_shadowTier = shadowTier;
-    WorldInternal_ComponentAfterSet(self, &TerrainProperties[TerrainProperty_ShadowTier]);
-    return Error_CreateSuccess();
-}
-
 Error WorldTerrainComponent_SetCastsShadows(WorldTerrainComponent* self, bool castsShadows)
 {
     if (self == NULL)
@@ -429,6 +505,34 @@ Error WorldTerrainComponent_SetCastsShadows(WorldTerrainComponent* self, bool ca
         return CreateNullSelfError("WorldTerrainComponent_SetCastsShadows");
     }
     SetBool(self, &self->_castsShadows, castsShadows, TerrainProperty_CastsShadows);
+    return Error_CreateSuccess();
+}
+
+Error WorldTerrainComponent_SetShadowDistance(WorldTerrainComponent* self, float shadowDistance)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldTerrainComponent_SetShadowDistance");
+    }
+    return SetFloat(self, &self->_shadowDistance, shadowDistance, TerrainProperty_ShadowDistance);
+}
+
+Error WorldTerrainComponent_SetShadowDistanceMultiplier(WorldTerrainComponent* self, float multiplier)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldTerrainComponent_SetShadowDistanceMultiplier");
+    }
+    return SetFloat(self, &self->_shadowDistanceMultiplier, multiplier, TerrainProperty_ShadowDistanceMultiplier);
+}
+
+Error WorldTerrainComponent_SetIsShadowDistanceFixed(WorldTerrainComponent* self, bool isFixed)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldTerrainComponent_SetIsShadowDistanceFixed");
+    }
+    SetBool(self, &self->_isShadowDistanceFixed, isFixed, TerrainProperty_IsShadowDistanceFixed);
     return Error_CreateSuccess();
 }
 
@@ -540,13 +644,13 @@ TerrainSettings WorldTerrainComponent_ResolveSettings(const WorldTerrainComponen
     {
         Settings.Render.HasOutline = self->_hasOutline;
     }
-    if (self->_overridesShadowTier)
-    {
-        Settings.Render.ShadowTier = self->_shadowTier;
-    }
     if (self->_overridesCastsShadows)
     {
         Settings.Render.CastsShadows = self->_castsShadows;
+    }
+    if (self->_overridesIsShadowDistanceFixed)
+    {
+        Settings.Render.IsShadowDistanceFixed = self->_isShadowDistanceFixed;
     }
     if (self->_overridesHaze)
     {
@@ -561,6 +665,17 @@ TerrainSettings WorldTerrainComponent_ResolveSettings(const WorldTerrainComponen
     {
         Settings.Render.IsDrawDistanceFixed = self->_isDrawDistanceFixed;
     }
+    // The shadow distance in effect, after the draw distance (which stands for it without one), as a model's.
+    if (self->_overridesShadowDistance)
+    {
+        Settings.Render.ShadowDistance = self->_shadowDistance;
+        Settings.Render.HasShadowDistance = true;
+    }
+    if (!Settings.Render.HasShadowDistance)
+    {
+        Settings.Render.ShadowDistance = Settings.Render.DrawDistance;
+    }
+    Settings.Render.ShadowDistance *= self->_shadowDistanceMultiplier;
     if (self->_overridesIsCollisionEnabled)
     {
         Settings.Collision.IsEnabled = self->_isCollisionEnabled;

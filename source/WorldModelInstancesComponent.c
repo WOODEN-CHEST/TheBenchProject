@@ -6,8 +6,8 @@
 
 
 // Macros.
-/** The format version of the model instances component's property table. */
-#define INSTANCES_TABLE_VERSION 1U
+/** The table version older files hold the shadow tier in. */
+#define LEGACY_SHADOW_TIER_VERSION 1U
 /** The inspector's category of the copies. */
 #define CATEGORY_INSTANCES ((const unsigned char*)u8"Instances")
 
@@ -21,10 +21,19 @@ typedef enum InstancesPropertyEnum
     InstancesProperty_Variant,
     InstancesProperty_OverridesHasOutline,
     InstancesProperty_HasOutline,
-    InstancesProperty_OverridesShadowTier,
-    InstancesProperty_ShadowTier,
     InstancesProperty_OverridesCastsShadows,
     InstancesProperty_CastsShadows,
+    InstancesProperty_OverridesShadowDistance,
+    InstancesProperty_ShadowDistance,
+    InstancesProperty_ShadowDistanceMultiplier,
+    InstancesProperty_OverridesIsShadowDistanceFixed,
+    InstancesProperty_IsShadowDistanceFixed,
+    InstancesProperty_OverridesIsShadowOnly,
+    InstancesProperty_IsShadowOnly,
+    InstancesProperty_OverridesHasTwoSidedShadows,
+    InstancesProperty_HasTwoSidedShadows,
+    InstancesProperty_OverridesShadowLod,
+    InstancesProperty_ShadowLod,
     InstancesProperty_OverridesHaze,
     InstancesProperty_Haze,
     InstancesProperty_OverridesOccludesSky,
@@ -47,8 +56,9 @@ typedef enum InstancesPropertyEnum
 // Fields.
 /* Every property, in inspector order: the model component's rows with the model component's wire ids (shared through
  * source/WorldModelComponentInternal.h; no omit_pixelation, 3 and 9: copies are never crisp), then the copies. The wire
- * ids are the save schema: never renumber or reuse one. The haze's pair is 23 and 24 and the sky's 25 and 26, as in the
- * model component, and the copies 22. The next free wire id is 27. */
+ * ids are the save schema: never renumber or reuse one; a removed property's id goes into the table's retired list. The
+ * haze's pair is 23 and 24, the sky's 25 and 26 and the shadow rows 27 to 37, as in the model component, and the copies
+ * 22; 4 and 10, the shadow tier's pair, are retired. The next free wire id is 38. */
 static const PropertyDescriptor InstancesProperties[InstancesProperty_Count] =
 {
     [InstancesProperty_WorldModel] =
@@ -76,16 +86,6 @@ static const PropertyDescriptor InstancesProperties[InstancesProperty_Count] =
         WORLD_MODEL_PLACEMENT_ROW_HAS_OUTLINE, .WireId = 2U, PROPERTY_MEMBER(WorldModelInstancesComponent, _hasOutline),
         .SinceVersion = 1U
     },
-    [InstancesProperty_OverridesShadowTier] =
-    {
-        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_SHADOW_TIER, .WireId = 10U,
-        PROPERTY_MEMBER(WorldModelInstancesComponent, _overridesShadowTier), .SinceVersion = 1U
-    },
-    [InstancesProperty_ShadowTier] =
-    {
-        WORLD_MODEL_PLACEMENT_ROW_SHADOW_TIER, .WireId = 4U, PROPERTY_MEMBER(WorldModelInstancesComponent, _shadowTier),
-        .SinceVersion = 1U
-    },
     [InstancesProperty_OverridesCastsShadows] =
     {
         WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_CASTS_SHADOWS, .WireId = 11U,
@@ -95,6 +95,61 @@ static const PropertyDescriptor InstancesProperties[InstancesProperty_Count] =
     {
         WORLD_MODEL_PLACEMENT_ROW_CASTS_SHADOWS, .WireId = 5U,
         PROPERTY_MEMBER(WorldModelInstancesComponent, _castsShadows), .SinceVersion = 1U
+    },
+    [InstancesProperty_OverridesShadowDistance] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_SHADOW_DISTANCE, .WireId = WORLD_MODEL_PLACEMENT_WIRE_OVERRIDES_SHADOW_DISTANCE,
+        PROPERTY_MEMBER(WorldModelInstancesComponent, _overridesShadowDistance), .SinceVersion = 2U
+    },
+    [InstancesProperty_ShadowDistance] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_SHADOW_DISTANCE, .WireId = WORLD_MODEL_PLACEMENT_WIRE_SHADOW_DISTANCE,
+        PROPERTY_MEMBER(WorldModelInstancesComponent, _shadowDistance), .SinceVersion = 2U
+    },
+    [InstancesProperty_ShadowDistanceMultiplier] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_SHADOW_DISTANCE_MULTIPLIER, .WireId = 29U,
+        PROPERTY_MEMBER(WorldModelInstancesComponent, _shadowDistanceMultiplier), .SinceVersion = 2U
+    },
+    [InstancesProperty_OverridesIsShadowDistanceFixed] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_IS_SHADOW_DISTANCE_FIXED, .WireId = 30U,
+        PROPERTY_MEMBER(WorldModelInstancesComponent, _overridesIsShadowDistanceFixed), .SinceVersion = 2U
+    },
+    [InstancesProperty_IsShadowDistanceFixed] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_IS_SHADOW_DISTANCE_FIXED, .WireId = 31U,
+        PROPERTY_MEMBER(WorldModelInstancesComponent, _isShadowDistanceFixed), .SinceVersion = 2U
+    },
+    [InstancesProperty_OverridesIsShadowOnly] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_IS_SHADOW_ONLY, .WireId = 32U,
+        PROPERTY_MEMBER(WorldModelInstancesComponent, _overridesIsShadowOnly), .SinceVersion = 2U
+    },
+    [InstancesProperty_IsShadowOnly] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_IS_SHADOW_ONLY, .WireId = 33U,
+        PROPERTY_MEMBER(WorldModelInstancesComponent, _isShadowOnly), .SinceVersion = 2U
+    },
+    [InstancesProperty_OverridesHasTwoSidedShadows] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_HAS_TWO_SIDED_SHADOWS, .WireId = 34U,
+        PROPERTY_MEMBER(WorldModelInstancesComponent, _overridesHasTwoSidedShadows), .SinceVersion = 2U
+    },
+    [InstancesProperty_HasTwoSidedShadows] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_HAS_TWO_SIDED_SHADOWS, .WireId = 35U,
+        PROPERTY_MEMBER(WorldModelInstancesComponent, _hasTwoSidedShadows), .SinceVersion = 2U
+    },
+    [InstancesProperty_OverridesShadowLod] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_SHADOW_LOD, .WireId = 36U,
+        PROPERTY_MEMBER(WorldModelInstancesComponent, _overridesShadowLod), .SinceVersion = 2U
+    },
+    [InstancesProperty_ShadowLod] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_SHADOW_LOD, .WireId = 37U, PROPERTY_MEMBER(WorldModelInstancesComponent, _shadowLod),
+        .SinceVersion = 2U
     },
     [InstancesProperty_OverridesHaze] =
     {
@@ -178,17 +233,55 @@ static const PropertyDescriptor InstancesProperties[InstancesProperty_Count] =
     },
 };
 
+/* The shadow tier's pair, which version 1 held. */
+static const uint16_t InstancesRetiredWireIds[] =
+{
+    WORLD_MODEL_PLACEMENT_WIRE_SHADOW_TIER, WORLD_MODEL_PLACEMENT_WIRE_OVERRIDES_SHADOW_TIER
+};
+
+/* The wire ids the GHDF migration of the shadow tier reads and writes: the model component's. */
+static const WorldModelPlacementTierIds InstancesTierIds =
+{
+    .OverridesShadowTier = WORLD_MODEL_PLACEMENT_WIRE_OVERRIDES_SHADOW_TIER,
+    .ShadowTier = WORLD_MODEL_PLACEMENT_WIRE_SHADOW_TIER,
+    .OverridesShadowDistance = WORLD_MODEL_PLACEMENT_WIRE_OVERRIDES_SHADOW_DISTANCE,
+    .ShadowDistance = WORLD_MODEL_PLACEMENT_WIRE_SHADOW_DISTANCE
+};
+
+
+// Static functions: the migrations of older data.
+/* Version 1's JSON: the shadow tier read into the shadow distance. */
+static Error MigrateInstancesJSON(uint32_t fromVersion, JSONCompound* compound, JSONObjectPool* pool, Logger* logger)
+{
+    (void)pool;
+    return (fromVersion <= LEGACY_SHADOW_TIER_VERSION)
+        ? WorldModelPlacement_MigrateShadowTierJSON(compound, logger, "model_instances_component")
+        : Error_CreateSuccess();
+}
+
+/* Version 1's GHDF: the same, by wire ids. */
+static Error MigrateInstancesGHDF(uint32_t fromVersion, GHDFCompound* compound, GHDFObjectPool* pool, Logger* logger)
+{
+    (void)pool;
+    return (fromVersion <= LEGACY_SHADOW_TIER_VERSION)
+        ? WorldModelPlacement_MigrateShadowTierGHDF(compound, &InstancesTierIds, logger, "model_instances_component")
+        : Error_CreateSuccess();
+}
+
+
+// Fields: the table (it refers to the migrations above).
 static const PropertyTable InstancesTable =
 {
     .Name = u8"model_instances_component",
-    .Version = INSTANCES_TABLE_VERSION,
+    .Version = WORLD_MODEL_PLACEMENT_TABLE_VERSION,
     .StructSize = sizeof(WorldModelInstancesComponent),
     .Descriptors = InstancesProperties,
     .DescriptorCount = InstancesProperty_Count,
-    .RetiredWireIds = NULL,
-    .RetiredWireIdCount = 0U,
+    .RetiredWireIds = InstancesRetiredWireIds,
+    .RetiredWireIdCount = sizeof(InstancesRetiredWireIds) / sizeof(InstancesRetiredWireIds[0]),
     .AfterSet = WorldInternal_ComponentAfterSet,
-    .Migrate = NULL
+    .Migrate = MigrateInstancesJSON,
+    .MigrateGHDF = MigrateInstancesGHDF
 };
 
 
@@ -269,10 +362,6 @@ static bool TryGetOverrideFlag(WorldModelInstancesComponent* self, WorldModelSet
             *outFlag = &self->_overridesHasOutline;
             *outProperty = InstancesProperty_OverridesHasOutline;
             return true;
-        case WorldModelSetting_ShadowTier:
-            *outFlag = &self->_overridesShadowTier;
-            *outProperty = InstancesProperty_OverridesShadowTier;
-            return true;
         case WorldModelSetting_CastsShadows:
             *outFlag = &self->_overridesCastsShadows;
             *outProperty = InstancesProperty_OverridesCastsShadows;
@@ -296,6 +385,26 @@ static bool TryGetOverrideFlag(WorldModelInstancesComponent* self, WorldModelSet
         case WorldModelSetting_OccludesSky:
             *outFlag = &self->_overridesOccludesSky;
             *outProperty = InstancesProperty_OverridesOccludesSky;
+            return true;
+        case WorldModelSetting_ShadowDistance:
+            *outFlag = &self->_overridesShadowDistance;
+            *outProperty = InstancesProperty_OverridesShadowDistance;
+            return true;
+        case WorldModelSetting_IsShadowDistanceFixed:
+            *outFlag = &self->_overridesIsShadowDistanceFixed;
+            *outProperty = InstancesProperty_OverridesIsShadowDistanceFixed;
+            return true;
+        case WorldModelSetting_IsShadowOnly:
+            *outFlag = &self->_overridesIsShadowOnly;
+            *outProperty = InstancesProperty_OverridesIsShadowOnly;
+            return true;
+        case WorldModelSetting_HasTwoSidedShadows:
+            *outFlag = &self->_overridesHasTwoSidedShadows;
+            *outProperty = InstancesProperty_OverridesHasTwoSidedShadows;
+            return true;
+        case WorldModelSetting_ShadowLod:
+            *outFlag = &self->_overridesShadowLod;
+            *outProperty = InstancesProperty_OverridesShadowLod;
             return true;
         case WorldModelSetting_OmitPixelation:
         case WorldModelSetting_Count:
@@ -376,14 +485,18 @@ bool WorldModelInstancesComponent_IsOverridden(const WorldModelInstancesComponen
 {
     switch (setting)
     {
-        case WorldModelSetting_HasOutline:          return self->_overridesHasOutline;
-        case WorldModelSetting_ShadowTier:          return self->_overridesShadowTier;
-        case WorldModelSetting_CastsShadows:        return self->_overridesCastsShadows;
-        case WorldModelSetting_DrawDistance:        return self->_overridesDrawDistance;
-        case WorldModelSetting_IsDrawDistanceFixed: return self->_overridesIsDrawDistanceFixed;
-        case WorldModelSetting_LodDistances:        return self->_overridesLodDistances;
-        case WorldModelSetting_Haze:                return self->_overridesHaze;
-        case WorldModelSetting_OccludesSky:         return self->_overridesOccludesSky;
+        case WorldModelSetting_HasOutline:            return self->_overridesHasOutline;
+        case WorldModelSetting_CastsShadows:          return self->_overridesCastsShadows;
+        case WorldModelSetting_DrawDistance:          return self->_overridesDrawDistance;
+        case WorldModelSetting_IsDrawDistanceFixed:   return self->_overridesIsDrawDistanceFixed;
+        case WorldModelSetting_LodDistances:          return self->_overridesLodDistances;
+        case WorldModelSetting_Haze:                  return self->_overridesHaze;
+        case WorldModelSetting_OccludesSky:           return self->_overridesOccludesSky;
+        case WorldModelSetting_ShadowDistance:        return self->_overridesShadowDistance;
+        case WorldModelSetting_IsShadowDistanceFixed: return self->_overridesIsShadowDistanceFixed;
+        case WorldModelSetting_IsShadowOnly:          return self->_overridesIsShadowOnly;
+        case WorldModelSetting_HasTwoSidedShadows:    return self->_overridesHasTwoSidedShadows;
+        case WorldModelSetting_ShadowLod:             return self->_overridesShadowLod;
         case WorldModelSetting_OmitPixelation:
         case WorldModelSetting_Count:
             break;
@@ -420,22 +533,6 @@ Error WorldModelInstancesComponent_SetHasOutline(WorldModelInstancesComponent* s
     return Error_CreateSuccess();
 }
 
-Error WorldModelInstancesComponent_SetShadowTier(WorldModelInstancesComponent* self, WorldShadowTier shadowTier)
-{
-    if (self == NULL)
-    {
-        return CreateNullSelfError("WorldModelInstancesComponent_SetShadowTier");
-    }
-    Error CheckResult = CheckProperty(InstancesProperty_ShadowTier, PropertyValue_FromEnum((int32_t)shadowTier));
-    if (CheckResult.Code != ErrorCode_Success)
-    {
-        return CheckResult;
-    }
-    self->_shadowTier = shadowTier;
-    WorldInternal_ComponentAfterSet(self, &InstancesProperties[InstancesProperty_ShadowTier]);
-    return Error_CreateSuccess();
-}
-
 Error WorldModelInstancesComponent_SetCastsShadows(WorldModelInstancesComponent* self, bool castsShadows)
 {
     if (self == NULL)
@@ -443,6 +540,65 @@ Error WorldModelInstancesComponent_SetCastsShadows(WorldModelInstancesComponent*
         return CreateNullSelfError("WorldModelInstancesComponent_SetCastsShadows");
     }
     SetBool(self, &self->_castsShadows, castsShadows, InstancesProperty_CastsShadows);
+    return Error_CreateSuccess();
+}
+
+Error WorldModelInstancesComponent_SetShadowDistance(WorldModelInstancesComponent* self, float shadowDistance)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldModelInstancesComponent_SetShadowDistance");
+    }
+    return SetFloat(self, &self->_shadowDistance, shadowDistance, InstancesProperty_ShadowDistance);
+}
+
+Error WorldModelInstancesComponent_SetShadowDistanceMultiplier(WorldModelInstancesComponent* self, float multiplier)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldModelInstancesComponent_SetShadowDistanceMultiplier");
+    }
+    return SetFloat(self, &self->_shadowDistanceMultiplier, multiplier, InstancesProperty_ShadowDistanceMultiplier);
+}
+
+Error WorldModelInstancesComponent_SetIsShadowDistanceFixed(WorldModelInstancesComponent* self, bool isFixed)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldModelInstancesComponent_SetIsShadowDistanceFixed");
+    }
+    SetBool(self, &self->_isShadowDistanceFixed, isFixed, InstancesProperty_IsShadowDistanceFixed);
+    return Error_CreateSuccess();
+}
+
+Error WorldModelInstancesComponent_SetIsShadowOnly(WorldModelInstancesComponent* self, bool isShadowOnly)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldModelInstancesComponent_SetIsShadowOnly");
+    }
+    SetBool(self, &self->_isShadowOnly, isShadowOnly, InstancesProperty_IsShadowOnly);
+    return Error_CreateSuccess();
+}
+
+Error WorldModelInstancesComponent_SetHasTwoSidedShadows(WorldModelInstancesComponent* self, bool hasTwoSidedShadows)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldModelInstancesComponent_SetHasTwoSidedShadows");
+    }
+    SetBool(self, &self->_hasTwoSidedShadows, hasTwoSidedShadows, InstancesProperty_HasTwoSidedShadows);
+    return Error_CreateSuccess();
+}
+
+Error WorldModelInstancesComponent_SetShadowLod(WorldModelInstancesComponent* self, uint32_t lod)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldModelInstancesComponent_SetShadowLod");
+    }
+    self->_shadowLod = lod;
+    WorldInternal_ComponentAfterSet(self, &InstancesProperties[InstancesProperty_ShadowLod]);
     return Error_CreateSuccess();
 }
 
@@ -582,13 +738,26 @@ WorldModelSettings WorldModelInstancesComponent_ResolveSettings(const WorldModel
         Settings.HasOutline = self->_hasOutline;
     }
     Settings.OmitsPixelation = false;
-    if (self->_overridesShadowTier)
-    {
-        Settings.ShadowTier = self->_shadowTier;
-    }
     if (self->_overridesCastsShadows)
     {
         Settings.CastsShadows = self->_castsShadows;
+    }
+    if (self->_overridesIsShadowDistanceFixed)
+    {
+        Settings.IsShadowDistanceFixed = self->_isShadowDistanceFixed;
+    }
+    if (self->_overridesIsShadowOnly)
+    {
+        Settings.IsShadowOnly = self->_isShadowOnly;
+    }
+    if (self->_overridesHasTwoSidedShadows)
+    {
+        Settings.HasTwoSidedShadows = self->_hasTwoSidedShadows;
+    }
+    if (self->_overridesShadowLod)
+    {
+        Settings.ShadowLod = self->_shadowLod;
+        Settings.HasShadowLod = true;
     }
     if (self->_overridesHaze)
     {
@@ -607,6 +776,8 @@ WorldModelSettings WorldModelInstancesComponent_ResolveSettings(const WorldModel
     {
         Settings.IsDrawDistanceFixed = self->_isDrawDistanceFixed;
     }
+    WorldModelPlacement_ResolveShadowDistance(&Settings, self->_overridesShadowDistance, self->_shadowDistance,
+        self->_shadowDistanceMultiplier);
     return Settings;
 }
 

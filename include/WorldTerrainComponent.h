@@ -2,8 +2,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-// TerrainAsset.h for the settings a placement overrides (and the shadow tier and collision layer they hold);
-// WorldComponent.h for the component base and the registry entry.
+// TerrainAsset.h for the settings a placement overrides (and the collision layer they hold); WorldComponent.h for the
+// component base and the registry entry.
 #include "TerrainAsset.h"
 #include "WorldComponent.h"
 #include "wr/WRError.h"
@@ -23,10 +23,14 @@
  *
  * OVERRIDES. Each default of the terrain asset a placement may change is two rows: an override flag
  * ("overrides_<key>", false: the asset's value applies) and the placement's own value next to it, kept (and saved) while
- * the flag is off: has_outline, shadow_tier, casts_shadows, haze, draw_distance, is_draw_distance_fixed,
- * is_collision_enabled, collision_layer and collides_with. draw_distance_multiplier (above 0, default 1) multiplies whichever draw distance
- * applies. WorldTerrainComponent_ResolveSettings is the pure function that gives the settings in effect. Its table is
- * "terrain_component", in that order with "terrain" first; every change advances the component's revision.
+ * the flag is off: has_outline, casts_shadows, shadow_distance, is_shadow_distance_fixed, haze, draw_distance,
+ * is_draw_distance_fixed, is_collision_enabled, collision_layer and collides_with. draw_distance_multiplier (above 0,
+ * default 1) multiplies whichever draw distance applies and shadow_distance_multiplier whichever shadow distance applies
+ * (the draw distance in effect when neither the placement nor the terrain gives one).
+ * WorldTerrainComponent_ResolveSettings is the pure function that gives the settings in effect. Its table is
+ * "terrain_component" (version 2: older world files' shadow tier is read into the shadow distance, as for the model
+ * component), in that order with "terrain" first and each multiplier after its distance; every change advances the
+ * component's revision.
  */
 
 
@@ -43,8 +47,6 @@ typedef enum WorldTerrainSettingEnum
 {
     /** @brief has_outline. */
     WorldTerrainSetting_HasOutline,
-    /** @brief shadow_tier. */
-    WorldTerrainSetting_ShadowTier,
     /** @brief casts_shadows. */
     WorldTerrainSetting_CastsShadows,
     /** @brief draw_distance. */
@@ -59,6 +61,10 @@ typedef enum WorldTerrainSettingEnum
     WorldTerrainSetting_CollidesWith,
     /** @brief haze. */
     WorldTerrainSetting_Haze,
+    /** @brief shadow_distance. */
+    WorldTerrainSetting_ShadowDistance,
+    /** @brief is_shadow_distance_fixed. */
+    WorldTerrainSetting_IsShadowDistanceFixed,
     /** @brief The number of settings (not a setting). */
     WorldTerrainSetting_Count
 } WorldTerrainSetting;
@@ -77,10 +83,15 @@ typedef struct WorldTerrainComponentStruct
     /** @brief Override flags (false: the asset's value) and the placement's own values, kept while their flag is off. */
     bool _overridesHasOutline;
     bool _hasOutline;
-    bool _overridesShadowTier;
-    WorldShadowTier _shadowTier;
     bool _overridesCastsShadows;
     bool _castsShadows;
+    bool _overridesShadowDistance;
+    /** @brief Metres, above 0 (default TERRAIN_DEFAULT_SHADOW_DISTANCE). */
+    float _shadowDistance;
+    /** @brief Multiplies the shadow distance in effect; above 0 (default 1). */
+    float _shadowDistanceMultiplier;
+    bool _overridesIsShadowDistanceFixed;
+    bool _isShadowDistanceFixed;
     bool _overridesHaze;
     /** @brief The haze multiplier, in [0, WORLD_MODEL_MAX_HAZE] (default 1: the real air's haze; 0 as if the air were
      *  clear). */
@@ -191,24 +202,6 @@ static inline bool WorldTerrainComponent_HasOutline(const WorldTerrainComponent*
 Error WorldTerrainComponent_SetHasOutline(WorldTerrainComponent* self, bool hasOutline);
 
 /**
- * @brief The placement's own shadow tier (it applies while WorldTerrainSetting_ShadowTier is overridden).
- * @param self The component; must not be NULL.
- * @returns The tier.
- */
-static inline WorldShadowTier WorldTerrainComponent_GetShadowTier(const WorldTerrainComponent* self)
-{
-    return self->_shadowTier;
-}
-
-/**
- * @brief Sets the placement's own shadow tier (it applies while overridden).
- * @param self The component; must not be NULL.
- * @param shadowTier The cascade(s) it casts into.
- * @returns Success; ErrorCode_IllegalArgument for a NULL self; ErrorCode_ArgumentOutOfRange for a value outside the enum.
- */
-Error WorldTerrainComponent_SetShadowTier(WorldTerrainComponent* self, WorldShadowTier shadowTier);
-
-/**
  * @brief The placement's own "casts shadows" (it applies while WorldTerrainSetting_CastsShadows is overridden).
  * @param self The component; must not be NULL.
  * @returns true if it casts shadows.
@@ -225,6 +218,65 @@ static inline bool WorldTerrainComponent_CastsShadows(const WorldTerrainComponen
  * @returns Success; ErrorCode_IllegalArgument for a NULL self.
  */
 Error WorldTerrainComponent_SetCastsShadows(WorldTerrainComponent* self, bool castsShadows);
+
+/**
+ * @brief The placement's own shadow distance in metres (it applies while WorldTerrainSetting_ShadowDistance is
+ *        overridden): how far from the camera its chunks still cast.
+ * @param self The component; must not be NULL.
+ * @returns The distance.
+ */
+static inline float WorldTerrainComponent_GetShadowDistance(const WorldTerrainComponent* self)
+{
+    return self->_shadowDistance;
+}
+
+/**
+ * @brief Sets the placement's own shadow distance (it applies while overridden).
+ * @param self The component; must not be NULL.
+ * @param shadowDistance Metres, above 0.
+ * @returns Success; ErrorCode_IllegalArgument for a NULL self; ErrorCode_ArgumentOutOfRange for one not above 0 or not
+ *          finite.
+ */
+Error WorldTerrainComponent_SetShadowDistance(WorldTerrainComponent* self, float shadowDistance);
+
+/**
+ * @brief The multiplier of the shadow distance in effect.
+ * @param self The component; must not be NULL.
+ * @returns The multiplier (above 0).
+ */
+static inline float WorldTerrainComponent_GetShadowDistanceMultiplier(const WorldTerrainComponent* self)
+{
+    return self->_shadowDistanceMultiplier;
+}
+
+/**
+ * @brief Sets the multiplier of the shadow distance in effect (the placement's, the terrain's, or the draw distance in
+ *        effect when neither gives one).
+ * @param self The component; must not be NULL.
+ * @param multiplier Above 0.
+ * @returns Success; ErrorCode_IllegalArgument for a NULL self; ErrorCode_ArgumentOutOfRange for one not above 0 or not
+ *          finite.
+ */
+Error WorldTerrainComponent_SetShadowDistanceMultiplier(WorldTerrainComponent* self, float multiplier);
+
+/**
+ * @brief The placement's own "fixed shadow distance" (it applies while WorldTerrainSetting_IsShadowDistanceFixed is
+ *        overridden).
+ * @param self The component; must not be NULL.
+ * @returns true if fixed.
+ */
+static inline bool WorldTerrainComponent_IsShadowDistanceFixed(const WorldTerrainComponent* self)
+{
+    return self->_isShadowDistanceFixed;
+}
+
+/**
+ * @brief Sets the placement's own "fixed shadow distance" (it applies while overridden).
+ * @param self The component; must not be NULL.
+ * @param isFixed Whether the player's shadow_distance_scale leaves the shadow distance as it is.
+ * @returns Success; ErrorCode_IllegalArgument for a NULL self.
+ */
+Error WorldTerrainComponent_SetIsShadowDistanceFixed(WorldTerrainComponent* self, bool isFixed);
 
 /**
  * @brief The placement's own haze multiplier (it applies while WorldTerrainSetting_Haze is overridden).
@@ -358,8 +410,10 @@ Error WorldTerrainComponent_SetCollidesWith(WorldTerrainComponent* self, uint32_
 
 /**
  * @brief The settings in effect for this placement: the asset's (@p assetSettings), or the placement's own where their
- *        override flag is on; the draw distance times the multiplier; the mask the placement's, else the asset's, else
- *        the layer in effect's default mask (Collision.HasCollidesWith is then true: the mask is always resolved).
+ *        override flag is on; the draw distance times its multiplier; the shadow distance in effect (the placement's,
+ *        else the asset's, else the draw distance in effect; Render.HasShadowDistance says whether it is one of their
+ *        own) times its multiplier; the mask the placement's, else the asset's, else the layer in effect's default mask
+ *        (Collision.HasCollidesWith is then true: the mask is always resolved).
  * @param self The component; must not be NULL.
  * @param assetSettings The terrain's settings (TerrainAsset_GetSettings), or the defaults
  *        (TerrainSettings_CreateDefault) while no terrain is resolved; must not be NULL.

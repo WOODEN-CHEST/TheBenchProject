@@ -52,20 +52,6 @@ static float GetZoomFactor(const WorldVisibilityView* view)
     return (isfinite(view->ZoomFactor) && (view->ZoomFactor > 0.0f)) ? view->ZoomFactor : 1.0f;
 }
 
-/* Whether a model casts into the given shadow cascade, per its WorldShadowTier: Both casts into either; Near casts only
- * into the near cascade; Far casts only into the far cascade. */
-static bool ModelCastsIntoCascade(WorldShadowTier shadowTier, bool isNearCascade)
-{
-    switch (shadowTier)
-    {
-        case WorldShadowTier_Near: return isNearCascade;
-        case WorldShadowTier_Far:  return !isNearCascade;
-        case WorldShadowTier_Both: return true;
-    }
-    // Only reachable with a corrupted tier value; casting into both cascades is the safe choice.
-    return true;
-}
-
 /* Empties every list and the counts. */
 static void Clear(WorldVisibility* self)
 {
@@ -92,15 +78,23 @@ static bool AddIndex(GenericBuffer* list, size_t index)
 }
 
 /* An entry's fades: its draw distance fades it by the camera's distance to its bounding sphere (times @p zoomFactor),
- * its tint's alpha (the object's opacity) by 1 - opacity, and the draw takes the larger. */
+ * its tint's alpha (the object's opacity) by 1 - opacity, and the draw takes the larger; the shadow passes take the
+ * larger of that and its shadow distance's fade (the same distance against @p shadowDistance). */
 static WorldVisibilityFade GetFade(const WorldVisibilityView* view, Vector3 center, float radius, float drawDistance,
-    float zoomFactor, Color tint)
+    float shadowDistance, float zoomFactor, Color tint)
 {
     float Distance = WorldVisibility_GetEntryDistance(view->CameraPosition, center, radius) * zoomFactor;
     float DistanceFade = WorldVisibility_GetDistanceFade(Distance, drawDistance);
     float OpacityFade = WorldVisibility_GetOpacityFade((float)tint.a / (float)UCHAR_MAX);
-    return (WorldVisibilityFade){ .Distance = DistanceFade, .Combined = WorldVisibility_CombineFades(DistanceFade,
-        OpacityFade) };
+    float Combined = WorldVisibility_CombineFades(DistanceFade, OpacityFade);
+    float ShadowFade = WorldVisibility_CombineFades(Combined, WorldVisibility_GetDistanceFade(Distance, shadowDistance));
+    return (WorldVisibilityFade){ .Distance = DistanceFade, .Combined = Combined, .Shadow = ShadowFade };
+}
+
+/* The shadow distance scale to use: anything not finite or below 0 counts as 1. */
+static float GetShadowDistanceScale(const WorldVisibilityView* view)
+{
+    return SanitizeScale(view->ShadowDistanceScale);
 }
 
 /* Whether a sphere is inside a view volume, or culling is off. */
@@ -109,21 +103,58 @@ static bool IsInVolume(const WorldVisibilityView* view, const WorldFrustum* volu
     return !view->IsCullingEnabled || WorldVisibility_IsSphereInFrustum(volume, center, radius);
 }
 
-/* Adds a shadow caster that is drawn this frame to the shadow passes that run and that it reaches: a cascade when it
- * casts into that cascade and lies in its box, the cube shadow when it touches the light's reach sphere (anything further
- * cannot shadow what the light lights: the light falls to 0 at its reach). */
-static bool AddCaster(GenericBuffer lists[WorldVisibilityPass_Count], const WorldVisibilityView* view, Vector3 center,
-    float radius, bool castsIntoNear, bool castsIntoFar, size_t index)
+/* Whether a sphere lies wholly inside a shadow level's four sides (never with culling off): the level after it then
+ * leaves it out. A NaN counts as outside. */
+static bool IsInsideSides(const WorldVisibilityView* view, const WorldFrustum* box, Vector3 center, float radius)
 {
-    if (view->IsNearCascadeActive && castsIntoNear && IsInVolume(view, &view->NearCascade, center, radius)
-        && !AddIndex(&lists[WorldVisibilityPass_NearCascade], index))
+    static const WorldFrustumPlane Sides[] =
+    {
+        WorldFrustumPlane_Left, WorldFrustumPlane_Right, WorldFrustumPlane_Bottom, WorldFrustumPlane_Top
+    };
+    if (!view->IsCullingEnabled)
     {
         return false;
     }
-    if (view->IsFarCascadeActive && castsIntoFar && IsInVolume(view, &view->FarCascade, center, radius)
-        && !AddIndex(&lists[WorldVisibilityPass_FarCascade], index))
+    for (size_t Index = 0U; Index < (sizeof(Sides) / sizeof(Sides[0])); Index++)
     {
-        return false;
+        const WorldPlane* Plane = &box->Planes[Sides[Index]];
+        float SignedDistance = Plane->Normal.x*center.x + Plane->Normal.y*center.y + Plane->Normal.z*center.z
+            + Plane->Distance;
+        if (!(SignedDistance >= radius))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Adds a shadow caster that is drawn this frame, and casts (its shadow fade below 1), to the shadow passes that run and
+ * that it reaches: each shadow level that renders, when the caster's sphere is large enough for it, reaches within the
+ * shadow reach, lies in its box and, past the first level, is not deep inside the level before's box (its ring); with
+ * culling off, the box and the ring take everything (the size cut and the reach stay). The cube shadow takes it when it
+ * touches the light's reach sphere (anything further cannot shadow what the light lights: the light falls to 0 at its
+ * reach). */
+static bool AddCaster(GenericBuffer lists[WorldVisibilityPass_Count], const WorldVisibilityView* view, Vector3 center,
+    float radius, float shadowFade, size_t index)
+{
+    if (!(shadowFade < 1.0f))
+    {
+        return true;
+    }
+    bool IsWithinReach = WorldVisibility_GetEntryDistance(view->CameraPosition, center, radius) <= view->ShadowReach;
+    uint32_t LevelCount = (view->ShadowLevelCount < WORLD_VISIBILITY_MAX_SHADOW_LEVELS) ? view->ShadowLevelCount
+        : WORLD_VISIBILITY_MAX_SHADOW_LEVELS;
+    for (uint32_t Level = 0U; IsWithinReach && (Level < LevelCount); Level++)
+    {
+        const WorldVisibilityShadowLevel* ShadowLevel = &view->ShadowLevels[Level];
+        if (ShadowLevel->IsRendered && (radius >= ShadowLevel->MinRadius)
+            && IsInVolume(view, &ShadowLevel->Box, center, radius)
+            && !((Level > 0U) && IsInsideSides(view, &view->ShadowLevels[Level - 1U].Box, center,
+                radius + ShadowLevel->InnerInset))
+            && !AddIndex(&lists[WorldVisibility_GetShadowLevelPass(Level)], index))
+        {
+            return false;
+        }
     }
     if (view->IsPointShadowActive
         && (Vector3Distance(center, view->PointShadowPosition) < (radius + view->PointShadowReach))
@@ -173,18 +204,22 @@ static bool AddToCamera(WorldVisibility* self, GenericBuffer* cameraList, const 
     return true;
 }
 
-/* One model entry: its fades (none for an entry the passes do not draw at all), then the camera's list and the shadow
- * passes' lists it joins. */
+/* One model entry: its fades (none for an entry the passes do not draw at all), then the camera's list (unless it is
+ * only a shadow) and the shadow passes' lists it joins. */
 static bool AddModel(WorldVisibility* self, const WorldVisibilityView* view, const WorldRenderModel* model, size_t index)
 {
-    WorldVisibilityFade Fade = { .Distance = 1.0f, .Combined = 1.0f };
+    WorldVisibilityFade Fade = { .Distance = 1.0f, .Combined = 1.0f, .Shadow = 1.0f };
     if (model->IsDrawn)
     {
         // Its own draw distance (the world model's or the placement's, times its multiplier), scaled by the quality
-        // setting unless it is fixed, against the zoomed distance.
+        // setting unless it is fixed, against the zoomed distance; its shadow distance the same way.
         float DrawDistance = WorldVisibility_ScaleDrawDistance(model->DrawDistance, model->IsDrawDistanceFixed,
             view->DrawDistanceScale);
-        Fade = GetFade(view, model->RenderCenter, model->Radius, DrawDistance, GetZoomFactor(view), model->Tint);
+        float ShadowDistance = WorldVisibility_ScaleShadowDistance(DrawDistance, model->HasShadowDistance,
+            model->ShadowDistance, model->IsDrawDistanceFixed, model->IsShadowDistanceFixed, view->DrawDistanceScale,
+            GetShadowDistanceScale(view));
+        Fade = GetFade(view, model->RenderCenter, model->Radius, DrawDistance, ShadowDistance, GetZoomFactor(view),
+            model->Tint);
     }
     if (!GenericBuffer_AddLast(&self->_modelFades, &Fade))
     {
@@ -201,8 +236,8 @@ static bool AddModel(WorldVisibility* self, const WorldVisibilityView* view, con
     }
 
     bool IsInView = false;
-    if (!AddToCamera(self, &self->_models[WorldVisibilityPass_Camera], view, model->RenderCenter, model->Radius,
-        Fade.Combined, model->OmitsPixelation, index, &self->_counts.DrawnModelCount, &IsInView))
+    if (!model->IsShadowOnly && !AddToCamera(self, &self->_models[WorldVisibilityPass_Camera], view, model->RenderCenter,
+        model->Radius, Fade.Combined, model->OmitsPixelation, index, &self->_counts.DrawnModelCount, &IsInView))
     {
         return false;
     }
@@ -218,8 +253,7 @@ static bool AddModel(WorldVisibility* self, const WorldVisibilityView* view, con
     {
         return false;
     }
-    return !model->CastsShadows || AddCaster(self->_models, view, model->RenderCenter, model->Radius,
-        ModelCastsIntoCascade(model->ShadowTier, true), ModelCastsIntoCascade(model->ShadowTier, false), index);
+    return !model->CastsShadows || AddCaster(self->_models, view, model->RenderCenter, model->Radius, Fade.Shadow, index);
 }
 
 /* One sprite entry (the cache lists only sprites that have a frame to draw on shown objects). Its sphere is the one
@@ -228,10 +262,13 @@ static bool AddSprite(WorldVisibility* self, const WorldVisibilityView* view, co
     size_t index)
 {
     // Its own draw distance (the world sprite's, its kind's or the placement's, times its multiplier), with the models'
-    // rules: scaled by the quality setting unless it is fixed, against the zoomed distance.
+    // rules: scaled by the quality setting unless it is fixed, against the zoomed distance; its shadow distance too.
     float DrawDistance = WorldVisibility_ScaleDrawDistance(sprite->DrawDistance, sprite->IsDrawDistanceFixed,
         view->DrawDistanceScale);
-    WorldVisibilityFade Fade = GetFade(view, sprite->Shape.Position, sprite->BoundsRadius, DrawDistance,
+    float ShadowDistance = WorldVisibility_ScaleShadowDistance(DrawDistance, sprite->HasShadowDistance,
+        sprite->ShadowDistance, sprite->IsDrawDistanceFixed, sprite->IsShadowDistanceFixed, view->DrawDistanceScale,
+        GetShadowDistanceScale(view));
+    WorldVisibilityFade Fade = GetFade(view, sprite->Shape.Position, sprite->BoundsRadius, DrawDistance, ShadowDistance,
         GetZoomFactor(view), sprite->Tint);
     if (!GenericBuffer_AddLast(&self->_spriteFades, &Fade))
     {
@@ -243,25 +280,28 @@ static bool AddSprite(WorldVisibility* self, const WorldVisibilityView* view, co
         return true;
     }
 
-    if (!AddToCamera(self, &self->_sprites[WorldVisibilityPass_Camera], view, sprite->Shape.Position,
-        sprite->BoundsRadius, Fade.Combined, sprite->OmitsPixelation, index, &self->_counts.DrawnSpriteCount, NULL))
+    if (!sprite->IsShadowOnly && !AddToCamera(self, &self->_sprites[WorldVisibilityPass_Camera], view,
+        sprite->Shape.Position, sprite->BoundsRadius, Fade.Combined, sprite->OmitsPixelation, index,
+        &self->_counts.DrawnSpriteCount, NULL))
     {
         return false;
     }
-    // Sprites cast into both cascades.
     return !WorldRenderSprite_CastsShadows(sprite)
-        || AddCaster(self->_sprites, view, sprite->Shape.Position, sprite->BoundsRadius, true, true, index);
+        || AddCaster(self->_sprites, view, sprite->Shape.Position, sprite->BoundsRadius, Fade.Shadow, index);
 }
 
 /* One terrain chunk entry (the cache lists only chunks of shown terrains): its fades, then the camera's list when it
- * is in view (counted with its triangles), and the shadow passes' lists by its shadow tier, as a model's. */
+ * is in view (counted with its triangles), and the shadow passes' lists, as a model's. */
 static bool AddTerrainChunk(WorldVisibility* self, const WorldVisibilityView* view, const WorldRenderTerrainChunk* chunk,
     size_t index)
 {
     float DrawDistance = WorldVisibility_ScaleDrawDistance(chunk->DrawDistance, chunk->IsDrawDistanceFixed,
         view->DrawDistanceScale);
-    WorldVisibilityFade Fade = GetFade(view, chunk->RenderCenter, chunk->Radius, DrawDistance, GetZoomFactor(view),
-        chunk->Tint);
+    float ShadowDistance = WorldVisibility_ScaleShadowDistance(DrawDistance, chunk->HasShadowDistance,
+        chunk->ShadowDistance, chunk->IsDrawDistanceFixed, chunk->IsShadowDistanceFixed, view->DrawDistanceScale,
+        GetShadowDistanceScale(view));
+    WorldVisibilityFade Fade = GetFade(view, chunk->RenderCenter, chunk->Radius, DrawDistance, ShadowDistance,
+        GetZoomFactor(view), chunk->Tint);
     if (!GenericBuffer_AddLast(&self->_terrainChunkFades, &Fade))
     {
         return false;
@@ -285,20 +325,23 @@ static bool AddTerrainChunk(WorldVisibility* self, const WorldVisibilityView* vi
     {
         return false;
     }
-    return !chunk->CastsShadows || AddCaster(self->_terrainChunks, view, chunk->RenderCenter, chunk->Radius,
-        ModelCastsIntoCascade(chunk->ShadowTier, true), ModelCastsIntoCascade(chunk->ShadowTier, false), index);
+    return !chunk->CastsShadows || AddCaster(self->_terrainChunks, view, chunk->RenderCenter, chunk->Radius, Fade.Shadow,
+        index);
 }
 
 /* One instance cell entry (the cache lists only cells of drawn components): its fades by its sphere around every
- * copy, then the camera's list when it is in view (counted with its copies), and the shadow passes' lists by its shadow
- * tier, as a model's. */
+ * copy, then the camera's list when it is in view (counted with its copies) unless its copies are only shadows, and the
+ * shadow passes' lists, as a model's (each copy fades and is cut by its size in the vertex stage on its own). */
 static bool AddInstanceCell(WorldVisibility* self, const WorldVisibilityView* view, const WorldRenderInstanceCell* cell,
     size_t index)
 {
     float DrawDistance = WorldVisibility_ScaleDrawDistance(cell->DrawDistance, cell->IsDrawDistanceFixed,
         view->DrawDistanceScale);
-    WorldVisibilityFade Fade = GetFade(view, cell->RenderCenter, cell->Radius, DrawDistance, GetZoomFactor(view),
-        cell->Tint);
+    float ShadowDistance = WorldVisibility_ScaleShadowDistance(DrawDistance, cell->HasShadowDistance,
+        cell->ShadowDistance, cell->IsDrawDistanceFixed, cell->IsShadowDistanceFixed, view->DrawDistanceScale,
+        GetShadowDistanceScale(view));
+    WorldVisibilityFade Fade = GetFade(view, cell->RenderCenter, cell->Radius, DrawDistance, ShadowDistance,
+        GetZoomFactor(view), cell->Tint);
     if (!GenericBuffer_AddLast(&self->_instanceCellFades, &Fade))
     {
         return false;
@@ -308,7 +351,9 @@ static bool AddInstanceCell(WorldVisibility* self, const WorldVisibilityView* vi
         self->_counts.InstanceCellsFadedOutCount++;
         return true;
     }
-    if (IsInVolume(view, &view->CameraFrustum, cell->RenderCenter, cell->Radius))
+    // Copies that are only shadows cast and keep the sky out, but the camera's passes do not draw them.
+    bool IsInView = !cell->IsShadowOnly && IsInVolume(view, &view->CameraFrustum, cell->RenderCenter, cell->Radius);
+    if (IsInView)
     {
         if (!AddIndex(&self->_instanceCells[WorldVisibilityPass_Camera], index))
         {
@@ -317,7 +362,7 @@ static bool AddInstanceCell(WorldVisibility* self, const WorldVisibilityView* vi
         self->_counts.DrawnInstanceCellCount++;
         self->_counts.DrawnInstanceCount += cell->RecordCount;
     }
-    else
+    else if (!cell->IsShadowOnly)
     {
         self->_counts.InstanceCellsOutsideViewCount++;
     }
@@ -326,8 +371,8 @@ static bool AddInstanceCell(WorldVisibility* self, const WorldVisibilityView* vi
     {
         return false;
     }
-    return !cell->CastsShadows || AddCaster(self->_instanceCells, view, cell->RenderCenter, cell->Radius,
-        ModelCastsIntoCascade(cell->ShadowTier, true), ModelCastsIntoCascade(cell->ShadowTier, false), index);
+    return !cell->CastsShadows || AddCaster(self->_instanceCells, view, cell->RenderCenter, cell->Radius, Fade.Shadow,
+        index);
 }
 
 /* Whether a pass value names a list. */
@@ -385,6 +430,15 @@ bool WorldVisibility_IsSphereInFrustum(const WorldFrustum* frustum, Vector3 cent
 float WorldVisibility_ScaleDrawDistance(float drawDistance, bool isFixed, float scale)
 {
     return isFixed ? drawDistance : (drawDistance * SanitizeScale(scale));
+}
+
+float WorldVisibility_ScaleShadowDistance(float drawDistance, bool hasShadowDistance, float shadowDistance,
+    bool isDrawDistanceFixed, bool isShadowDistanceFixed, float drawDistanceScale, float shadowDistanceScale)
+{
+    float Distance = hasShadowDistance ? shadowDistance
+        : WorldVisibility_ScaleDrawDistance(shadowDistance, isDrawDistanceFixed, drawDistanceScale);
+    Distance = WorldVisibility_ScaleDrawDistance(Distance, isShadowDistanceFixed, shadowDistanceScale);
+    return (Distance < drawDistance) ? Distance : drawDistance; // a NaN takes the draw distance
 }
 
 float WorldVisibility_GetZoomFactor(float fovYDegrees)
@@ -622,7 +676,7 @@ WorldVisibilityFade WorldVisibility_GetInstanceCellFade(const WorldVisibility* s
 {
     if (index >= self->_instanceCellFades._count)
     {
-        return (WorldVisibilityFade){ .Distance = 1.0f, .Combined = 1.0f };
+        return (WorldVisibilityFade){ .Distance = 1.0f, .Combined = 1.0f, .Shadow = 1.0f };
     }
     const void* FadeData = self->_instanceCellFades._data;
     const WorldVisibilityFade* Fades = FadeData;
@@ -633,7 +687,7 @@ WorldVisibilityFade WorldVisibility_GetModelFade(const WorldVisibility* self, si
 {
     if (index >= self->_modelFades._count)
     {
-        return (WorldVisibilityFade){ .Distance = 1.0f, .Combined = 1.0f };
+        return (WorldVisibilityFade){ .Distance = 1.0f, .Combined = 1.0f, .Shadow = 1.0f };
     }
     const void* FadeData = self->_modelFades._data;
     const WorldVisibilityFade* Fades = FadeData;
@@ -644,7 +698,7 @@ WorldVisibilityFade WorldVisibility_GetSpriteFade(const WorldVisibility* self, s
 {
     if (index >= self->_spriteFades._count)
     {
-        return (WorldVisibilityFade){ .Distance = 1.0f, .Combined = 1.0f };
+        return (WorldVisibilityFade){ .Distance = 1.0f, .Combined = 1.0f, .Shadow = 1.0f };
     }
     const void* FadeData = self->_spriteFades._data;
     const WorldVisibilityFade* Fades = FadeData;
@@ -655,7 +709,7 @@ WorldVisibilityFade WorldVisibility_GetTerrainChunkFade(const WorldVisibility* s
 {
     if (index >= self->_terrainChunkFades._count)
     {
-        return (WorldVisibilityFade){ .Distance = 1.0f, .Combined = 1.0f };
+        return (WorldVisibilityFade){ .Distance = 1.0f, .Combined = 1.0f, .Shadow = 1.0f };
     }
     const void* FadeData = self->_terrainChunkFades._data;
     const WorldVisibilityFade* Fades = FadeData;

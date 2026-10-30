@@ -1199,6 +1199,22 @@ Error Properties_WriteJSON(const PropertyTable* table, const void* instance, JSO
     return Error_CreateSuccess();
 }
 
+Error Properties_MigrateJSON(const PropertyTable* table, JSONCompound* compound, const PropertyReadOptions* options)
+{
+    if ((table == NULL) || (compound == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Properties_MigrateJSON: table and compound must not be NULL.");
+    }
+    PropertyReadOptions Options = (options != NULL) ? *options : PropertyReadOptions_CreateDefault();
+    if ((Options.DataVersion == 0U) || (Options.DataVersion >= table->Version) || (table->Migrate == NULL))
+    {
+        return Error_CreateSuccess();
+    }
+    Error MigrateResult = table->Migrate(Options.DataVersion, compound, Options.Pool, Options.Logger);
+    return (MigrateResult.Code == ErrorCode_Success) ? MigrateResult
+        : PropertyInternal_WrapError(MigrateResult.Code, table, NULL, &MigrateResult);
+}
+
 Error Properties_ReadJSON(const PropertyTable* table, JSONCompound* compound, void* instance,
     const PropertyReadOptions* options)
 {
@@ -1208,13 +1224,10 @@ Error Properties_ReadJSON(const PropertyTable* table, JSONCompound* compound, vo
             "Properties_ReadJSON: table, compound and instance must not be NULL.");
     }
     PropertyReadOptions Options = (options != NULL) ? *options : PropertyReadOptions_CreateDefault();
-    if ((Options.DataVersion != 0U) && (Options.DataVersion < table->Version) && (table->Migrate != NULL))
+    Error MigrateResult = Properties_MigrateJSON(table, compound, &Options);
+    if (MigrateResult.Code != ErrorCode_Success)
     {
-        Error MigrateResult = table->Migrate(Options.DataVersion, compound, Options.Pool);
-        if (MigrateResult.Code != ErrorCode_Success)
-        {
-            return PropertyInternal_WrapError(MigrateResult.Code, table, NULL, &MigrateResult);
-        }
+        return MigrateResult;
     }
 
     // All or nothing, for the key registry too: a refused read forgets the keys its data rows interned.

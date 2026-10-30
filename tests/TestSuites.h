@@ -213,6 +213,12 @@ void WorldAnimationGraphTests_Run(TestRun* run);
  *  (WorldLodTests.c; a private module of source/). */
 void WorldLodTests_Run(TestRun* run);
 
+/** @brief The sun's and the moon's shadow levels: their sizes and texels, the levels the reach needs, which level a point
+ *  reads with the bands between them and the reach's fade, the size cut, the LODs far levels pick, the update schedule
+ *  (staggered periods, the turn and the move that render a kept level at once, new settings), and kept levels read as
+ *  they were rendered, near the origin and 10 000 km out (WorldShadowLevelsTests.c; a private module of source/). */
+void WorldShadowLevelsTests_Run(TestRun* run);
+
 /** @brief Instanced drawing's pure maths: cells (every copy in one, grid order, records composing back to the copies,
  *  spheres holding them, stable random values), LOD bands (around the switch distances, stopping at the middle,
  *  complementary and continuous, the zoom and the scales, a forced LOD), fades by the models' rule, the passes' rules

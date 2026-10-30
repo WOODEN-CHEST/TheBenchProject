@@ -348,6 +348,15 @@ void WorldInstancing_SetDrawDistance(WorldInstanceView* self, float drawDistance
     self->FadeBand = Band;
 }
 
+void WorldInstancing_SetShadowDistance(WorldInstanceView* self, float shadowDistance)
+{
+    WorldInstanceView Distance;
+    WorldInstancing_SetDrawDistance(&Distance, shadowDistance);
+    self->ShadowDistance = Distance.DrawDistance;
+    self->ShadowFadeStart = Distance.FadeStart;
+    self->ShadowFadeBand = Distance.FadeBand;
+}
+
 float WorldInstancing_GetDistanceFade(const WorldInstanceView* view, float distance)
 {
     if (!(distance < view->DrawDistance))
@@ -361,10 +370,19 @@ float WorldInstancing_GetDistanceFade(const WorldInstanceView* view, float dista
     return fminf((distance - view->FadeStart) / view->FadeBand, 1.0f);
 }
 
-WorldInstanceState WorldInstancing_Evaluate(const WorldInstanceView* view, const Matrix* cellRenderMatrix,
+/* A copy's sphere this frame: its radius, and the zoomed distances its LOD and its fade are measured at (the camera's
+ * at the origin to the sphere's centre and to its nearest point). */
+typedef struct CopySphereStruct
+{
+    float Radius;
+    float LodDistance;
+    float FadeDistance;
+} CopySphere;
+
+/* The copy's sphere: the bounds under its matrix (in the cell's space), then the cell's matrix into render space. */
+static CopySphere GetCopySphere(const WorldInstanceView* view, const Matrix* cellRenderMatrix,
     const WorldInstanceRecord* record)
 {
-    // The copy's sphere: the bounds under its matrix (in the cell's space), then the cell's matrix into render space.
     Vector3 Local = { ApplyRow(record, 0U, view->BoundsCenter), ApplyRow(record, 1U, view->BoundsCenter),
         ApplyRow(record, 2U, view->BoundsCenter) };
     const Matrix* M = cellRenderMatrix;
@@ -375,23 +393,30 @@ WorldInstanceState WorldInstancing_Evaluate(const WorldInstanceView* view, const
         (M->m2 * Local.x) + (M->m6 * Local.y) + (M->m10 * Local.z) + M->m14
     };
     float CenterDistance = sqrtf((Render.x * Render.x) + (Render.y * Render.y) + (Render.z * Render.z));
-    float Radius = view->BoundsRadius * GetLongestAxis(record);
-    float LodDistance = CenterDistance * view->ZoomFactor;
-    float FadeDistance = fmaxf(CenterDistance - Radius, 0.0f) * view->ZoomFactor;
+    CopySphere Sphere;
+    Sphere.Radius = view->BoundsRadius * GetLongestAxis(record);
+    Sphere.LodDistance = CenterDistance * view->ZoomFactor;
+    Sphere.FadeDistance = fmaxf(CenterDistance - Sphere.Radius, 0.0f) * view->ZoomFactor;
+    return Sphere;
+}
 
-    float Opacity = fminf(fmaxf(view->ObjectOpacity * ((float)record->Tint.a / 255.0f), 0.0f), 1.0f);
+/* A copy's state from its fade and the distance its LOD is picked at (or a LOD it shows whatever the distance, below the
+ * LOD count, or -1 for none). */
+static WorldInstanceState GetCopyState(const WorldInstanceView* view, float fade, float lodDistance, int forcedLod)
+{
     WorldInstanceState State =
     {
-        .Fade = fmaxf(WorldInstancing_GetDistanceFade(view, FadeDistance), 1.0f - Opacity),
+        .Fade = fade,
         .Lod = view->Bands.LodCount - 1U, .IncomingLod = view->Bands.LodCount - 1U, .Progress = 0.0f,
         .IsInBand = false
     };
-    if (view->Bands.IsForced)
+    if (forcedLod >= 0)
     {
-        State.Lod = view->Bands.ForcedLod;
+        State.Lod = (size_t)forcedLod;
         State.IncomingLod = State.Lod;
         return State;
     }
+    float LodDistance = lodDistance;
     for (size_t Band = 0U; (Band + 1U) < view->Bands.LodCount; Band++)
     {
         if (LodDistance < view->Bands.Start[Band])
@@ -410,6 +435,65 @@ WorldInstanceState WorldInstancing_Evaluate(const WorldInstanceView* view, const
         }
     }
     return State;
+}
+
+/* The copy's opacity's fade: 1 - the object's opacity times its tint's alpha. */
+static float GetOpacityFade(const WorldInstanceView* view, const WorldInstanceRecord* record)
+{
+    float Opacity = fminf(fmaxf(view->ObjectOpacity * ((float)record->Tint.a / 255.0f), 0.0f), 1.0f);
+    return 1.0f - Opacity;
+}
+
+/* A copy's shadow-distance fade at a zoomed distance to its sphere's nearest point (the view's shadow distance, the
+ * draw distance's rule). */
+static float GetShadowDistanceFade(const WorldInstanceView* view, float distance)
+{
+    if (!(distance < view->ShadowDistance))
+    {
+        return 1.0f;
+    }
+    if (distance <= view->ShadowFadeStart)
+    {
+        return 0.0f;
+    }
+    return fminf((distance - view->ShadowFadeStart) / view->ShadowFadeBand, 1.0f);
+}
+
+WorldInstanceState WorldInstancing_Evaluate(const WorldInstanceView* view, const Matrix* cellRenderMatrix,
+    const WorldInstanceRecord* record)
+{
+    CopySphere Sphere = GetCopySphere(view, cellRenderMatrix, record);
+    float Fade = fmaxf(WorldInstancing_GetDistanceFade(view, Sphere.FadeDistance), GetOpacityFade(view, record));
+    return GetCopyState(view, Fade, Sphere.LodDistance, view->Bands.IsForced ? (int)view->Bands.ForcedLod : -1);
+}
+
+WorldInstanceState WorldInstancing_EvaluateShadow(const WorldInstanceView* view, const Matrix* cellRenderMatrix,
+    const WorldInstanceRecord* record)
+{
+    CopySphere Sphere = GetCopySphere(view, cellRenderMatrix, record);
+    float Fade = fmaxf(WorldInstancing_GetDistanceFade(view, Sphere.FadeDistance), GetOpacityFade(view, record));
+    Fade = fmaxf(Fade, GetShadowDistanceFade(view, Sphere.FadeDistance));
+    if (!(Sphere.Radius >= view->ShadowMinRadius))
+    {
+        Fade = 1.0f; // too small for the pass's texels: its shadow could not show
+    }
+    int ForcedLod = (view->ShadowLod >= 0) ? view->ShadowLod : (view->Bands.IsForced ? (int)view->Bands.ForcedLod : -1);
+    return GetCopyState(view, Fade, fmaxf(Sphere.LodDistance, view->ShadowLodDistance), ForcedLod);
+}
+
+uint32_t WorldInstancing_GetShadowLodMask(const WorldInstanceView* view, uint32_t cameraMask, float nearest,
+    float farthest)
+{
+    if ((view->ShadowLod >= 0) && ((size_t)view->ShadowLod < WORLD_MODEL_MAX_LODS))
+    {
+        return (uint32_t)1U << (uint32_t)view->ShadowLod;
+    }
+    if (!(view->ShadowLodDistance > 0.0f))
+    {
+        return cameraMask;
+    }
+    return WorldInstancing_GetCellLodMask(&view->Bands, fmaxf(nearest, view->ShadowLodDistance),
+        fmaxf(farthest, view->ShadowLodDistance));
 }
 
 size_t WorldInstancing_GetSolidLod(const WorldInstanceState* state)

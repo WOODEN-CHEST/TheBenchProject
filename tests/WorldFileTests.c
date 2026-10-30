@@ -873,7 +873,7 @@ static void WrittenJSONLeavesOutDefaultsInTableOrder(TestRun* run)
     }
     const char* Expected =
         "{\n"
-        "    \"format_version\": 1,\n"
+        "    \"format_version\": 2,\n"
         "    \"next_object_id\": 3,\n"
         "    \"environment\": {},\n"
         "    \"objects\": [\n"
@@ -1028,8 +1028,8 @@ static void HostileJSONIsRefusedWithNothingLeft(TestRun* run)
     CheckRefusedJSON(run, &Keys, "{\"objects\": []}", NoVersion);
     const char* const ZeroVersion[] = { "at least 1", NULL };
     CheckRefusedJSON(run, &Keys, "{\"format_version\": 0}", ZeroVersion);
-    const char* const NewerVersion[] = { "format version 2 is newer than this game reads (1)", NULL };
-    CheckRefusedJSON(run, &Keys, "{\"format_version\": 2}", NewerVersion);
+    const char* const NewerVersion[] = { "format version 3 is newer than this game reads (2)", NULL };
+    CheckRefusedJSON(run, &Keys, "{\"format_version\": 3}", NewerVersion);
     const char* const TextVersion[] = { "format_version", NULL };
     CheckRefusedJSON(run, &Keys, "{\"format_version\": \"one\"}", TextVersion);
     const char* const LongName[] = { "name is longer than the 256 bytes", NULL };
@@ -1534,7 +1534,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 62U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 64U);
             // The terrain: one object placing the placeholder terrain around the ground slab.
             WorldComponent* Ground = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 51U, WorldComponentType_Terrain, &Ground)
@@ -1587,6 +1587,33 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
                 && WorldSpriteComponent_IsOverridden(WorldSpriteComponent_FromComponent(Mirrored),
                     WorldSpriteSetting_FlipX)
                 && WorldSpriteComponent_IsFlippedX(WorldSpriteComponent_FromComponent(Mirrored)));
+            // Two one-sided cards: the second casts from both faces (its own override), the first only from its back.
+            WorldComponent* OneSided = NULL;
+            WorldComponent* TwoSided = NULL;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 63U, WorldComponentType_Model, &OneSided)
+                && World_TryGetComponent(&Loaded, 64U, WorldComponentType_Model, &TwoSided)
+                && AreNamesEqual(WorldModelComponent_GetWorldModel(WorldModelComponent_FromComponent(OneSided)),
+                    (const unsigned char*)u8"test_card")
+                && !WorldModelComponent_IsOverridden(WorldModelComponent_FromComponent(OneSided),
+                    WorldModelSetting_HasTwoSidedShadows)
+                && WorldModelComponent_IsOverridden(WorldModelComponent_FromComponent(TwoSided),
+                    WorldModelSetting_HasTwoSidedShadows)
+                && WorldModelComponent_HasTwoSidedShadows(WorldModelComponent_FromComponent(TwoSided)));
+            // The shadow distance: four small props cast only near the camera (16 m), the metal cube as far as it is
+            // drawn.
+            static const uint64_t NearCasters[] = { 13U, 19U, 20U, 50U };
+            for (size_t Index = 0U; Index < (sizeof(NearCasters) / sizeof(NearCasters[0])); Index++)
+            {
+                WorldComponent* Prop = NULL;
+                TEST_CHECK(run, World_TryGetComponent(&Loaded, NearCasters[Index], WorldComponentType_Model, &Prop)
+                    && WorldModelComponent_IsOverridden(WorldModelComponent_FromComponent(Prop),
+                        WorldModelSetting_ShadowDistance)
+                    && (WorldModelComponent_GetShadowDistance(WorldModelComponent_FromComponent(Prop)) == 16.0f));
+            }
+            WorldComponent* MetalCube = NULL;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 14U, WorldComponentType_Model, &MetalCube)
+                && !WorldModelComponent_IsOverridden(WorldModelComponent_FromComponent(MetalCube),
+                    WorldModelSetting_ShadowDistance));
             // The variant example: two cubes of one world model, red and blue.
             WorldComponent* Painted = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 23U, WorldComponentType_Model, &Painted)
@@ -1910,12 +1937,15 @@ static void TheReferenceExamplesLoad(TestRun* run)
     Memory_Free(Path._data);
 }
 
-static void EveryTableInAWorldFileIsAtItsFirstVersion(TestRun* run)
+static void EveryTableInAWorldFileIsAtTheVersionItsFormatWrites(TestRun* run)
 {
     // World files map their format version to each table's data version (WorldFile.c, GetTableVersion): format 1
-    // wrote every table at version 1. A table that raises its version needs a new format version and that mapping.
+    // wrote every table at version 1, format 2 (the current one) writes the model, model instances and terrain
+    // components at 2 and every other table at 1. A table that raises its version again needs a new format version and
+    // that mapping.
     KeyRegistry Keys;
     World Probe;
+    TEST_CHECK(run, WORLD_FILE_FORMAT_VERSION == 2U);
     TEST_CHECK(run, WorldEnvironment_GetPropertyTable()->Version == 1U);
     TEST_CHECK(run, WorldObject_GetPropertyTable()->Version == 1U);
     if (TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys)))
@@ -1924,12 +1954,231 @@ static void EveryTableInAWorldFileIsAtItsFirstVersion(TestRun* run)
         {
             for (size_t Type = 0U; Type < World_GetComponentTypeCount(&Probe); Type++)
             {
-                TEST_CHECK(run, World_GetComponentTypeInfo(&Probe, (WorldComponentType)Type)->Table->Version == 1U);
+                WorldComponentType Kind = (WorldComponentType)Type;
+                bool IsRaised = (Kind == WorldComponentType_Model) || (Kind == WorldComponentType_ModelInstances)
+                    || (Kind == WorldComponentType_Terrain);
+                TEST_CHECK(run, World_GetComponentTypeInfo(&Probe, Kind)->Table->Version == (IsRaised ? 2U : 1U));
             }
             TEST_CHECK_SUCCESS(run, World_Deconstruct(&Probe));
         }
         KeyRegistry_Deconstruct(&Keys);
     }
+}
+
+/* The block of the component of @p type of the object at @p index of a GHDF world tree (NULL with a failed check when it
+ * has none). */
+static GHDFCompound* GetGHDFComponent(TestRun* run, GHDFCompound* root, size_t index, WorldComponentType type)
+{
+    GHDFObjectValue Objects;
+    GHDFObjectValue Object;
+    GHDFObjectValue Components;
+    GHDFObjectValue Block;
+    // references/world_structure.md: a component's entry id is its type's value + 1.
+    if (!TEST_CHECK_SUCCESS(run, GHDFCompound_Get(root, WorldFileRootEntry_Objects, &Objects))
+        || !TEST_CHECK_SUCCESS(run, GHDFArray_Get(Objects.Value.Array, index, &Object))
+        || !TEST_CHECK_SUCCESS(run, GHDFCompound_Get(Object.Value.Compound, WorldFileObjectEntry_Components,
+            &Components))
+        || !TEST_CHECK_SUCCESS(run, GHDFCompound_Get(Components.Value.Compound, (GHDFEntryID)type + 1U, &Block)))
+    {
+        return NULL;
+    }
+    return Block.Value.Compound;
+}
+
+/* Puts an older version's shadow tier pair into a component's GHDF block. */
+static void PutGHDFShadowTier(TestRun* run, GHDFCompound* block, GHDFEntryID flagId, GHDFEntryID tierId, bool overrides,
+    int64_t tier)
+{
+    GHDFObjectValue Flag = GHDFObjectValue_CreateBoolean(overrides);
+    GHDFObjectValue Tier = GHDFObjectValue_CreateEncodedInteger(tier);
+    TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(block, flagId, GHDF_CreateRegularType(GHDFValueType_Boolean), &Flag));
+    TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(block, tierId, GHDF_CreateRegularType(GHDFValueType_EncodedInteger),
+        &Tier));
+}
+
+/* Checks a model component's shadow distance override and value. */
+static void CheckModelShadowDistance(TestRun* run, World* world, uint64_t id, bool isOverridden, float distance)
+{
+    WorldComponent* Component = NULL;
+    WorldModelComponent* Placement = World_TryGetComponent(world, id, WorldComponentType_Model, &Component)
+        ? WorldModelComponent_FromComponent(Component) : NULL;
+    if (!TEST_CHECK(run, (Placement != NULL)
+        && (WorldModelComponent_IsOverridden(Placement, WorldModelSetting_ShadowDistance) == isOverridden)
+        && (WorldModelComponent_GetShadowDistance(Placement) == distance)))
+    {
+        printf("      (object %" PRIu64 ")\n", id);
+    }
+}
+
+/* Format 1's placements held a shadow tier (which of two shadow maps they cast into); their tables' migrations read it:
+ * "near" is a 16 m shadow distance (overridden as the tier was, kept as the tier was kept), "both" nothing, "far" is
+ * dropped with one warning each; the old keys are no unknown names. Written again, the world is format 2 without them.
+ * The same from GHDF, by wire ids; a tier that is no tier is refused, naming the object and the table. */
+static void AnOlderFilesShadowTierIsReadIntoTheShadowDistance(TestRun* run)
+{
+    GenericBuffer Directory;
+    GenericBuffer_AllocateVariable(&Directory, WORLD_FILE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    Logger Log;
+    KeyRegistry Keys;
+    if (!TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "world_file_shadow_tier", &Directory))
+        || !TEST_CHECK_SUCCESS(run, Logger_Construct(&Log, Directory._data)))
+    {
+        Memory_Free(Directory._data);
+        return;
+    }
+    GenericBuffer Written;
+    GenericBuffer_AllocateVariable(&Written, WORLD_FILE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    if (TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys)))
+    {
+        const char* Text =
+            "{\"format_version\": 1, \"objects\": [\n"
+            " {\"id\": 1, \"components\": {\"model\": {\"world_model\": \"a\", \"overrides_shadow_tier\": true, "
+            "\"shadow_tier\": \"near\"}}},\n"
+            " {\"id\": 2, \"components\": {\"model\": {\"world_model\": \"a\", \"shadow_tier\": \"near\"}}},\n"
+            " {\"id\": 3, \"components\": {\"model\": {\"world_model\": \"a\", \"overrides_shadow_tier\": true, "
+            "\"shadow_tier\": \"far\"}}},\n"
+            " {\"id\": 4, \"components\": {\"model\": {\"world_model\": \"a\", \"overrides_shadow_tier\": true, "
+            "\"shadow_tier\": \"both\"}}},\n"
+            " {\"id\": 5, \"components\": {\"model_instances\": {\"world_model\": \"a\", \"overrides_shadow_tier\": "
+            "true, \"shadow_tier\": \"near\"}}},\n"
+            " {\"id\": 6, \"components\": {\"terrain\": {\"terrain\": \"t\", \"overrides_shadow_tier\": true, "
+            "\"shadow_tier\": \"near\"}}}]}";
+        World Loaded;
+        if (TEST_CHECK_SUCCESS(run, ReadJSONText(Text, &Keys, &Log, &Loaded)))
+        {
+            CheckModelShadowDistance(run, &Loaded, 1U, true, WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE);
+            CheckModelShadowDistance(run, &Loaded, 2U, false, WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE);
+            CheckModelShadowDistance(run, &Loaded, 3U, false, WORLD_MODEL_DEFAULT_SHADOW_DISTANCE);
+            CheckModelShadowDistance(run, &Loaded, 4U, false, WORLD_MODEL_DEFAULT_SHADOW_DISTANCE);
+            WorldComponent* Component = NULL;
+            WorldModelInstancesComponent* Instances = World_TryGetComponent(&Loaded, 5U,
+                WorldComponentType_ModelInstances, &Component) ? WorldModelInstancesComponent_FromComponent(Component)
+                : NULL;
+            TEST_CHECK(run, (Instances != NULL)
+                && WorldModelInstancesComponent_IsOverridden(Instances, WorldModelSetting_ShadowDistance)
+                && (WorldModelInstancesComponent_GetShadowDistance(Instances) == WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE));
+            WorldTerrainComponent* Terrain = World_TryGetComponent(&Loaded, 6U, WorldComponentType_Terrain, &Component)
+                ? WorldTerrainComponent_FromComponent(Component) : NULL;
+            TEST_CHECK(run, (Terrain != NULL)
+                && WorldTerrainComponent_IsOverridden(Terrain, WorldTerrainSetting_ShadowDistance)
+                && (WorldTerrainComponent_GetShadowDistance(Terrain) == WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE));
+            // Written again: format 2, the shadow distance's keys, no tier.
+            if (TEST_CHECK_SUCCESS(run, WorldFile_WriteJSON(&Loaded, &Written))
+                && TEST_CHECK(run, GenericBuffer_NullTerminate(&Written)))
+            {
+                const char* Again = (const char*)Written._data;
+                TEST_CHECK(run, (strstr(Again, "\"format_version\": 2,") != NULL) && (strstr(Again, "shadow_tier") == NULL)
+                    && (strstr(Again, "\"overrides_shadow_distance\": true,") != NULL)
+                    && (strstr(Again, "\"shadow_distance\": 16.0") != NULL));
+            }
+            TEST_CHECK_SUCCESS(run, World_Deconstruct(&Loaded));
+        }
+        // A format 2 file is not migrated: a tier there is an unknown key.
+        if (TEST_CHECK_SUCCESS(run, ReadJSONText("{\"format_version\": 2, \"objects\": [{\"id\": 1, \"components\": "
+            "{\"model\": {\"world_model\": \"a\", \"shadow_tier\": \"near\"}}}]}", &Keys, &Log, &Loaded)))
+        {
+            CheckModelShadowDistance(run, &Loaded, 1U, false, WORLD_MODEL_DEFAULT_SHADOW_DISTANCE);
+            TEST_CHECK_SUCCESS(run, World_Deconstruct(&Loaded));
+        }
+        const char* const BadTier[] = { "object 1", "model_component", "shadow_tier must be \"both\", \"near\" or \"far\"",
+            NULL };
+        CheckRefusedJSON(run, &Keys, "{\"format_version\": 1, \"objects\": [{\"id\": 1, \"components\": {\"model\": "
+            "{\"shadow_tier\": \"middle\"}}}]}", BadTier);
+        const char* const BadFlag[] = { "object 1", "terrain_component", "overrides_shadow_tier", NULL };
+        CheckRefusedJSON(run, &Keys, "{\"format_version\": 1, \"objects\": [{\"id\": 1, \"components\": "
+            "{\"terrain\": {\"overrides_shadow_tier\": 1}}}]}", BadFlag);
+
+        // GHDF: a world of the placements written today, made format 1 with the tier's entries.
+        World Source;
+        GenericBuffer Bytes;
+        GenericBuffer_AllocateVariable(&Bytes, WORLD_FILE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+        GenericBuffer Edited;
+        GenericBuffer_AllocateVariable(&Edited, WORLD_FILE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+        GHDFObjectPool* Pool = NULL;
+        GHDFCompound* Root = NULL;
+        if (TEST_CHECK_SUCCESS(run, World_Construct1(&Source, &Keys)))
+        {
+            static const WorldComponentType Types[] =
+            {
+                WorldComponentType_Model, WorldComponentType_Model, WorldComponentType_ModelInstances,
+                WorldComponentType_Terrain
+            };
+            for (size_t Index = 0U; Index < (sizeof(Types) / sizeof(Types[0])); Index++)
+            {
+                WorldObject* Object = CreateObject(run, &Source);
+                WorldComponent* Added = NULL;
+                TEST_CHECK(run, (Object != NULL) && TEST_CHECK_SUCCESS(run, World_AddComponent(&Source,
+                    WorldObject_GetId(Object), Types[Index], &Added)));
+            }
+            if (TEST_CHECK_SUCCESS(run, WorldFile_WriteGHDF(&Source, &Bytes))
+                && TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&Pool)) && ReadGHDFTree(run, Pool, &Bytes, &Root))
+            {
+                TEST_CHECK_SUCCESS(run, GameGHDF_PutUnsigned(Root, WorldFileRootEntry_FormatVersion, 1U));
+                GHDFCompound* Near = GetGHDFComponent(run, Root, 0U, WorldComponentType_Model);
+                GHDFCompound* Far = GetGHDFComponent(run, Root, 1U, WorldComponentType_Model);
+                GHDFCompound* Copies = GetGHDFComponent(run, Root, 2U, WorldComponentType_ModelInstances);
+                GHDFCompound* Ground = GetGHDFComponent(run, Root, 3U, WorldComponentType_Terrain);
+                if ((Near != NULL) && (Far != NULL) && (Copies != NULL) && (Ground != NULL))
+                {
+                    // The model blocks' tier pair is 10 and 4, the terrain's 4 and 5.
+                    PutGHDFShadowTier(run, Near, 10U, 4U, true, 1);
+                    PutGHDFShadowTier(run, Far, 10U, 4U, true, 2);
+                    PutGHDFShadowTier(run, Copies, 10U, 4U, false, 1);
+                    PutGHDFShadowTier(run, Ground, 4U, 5U, true, 1);
+                }
+                World FromGHDF;
+                if (WriteGHDFTree(run, Root, &Edited)
+                    && TEST_CHECK_SUCCESS(run, ReadGHDFBytes(&Edited, &Keys, &Log, &FromGHDF)))
+                {
+                    CheckModelShadowDistance(run, &FromGHDF, 1U, true, WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE);
+                    CheckModelShadowDistance(run, &FromGHDF, 2U, false, WORLD_MODEL_DEFAULT_SHADOW_DISTANCE);
+                    WorldComponent* Component = NULL;
+                    WorldModelInstancesComponent* Instances = World_TryGetComponent(&FromGHDF, 3U,
+                        WorldComponentType_ModelInstances, &Component)
+                        ? WorldModelInstancesComponent_FromComponent(Component) : NULL;
+                    TEST_CHECK(run, (Instances != NULL)
+                        && !WorldModelInstancesComponent_IsOverridden(Instances, WorldModelSetting_ShadowDistance)
+                        && (WorldModelInstancesComponent_GetShadowDistance(Instances)
+                            == WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE));
+                    WorldTerrainComponent* Terrain = World_TryGetComponent(&FromGHDF, 4U, WorldComponentType_Terrain,
+                        &Component) ? WorldTerrainComponent_FromComponent(Component) : NULL;
+                    TEST_CHECK(run, (Terrain != NULL)
+                        && WorldTerrainComponent_IsOverridden(Terrain, WorldTerrainSetting_ShadowDistance)
+                        && (WorldTerrainComponent_GetShadowDistance(Terrain) == WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE));
+                    TEST_CHECK_SUCCESS(run, World_Deconstruct(&FromGHDF));
+                }
+                // A tier past the three: refused, naming the object and the table.
+                GenericBuffer_Clear(&Edited);
+                if (Near != NULL)
+                {
+                    PutGHDFShadowTier(run, Near, 10U, 4U, true, 7);
+                }
+                const char* const OutOfRange[] = { "object 1", "model_component", "shadow_tier", NULL };
+                if (WriteGHDFTree(run, Root, &Edited))
+                {
+                    CheckRefusedGHDF(run, &Keys, &Edited, OutOfRange);
+                }
+                TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Root, true));
+            }
+            TEST_CHECK_SUCCESS(run, World_Deconstruct(&Source));
+        }
+        if (Pool != NULL)
+        {
+            TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(Pool));
+        }
+        Memory_Free(Edited._data);
+        Memory_Free(Bytes._data);
+        KeyRegistry_Deconstruct(&Keys);
+    }
+    TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
+    // One warning per dropped "far" (JSON's object 3, GHDF's object 2); the old keys and the retired ids are no unknown
+    // names, but a tier in a format 2 file is.
+    const unsigned char* Base = Directory._data;
+    TEST_CHECK(run, CountInLatestLog(run, Base, "model_component: an older file's shadow_tier \"far\" is dropped") == 2U);
+    TEST_CHECK(run, CountInLatestLog(run, Base, "skipped the unknown key \"shadow_tier\" in model_component") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Base, "skipped the unknown") == 1U);
+    Memory_Free(Written._data);
+    Memory_Free(Directory._data);
 }
 
 static void WorldNamesAreValidated(TestRun* run)
@@ -2154,7 +2403,9 @@ static const TestCase WorldFileTestCases[] =
     { "the_shipped_test_world_loads_and_is_written_the_same", TheShippedTestWorldLoadsAndIsWrittenTheSame },
     { "positions_are_doubles_and_old_saves_load", PositionsAreDoublesAndOldSavesLoad },
     { "the_reference_examples_load", TheReferenceExamplesLoad },
-    { "every_table_in_a_world_file_is_at_its_first_version", EveryTableInAWorldFileIsAtItsFirstVersion },
+    { "every_table_in_a_world_file_is_at_the_version_its_format_writes",
+        EveryTableInAWorldFileIsAtTheVersionItsFormatWrites },
+    { "an_older_files_shadow_tier_is_read_into_the_shadow_distance", AnOlderFilesShadowTierIsReadIntoTheShadowDistance },
     { "world_names_are_validated", WorldNamesAreValidated },
     { "a_used_up_id_counter_still_saves", AUsedUpIdCounterStillSaves },
     { "the_tree_limit_refuses_large_files", TheTreeLimitRefusesLargeFiles },

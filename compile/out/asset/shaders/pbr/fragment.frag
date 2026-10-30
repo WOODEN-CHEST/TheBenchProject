@@ -87,7 +87,7 @@ void main()
     // Base reflectance: 0.04 for dielectrics, the albedo for metals.
     vec3 f0 = mix(vec3(0.04), albedo, metal);
 
-    // The sun and (at night) the moon through the air at the fragment's height, darkened by the cascades' shadow, read
+    // The sun and (at night) the moon through the air at the fragment's height, darkened by the shadow levels' shadow, read
     // off the triangle's own face (what the maps hold). Then the point lights, the cube-shadow light read at the fragment
     // itself.
     SkyLightValues light = SkyLightAt(fragPosition);
@@ -113,9 +113,11 @@ void main()
     reflected = NightVisionOf(reflected);
     vec3 color = reflected + emissive;
 
-    // The haze in front of it (aerial perspective, the ground haze), then interior lighting's debug view while it is on.
+    // The haze in front of it (aerial perspective, the ground haze), then the debug views of interior lighting and the
+    // shadow levels while they are on.
     color = ApplyAerialPerspective(color, fragPosition);
     color = InteriorViewColor(color, fragPosition, surfaceNormal, skyVisibility);
+    color = ShadowLevelViewColor(color, fragPosition);
 
     // The fade is tested last, after every derivative and mipmapped fetch above, so those stay defined for the pixels
     // that are drawn.

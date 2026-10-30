@@ -146,8 +146,11 @@ static void ResolvesModelsAndComputesWorldBounds(TestRun* run)
             // Before any LOD update the entry holds no LOD yet: it reads as LOD 0, not fading.
             TEST_CHECK(run, !Models[0].Lod.IsStarted && (Models[0].Lod.CurrentLod == 0U)
                 && !WorldLodState_IsFading(&Models[0].Lod));
-            TEST_CHECK(run, Models[0].HasOutline && !Models[0].OmitsPixelation && Models[0].CastsShadows
-                && (Models[0].ShadowTier == WorldShadowTier_Both));
+            TEST_CHECK(run, Models[0].HasOutline && !Models[0].OmitsPixelation && Models[0].CastsShadows);
+            // Casting as far as it is drawn (the draw distance stands in for the shadow distance), drawn itself.
+            TEST_CHECK(run, !Models[0].HasShadowDistance && (Models[0].ShadowDistance == 600.0f)
+                && !Models[0].IsShadowDistanceFixed && !Models[0].IsShadowOnly && !Models[0].HasTwoSidedShadows
+                && !Models[0].HasShadowLod);
             TEST_CHECK(run, (Models[0].DrawDistance == 600.0f) && !Models[0].IsDrawDistanceFixed
                 && !Models[0].HasVariant);
         }
@@ -430,7 +433,7 @@ static void DisabledAndHiddenObjectsAreNotDrawn(TestRun* run)
 }
 
 /* An entry carries the settings in effect: the world model's while the placement overrides nothing, the placement's own
- * while their flags are on, and the draw distance in effect times the multiplier. */
+ * while their flags are on, and the draw and shadow distances in effect times their multipliers. */
 static void EntriesCarryTheSettingsInEffect(TestRun* run)
 {
     CacheFixture Fixture;
@@ -438,8 +441,9 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
     if (!CacheFixture_Construct(run, &Fixture)
         || !TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"dark_box\", \"lods\": [{\"model\": \"box\", "
             "\"max_distance\": 20}], \"draw_distance\": 50, \"is_draw_distance_fixed\": true, \"render\": {"
-            "\"has_outline\": false, \"omit_pixelation\": true, \"shadow_tier\": \"far\", \"casts_shadows\": false, "
-            "\"haze\": 0.5, \"occludes_sky\": false}}")
+            "\"has_outline\": false, \"omit_pixelation\": true, \"casts_shadows\": false, \"shadow_distance\": 40, "
+            "\"is_shadow_distance_fixed\": true, \"is_shadow_only\": true, \"has_two_sided_shadows\": true, "
+            "\"shadow_lod\": 2, \"haze\": 0.5, \"occludes_sky\": false}}")
         || ((ModelComponent = AddModel(run, &Fixture.World, "dark_box", Vector3Zero(), (Vector3){ 1.0f, 1.0f, 1.0f }))
             == NULL)
         || !CacheFixture_Sync(run, &Fixture))
@@ -450,25 +454,32 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
     size_t Count = 0;
     const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
     TEST_CHECK(run, (Count == 1) && Models[0].IsDrawn && !Models[0].HasOutline && Models[0].OmitsPixelation
-        && (Models[0].ShadowTier == WorldShadowTier_Far) && !Models[0].CastsShadows && (Models[0].DrawDistance == 50.0f)
-        && Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.5f) && !Models[0].OccludesSky);
+        && !Models[0].CastsShadows && (Models[0].DrawDistance == 50.0f) && Models[0].IsDrawDistanceFixed
+        && (Models[0].Haze == 0.5f) && !Models[0].OccludesSky);
+    TEST_CHECK(run, (Count == 1) && Models[0].HasShadowDistance && (Models[0].ShadowDistance == 40.0f)
+        && Models[0].IsShadowDistanceFixed && Models[0].IsShadowOnly && Models[0].HasTwoSidedShadows
+        && Models[0].HasShadowLod && (Models[0].ShadowLod == 2U));
 
     // The placement's own values (kept from before) apply once their flags are on; the multiplier always does.
     for (int Setting = 0; Setting < (int)WorldModelSetting_Count; Setting++)
     {
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(ModelComponent, (WorldModelSetting)Setting, true));
     }
-    TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowTier(ModelComponent, WorldShadowTier_Near));
+    TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowDistance(ModelComponent, 25.0f));
+    TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowDistanceMultiplier(ModelComponent, 0.5f));
+    TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowLod(ModelComponent, 1U));
     TEST_CHECK_SUCCESS(run, WorldModelComponent_SetDrawDistance(ModelComponent, 30.0f));
     TEST_CHECK_SUCCESS(run, WorldModelComponent_SetDrawDistanceMultiplier(ModelComponent, 2.0f));
     TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHaze(ModelComponent, 0.0f));
     if (CacheFixture_Sync(run, &Fixture))
     {
         Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
-        TEST_CHECK(run, (Count == 1) && Models[0].HasOutline && !Models[0].OmitsPixelation
-            && (Models[0].ShadowTier == WorldShadowTier_Near) && Models[0].CastsShadows
+        TEST_CHECK(run, (Count == 1) && Models[0].HasOutline && !Models[0].OmitsPixelation && Models[0].CastsShadows
             && (Models[0].DrawDistance == 60.0f) && !Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.0f)
             && Models[0].OccludesSky);
+        TEST_CHECK(run, (Count == 1) && Models[0].HasShadowDistance && (Models[0].ShadowDistance == 12.5f)
+            && !Models[0].IsShadowDistanceFixed && !Models[0].IsShadowOnly && !Models[0].HasTwoSidedShadows
+            && Models[0].HasShadowLod && (Models[0].ShadowLod == 1U));
     }
 
     // Overrides off again: the world model's settings, its distance times the multiplier.
@@ -479,9 +490,11 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
     if (CacheFixture_Sync(run, &Fixture))
     {
         Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
-        TEST_CHECK(run, (Count == 1) && !Models[0].HasOutline && (Models[0].ShadowTier == WorldShadowTier_Far)
-            && (Models[0].DrawDistance == 100.0f) && Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.5f)
-            && !Models[0].OccludesSky);
+        TEST_CHECK(run, (Count == 1) && !Models[0].HasOutline && (Models[0].DrawDistance == 100.0f)
+            && Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.5f) && !Models[0].OccludesSky);
+        TEST_CHECK(run, (Count == 1) && Models[0].HasShadowDistance && (Models[0].ShadowDistance == 20.0f)
+            && Models[0].IsShadowDistanceFixed && Models[0].IsShadowOnly && Models[0].HasTwoSidedShadows
+            && Models[0].HasShadowLod && (Models[0].ShadowLod == 2U));
     }
     CacheFixture_Deconstruct(run, &Fixture);
 }
@@ -1773,7 +1786,8 @@ static void TerrainChunksAreListedWhereTheirObjectPutsThem(TestRun* run)
                     && ((Index == 0U) || (Entry->ChunkIndex > Chunks[Index - 1U].ChunkIndex))
                     && (Entry->TriangleCount == TerrainChunk_GetSurfaceTriangleCount(Source)));
                 Color Tint = RenderColor_GetFinalColor(WorldObject_GetTint(Owner));
-                TEST_CHECK(run, Entry->HasOutline && (Entry->ShadowTier == WorldShadowTier_Both) && Entry->CastsShadows
+                TEST_CHECK(run, Entry->HasOutline && Entry->CastsShadows && !Entry->HasShadowDistance
+                    && (Entry->ShadowDistance == TERRAIN_DEFAULT_DRAW_DISTANCE) && !Entry->IsShadowDistanceFixed
                     && (Entry->DrawDistance == TERRAIN_DEFAULT_DRAW_DISTANCE) && Entry->IsDrawDistanceFixed
                     && (Entry->Tint.r == Tint.r) && (Entry->Tint.a == Tint.a) && (Tint.a < 200));
                 // A surface vertex through the chunk's matrix is the terrain's vertex through the object's.

@@ -20,8 +20,10 @@
  * FRUSTUMS. A view-projection matrix (raymath's order, MatrixMultiply(view, projection); perspective or orthographic)
  * gives six planes (Gribb and Hartmann) with unit normals pointing inward; a sphere is outside when it lies wholly behind
  * one of them. The camera's frustum culls what the scene, G-buffer and crisp passes draw. Shadow casters are never culled
- * by the camera (a caster off screen can still shadow what is on it): each shadow cascade culls its casters against its
- * own orthographic box, and the cube shadow keeps its reach test. The sky's visibility map (interior lighting) takes
+ * by the camera (a caster off screen can still shadow what is on it): each shadow level that renders this frame culls its
+ * casters against its own orthographic box (its sides and far plane: what lies nearer the light than the box is drawn
+ * onto its near plane), keeps only those large enough for its texels (its size cut) and those within the world's shadow
+ * reach, and the cube shadow keeps its reach test. The sky's visibility map (interior lighting) takes
  * what keeps the sky out within its box the same way, whether it casts shadows or not: models and instance cells whose
  * settings occlude the sky, and every terrain chunk.
  *
@@ -41,6 +43,13 @@
  * G-buffer draws an entry solid while its fade is below WORLD_VISIBILITY_GBUFFER_FADE_LIMIT and skips it above, so
  * outlines and AO switch off once, at mid-fade, instead of breaking up with the dither.
  *
+ * SHADOW DISTANCE. How far from the camera an entry still casts (WorldVisibility_ScaleShadowDistance): its own or its
+ * asset's shadow distance, or its draw distance when neither gives one (then scaled as the draw distance is), times the
+ * player's shadow_distance_scale unless it is fixed, never beyond its draw distance; measured and faded as the draw
+ * distance is. An entry's shadow fade is the larger of its fade and that one: the shadow passes dither by it, and an
+ * entry whose shadow fade is 1 is in no shadow list. An entry that is only a shadow (is_shadow_only) is in no camera
+ * list: it casts (and keeps the sky out) but is not drawn.
+ *
  * THE DITHER. shaders/common/dither.glsl keeps a share of a draw's pixels by a 4x4 ordered (Bayer) pattern on the scene's
  * pixel grid: cell = floor(gl_FragCoord.xy / ditherPixelScale) mod 4, threshold = (BAYER[cell.y][cell.x] + 0.5) / 16. A
  * pixel is kept when both masks keep it: the draw's fade (threshold > fade) and its part of a LOD cross-fade (the
@@ -54,17 +63,20 @@
  * build allocates nothing.
  *
  * TERRAIN CHUNKS take the models' rules: their own draw distance (the terrain's, 4 km and fixed by default),
- * the camera's frustum, each cascade by their shadow tier, the cube's reach, the opacity of their object's tint. They
+ * the camera's frustum, each shadow level as a caster, the cube's reach, the opacity of their object's tint. They
  * are never crisp, and have counts of their own (not in the models' and sprites').
  *
  * INSTANCE CELLS take them too, each by its sphere around every copy of the cell: their component's draw distance
- * measured to the sphere's nearest point with the zoom factor, the camera's frustum, each cascade by their shadow tier,
+ * measured to the sphere's nearest point with the zoom factor, the camera's frustum, each shadow level as a caster,
  * the cube's reach, their object's opacity. A cell in a list is drawn copy by copy: every copy fades and picks its LOD
  * on its own in the vertex stage (WorldInstancing.h). Never crisp; counts of their own.
  */
 
 
 // Macros.
+/** @brief The most shadow levels the lists are built for (WorldShadowLevels.h's WORLD_SHADOW_MAX_LEVELS: the renderer
+ *  checks the two are the same). */
+#define WORLD_VISIBILITY_MAX_SHADOW_LEVELS 8U
 /** @brief The vertical field of view, in degrees, that draw and LOD distances are authored at: the zoom factor is 1
  *  there (the camera's default). */
 #define WORLD_VISIBILITY_REFERENCE_FOV_Y 60.0
@@ -120,10 +132,11 @@ typedef enum WorldVisibilityPassEnum
 {
     /** @brief The camera's passes: the scene, the G-buffer and the crisp overlay. */
     WorldVisibilityPass_Camera,
-    /** @brief The near shadow cascade's casters. */
-    WorldVisibilityPass_NearCascade,
-    /** @brief The far shadow cascade's casters. */
-    WorldVisibilityPass_FarCascade,
+    /** @brief The first shadow level's casters; level k's list is this plus k (WorldVisibility_GetShadowLevelPass), up to
+     *  WorldVisibilityPass_ShadowLevelLast. */
+    WorldVisibilityPass_ShadowLevel0,
+    /** @brief The last shadow level's casters (level WORLD_VISIBILITY_MAX_SHADOW_LEVELS - 1). */
+    WorldVisibilityPass_ShadowLevelLast = WorldVisibilityPass_ShadowLevel0 + (int)WORLD_VISIBILITY_MAX_SHADOW_LEVELS - 1,
     /** @brief The point-light cube shadow's casters. */
     WorldVisibilityPass_PointShadow,
     /** @brief What keeps the sky out in the sky's visibility map (its box): models and instance cells that occlude the
@@ -140,7 +153,26 @@ typedef struct WorldVisibilityFadeStruct
     float Distance;
     /** @brief The draw's fade: max(Distance, 1 - opacity). Models and cutout sprites dither by it; 1 = not drawn. */
     float Combined;
+    /** @brief The shadow passes' fade: max(Combined, its shadow distance's fade). The shadow passes dither by it; 1 = it
+     *  casts nothing. */
+    float Shadow;
 } WorldVisibilityFade;
+
+/** @brief One shadow level as the lists see it. A plain value type. */
+typedef struct WorldVisibilityShadowLevelStruct
+{
+    /** @brief Whether the level renders this frame: only then it gets a list (a kept level's map holds its casters
+     *  already). */
+    bool IsRendered;
+    /** @brief Its box: its four sides and its far plane (its near plane holds everything: casters nearer the light are
+     *  drawn onto it). */
+    WorldFrustum Box;
+    /** @brief The smallest bounding sphere it takes (its size cut: WorldShadowLevels_GetMinRadius). */
+    float MinRadius;
+    /** @brief For a level past the first: it leaves out a caster whose sphere lies inside the level before's sides by
+     *  this many metres more than its radius (its ring: WorldShadowLevels_GetInnerInset). Unread for the first. */
+    float InnerInset;
+} WorldVisibilityShadowLevel;
 
 /**
  * @brief What a build is for: the camera, the shadow passes that run this frame, and the settings.
@@ -155,15 +187,19 @@ typedef struct WorldVisibilityViewStruct
     Vector3 CameraPosition;
     /** @brief The camera's frustum. */
     WorldFrustum CameraFrustum;
-    /** @brief Whether the camera's frustum and the cascades' boxes cull (false: an A/B toggle that keeps everything the
-     *  draw distances and opacities leave; the cube's reach test stays). */
+    /** @brief Whether the camera's frustum and the shadow levels' boxes and rings cull (false: an A/B toggle that keeps
+     *  everything the draw distances and opacities leave; the size cut, the shadow reach and the cube's reach stay). */
     bool IsCullingEnabled;
-    /** @brief Whether the near cascade runs, and its box. */
-    bool IsNearCascadeActive;
-    WorldFrustum NearCascade;
-    /** @brief Whether the far cascade runs, and its box. */
-    bool IsFarCascadeActive;
-    WorldFrustum FarCascade;
+    /** @brief The shadow levels this frame: how many are used (0 while they do not run; at most
+     *  WORLD_VISIBILITY_MAX_SHADOW_LEVELS), and each one's. */
+    uint32_t ShadowLevelCount;
+    WorldVisibilityShadowLevel ShadowLevels[WORLD_VISIBILITY_MAX_SHADOW_LEVELS];
+    /** @brief How far the shadow levels' casters may stand: the nearest point of a caster's sphere at most this far from the
+     *  camera (the world's shadow reach, metres; the cube shadow ignores it). */
+    float ShadowReach;
+    /** @brief The player's shadow distance scale (the config's shadow_distance_scale; anything not finite or below 0
+     *  counts as 1). */
+    float ShadowDistanceScale;
     /** @brief Whether the cube shadow runs, its light's position (render space: the light's RenderPosition) and its
      *  reach (casters must touch the reach sphere). */
     bool IsPointShadowActive;
@@ -283,6 +319,25 @@ bool WorldVisibility_IsSphereInFrustum(const WorldFrustum* frustum, Vector3 cent
 float WorldVisibility_ScaleDrawDistance(float drawDistance, bool isFixed, float scale);
 
 /**
+ * @brief An entry's shadow distance under the player's quality settings: how far from the camera it still casts.
+ *
+ * With a shadow distance of its own (or its asset's) it is that, times the shadow distance scale unless it is fixed;
+ * without one, @p shadowDistance is its unscaled draw distance in effect (times its shadow multiplier), scaled as its draw
+ * distance is (the draw distance scale unless the draw distance is fixed), then by the shadow distance scale unless the
+ * shadow distance is fixed. Never beyond @p drawDistance.
+ * @param drawDistance Its draw distance, already scaled (WorldVisibility_ScaleDrawDistance).
+ * @param hasShadowDistance Whether @p shadowDistance is a shadow distance of its own (or its asset's).
+ * @param shadowDistance Its shadow distance in effect, in metres (as the render cache keeps it).
+ * @param isDrawDistanceFixed Whether its draw distance is fixed.
+ * @param isShadowDistanceFixed Whether its shadow distance is fixed.
+ * @param drawDistanceScale The draw distance scale; anything not finite or below 0 counts as 1.
+ * @param shadowDistanceScale The shadow distance scale; anything not finite or below 0 counts as 1.
+ * @returns The shadow distance to compare with, at most @p drawDistance.
+ */
+float WorldVisibility_ScaleShadowDistance(float drawDistance, bool hasShadowDistance, float shadowDistance,
+    bool isDrawDistanceFixed, bool isShadowDistanceFixed, float drawDistanceScale, float shadowDistanceScale);
+
+/**
  * @brief The zoom factor of a field of view: tan(fovY / 2) / tan(WORLD_VISIBILITY_REFERENCE_FOV_Y / 2).
  *
  * Distances are multiplied by it before they are compared with draw distances (and LOD switch distances):
@@ -390,15 +445,19 @@ void WorldVisibility_Deconstruct(WorldVisibility* self);
  * Every entry gets its fades (WorldVisibilityFade; entries the passes do not draw at all get 1), from its own draw
  * distance (WorldVisibility_ScaleDrawDistance) against its zoomed distance. An entry with a combined fade below 1
  * joins:
- *   - the camera's list when it is drawn (a model must be IsDrawn) and inside the camera's frustum;
- *   - a cascade's list when it casts shadows (a model with CastsShadows whose shadow tier routes it to that cascade; a
- *     sprite with WorldRenderSprite_CastsShadows), that cascade runs and its sphere is inside the cascade's box;
- *   - the cube shadow's list when it casts shadows, the cube shadow runs and its sphere touches the light's reach sphere.
+ *   - the camera's list when it is drawn (a model must be IsDrawn), it is not only a shadow (IsShadowOnly) and it is
+ *     inside the camera's frustum;
+ *   - a shadow level's list when it casts shadows (a model with CastsShadows; a sprite with
+ *     WorldRenderSprite_CastsShadows) and its shadow fade is below 1, that level renders this frame, its sphere is at
+ *     least the level's MinRadius, its sphere's nearest point lies within the shadow reach and the sphere is inside the
+ *     level's box;
+ *   - the cube shadow's list when it casts shadows, its shadow fade is below 1, the cube shadow runs and its sphere
+ *     touches the light's reach sphere.
  * A model's sphere is its bounding sphere (around RenderCenter); a sprite's is the sphere around its pivot (Shape.Position)
  * that holds its quad in every orientation (WorldRenderSprite.BoundsRadius), so one sphere serves the camera and the
  * lights; a terrain chunk's is its bounding sphere, and it joins the lists as a model does (never crisp), and so does an
  * instance cell. Everything is in render space. With culling off the
- * camera's frustum and the cascades' boxes cull nothing. Main thread only; no allocation once the lists have grown.
+ * camera's frustum and the shadow levels' boxes and rings cull nothing. Main thread only; no allocation once the lists have grown.
  * @param self The visibility; must not be NULL.
  * @param cache The render cache, synced for this frame; must not be NULL. Its entries are read, never written.
  * @param view What the lists are for; must not be NULL.
@@ -406,6 +465,16 @@ void WorldVisibility_Deconstruct(WorldVisibility* self);
  *          (the lists are then empty).
  */
 Error WorldVisibility_Build(WorldVisibility* self, const WorldRenderCache* cache, const WorldVisibilityView* view);
+
+/**
+ * @brief The pass of a shadow level's list.
+ * @param level The level, below WORLD_VISIBILITY_MAX_SHADOW_LEVELS.
+ * @returns WorldVisibilityPass_ShadowLevel0 + @p level.
+ */
+static inline WorldVisibilityPass WorldVisibility_GetShadowLevelPass(uint32_t level)
+{
+    return (WorldVisibilityPass)((uint32_t)WorldVisibilityPass_ShadowLevel0 + level);
+}
 
 /**
  * @brief Returns a pass's model list: indices into @p cache's models, ascending.
@@ -458,7 +527,7 @@ const size_t* WorldVisibility_GetInstanceCells(const WorldVisibility* self, cons
  * @brief Returns a cache instance cell's fades this frame (the cell's as a whole: its copies fade on their own).
  * @param self The visibility; must not be NULL.
  * @param index The cell's index in the cache (from a list).
- * @returns Its fades; fully faded (1, 1) for an index the last build did not cover.
+ * @returns Its fades; fully faded (1, 1, 1) for an index the last build did not cover.
  */
 WorldVisibilityFade WorldVisibility_GetInstanceCellFade(const WorldVisibility* self, size_t index);
 
@@ -466,7 +535,7 @@ WorldVisibilityFade WorldVisibility_GetInstanceCellFade(const WorldVisibility* s
  * @brief Returns a cache model's fades this frame.
  * @param self The visibility; must not be NULL.
  * @param index The model's index in the cache (from a list).
- * @returns Its fades; fully faded (1, 1) for an index the last build did not cover.
+ * @returns Its fades; fully faded (1, 1, 1) for an index the last build did not cover.
  */
 WorldVisibilityFade WorldVisibility_GetModelFade(const WorldVisibility* self, size_t index);
 
@@ -474,7 +543,7 @@ WorldVisibilityFade WorldVisibility_GetModelFade(const WorldVisibility* self, si
  * @brief Returns a cache sprite's fades this frame.
  * @param self The visibility; must not be NULL.
  * @param index The sprite's index in the cache (from a list).
- * @returns Its fades; fully faded (1, 1) for an index the last build did not cover.
+ * @returns Its fades; fully faded (1, 1, 1) for an index the last build did not cover.
  */
 WorldVisibilityFade WorldVisibility_GetSpriteFade(const WorldVisibility* self, size_t index);
 
@@ -482,7 +551,7 @@ WorldVisibilityFade WorldVisibility_GetSpriteFade(const WorldVisibility* self, s
  * @brief Returns a cache terrain chunk's fades this frame.
  * @param self The visibility; must not be NULL.
  * @param index The chunk's index in the cache (from a list).
- * @returns Its fades; fully faded (1, 1) for an index the last build did not cover.
+ * @returns Its fades; fully faded (1, 1, 1) for an index the last build did not cover.
  */
 WorldVisibilityFade WorldVisibility_GetTerrainChunkFade(const WorldVisibility* self, size_t index);
 

@@ -222,6 +222,8 @@ static void DrawModelLayer(WorldRenderer* self, const WorldRendererMeshShaders* 
     const size_t* Visible = WorldVisibility_GetModels(&self->_visibility, &self->_cache, WorldVisibilityPass_SkyVisibility,
         &VisibleCount);
     const uint8_t* Layers = (const uint8_t*)State->_modelLayers._data;
+    WorldRendererDitherRun Run = { 0 };
+    WorldRendererDitherRun SkinnedRun = { 0 };
     for (size_t Position = 0U; Position < VisibleCount; Position++)
     {
         if ((layer < MODEL_LAYER_COUNT) && ((Position >= State->_modelLayers._count) || (Layers[Position] != layer)))
@@ -231,13 +233,14 @@ static void DrawModelLayer(WorldRenderer* self, const WorldRendererMeshShaders* 
         size_t Index = Visible[Position];
         const WorldRenderModel* Entry = &Models[Index];
         float Fade = WorldVisibility_GetModelFade(&self->_visibility, Index).Combined;
-        WorldRendererCommon_SetDither(*shaders->Rigid, &State->_dither, Fade, 0.0f, false);
+        WorldRendererCommon_SetRunDither(*shaders->Rigid, &State->_dither, &Run, Fade);
         if ((shaders->Skinned != NULL) && (Entry->Pose != NULL))
         {
-            WorldRendererCommon_SetDither(*shaders->Skinned, &State->_skinnedDither, Fade, 0.0f, false);
+            WorldRendererCommon_SetRunDither(*shaders->Skinned, &State->_skinnedDither, &SkinnedRun, Fade);
         }
-        WorldRendererGeometry_DrawModel(self, Entry, WorldLodState_GetShadowLod(&Entry->Lod), shaders, false);
+        WorldRendererGeometry_DrawModelDepth(Entry, WorldLodState_GetShadowLod(&Entry->Lod), shaders);
     }
+    WorldRendererCommon_EndDepthMeshes();
 }
 
 /* Opens a draw into a target of the volume with the map's view, every fragment kept (no depth test, both faces). */
@@ -468,7 +471,7 @@ void WorldRendererSkyVisibility_Render(WorldRenderer* self, const WorldRenderFra
                 else
                 {
                     WorldRendererInstances_DrawCasters(self, frame, SliceShader, &State->_dither,
-                        WorldVisibilityPass_SkyVisibility);
+                        WorldVisibilityPass_SkyVisibility, NULL);
                 }
                 GLSliceMap_EndLogicOp(&State->_api);
                 EndVolumeDraw();
@@ -489,7 +492,7 @@ void WorldRendererSkyVisibility_Render(WorldRenderer* self, const WorldRenderFra
             GLSliceMap_BeginLogicOp(&State->_api, GLSliceMapOp_Or);
             DrawModelLayer(self, &Shaders, MODEL_LAYER_COUNT);
             WorldRendererInstances_DrawCasters(self, frame, SliceShader, &State->_dither,
-                WorldVisibilityPass_SkyVisibility);
+                WorldVisibilityPass_SkyVisibility, NULL);
             GLSliceMap_EndLogicOp(&State->_api);
             EndVolumeDraw();
         }

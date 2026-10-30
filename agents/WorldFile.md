@@ -77,12 +77,20 @@ shown as `?`. GHDF ids a table retired are skipped silently. These warnings are 
 failed load's error says what is wrong; the world it was building may still log its own lines, such as a refused
 parent, before it is destroyed).
 
-**Versions** (`GetTableVersion` in WorldFile.c): format 1 holds every table at its version 1, which the reads pass as
-`PropertyReadOptions.DataVersion`. A table that raises its `Version` (with a `Migrate`) needs a new world format
-version and that mapping: a `// TODO:` there says so, and a test fails while any table a world file holds is above 1.
-Once other worlds must keep loading, a change of a row's meaning (a key or wire id that comes to name something else)
-raises the table's version with a `Migrate` (and a GHDF migration slot, which the tables do not have yet) and the world
-format version.
+**Versions** (`GetTableVersion` in WorldFile.c): `WORLD_FILE_FORMAT_VERSION` is 2. Format 1 holds every table at its
+version 1; format 2 every table at its current `Version` (2 for `model_component`, `model_instances_component` and
+`terrain_component`, 1 for the others). The reads pass that as `PropertyReadOptions.DataVersion`, with the load's
+`Logger`, JSON pool and GHDF pool. Each block (the environment, each object, each component) is **migrated before its
+unknown names are noted** (`Properties_MigrateJSON` / `Properties_MigrateGHDF`, [PropertyDescriptors.md](PropertyDescriptors.md)),
+so the keys a migration consumes are no unknown names; a migration's error fails the load, naming the object. The three
+tables' migration from version 1 reads the shadow tier pair (`WorldModelPlacement_MigrateShadowTierJSON` / `GHDF` in
+`source/WorldModelComponentInternal.h`): `near` becomes a 16 m `shadow_distance` (`WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE`,
+with `overrides_shadow_distance` on when `overrides_shadow_tier` was), each only where the block does not give it
+already; `both` changes nothing; `far` is dropped with one warning per block through the load's logger
+(`model_component: an older file's shadow_tier "far" is dropped: ...`); anything else fails the load. The tier's GHDF
+ids are retired (10 and 4 in the model tables, 4 and 5 in the terrain's), so a newer file never reuses them. A table
+that raises its `Version` again needs a new world format version and that mapping (a `// TODO:` there says so, and
+`every_table_in_a_world_file_is_at_the_version_its_format_writes` fails until the mapping and the test agree).
 
 ## Writing
 

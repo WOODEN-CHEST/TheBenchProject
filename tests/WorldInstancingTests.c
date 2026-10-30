@@ -579,6 +579,55 @@ static void ThePassesDrawByTheirRules(TestRun* run)
         && !WorldInstancing_GetDraw(&Alone, WorldInstancePass_Lit, 1U).IsDrawn);
 }
 
+/* A shadow pass evaluates a copy by its own rules: the fade also by the shadow distance (the visibility's rule, measured
+ * to the copy's sphere), none for a copy smaller than the pass's size cut, the LOD of at least the pass's LOD distance or
+ * the component's own shadow LOD; the cells' LOD masks follow. The camera's passes keep their own. */
+static void TheShadowPassEvaluatesItsOwnFadeCutAndLod(TestRun* run)
+{
+    WorldModelLodSettings Settings = MakeSettings(0.2f);
+    WorldInstanceView View = MakeView(&Settings, 1000.0f);
+    WorldInstancing_SetShadowDistance(&View, 50.0f);
+    View.ShadowLod = -1;
+    WorldInstanceRecord Record = MakePlainRecord();
+    // The copy's sphere is 0.5 m: at 48 m its nearest point is 47.5 m away, halfway through the 45 to 50 m band.
+    Matrix Near = MatrixTranslate(0.0f, 0.0f, 20.0f);
+    Matrix Band = MatrixTranslate(0.0f, 0.0f, 48.0f);
+    Matrix Beyond = MatrixTranslate(0.0f, 0.0f, 60.0f);
+    TEST_CHECK(run, WorldInstancing_EvaluateShadow(&View, &Near, &Record).Fade == 0.0f);
+    TEST_CHECK(run, fabsf(WorldInstancing_EvaluateShadow(&View, &Band, &Record).Fade - 0.5f) < 1e-5f);
+    TEST_CHECK(run, fabsf(WorldInstancing_EvaluateShadow(&View, &Band, &Record).Fade
+        - WorldVisibility_GetDistanceFade(47.5f, 50.0f)) < 1e-6f);
+    TEST_CHECK(run, (WorldInstancing_EvaluateShadow(&View, &Beyond, &Record).Fade == 1.0f)
+        && (WorldInstancing_Evaluate(&View, &Beyond, &Record).Fade == 0.0f));
+
+    // The size cut: a sphere exactly the cut casts, a smaller one does not (the camera still draws it).
+    View.ShadowMinRadius = 0.5f;
+    TEST_CHECK(run, WorldInstancing_EvaluateShadow(&View, &Near, &Record).Fade == 0.0f);
+    View.ShadowMinRadius = 0.6f;
+    TEST_CHECK(run, (WorldInstancing_EvaluateShadow(&View, &Near, &Record).Fade == 1.0f)
+        && (WorldInstancing_Evaluate(&View, &Near, &Record).Fade == 0.0f));
+    View.ShadowMinRadius = 0.0f;
+
+    // The level's LOD distance: a copy 5 m away (LOD 0 for the camera) casts the LOD 40 m would show.
+    Matrix Close = MatrixTranslate(0.0f, 0.0f, 5.0f);
+    View.ShadowLodDistance = 40.0f;
+    TEST_CHECK(run, (WorldInstancing_EvaluateShadow(&View, &Close, &Record).Lod == 2U)
+        && (WorldInstancing_Evaluate(&View, &Close, &Record).Lod == 0U));
+    TEST_CHECK(run, WorldInstancing_GetShadowLodMask(&View, 1U, 3.0f, 6.0f) == 4U);
+    // Farther than that, the copy's own distance picks it.
+    View.ShadowLodDistance = 4.0f;
+    TEST_CHECK(run, WorldInstancing_EvaluateShadow(&View, &Close, &Record).Lod == 0U);
+    // No LOD distance: the camera's mask.
+    View.ShadowLodDistance = 0.0f;
+    TEST_CHECK(run, WorldInstancing_GetShadowLodMask(&View, 5U, 3.0f, 6.0f) == 5U);
+    // The component's own shadow LOD, in every pass and at any distance.
+    View.ShadowLod = 1;
+    View.ShadowLodDistance = 40.0f;
+    TEST_CHECK(run, (WorldInstancing_EvaluateShadow(&View, &Close, &Record).Lod == 1U)
+        && (WorldInstancing_EvaluateShadow(&View, &Beyond, &Record).Lod == 1U));
+    TEST_CHECK(run, WorldInstancing_GetShadowLodMask(&View, 1U, 0.0f, 500.0f) == 2U);
+}
+
 /* A cell's LOD mask holds every LOD any copy whose LOD distance lies in its range shows (both of a band); a forced LOD
  * is its only bit; a NaN range gives every LOD. */
 static void CellLodMasksHoldTheirCopiesLods(TestRun* run)
@@ -636,6 +685,7 @@ void WorldInstancingTests_Run(TestRun* run)
         { "fades_follow_the_models_rule", FadesFollowTheModelsRule },
         { "the_passes_draw_by_their_rules", ThePassesDrawByTheirRules },
         { "cell_lod_masks_hold_their_copies_lods", CellLodMasksHoldTheirCopiesLods },
+        { "the_shadow_pass_evaluates_its_own_fade_cut_and_lod", TheShadowPassEvaluatesItsOwnFadeCutAndLod },
     };
     TestRun_RunSuite(run, "WorldInstancing", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

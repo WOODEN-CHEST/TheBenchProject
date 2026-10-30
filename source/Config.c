@@ -32,6 +32,12 @@
 #define CONFIG_KEY_DRAW_DISTANCE_SCALE ((const unsigned char*)u8"draw_distance_scale")
 /** JSON key for the LOD distance scale. */
 #define CONFIG_KEY_LOD_DISTANCE_SCALE ((const unsigned char*)u8"lod_distance_scale")
+/** JSON keys of the sun's and the moon's shadow quality settings. */
+#define CONFIG_KEY_SHADOW_DISTANCE_SCALE ((const unsigned char*)u8"shadow_distance_scale")
+#define CONFIG_KEY_SHADOW_LEVEL_COUNT ((const unsigned char*)u8"shadow_level_count")
+#define CONFIG_KEY_SHADOW_LEVEL_FACTOR ((const unsigned char*)u8"shadow_level_factor")
+#define CONFIG_KEY_SHADOW_MAP_SIZE ((const unsigned char*)u8"shadow_map_size")
+#define CONFIG_KEY_SHADOW_UPDATE_PERIODS ((const unsigned char*)u8"shadow_update_periods")
 
 /** Index of the width element within the resolution array. */
 #define CONFIG_RESOLUTION_WIDTH_INDEX ((size_t)0)
@@ -58,6 +64,10 @@
 /** Largest accepted target FPS; larger values fall back to the default. */
 #define CONFIG_MAX_TARGET_FPS ((int32_t)1000)
 
+/** The default shadow quality: five levels, each four times as wide as the one before, 2048 texels a side. */
+#define CONFIG_DEFAULT_SHADOW_LEVEL_COUNT ((int32_t)5)
+#define CONFIG_DEFAULT_SHADOW_LEVEL_FACTOR 4.0f
+#define CONFIG_DEFAULT_SHADOW_MAP_SIZE ((int32_t)2048)
 /** Default value for every post-effect config-side strength multiplier. */
 #define CONFIG_DEFAULT_EFFECT_STRENGTH (1.0f)
 /** Largest accepted effect strength multiplier; larger (or non-finite/negative) values fall back to the
@@ -178,6 +188,66 @@ static bool ReadArrayInt32(JSONArray* array, size_t index, int32_t* outValue)
     return true;
 }
 
+/* Reads the shadow levels' update periods: each element present and numeric replaces its level's (the others keep
+   theirs); the array may be shorter or longer than the levels (the extra elements are ignored). */
+static void ReadShadowUpdatePeriods(JSONCompound* root, GameConfig* config)
+{
+    JSONObjectValue Value;
+    bool WasFound = false;
+    Error Result = JSONCompound_GetOptionalVerified(root, CONFIG_KEY_SHADOW_UPDATE_PERIODS, JSONValueType_Array, &Value,
+        &WasFound);
+    if ((Result.Code != ErrorCode_Success) || !WasFound)
+    {
+        Error_Deconstruct(&Result);
+        return;
+    }
+    for (size_t Level = 0U; Level < (size_t)CONFIG_MAX_SHADOW_LEVELS; Level++)
+    {
+        int32_t Period = 0;
+        if (ReadArrayInt32(Value.Value.Array, Level, &Period))
+        {
+            config->ShadowUpdatePeriods[Level] = Period;
+        }
+    }
+}
+
+/* Whether a value is a power of two (above 0). */
+static bool IsPowerOfTwo(int32_t value)
+{
+    return (value > 0) && ((value & (value - 1)) == 0);
+}
+
+/* Puts the shadow quality settings in range: an out-of-range or malformed one takes its default. */
+static void ClampShadowSettings(GameConfig* config)
+{
+    ClampEffectStrength(&config->ShadowDistanceScale); // a multiplier like the effect strengths
+    if ((config->ShadowLevelCount < 1) || (config->ShadowLevelCount > CONFIG_MAX_SHADOW_LEVELS))
+    {
+        config->ShadowLevelCount = CONFIG_DEFAULT_SHADOW_LEVEL_COUNT;
+    }
+    if (!(config->ShadowLevelFactor >= CONFIG_MIN_SHADOW_LEVEL_FACTOR)
+        || !(config->ShadowLevelFactor <= CONFIG_MAX_SHADOW_LEVEL_FACTOR))
+    {
+        config->ShadowLevelFactor = CONFIG_DEFAULT_SHADOW_LEVEL_FACTOR;
+    }
+    if (!IsPowerOfTwo(config->ShadowMapSize) || (config->ShadowMapSize < CONFIG_MIN_SHADOW_MAP_SIZE)
+        || (config->ShadowMapSize > CONFIG_MAX_SHADOW_MAP_SIZE))
+    {
+        config->ShadowMapSize = CONFIG_DEFAULT_SHADOW_MAP_SIZE;
+    }
+    int32_t Default = 1;
+    for (size_t Level = 0U; Level < (size_t)CONFIG_MAX_SHADOW_LEVELS; Level++)
+    {
+        // The defaults: 1 for the first two levels, then doubling.
+        Default = (Level < 2U) ? 1 : (Default * 2);
+        int32_t* Period = &config->ShadowUpdatePeriods[Level];
+        if ((*Period < 1) || (*Period > CONFIG_MAX_SHADOW_UPDATE_PERIOD))
+        {
+            *Period = Default;
+        }
+    }
+}
+
 /* Reads the resolution array; only overwrites the defaults when both components are present and numeric. */
 static void ReadResolution(JSONCompound* root, GameConfig* config)
 {
@@ -216,6 +286,11 @@ static void ReadConfigValues(JSONCompound* root, GameConfig* config)
     ReadFloat(root, CONFIG_KEY_FOG_STRENGTH, &config->FogStrength);
     ReadFloat(root, CONFIG_KEY_DRAW_DISTANCE_SCALE, &config->DrawDistanceScale);
     ReadFloat(root, CONFIG_KEY_LOD_DISTANCE_SCALE, &config->LodDistanceScale);
+    ReadFloat(root, CONFIG_KEY_SHADOW_DISTANCE_SCALE, &config->ShadowDistanceScale);
+    ReadInt32(root, CONFIG_KEY_SHADOW_LEVEL_COUNT, &config->ShadowLevelCount);
+    ReadFloat(root, CONFIG_KEY_SHADOW_LEVEL_FACTOR, &config->ShadowLevelFactor);
+    ReadInt32(root, CONFIG_KEY_SHADOW_MAP_SIZE, &config->ShadowMapSize);
+    ReadShadowUpdatePeriods(root, config);
 }
 
 /* Parses the raw file bytes as a JSON object and overlays its settings onto the config, then discards the
@@ -276,6 +351,16 @@ void GameConfig_SetDefaults(GameConfig* self)
     self->FogStrength = CONFIG_DEFAULT_EFFECT_STRENGTH;
     self->DrawDistanceScale = CONFIG_DEFAULT_EFFECT_STRENGTH;
     self->LodDistanceScale = CONFIG_DEFAULT_EFFECT_STRENGTH;
+    self->ShadowDistanceScale = CONFIG_DEFAULT_EFFECT_STRENGTH;
+    self->ShadowLevelCount = CONFIG_DEFAULT_SHADOW_LEVEL_COUNT;
+    self->ShadowLevelFactor = CONFIG_DEFAULT_SHADOW_LEVEL_FACTOR;
+    self->ShadowMapSize = CONFIG_DEFAULT_SHADOW_MAP_SIZE;
+    int32_t Period = 1;
+    for (size_t Level = 0U; Level < (size_t)CONFIG_MAX_SHADOW_LEVELS; Level++)
+    {
+        Period = (Level < 2U) ? 1 : (Period * 2);
+        self->ShadowUpdatePeriods[Level] = Period;
+    }
 }
 
 Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
@@ -315,6 +400,7 @@ Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
     ClampEffectStrength(&outConfig->FogStrength);
     ClampEffectStrength(&outConfig->DrawDistanceScale); // a multiplier like the effect strengths
     ClampEffectStrength(&outConfig->LodDistanceScale);
+    ClampShadowSettings(outConfig);
     return ParseResult;
 }
 

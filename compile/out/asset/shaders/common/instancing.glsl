@@ -11,8 +11,11 @@
 //   longest axis), placed by matModel; its LOD distance is the camera's (render space's origin) to the centre, its fade
 //   distance to the nearest point, both times the zoom factor;
 // - its fade: the distance fade over the last band of the draw distance in effect, against 1 - its opacity (the
-//   object's times its tint's alpha): the larger counts;
+//   object's times its tint's alpha): the larger counts; in the shadow passes also its shadow distance's fade (the same
+//   rule), and none of it (the copy left out) when its sphere is smaller than the pass's size cut;
 // - its LOD: before a band, the band's outgoing LOD; inside it both, the incoming one's share rising linearly across it;
+//   in the shadow passes at least the LOD it would show at the pass's LOD distance (a far shadow level's), or the
+//   component's own shadow LOD;
 // - whether this draw (its pass, its LOD) shows it, and with which dither (WorldInstancing_GetDraw).
 // A copy this draw does not show gets every vertex at one point outside the clip volume: its triangles are degenerate and
 // make no fragments.
@@ -54,6 +57,15 @@ uniform float instanceObjectOpacity;                 // the object's opacity: ev
 uniform vec3 instanceBoundsCenter;                   // the world model's sphere in a copy's space
 uniform float instanceBoundsRadius;                  // its radius, times the object's own stretch
 uniform mat4 instanceLodTransform;                   // the LOD's import transform, applied before the copy's matrix
+// The shadow passes' own (the other passes ignore them): the shadow distance in effect (3.4e38 for none), where its fade
+// band starts and its length; the smallest copy the pass takes (its sphere's radius); the zoomed distance it picks LODs
+// at (0: none); the LOD every copy casts with, -1 when none.
+uniform float instanceShadowDistance;
+uniform float instanceShadowFadeStart;
+uniform float instanceShadowFadeBand;
+uniform float instanceShadowMinRadius;
+uniform float instanceShadowLodDistance;
+uniform int instanceShadowLod;
 
 flat out float fragDitherFade;
 flat out float fragDitherLodProgress;
@@ -98,8 +110,23 @@ float Instancing_GetDistanceFade(float distance)
     return min((distance - instanceFadeStart)/instanceFadeBand, 1.0);
 }
 
-// Whether this draw shows the copy (WorldInstancing_Evaluate, then WorldInstancing_GetDraw for instancePass and
-// instanceLod) and, when it does, writes its dither to the flat outputs. matModel is the cell's render-space matrix.
+// The copy's shadow-distance fade at a zoomed distance to its sphere's nearest point (the draw distance's rule).
+float Instancing_GetShadowDistanceFade(float distance)
+{
+    if (!(distance < instanceShadowDistance))
+    {
+        return 1.0;
+    }
+    if (distance <= instanceShadowFadeStart)
+    {
+        return 0.0;
+    }
+    return min((distance - instanceShadowFadeStart)/instanceShadowFadeBand, 1.0);
+}
+
+// Whether this draw shows the copy (WorldInstancing_Evaluate, or WorldInstancing_EvaluateShadow in the shadow passes,
+// then WorldInstancing_GetDraw for instancePass and instanceLod) and, when it does, writes its dither to the flat
+// outputs. matModel is the cell's render-space matrix.
 bool Instancing_IsShown(mat4 matModel)
 {
     vec3 center = vec3(matModel*vec4(Instancing_MovePoint(instanceBoundsCenter), 1.0));
@@ -107,10 +134,19 @@ bool Instancing_IsShown(mat4 matModel)
         length(vec3(instanceRow0.y, instanceRow1.y, instanceRow2.y))), length(vec3(instanceRow0.z, instanceRow1.z,
         instanceRow2.z)));
     float centerDistance = length(center);
+    float radius = instanceBoundsRadius*longest;
     float lodDistance = centerDistance*instanceZoomFactor;
-    float fadeDistance = max(centerDistance - instanceBoundsRadius*longest, 0.0)*instanceZoomFactor;
+    float fadeDistance = max(centerDistance - radius, 0.0)*instanceZoomFactor;
     float opacity = clamp(instanceObjectOpacity*instanceTint.a, 0.0, 1.0);
     float fade = max(Instancing_GetDistanceFade(fadeDistance), 1.0 - opacity);
+    int forcedLod = instanceForcedLod;
+    if (instancePass == INSTANCE_PASS_SHADOW)
+    {
+        fade = max(fade, Instancing_GetShadowDistanceFade(fadeDistance));
+        fade = (radius >= instanceShadowMinRadius) ? fade : 1.0;
+        lodDistance = max(lodDistance, instanceShadowLodDistance);
+        forcedLod = (instanceShadowLod >= 0) ? instanceShadowLod : forcedLod;
+    }
     if (!(fade < 1.0))
     {
         return false;
@@ -120,9 +156,9 @@ bool Instancing_IsShown(mat4 matModel)
     int incomingLod = lod;
     float progress = 0.0;
     bool isInBand = false;
-    if (instanceForcedLod >= 0)
+    if (forcedLod >= 0)
     {
-        lod = instanceForcedLod;
+        lod = forcedLod;
         incomingLod = lod;
     }
     else
@@ -164,7 +200,7 @@ bool Instancing_IsShown(mat4 matModel)
         // The LOD with the larger share, solid, until mid-fade.
         return (instanceLod == solidLod) && (fade < INSTANCE_GBUFFER_FADE_LIMIT);
     }
-    // The shadows: the LOD with the larger share, dithered by the copy's own fade.
+    // The shadows: the LOD with the larger share, dithered by the copy's own shadow fade.
     fragDitherFade = fade;
     return instanceLod == solidLod;
 }

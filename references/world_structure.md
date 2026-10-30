@@ -19,7 +19,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 
 ```json
 {
-    "format_version": 1,
+    "format_version": 2,
     "name": "test",
     "next_object_id": 22,
     "environment": {
@@ -58,8 +58,8 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
             "components": {
                 "model": {
                     "world_model": "pbr_metal",
-                    "overrides_shadow_tier": true,
-                    "shadow_tier": "near"
+                    "overrides_shadow_distance": true,
+                    "shadow_distance": 16.0
                 },
                 "collider": {
                     "uses_own_shape": true,
@@ -77,10 +77,10 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 
 | Key | Value | |
 |---|---|---|
-| `format_version` | integer, required | The format the file is written in: 1. A newer version is refused ("newer than this game reads"). |
+| `format_version` | integer, required | The format the file is written in: 2. Format 1 is still read (its placements' `shadow_tier`, "Versions" below); a newer version is refused ("newer than this game reads"). |
 | `name` | string or `null` | The world's name: at most 256 bytes of UTF-8. |
 | `next_object_id` | integer | The id the world hands to its next new object, so ids of removed objects are not reused; 18446744073709551615 once every id was handed out (no id is that large). When it is not above every object id it is raised to one that is, with a warning; without it, one above the largest id. |
-| `environment` | object | The environment's settings by key (the `world_environment` table; `agents/WorldData.md`, "Environment", lists them with their rules). Absent keys keep their defaults. The air's settings are among them: `haze_height`, `haze_albedo`, `sun_glow`, `air_density`, `ozone` and `multiple_scattering` (with `sky_turbidity` and `sky_ground_albedo`), e.g. `{"haze_height": 300, "sun_glow": 0.9, "ozone": 0}`. The haze's settings: `aerial_distance_scale` (every haze distance that many times longer; 5 for a bigger, hazier town), `haze_start_distance`, the ground haze's `ground_haze_density` (0.02 a morning mist), `ground_haze_base`, `ground_haze_thickness` (15 for that mist), `ground_haze_albedo` and `ground_haze_glow`, and `horizon_ground_height` (the far ground's height); `fog_strength` multiplies the haze (1 the real air, 0 clear air) and `fog_color` is not used, e.g. `{"ground_haze_density": 0.02, "ground_haze_thickness": 15}`. One light scale lights the sky and the surfaces: `sun_color` is the sun's colour above the air (default white: the air reddens it), `moon_intensity` the full moon's light above the air (default 0.04), `ambient_skylight_color` and `ambient_skylight_intensity` tint and scale the sky's own light on surfaces (white and 1: the sky's own), and `night_light_color` and `night_light_intensity` set the moonless night's own light, e.g. `{"night_light_intensity": 0}` for a pitch-black moonless night. |
+| `environment` | object | The environment's settings by key (the `world_environment` table; `agents/WorldData.md`, "Environment", lists them with their rules). Absent keys keep their defaults. The air's settings are among them: `haze_height`, `haze_albedo`, `sun_glow`, `air_density`, `ozone` and `multiple_scattering` (with `sky_turbidity` and `sky_ground_albedo`), e.g. `{"haze_height": 300, "sun_glow": 0.9, "ozone": 0}`. The haze's settings: `aerial_distance_scale` (every haze distance that many times longer; 5 for a bigger, hazier town), `haze_start_distance`, the ground haze's `ground_haze_density` (0.02 a morning mist), `ground_haze_base`, `ground_haze_thickness` (15 for that mist), `ground_haze_albedo` and `ground_haze_glow`, and `horizon_ground_height` (the far ground's height); `fog_strength` multiplies the haze (1 the real air, 0 clear air) and `fog_color` is not used, e.g. `{"ground_haze_density": 0.02, "ground_haze_thickness": 15}`. One light scale lights the sky and the surfaces: `sun_color` is the sun's colour above the air (default white: the air reddens it), `moon_intensity` the full moon's light above the air (default 0.04), `ambient_skylight_color` and `ambient_skylight_intensity` tint and scale the sky's own light on surfaces (white and 1: the sky's own), and `night_light_color` and `night_light_intensity` set the moonless night's own light, e.g. `{"night_light_intensity": 0}` for a pitch-black moonless night. The sun's and the moon's shadows: `are_shadows_enabled` and `shadow_reach` (metres from the camera, 0 to 20000, default 4000; 0 none), e.g. `{"shadow_reach": 1500}` for a small walled town. |
 | `objects` | array of objects | The objects. |
 
 ### An object
@@ -115,8 +115,12 @@ are no "inherit" values.
 |---|---|---|
 | The outline | `overrides_has_outline` | `has_outline` (default true) |
 | Full resolution over the pixelated image | `overrides_omit_pixelation` | `omit_pixelation` (default false) |
-| The shadow cascades | `overrides_shadow_tier` | `shadow_tier`: `both` (default), `near`, `far` |
 | Casting shadows | `overrides_casts_shadows` | `casts_shadows` (default true) |
+| How far from the camera it still casts | `overrides_shadow_distance` | `shadow_distance`: metres, above 0 (default 600; while not overridden, the world model's own, or without one its draw distance) |
+| Keeping the shadow distance fixed against the quality setting | `overrides_is_shadow_distance_fixed` | `is_shadow_distance_fixed` (default false) |
+| Casting without being drawn | `overrides_is_shadow_only` | `is_shadow_only` (default false) |
+| Casting from both faces | `overrides_has_two_sided_shadows` | `has_two_sided_shadows` (default false) |
+| The LOD it casts with | `overrides_shadow_lod` | `shadow_lod`: an integer >= 0, 0 the finest; past the last LOD, the last (default 0) |
 | The haze in front of it | `overrides_haze` | `haze`: in [0, 1000], times the air's haze (default 1; 0 as if the air were clear: a sign that must read from far away) |
 | Keeping the sky's light off what lies under it | `overrides_occludes_sky` | `occludes_sky` (default true: a roof, a wall, a canopy; false for grass, small plants, people and poles) |
 | The draw distance | `overrides_draw_distance` | `draw_distance`: metres, above 0 (default 600) |
@@ -124,7 +128,8 @@ are no "inherit" values.
 | The LOD switch distances | `overrides_lod_distances` | `lod_distances`: metres, finest LOD first, each above 0 and above the one before, at most 8 (default `[]`) |
 
 `draw_distance_multiplier` (above 0, default 1) multiplies the draw distance in effect, the world model's or the
-placement's own: 2 is seen twice as far. It is a plain setting, not an override. The LODs:
+placement's own: 2 is seen twice as far. `shadow_distance_multiplier` (above 0, default 1) likewise multiplies the shadow
+distance in effect. Both are plain settings, not overrides. The LODs:
 - `lod_distances` applies only while it holds one distance per LOD of the world model; when the world model gains or
   loses a LOD, the world model's distances apply instead (the game warns once) until the list fits again.
 - `lod_distance_multiplier` (above 0, default 1) multiplies the switch distances in effect: 2 keeps each LOD twice as
@@ -202,6 +207,9 @@ while its flag is off.
 | How bright it glows unlit | `overrides_emission` | `emission`: >= 0 (1) |
 | Light wrapping around a billboard | `overrides_light_wrap` | `light_wrap`: in [0, 1] (1) |
 | Casting shadows | `overrides_casts_shadows` | `casts_shadows` (true) |
+| How far from the camera it still casts | `overrides_shadow_distance` | `shadow_distance`: metres, above 0 (150; while not overridden, the world sprite's own, or without one its draw distance) |
+| Keeping the shadow distance fixed against the quality setting | `overrides_is_shadow_distance_fixed` | `is_shadow_distance_fixed` (false) |
+| Casting without being drawn | `overrides_is_shadow_only` | `is_shadow_only` (false) |
 | A decal on a surface (with `fixed`) | `overrides_is_decal` | `is_decal` (false) |
 | A decal's lift | `overrides_decal_offset` | `decal_offset`: metres, >= 0 (0.01) |
 | The outline | `overrides_has_outline` | `has_outline` (true) |
@@ -211,8 +219,9 @@ while its flag is off.
 | Keeping it fixed against the quality setting | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` (false) |
 
 `draw_distance_multiplier` (above 0, default 1) multiplies the draw distance in effect: the placement's own, the world
-sprite's, or, when neither gives one, its kind's (150 m, or 60 m for a decal, decided on the settings in effect). It is
-a plain setting, not an override.
+sprite's, or, when neither gives one, its kind's (150 m, or 60 m for a decal, decided on the settings in effect).
+`shadow_distance_multiplier` (above 0, default 1) multiplies the shadow distance in effect. Both are plain settings, not
+overrides.
 
 ```
 "sprite": {
@@ -336,8 +345,10 @@ render and collision setting of the terrain asset can be overridden with the two
 |---|---|---|
 | `terrain` | an asset name or `null` (null) | The terrain. None places nothing; a name that does not load draws and collides nothing (logged once). |
 | `overrides_has_outline`, `has_outline` | false, true | The outline. |
-| `overrides_shadow_tier`, `shadow_tier` | false, `both` | Which cascades it casts into: `near`, `far`, `both`. |
 | `overrides_casts_shadows`, `casts_shadows` | false, true | Off: it casts no shadow (it still receives them). |
+| `overrides_shadow_distance`, `shadow_distance` | false, 4000 | How far from the camera its chunks still cast, in metres (above 0); while not overridden, the asset's own, or without one the draw distance. |
+| `shadow_distance_multiplier` | above 0 (1) | Times the shadow distance in effect. |
+| `overrides_is_shadow_distance_fixed`, `is_shadow_distance_fixed` | false, false | On: the player's shadow distance setting leaves it as it is. |
 | `overrides_haze`, `haze` | false, 1 | Times the air's haze in front of it, in [0, 1000] (0 as if the air were clear). |
 | `overrides_draw_distance`, `draw_distance` | false, 4000 | How far each chunk is seen, in metres (above 0). |
 | `draw_distance_multiplier` | above 0 (1) | Times the draw distance in effect. |
@@ -506,7 +517,12 @@ Downloaded worlds use the same code, so loading treats every file as hostile:
   warning per name for the whole file, so a world from a newer game version still loads without the parts it does
   not know. GHDF entry ids a table retired are skipped silently.
 - **Versions:** the format version is raised only for changes an older game cannot read by skipping what it does not
-  know (a renamed key, a value read another way); new keys and new component types keep it. Every table a world file
-  holds is at its version 1 under format 1. Once other worlds must keep loading, a change of a row's meaning (a key or
-  wire id that comes to name something else) raises the table's version with a `Migrate` (and a GHDF migration slot,
-  which the tables do not have yet) and the format version.
+  know (a renamed key, a value read another way); new keys and new component types keep it. Format 2 holds the `model`,
+  `model_instances` and `terrain` blocks at their version 2 and every other table at its version 1; format 1 held every
+  table at its version 1. A table at an older version than its own is migrated before it is read, in JSON and GHDF
+  alike: format 1's `model`, `model_instances` and `terrain` blocks held a shadow tier (`overrides_shadow_tier` and
+  `shadow_tier`, GHDF entries 10 and 4 in the model blocks, 4 and 5 in the terrain block; those ids are retired): `near` is
+  read as a `shadow_distance` of 16 (overridden when `overrides_shadow_tier` was on, kept when it was off), `both` as
+  nothing, and `far` is dropped with a warning; a tier that is not one of the three is refused. Written again, such a
+  world is format 2. A change of a row's meaning (a key or wire id that comes to name something else) raises the
+  table's version with its migrations and the format version.

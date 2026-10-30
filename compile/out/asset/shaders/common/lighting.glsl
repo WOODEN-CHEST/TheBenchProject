@@ -1,6 +1,6 @@
 // The world's lighting, shared by the lit shaders (world_pbr and world_sprite), for #include "common/lighting": the
 // frame's lighting uniforms (the renderer uploads the same values to every shader that includes this file), the
-// Cook-Torrance BRDF, the sky's two directional lights (the sun and the moon) with the cascades' shadow, forward point
+// Cook-Torrance BRDF, the sky's two directional lights (the sun and the moon) with the shadow levels' shadow, forward point
 // lights and the shadow-casting point light with its cube shadow, the sky's ambient light with the screen-space AO and
 // interior lighting (common/interior: what roofs keep out, rooms' own light), the eye's night vision and the haze in
 // front of every surface (the aerial perspective and the ground haze, common/haze).
@@ -46,22 +46,27 @@ uniform bool isMoonLit;        // false: the moon lights nothing this frame (its
 uniform vec3 ambientTint;      // the ambient's tint and strength on the sky's light (ambient_skylight_color x intensity)
 uniform vec3 nightLight;       // the moonless night's own light on a surface, per unit of its albedo
 
-// Shadow map: TWO cascades, rendered from the sky's shadow light: the sun by day, the moon on bright nights. The NEAR
-// cascade is a small, sharp map for close detail; the FAR cascade is a large, coarse map for distant / large casters
-// (each object's WorldShadowTier decides which cascade(s) it was rendered into). A fragment samples the near cascade
-// first and falls back to the far cascade when it lies beyond the near frustum.
-uniform mat4 lightVP;          // render space -> near-cascade light-clip space
-uniform sampler2D shadowMap;   // near-cascade directional depth map
-uniform mat4 lightVPFar;       // render space -> far-cascade light-clip space
-uniform sampler2D shadowMapFar;// far-cascade directional depth map
-uniform bool shadowFarActive;  // whether the far cascade is available this frame
-uniform float shadowStrength;  // 0..1, how much a shadowed light is darkened (the cascades and the point shadow)
-uniform vec2 shadowDepthBias;  // the depth bias in the near and the far cascade, in their depth units (half a texel)
-uniform vec2 shadowNormalOffset; // how far a lookup moves off its surface at grazing incidence, near and far, metres
-uniform float shadowTexelSize; // 1.0 / shadow-map resolution, for PCF tap offsets
-uniform vec3 shadowLightDirection; // unit direction TO the light the cascades were rendered from
-uniform float sunShadowFade;   // 0..1, how much the cascades shadow the sun: 0 while the moon casts them or neither
-uniform float moonShadowFade;  // 0..1, how much they shadow the moon. Both 0: the cascades are not sampled at all
+// The shadow levels of the sky's shadow light (the sun by day, the moon on bright nights; WorldShadowLevels.h): nested
+// square boxes around the camera in the light's view, each shadowLevelFactor times as wide as the one before (32 m to
+// 8 km by default), one layer each of a depth texture array read with the hardware's comparison. A point reads the
+// smallest level that holds it; over the outer part of each level its shadow blends into the next level's, the last
+// level's fades to none, and every shadow fades out over the reach's last stretch. A level the renderer kept from an
+// earlier frame is read with the matrices it was rendered with.
+#define SHADOW_MAX_LEVELS 8
+uniform int shadowLevelCount;                         // the levels read this frame (0: none)
+uniform mat4 shadowLevelMatrices[SHADOW_MAX_LEVELS];  // render space -> each level's light clip space, as its map holds
+uniform vec2 shadowLevelOffsets[SHADOW_MAX_LEVELS];   // per level: the depth bias (depth units: half a texel) and the
+                                                      // lookup's move off its surface at grazing incidence (metres)
+uniform float shadowLevelEdge;        // a level is read up to this share of its half size (its margin at the edge)
+uniform float shadowLevelBandStart;   // and blends into the next level from this share on
+uniform float shadowLevelLogFactor;   // the natural log of the factor between the levels' widths
+uniform vec2 shadowReachFade;         // the reach's fade, metres from the camera: where it starts and the reach itself
+uniform sampler2DArrayShadow shadowLevels; // the levels' maps, one layer each (depth compared, bilinear)
+uniform bool shadowLevelView;         // the debug view: every lit surface tinted by the level its shadow comes from
+uniform float shadowStrength;  // 0..1, how much a shadowed light is darkened (the levels and the point shadow)
+uniform vec3 shadowLightDirection; // unit direction TO the light the levels were rendered from
+uniform float sunShadowFade;   // 0..1, how much the levels shadow the sun: 0 while the moon casts them or neither
+uniform float moonShadowFade;  // 0..1, how much they shadow the moon. Both 0: the levels are not sampled at all
 
 // Screen-space ambient occlusion, computed in a pre-pass (shaders/ao) and applied to ONLY the ambient term (so it never
 // dims the direct sun / point lights). aoMapActive false => no SSAO this frame.
@@ -181,59 +186,125 @@ vec3 WrappedLight(vec3 n, vec3 v, vec3 l, vec3 radiance, float wrap, vec3 albedo
 }
 
 
-// ---- The cascades' shadow --------------------------------------------------------------------------------------
-// The cascades hold the casters' faces turned away from the light (their front faces are culled), so a lit surface never
-// meets itself in the map. A lookup moves off its surface along its geometric normal, the more the more the surface is
-// turned from the light (no surface shadows itself through the map's texels at a slant), and keeps only a small depth
-// bias: a shadow then reaches the foot of what casts it, and a roof's shadow the top of the wall under it.
+// ---- The levels' shadow ----------------------------------------------------------------------------------------
+// The levels hold the casters' faces turned away from the light (their front faces are culled), so a lit surface never
+// meets itself in a map. A lookup moves off its surface along its geometric normal, the more the more the surface is
+// turned from the light (no surface shadows itself through a map's texels at a slant), and keeps only a small depth
+// bias: a shadow then reaches the foot of what casts it, and a roof's shadow the top of the wall under it. Both are in
+// texels of the level read, so every level is as tight as the first relative to its texel.
 
-// Samples ONE shadow cascade. Returns -1.0 when the fragment falls outside this cascade's frustum (so the caller can
-// fall back to the next cascade / treat it as lit), else 0 (fully lit) .. 1 (fully shadowed). Crisp pixel-art shadow: a
-// 2x2 PCF (the minimal filtering that stops a single-tap edge crawling pixel-to-pixel as the camera moves, while staying
-// sharp at the low resolution). normal is the surface's geometric normal (unit), nDotL its cosine toward the shadow
-// light (clamped at 0).
-float SampleShadowCascade(sampler2D map, mat4 vp, vec3 worldPos, vec3 normal, float nDotL, float depthBias,
-    float normalOffset)
+// Where a point's shadow comes from (WorldShadowLevels_GetLookup is its C mirror): the level read, below the count (or
+// the count itself: none holds it), and the next level's share across the level's band (at the last level, the share
+// that fades to none).
+struct ShadowLevelChoice
 {
-    float slant = sqrt(max(1.0 - nDotL*nDotL, 0.0));
-    vec4 clip = vp*vec4(worldPos + normal*(normalOffset*slant), 1.0);
-    vec3 proj = clip.xyz/clip.w;
-    proj = proj*0.5 + 0.5; // NDC -> [0,1]
-    if ((proj.z > 1.0) || (proj.x < 0.0) || (proj.x > 1.0) || (proj.y < 0.0) || (proj.y > 1.0))
-    {
-        return -1.0; // outside this cascade
-    }
+    int level;
+    float nextWeight;
+};
 
-    // 2x2 PCF: four taps half a texel off-centre, averaged. Reads as a hard edge after the point-upscale but dithers the
-    // boundary just enough to stop sub-pixel shimmer.
-    float shadow = 0.0;
-    shadow += (proj.z - depthBias > texture(map, proj.xy + vec2(-0.5, -0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
-    shadow += (proj.z - depthBias > texture(map, proj.xy + vec2( 0.5, -0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
-    shadow += (proj.z - depthBias > texture(map, proj.xy + vec2(-0.5,  0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
-    shadow += (proj.z - depthBias > texture(map, proj.xy + vec2( 0.5,  0.5)*shadowTexelSize).r) ? 1.0 : 0.0;
-    return shadow*0.25;
+// The larger of a point's |x| and |y| in a level's light clip coordinates: 1 at the box's edge.
+float ShadowLevelBoxDistance(int level, vec3 worldPos)
+{
+    vec2 clip = (shadowLevelMatrices[level]*vec4(worldPos, 1.0)).xy; // orthographic: w is 1
+    return max(abs(clip.x), abs(clip.y));
 }
 
-// Returns 0 (lit) .. 1 (shadowed) for the fragment, sampling the NEAR cascade first (sharp) and falling back to the FAR
-// cascade (coarse, long-range) when the fragment lies beyond the near frustum. Outside both = lit. Samples nothing while
-// the cascades shadow neither light (they did not run this frame).
-float ComputeShadow(vec3 worldPos, vec3 normal, float nDotL)
+// The smallest level that holds a point, and the blend across its band. The levels are nearly concentric (a kept level's
+// box may lie off the camera by its move limit and turn by its turn limit), so the first level's coordinates give the
+// level by the factor between their widths to within one: the level's own matrix then decides, the next level taking a
+// point its box leaves out (an estimate one level low); one level high happens only inside a band, where the next level
+// holds the casters too.
+ShadowLevelChoice ChooseShadowLevel(vec3 worldPos)
 {
-    if ((shadowStrength <= 0.0) || ((sunShadowFade <= 0.0) && (moonShadowFade <= 0.0)))
+    ShadowLevelChoice choice;
+    float firstBox = ShadowLevelBoxDistance(0, worldPos);
+    int level = (firstBox <= shadowLevelEdge) ? 0
+        : int(ceil(log(firstBox/shadowLevelEdge)/max(shadowLevelLogFactor, 1e-6)));
+    level = clamp(level, 0, shadowLevelCount);
+    float box = (level < shadowLevelCount) ? ShadowLevelBoxDistance(level, worldPos) : 2.0;
+    if ((box > shadowLevelEdge) && (level < shadowLevelCount))
+    {
+        level += 1;
+        box = (level < shadowLevelCount) ? ShadowLevelBoxDistance(level, worldPos) : 2.0;
+    }
+    choice.level = level;
+    choice.nextWeight = clamp((box - shadowLevelBandStart)/max(shadowLevelEdge - shadowLevelBandStart, 1e-6), 0.0, 1.0);
+    return choice;
+}
+
+// One level's shadow at a point, 0 (lit) .. 1 (shadowed): the point moved off its surface by the level's offset times
+// slant (the sine of the surface's angle to the light), compared with the level's map by the hardware, which weighs the
+// four texels around it bilinearly (a soft one-texel edge, so a coarse level's edge is no staircase). Beyond the far
+// plane (nothing within the reach is) it reads as lit. The read sits in branches (neighbouring pixels may read other
+// levels), where its implicit derivatives are undefined: harmless, the maps have no mipmaps and filter linearly at every
+// scale (and cheaper than explicit gradients).
+float SampleShadowLevel(int level, vec3 worldPos, vec3 normal, float slant)
+{
+    vec2 offsets = shadowLevelOffsets[level];
+    vec3 proj = (shadowLevelMatrices[level]*vec4(worldPos + normal*(offsets.y*slant), 1.0)).xyz*0.5 + 0.5;
+    if (proj.z > 1.0)
     {
         return 0.0;
     }
-    float shadow = SampleShadowCascade(shadowMap, lightVP, worldPos, normal, nDotL, shadowDepthBias.x,
-        shadowNormalOffset.x);
-    if ((shadow < 0.0) && shadowFarActive)
-    {
-        shadow = SampleShadowCascade(shadowMapFar, lightVPFar, worldPos, normal, nDotL, shadowDepthBias.y,
-            shadowNormalOffset.y);
-    }
-    return max(shadow, 0.0);
+    float lit = texture(shadowLevels, vec4(proj.xy, float(level), proj.z - offsets.x));
+    return 1.0 - lit;
 }
 
-// How much the cascades darken the light that cast them at a point (0..1): their shadow times the shadow strength.
+// Returns 0 (lit) .. 1 (shadowed) for the fragment from the level that holds it, blended across its band into the next
+// level's (or to none past the last), times the reach's fade. normal is the surface's geometric normal (unit), nDotL its
+// cosine toward the shadow light (clamped at 0). Samples nothing while the levels shadow neither light (they did not run
+// this frame).
+float ComputeShadow(vec3 worldPos, vec3 normal, float nDotL)
+{
+    if ((shadowStrength <= 0.0) || (shadowLevelCount <= 0) || ((sunShadowFade <= 0.0) && (moonShadowFade <= 0.0)))
+    {
+        return 0.0;
+    }
+    float reachFade = 1.0 - clamp((length(worldPos) - shadowReachFade.x)/max(shadowReachFade.y - shadowReachFade.x, 1e-6),
+        0.0, 1.0);
+    ShadowLevelChoice choice = ChooseShadowLevel(worldPos);
+    if ((reachFade <= 0.0) || (choice.level >= shadowLevelCount))
+    {
+        return 0.0;
+    }
+    float slant = sqrt(max(1.0 - nDotL*nDotL, 0.0));
+    float shadow = SampleShadowLevel(choice.level, worldPos, normal, slant);
+    if (choice.nextWeight > 0.0)
+    {
+        float next = ((choice.level + 1) < shadowLevelCount)
+            ? SampleShadowLevel(choice.level + 1, worldPos, normal, slant) : 0.0;
+        shadow = mix(shadow, next, choice.nextWeight);
+    }
+    return shadow*reachFade;
+}
+
+// The levels' debug view (shadowLevelView): a colour by the level a point's shadow comes from, mixed across the bands,
+// times the picture's own brightness; black where no level holds the point (beyond the levels or the reach).
+const vec3 SHADOW_LEVEL_VIEW_COLORS[SHADOW_MAX_LEVELS] = vec3[]
+(
+    vec3(1.0, 0.25, 0.25), vec3(0.25, 1.0, 0.25), vec3(0.3, 0.45, 1.0), vec3(1.0, 1.0, 0.2),
+    vec3(1.0, 0.3, 1.0), vec3(0.2, 1.0, 1.0), vec3(1.0, 0.6, 0.2), vec3(1.0, 1.0, 1.0)
+);
+
+vec3 ShadowLevelViewColor(vec3 color, vec3 worldPos)
+{
+    if (!shadowLevelView || (shadowLevelCount <= 0))
+    {
+        return color;
+    }
+    float reachFade = 1.0 - clamp((length(worldPos) - shadowReachFade.x)/max(shadowReachFade.y - shadowReachFade.x, 1e-6),
+        0.0, 1.0);
+    ShadowLevelChoice choice = ChooseShadowLevel(worldPos);
+    if ((reachFade <= 0.0) || (choice.level >= shadowLevelCount))
+    {
+        return color*0.1;
+    }
+    vec3 next = ((choice.level + 1) < shadowLevelCount) ? SHADOW_LEVEL_VIEW_COLORS[choice.level + 1] : vec3(0.1);
+    vec3 hue = mix(SHADOW_LEVEL_VIEW_COLORS[choice.level], next, choice.nextWeight);
+    return color*mix(vec3(0.1), hue, reachFade);
+}
+
+// How much the levels darken the light that cast them at a point (0..1): their shadow times the shadow strength.
 // shadowPos is where the shadow map is read: the fragment's own position, or for a billboard the matching point of the
 // sprite as the light sees it (its shadow-map entry faces the light); shadowNormal the geometric normal there (unit), and
 // nDotL its cosine toward the shadow light (clamped at 0), which set how far the lookup moves off the surface.
@@ -257,19 +328,19 @@ vec3 FaceNormal(vec3 worldPos, vec3 side)
     return (dot(face, side) < 0.0) ? -face : face;
 }
 
-// The ambient pre-pass's contact shadow at this pixel (shaders/ao: 1 in one, 0 lit), of the light the cascades were
+// The ambient pre-pass's contact shadow at this pixel (shaders/ao: 1 in one, 0 lit), of the light the levels were
 // rendered from; 0 while no pre-pass ran or it did not see this draw's surface (drawInPrepass).
 float ScreenContactShadow()
 {
     return (aoMapActive && drawInPrepass) ? 1.0 - texture(ambientOcclusionMap, gl_FragCoord.xy/aoResolution).b : 0.0;
 }
 
-// How much the cascades darken the light that cast them on a model's or the terrain's surface (0..1), read off the
+// How much the levels darken the light that cast them on a model's or the terrain's surface (0..1), read off the
 // triangle's own face (FaceNormal): the maps hold the faces turned away from the light, so such a face lies in its own
 // shadow and takes all of it, and any other is read off its face. An interpolated or normal-mapped normal can lean
 // toward the light where its face leans away, and read the face's own entry in the map as lit: specks and bands of light
 // inside shade. (So a rounded low-poly shape's terminator follows its faces.) The screen's contact shadow darkens it too,
-// where the cascades' texels leave a seam at the foot of what casts a shadow. Nothing while the cascades shadow neither
+// where the levels' texels leave a seam at the foot of what casts a shadow. Nothing while the levels shadow neither
 // light.
 float FaceShadowAmount(vec3 worldPos, vec3 faceNormal)
 {
@@ -328,7 +399,7 @@ SkyLightValues SkyLightAt(vec3 worldPos)
     return light;
 }
 
-// The sky's two lights through the plain BRDF: the sun, then (at night) the moon. The cascades' shadow darkens the
+// The sky's two lights through the plain BRDF: the sun, then (at night) the moon. The levels' shadow darkens the
 // direct term of the light that cast it (by its fade), never the ambient.
 vec3 SkyLight(SkyLightValues light, vec3 n, vec3 v, float shadowAmount, vec3 albedo, vec3 f0, float rough, float metal)
 {

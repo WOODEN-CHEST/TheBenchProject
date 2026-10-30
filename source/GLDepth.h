@@ -4,8 +4,8 @@
 #include "wr/WRError.h"
 
 /*
- * Private header (source/): reversed depth, one of the four modules of direct OpenGL calls (BUILDING.md,
- * "Direct OpenGL calls"; GLTextureArray.h, GLReadback.h and GLSliceMap.h are the others). The scene's camera passes draw with a depth
+ * Private header (source/): reversed depth, one of the modules of direct OpenGL calls (BUILDING.md,
+ * "Direct OpenGL calls"; GLTextureArray.h, GLReadback.h, GLSliceMap.h and GLShadowArray.h are the others). The scene's camera passes draw with a depth
  * that runs from 1 at the near plane to 0 at infinity, in 32-bit float: a float's exponent spreads its precision
  * evenly over the distance's orders of magnitude, so a hill 20 km away is as well resolved, relative to its distance, as
  * a cup on a desk, and the projection needs no far plane. raylib's depth runs from 0 at the near plane to 1 at its fixed

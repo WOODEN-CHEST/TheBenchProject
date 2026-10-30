@@ -77,7 +77,7 @@ The header documents every function; the essentials:
 - **The renderer (render space: WorldRuntime.md):** `GameCamera.Position` is a `Vector3Double`; the render cache
   (`WorldRenderCache_Sync`) reads each object's double world matrix and position and makes their render-space floats
   with `GameMath_ToMatrixRelative` and `GameMath_ToVector3Relative` against the frame's origin; the collision debug
-  draws and the debug grid convert the same way; `WorldRenderSpace` snaps the shadow cascades in double.
+  draws and the debug grid convert the same way; `WorldRenderSpace` snaps the shadow levels in double.
 - **The world (WorldData.md, "Positions are doubles"):** objects' positions and world matrices, the hierarchy and
   `WorldTransform` are doubles; queries compare distances in double; files and `vector3` data values keep doubles.
 - **Collision (WorldCollision.md):** placements and poses are double; before every narrowphase call the world

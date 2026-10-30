@@ -15,7 +15,8 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | WorldInstancing | `source/WorldInstancing.h`, `source/WorldInstancing.c` (private) | Instanced drawing as pure maths (see "Model instances"): a component's copies sorted into cells with their records, the copies' LOD bands, fades and per-pass draws, and the LODs a cell can show: the C mirror of `shaders/common/instancing.glsl`. |
 | WorldLod | `source/WorldLod.h`, `source/WorldLod.c` (private) | Levels of detail as pure maths (see "LODs"): the LOD selection by distance with hysteresis, the scale and a forced LOD, and the cross-fade's state and its two draws. |
 | WorldAtmosphere | `source/WorldAtmosphere.h`, `source/WorldAtmosphere.c` (private) | The atmosphere as pure maths (see "Atmosphere"): the air's coefficients from the environment, the height the sky is seen from, heights and distances along rays without cancellation, and the lookup tables' layout: the C mirror of `shaders/common/atmosphere.glsl`'s mappings. |
-| WorldRenderSpace | `source/WorldRenderSpace.h`, `source/WorldRenderSpace.c` (private) | Render space as pure maths (see "Render space"): the frame's origin and its rotation-only view and projection, the C mirror of the sky shader's ray, the shadow cascades snapped to their texel grids, each grid anchored to the last frame's box. |
+| WorldRenderSpace | `source/WorldRenderSpace.h`, `source/WorldRenderSpace.c` (private) | Render space as pure maths (see "Render space"): the frame's origin and its rotation-only view and projection, the C mirror of the sky shader's ray, the shadow levels' boxes snapped to their texel grids, each grid anchored to its last box, and a kept box rebuilt for a new origin. |
+| WorldShadowLevels | `source/WorldShadowLevels.h`, `source/WorldShadowLevels.c` (private) | The sun's and the moon's shadow levels as pure maths (see "Sun and moon shadows"): their sizes and texels, the levels the reach needs, which level a point reads (the C mirror of `common/lighting`'s choice), the size cut, the LODs far levels pick, and which levels render each frame with the light frame each kept one is read with. |
 | WorldVisibility | `source/WorldVisibility.h`, `source/WorldVisibility.c` (private) | What each pass draws this frame (see "Visibility"): frustum planes and sphere tests, draw distances and their fade band, opacity, the dither's C mirror, and the per-pass lists built from the render cache. |
 | SpriteTransform | `source/SpriteTransform.h`, `source/SpriteTransform.c` (private) | A sprite quad's pure maths: its matrix for a viewer (billboard, axis billboard, fixed; the camera or a light), its world size, its bounds, and the back-to-front order of a transparent list (see "Sprites"). |
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
@@ -81,16 +82,18 @@ camera, however far out it is. The maths is the private `source/WorldRenderSpace
   crisp composite's occlusion, by a share of the depth); the meter, the bloom's prefilter and the sun shafts read the
   sky with the first, the stars sit at depth 0. Without clip control the renderer logs it once and keeps raylib's
   projection, its 4 km and its depth formats (the status's "reversed depth" unavailable).
-- **Stable shadow cascades** (`WorldRenderSpace_GetCascade`, `WorldRenderSpace_StepCascade`): each cascade is a
-  fixed-size box around the camera along the shadow light, its centre kept on the cascade's texel grid (1.6 cm near, 7.8
-  cm far) in the light's frame, in double. Each frame the centre moves from where it was (its anchor, which
-  `WorldRenderSpace_StepCascade` keeps in the cascade's `WorldRenderCascadeGrid`) to the camera by whole texels along
-  the light's right and up axes. While the light holds still the grid stands still in the world, so shadow edges do not
+- **Stable shadow levels** (`WorldRenderSpace_GetCascade`, `WorldRenderSpace_StepCascade`; the levels are "Sun and moon
+  shadows"): each level is a fixed-size box around the camera along the shadow light, its centre kept on the level's
+  texel grid (1.6 cm for the first, four times that for each one after it) in the light's frame, in double. Each frame
+  a level renders, its centre moves from where it was (its anchor, which `WorldRenderSpace_StepCascade` keeps in the
+  level's `WorldRenderCascadeGrid`) to the camera by whole texels along the light's right and up axes; a frame that
+  keeps a level's map builds its matrices again from that anchor and the light it was drawn with
+  (`WorldRenderSpace_GetCascadeAt`), relative to the new origin. While the light holds still the grid stands still in the world, so shadow edges do not
   crawl while the camera moves (a point keeps its texel; when the centre steps, the map's contents move by one whole
   texel). While the sun or the moon turns, the grid turns about the anchor, within half a texel of the camera, so edges
   near the camera slide as they would under a box centred on the camera, wherever the camera is: a point 4 m from a
-  still camera moves 0.24 texels a frame on the near map with a 2-minute day, 0.016 with a 24-minute day, 0.0004 with a
-  24-hour day, from 7 m to 28 km out. (A grid fixed to the world's origin would turn about that origin: 0.38–0.48 texels
+  still camera moves 0.24 texels a frame on the first level's map with a 2-minute day, 0.016 with a 24-minute day,
+  0.0004 with a 24-hour day, from 7 m to 28 km out. (A grid fixed to the world's origin would turn about that origin: 0.38–0.48 texels
   a frame of shimmer far out, whatever the clock's speed.) Stepping the shadow direction's updates is not done.
 - **The rule for every shader:** "world space" in a shader means render space. `fragPosition` is the fragment's
   position relative to the camera; light positions (`pointLightPositions`, `pointShadowLightPos`, the cube depth
@@ -217,7 +220,7 @@ Right after the cache's sync, `WorldVisibility_Build` (private `source/WorldVisi
 `tests/WorldVisibilityTests.c`) decides what every pass draws, and every pass iterates its list instead of the cache's
 whole arrays. The lists hold indices into the cache's models, sprites and terrain chunks, ascending (so the
 world's order is kept), and are rebuilt every frame without allocating once grown; each entry also gets its fades. Everything here is in render
-space: the cache's render-space centres, the camera at (0, 0, 0), the frustum, the cascades' boxes and the cube's
+space: the cache's render-space centres, the camera at (0, 0, 0), the frustum, the shadow levels' boxes and the cube's
 lamp all relative to the frame's origin.
 - **Frustum culling.** The camera's frustum is extracted once per frame from its view-projection (Gribb and Hartmann, six
   unit inward planes; `WorldVisibility_ExtractFrustum`; with reversed depth, `WorldVisibility_ExtractReversedFrustum`:
@@ -225,11 +228,20 @@ lamp all relative to the frame's origin.
   only what touches it (`WorldVisibility_IsSphereInFrustum`). A model's sphere is its bounding sphere (around `RenderCenter`); a
   sprite's is the sphere around its pivot that holds its quad in every orientation (`BoundsRadius`: half its diagonal
   around its centre for the default centre pivot), so one sphere serves the camera and the lights.
-- **Shadow casters are never culled by the camera:** a caster off screen can still shadow what is on it. Each cascade
-  takes the casters in its own orthographic box (its planes, from the light matrices `WorldRendererShadows_PrepareFrame`
-  builds once per frame), routed by their shadow tier; the cube shadow takes the casters touching its lamp's reach.
-  A model casts when it has `casts_shadows`; a sprite when it is a cutout sprite that is not a decal and casts
-  (`WorldRenderSprite_CastsShadows`).
+- **Shadow casters are never culled by the camera:** a caster off screen can still shadow what is on it. Each shadow
+  level that renders this frame takes the casters in its own orthographic box (its planes, from the light matrices
+  `WorldRendererShadows_PrepareFrame` builds once per frame) whose sphere is at least its size cut
+  (`WorldVisibilityShadowLevel.MinRadius`) and reaches within the shadow reach; past the first level, not those lying
+  inside the level before's sides by more than their radius and the level's inner inset (its ring:
+  `WorldVisibilityShadowLevel.InnerInset`, see "Sun and moon shadows"); a kept level gets no list. The cube shadow takes
+  the casters touching its lamp's reach (the shadow reach does not limit it). A model casts when it has
+  `casts_shadows` and its shadow fade is below 1; a sprite when it is a cutout sprite that is not a decal and casts
+  (`WorldRenderSprite_CastsShadows`). A shadow-only entry (`is_shadow_only`) is in every shadow list and the sky's
+  volume, never in the camera's.
+- **Shadow distance.** Each caster's shadow fade is the larger of its fade and the fade of its shadow distance, measured
+  as its draw distance is (`WorldVisibility_ScaleShadowDistance`: its own times the player's `shadow_distance_scale`
+  unless fixed; without one, its draw distance times its shadow distance multiplier, scaled as the draw distance is and
+  then by the shadow scale; never beyond its scaled draw distance). Beyond it an entry casts into no shadow pass.
 - **Draw distance.** Each model and each sprite has its own ([WorldModels.md](WorldModels.md),
   [WorldSprites.md](WorldSprites.md)): its world model's or world sprite's
   `draw_distance` (a world sprite without one: its kind's, 150 m or 60 m for a decal, decided per placement), or its
@@ -247,7 +259,8 @@ lamp all relative to the frame's origin.
   the PBR output alpha is 1 and their opacity is the dither (`// TODO:` in the PBR shader: alpha-tested material
   textures, leaves on a model, need a material alpha mode).
 - **How a fade shows.** Models and cutout sprites dither by their fade, in every pass that draws them (the scene, the
-  crisp overlay, both cascades and the cube shadow), so a fading object's shadow thins with it. Blended and additive
+  crisp overlay, every shadow level and the cube shadow: there by their shadow fade), so a fading object's shadow thins
+  with it. Blended and additive
   sprites are transparent already: their draw-distance fade scales their alpha (their opacity is in it already) and they
   do not dither. The G-buffer never dithers (holes would break the outline into noise and speckle the AO): it draws an
   entry solid while its fade is below 0.5 (`WORLD_VISIBILITY_GBUFFER_FADE_LIMIT`) and skips it from there on, so the
@@ -286,22 +299,22 @@ lamp all relative to the frame's origin.
   Shaders that take derivatives or sample mipmapped textures test it after those (the PBR shader last), so they stay
   defined for the pixels that are drawn.
 - **Terrain chunks** enter every list as models do, each by its own sphere: the camera's frustum, each
-  cascade's box by the terrain's shadow tier (when it casts), the cube's reach, the draw distance (4 km and fixed by
+  shadow level as a caster (when it casts, within its shadow distance), the cube's reach, the draw distance (4 km and fixed by
   default, so the quality setting never thins the hills; the zoom factor applies) and the fade, which their draws
   dither (and the G-buffer's limit) like a model's. Their lists are their own
   (`WorldVisibility_GetTerrainChunks(visibility, cache, pass)`, the fades `WorldVisibility_GetTerrainChunkFade`), and
   their counts too: a chunk is not counted as a model.
 - **Instance cells** enter every list as models do, each by its sphere around all its copies: the camera's
-  frustum, each cascade's box by the component's shadow tier (when it casts), the cube's reach, the draw distance
+  frustum, each shadow level as a caster (when it casts, within its shadow distance), the cube's reach, the draw distance
   measured to the sphere's nearest point (the quality setting scales it unless fixed; the zoom applies) and the opacity
   (the object's: each copy's own alpha fades only that copy, in the vertex stage). A cell no copy of which can be seen
   leaves every list; inside one, every copy fades and picks its LOD on its own (see "Model instances"). Their lists and
   fades are their own (`WorldVisibility_GetInstanceCells`, `WorldVisibility_GetInstanceCellFade`), and their counts too
   (`DrawnInstanceCellCount`, `DrawnInstanceCount`: the copies of the drawn cells, `InstanceCellsOutsideViewCount`,
   `InstanceCellsFadedOutCount`).
-- **A/B.** `WorldRenderer_SetCullingEnabled` (U in the test frame) switches the camera's frustum and the cascades' boxes
-  off: everything within its draw distance is drawn, and the image must not change. The
-  draw distances, fades and the cube's reach stay.
+- **A/B.** `WorldRenderer_SetCullingEnabled` (U in the test frame) switches the camera's frustum and the shadow levels'
+  boxes and rings off: everything within its draw distance is drawn, and the image must not change. The
+  draw distances, fades, the size cut, the shadow reach and the cube's reach stay.
 - **Status.** The status line (after the first render, the I key) gives what the camera's passes drew (models, sprites,
   how many of them fading; the models by LOD and how many cross-fade), how many entries lay outside the view, and how
   many faded out (beyond their draw distance or fully transparent); the terrains placed (and those without a
@@ -311,8 +324,8 @@ lamp all relative to the frame's origin.
   camera's copies by the LOD they show (the larger share), how many sit in a band and how many faded out, worked out
   with the C mirror when the line is logged (never per frame).
 - **Known limits.** The cube shadow of a fading object is grainy: its 20-tap PCF spreads over about 17 texels and samples
-  the dither pattern unevenly (the cascades' 2x2 PCF always takes one texel of each quarter of the pattern, so their
-  shadows thin smoothly). Without reversed depth the far plane is extracted from a float matrix, about 10 m uncertain at
+  the dither pattern unevenly (the levels' bilinear compare weighs the 2 x 2 texels around each point of the pattern, so
+  their shadows thin smoothly). Without reversed depth the far plane is extracted from a float matrix, about 10 m uncertain at
   4 km.
 
 ### LODs
@@ -340,8 +353,10 @@ Every model draws one of its world model's LODs ([WorldModels.md](WorldModels.md
   complementary dither masks (see "Visibility", the dither): every pixel is drawn by one of them and the background
   never shows; the object's lights are uploaded once for both. The G-buffer draws the LOD with the larger share
   (`WorldLodState_GetSolidLod`: the incoming one from half the fade on), solid, as it draws a fading object
-  solid; the shadow cascades and the cube shadow draw the LOD the object heads to (`WorldLodState_GetShadowLod`), solid
-  (only the object's own fade dithers them), so a shadow changes once per change and never shimmers. Without the PBR
+  solid; the first shadow level and the cube shadow draw the LOD the object heads to (`WorldLodState_GetShadowLod`),
+  solid (only the object's own shadow fade dithers them), so a shadow changes once per change and never shimmers; a
+  level past the first at least the LOD the object would show at the level's inner edge; an object with its own
+  `shadow_lod` casts with it in every shadow pass. Without the PBR
   shader (raylib's default shader, no dither) the larger share is drawn alone.
 - **LOD tinting** (`WorldRenderer_SetLodTintingEnabled`, Q in the test frame): every LOD's debug colour multiplied into
   its albedo (LOD 0 white, i.e. its own colours, 1 green, 2 yellow, 3 red, coarser magenta), and LODs past 0 glow
@@ -384,7 +399,11 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
 - **The passes' rules, per copy** (`WorldInstancing_GetDraw`, as for objects): the lit pass draws
   both LODs of a band, each with its share of the dither, and the copy's fade; the G-buffer the LOD with the larger
   share (the incoming one from `WORLD_LOD_SOLID_SHARE` of the band), solid, until mid-fade; the shadow passes that LOD,
-  dithered by the copy's own fade; the unlit fallback that LOD, solid. A copy with a fade of 1 is drawn by none.
+  dithered by the copy's own shadow fade (`WorldInstancing_EvaluateShadow`: the larger of its fade and its shadow
+  distance's, the component's shadow distance in effect; in a shadow level, none for a copy smaller than the level's
+  size cut, and at least the LOD it would show at the level's inner edge, or the component's own shadow LOD:
+  `WorldInstancing_GetShadowLodMask` picks the cell's LODs for that); the unlit fallback that LOD, solid. A copy with a
+  fade of 1 is drawn by none.
 - **Which LODs a cell draws:** only those its copies can show this frame (`LodMask`: the bands met by the cell's range
   of zoomed distances, widened a little for the GPU's rounding). The draw of LOD k keeps a copy only if it shows LOD k;
   the others get every vertex at one point outside the clip volume, so they make no fragments.
@@ -442,25 +461,28 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    calibration, and the shadow light chosen from the light through the air), every model's LOD and
    its cross-fade (`WorldRenderCache_UpdateLods`, see "LODs"), and every
    pass decision:
-   first which shadow passes run (`DecideShadows`) and their light matrices (`WorldRendererShadows_PrepareFrame`: both
-   cascades' view, projection and box, snapped to their texels; the cube shadow's lamp and far range) and the sky's
+   first which shadow passes run (`DecideShadows`, with the shadow levels' settings: the player's quality and the
+   world's reach) and their light matrices (`WorldRendererShadows_PrepareFrame`: the levels' maps made for the config,
+   the levels used, which render this frame, each one's view, projection and box, snapped to its texels, or kept from its
+   last render; the cube shadow's lamp and far range) and the sky's
    occupancy volume's map and window (`WorldRendererSkyVisibility_PrepareFrame`), then the frame's visibility (what every
    pass draws, see "Visibility"), then the rest (`DecidePasses`; the crisp overlay runs only for crisp objects in view).
 3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the shadow strength and the forward-light
    candidates (every light except the cube-shadow light) with their linear radiance.
    Then the eye's night vision for the frame (`DecideNightVision`: its strength, the field luminance, the rods' grey),
-   and each sprite's matrices (`WorldRendererSprites_PrepareFrame`: facing the camera, facing the cascades' light and the
-   cube shadow's lamp while those run) with the blended and additive sprites sorted back to front.
+   and each sprite's matrices (`WorldRendererSprites_PrepareFrame`: facing the camera, facing the shadow levels' light
+   and the cube shadow's lamp while those run) with the blended and additive sprites sorted back to front.
 4. The atmosphere's tables (`WorldRendererAtmosphere_Render`, see "Atmosphere"): the transmittance and multiple
    scattering tables when the air changed, the sky's irradiance table after them, then the sky view (the sun's
    half, and the moon's while the moonlit sky shows), then the aerial-perspective volume (see "Haze") with the
    sky's light by height in its last row (only that row while the haze is off); the tables left bound on units 7
-   and 8. Then the shadow cascades of the shadow light (the sun or the moon), then the
-   point-light cube shadow, each drawing its
-   visibility list (the casters in its box; within the light's reach). Models (the LOD they show or fade to), the
-   model instances' copies (each the LOD with the larger share, dithered by its own fade), terrain chunks (their
-   back faces in the cascades, as the models') and cutout sprites cast; sprites turned toward the light; each
-   caster dithered by its fade. Then the sky's occupancy volume (see "Interior lighting"): what keeps the sky out in its
+   and 8. Then the shadow levels of the shadow light (the sun or the moon) that render this frame, each into its
+   layer of the maps with depth clamping, then the point-light cube shadow, each drawing its visibility list (the
+   casters in its box, large enough for its texels, within the reach; within the light's reach). Models (the LOD they
+   show or fade to, at least the level's), the model instances' copies (each the LOD with the larger share, at least the
+   level's, dithered by its own shadow fade, left out of a level they are too small for), terrain chunks (their back
+   faces in the levels, as the models') and cutout sprites cast; sprites turned toward the light; each caster dithered
+   by its shadow fade. Then the sky's occupancy volume (see "Interior lighting"): what keeps the sky out in its
    map's box, drawn from above into height slices, and its pyramid.
 5. The normal/flag G-buffer (the camera's models, the LOD with the larger share, the copies the same way, terrain
    chunks and cutout sprites, solid below half their fade), when the AO, the contact shadows, the sky's visibility or
@@ -503,7 +525,7 @@ light; see "Sky's light on surfaces"), forward point lights, per-material metall
 optional albedo / normal / packed ORM (in the METALNESS slot) / emissive maps from the model definition's
 `material_overrides`, derivative-based normal mapping, and the haze in front of every surface (the aerial
 perspective and ground haze, see "Haze": `ApplyAerialPerspective`). The lighting
-itself (the frame's uniforms, the BRDF, the sky's lights with the cascades' shadow, point lights with the cube shadow,
+itself (the frame's uniforms, the BRDF, the sky's lights with the shadow levels' shadow, point lights with the cube shadow,
 the AO, the night vision and the haze) lives in
 `shaders/common/lighting.glsl`, which the sprite shader includes too: the renderer prepares and feeds every lit shader
 the same way (`WorldRendererLighting_PrepareLitShader`, `WorldRendererLighting_UploadFrame`). Without it models draw
@@ -530,7 +552,7 @@ because raylib's `DrawMesh` draws indexed only while the CPU index array is kept
   toward the camera's up); an `axis_billboard` turns only around the object's local Y axis; a `fixed` sprite lies in the
   object's local XY plane facing +Z. In a shadow pass the light is the viewer: billboards face the sun or the moon along
   its rays (with world up as their up) or the cube shadow's lamp, axis billboards turn around their axis toward it, fixed
-  sprites stay as they are. So a tree's shadow does not turn with the camera. The matrices (camera, cascades' light,
+  sprites stay as they are. So a tree's shadow does not turn with the camera. The matrices (camera, the shadow levels' light,
   cube's lamp) are made once per frame and shared by every pass.
 - **Lighting** (`world_sprite`, `#include "common/lighting"`): a rough dielectric (roughness 0.9, metallic 0, occlusion
   1) lit by the sun, the moon, the forward point lights (reach-culled per sprite on the sphere around its pivot), the
@@ -539,7 +561,7 @@ because raylib's `DrawMesh` draws indexed only while the CPU index array is kept
   and stand in for round things, so their diffuse light wraps: (n.l + w) / (1 + w) with w their `light_wrap` (default 1:
   n.l x 0.5 + 0.5), half lit from the side and dark only from straight behind; the specular keeps n.l.
 - **No self-shadowing.** A billboard's shadow-map entry faces the light while the visible quad faces the camera; the two
-  cross at the pivot, and half of the visible quad would lie in its own shadow. So the cascades and the cube are read on
+  cross at the pivot, and half of the visible quad would lie in its own shadow. So the shadow levels and the cube are read on
   the light-facing quad, at the point matching each fragment (`matShadowModel`, `matPointShadowModel` in the vertex
   stage): the sprite is shadowed by everything else where its own entry stands, never by itself.
 - **Unlit** sprites (`is_lit` false) show their colours times `emission` as emitted light: no night vision, still
@@ -557,9 +579,10 @@ because raylib's `DrawMesh` draws indexed only while the CPU index array is kept
 - **Decals** (`is_decal` with the fixed orientation): the vertex stage lifts the quad `decal_offset` metres along its
   normal toward the side the camera is on (raylib has no polygon offset). No shadow, no outline, not in the G-buffer;
   the AO and the shadow they get are their surface's.
-- **Shadows.** Cutout sprites that are not decals and have `casts_shadows` draw into both cascades and the cube shadow
-  through alpha-tested depth shaders (`world_sprite_depth`, `world_sprite_cube_depth`), so the shadow has the sprite's
-  shape.
+- **Shadows.** Cutout sprites that are not decals and have `casts_shadows` draw into the shadow levels (those they are
+  large enough for, within their shadow distance) and the cube shadow through alpha-tested depth shaders
+  (`world_sprite_depth`, `world_sprite_cube_depth`), so the shadow has the sprite's shape. An `is_shadow_only` sprite
+  casts but is not drawn.
 - **G-buffer.** Cutout sprites that are not decals (`world_normal_sprite`: alpha-tested at their cutoff, their quad's
   view normal turned toward the camera) get outlines and AO like models; decals, blended and additive sprites stay out.
 - **Crisp.** `omit_pixelation` draws a cutout sprite that is not a decal in the crisp overlay; decals and blended or
@@ -1049,30 +1072,113 @@ private `source/NightVision.{h,c}` (tested in `tests/NightVisionTests.c`; its he
 - **Not modelled.** The rods' slow dark adaptation (minutes; the vision follows the light at once) and the loss of
   sharpness in the dark.
 
-**Sun and moon shadows.** Two orthographic cascades around the camera (2048² depth textures), their centres snapped to
-their texel grids so shadow edges stand still while the camera moves (see "Render space"): NEAR (32 m, 1.6 cm texels,
-sharp) and FAR (160 m, 7.8 cm texels, coarse, optional). Each model component's `WorldShadowTier` (Both / Near / Far) routes which
-cascade(s) it casts into, and one with `casts_shadows` off casts into none (nor into the point-light shadow). They are rendered from the frame's shadow light (`WorldEnvironment_ChooseShadowLight`, from the light the sun and the moon give the camera's surroundings through the air): the
-brighter of the sun and the moon by luminance, once it stands above 0.05 (the sine of its elevation; full shadows from
-0.15), faded out while the two are about as bright (0 where they are equal, full once one is 4 times the other) and for
-a light too dim for a shadow to show (a thin crescent). So dusk with the moon up goes from sun shadows through none to
-moon shadows without a jump. The lit shaders sample near first, then far, with 2×2 PCF, darkening only that light's
-direct term (`sunShadowFade` / `moonShadowFade`; both 0, and no map sampled, while the cascades do not run). The maps
-hold the casters' faces turned away from the light (front faces culled), so a lit surface never meets itself there.
-Models and the terrain read them off the triangle's own face (`FaceNormal`: from the position's derivatives, turned to
-the interpolated normal's side): a face turned away from the light takes the whole shadow, the map holding that very
-face (no sunlit specks inside a cave or on a cliff's shaded side); a face toward it is looked up off itself along that
-normal by a texel and a half at grazing incidence (`sin` of the angle to the light: none facing it) with a depth bias
-of half a texel (0.8 cm and 2.3 cm in the near cascade, five times that in the far one: `SHADOW_DEPTH_BIAS_TEXELS`,
-`SHADOW_NORMAL_OFFSET_TEXELS`), so a shadow reaches the foot of what casts it and a roof's shadow the top of the wall
-under it. A smooth low-poly model's terminator follows its faces. A sprite is read on its quad facing the light, off
-that face. Active when shadows are enabled, the strength is above 0 and there is a shadow light.
+**Sun and moon shadows** (the pure maths `source/WorldShadowLevels.{h,c}`, tested in `tests/WorldShadowLevelsTests.c`;
+the pass `source/WorldRendererShadows.c`; the maps `source/GLShadowArray.{h,c}`, direct GL calls). The shadow light casts
+into nested **levels** around the camera (a clipmap):
+- **The levels.** Level k is a square box in the light's view, 32 m x 4^k wide (32, 128, 512, 2048 and 8192 m by
+  default: the player's `shadow_level_count` and `shadow_level_factor`, [Config.md](Config.md)), each map
+  `shadow_map_size` texels a side (2048: texels of 1.6 cm, 6.3 cm, 25 cm, 1 m and 4 m). Each is centred on the camera
+  and snapped to its own texel grid (see "Render space"), so its shadow edges stand still while the camera moves. At a
+  640 x 360 picture a scene pixel at distance d is about 0.0032 d wide, so at each level's inner edge a texel is about a
+  scene pixel: the shadows' quality falls with distance no faster than the picture's. Boxes centred on the camera, not
+  slices of its view: turning the camera renders nothing again, and a level's half behind the camera still holds the
+  casters that shade the view.
+- **The maps.** One texture array of 32-bit float depth, a layer per level the reach uses (`GLShadowArray`: made at the
+  first frame that runs the levels, for the config's map size and the levels used, again when either changes; a failure
+  is logged once and leaves the sun and the moon without shadows), on texture unit 12 (`sampler2DArrayShadow shadowLevels`), read with the
+  hardware's depth comparison and linear filtering: one lookup weighs the four texels around a point bilinearly, a soft
+  one-texel edge (no staircase at a coarse level's 1 m or 4 m texels). Every level's depth runs the reach both ways from
+  the camera along the light (times 1.05), so whatever the shadows reach lies inside every level; casters nearer the
+  light than a box (a tower toward a low sun, a hill behind the camera) are drawn onto its near plane with depth clamping
+  instead of being cut off, so a box's near plane culls no caster.
+- **The reach.** The world's `shadow_reach` (4 km by default, at most 20 km: the levels' depth precision, 2.5 mm there
+  against the first level's 8 mm bias at 2048 texels; the bias never falls below two of the depth's steps, 2^-23 of the
+  depth range, which finer maps at long reaches would ask for; 0 turns them off). The levels used are the first ones up to the one whose half
+  size holds it; the shadows fade out over its last tenth (at least 3 m) by the distance to the camera, and only casters
+  whose sphere reaches within it are drawn into the levels.
+- **Which level a point reads** (`ComputeShadow` in `common/lighting`, its C mirror `WorldShadowLevels_GetLookup`): the
+  smallest that holds it, by the larger of its light clip x and y in each level's own matrix against the level's edge (a
+  margin of 4 texels for the filter, the lookup's move off its surface and the centre's snapping); over the outer 15 % of
+  that the shadow blends linearly into the next level's (two lookups only there), and the last level's fades to none, so
+  there is no line at a level's edge or at the end of the shadows.
+- **What a level draws** (its visibility list, see "Visibility"): the casters in its box, large enough for its texels
+  (a bounding sphere at least two of its texels wide: a cup casts into the first level only, a tree up to the 1 m level, a
+  house and the terrain into every one; per copy for model instances, in the vertex stage), within their shadow
+  distance; models, model instances' copies and terrain chunks with their faces turned away from the light (both faces
+  for a two-sided caster), cutout sprites turned toward the light. A level past the first draws a caster at the LOD it
+  would show at the level's inner edge (`WorldShadowLevels_GetLodDistance`, with the zoom) unless it shows a coarser one,
+  or its own shadow LOD while it has one ([WorldModels.md](WorldModels.md)). Each caster is dithered by its shadow fade
+  (the larger of its fade and its shadow distance's). And a level past the first draws only its **ring**: the light's
+  view is orthographic, so a caster shades only what lies under it there, and one deep inside the level before's box
+  shades only points that read the level before alone. A caster whose sphere lies inside that box's sides by more than
+  `WorldShadowLevels_GetInnerInset` stays out, a bound on everything that can happen before the level renders again:
+  the band (where both levels are read), the camera's movement while either level keeps its map (2 % of the level's half
+  size and twice of the level before's), both levels' snapping, 4 of the level's texels around a lookup (its move off
+  the surface, the bilinear tap) and the light's turns while a map is kept (up to three turn limits for the level
+  before's light, carried over a caster's depth and, through the box's axes, over its place in the box; two for the
+  level's own, over the depth from the caster to what it shades: 10 to 24 m with the defaults). So the 128 m level leaves
+  out almost nothing, the 512 m level what lies within about 34 m of the camera, the 2048 m one 168 m and the 8192 m one
+  700 m: from the slab the 8192 m level draws none of the test terrain's chunks. The pictures are those of every level
+  drawing everything in its box, bit for bit (still, walking, flying past the far field).
+- **The draw.** Every depth pass (the levels, the cube shadow, the sky's volume) draws its models' and its chunks'
+  meshes through `WorldRendererCommon_DrawDepthMesh`: raylib's `DrawMesh` with the same matrices multiplied in the same
+  order (the pictures are the same bit for bit), but without what no depth stage reads (the material's colours and maps,
+  the normal matrix) and without unbinding the program and the vertex array after each mesh; the program is bound once
+  for all of the terrain's chunks and at each model's first mesh (and where a model's next mesh takes the other of its
+  rigid and skinned shaders), and a caster's dither uploaded only when it changes (`WorldRendererCommon_SetRunDither`). `DrawMesh`'s resets cost about 1.6 microseconds a mesh, which made a level of the
+  test terrain's 256 chunks cost 0.4 ms; drawn this way they cost about 0.05 ms.
+- **The objects' settings** ([WorldModels.md](WorldModels.md), [WorldSprites.md](WorldSprites.md),
+  [Terrain.md](Terrain.md)): `casts_shadows`; `shadow_distance`, how far from the camera a thing still casts (its own,
+  its asset's, or its draw distance when neither gives one; times its multiplier; times the player's
+  `shadow_distance_scale` unless fixed; never beyond its draw distance), measured and faded as a draw distance is (to its
+  sphere's nearest point, times the zoom; over its last tenth, at least 3 m); `is_shadow_only`, cast but not drawn (out of
+  the camera's passes, in every shadow pass and the sky's volume); `has_two_sided_shadows`; `shadow_lod`. The point
+  light's cube shadow takes them too.
+- **When a level renders** (`WorldShadowLevels_BeginFrame`): the far levels less often, staggered so that no two of
+  them render in one frame (`shadow_update_periods`: 1, 1, 2, 4, 8 by default; a period P renders when the frame count is
+  P / 2 - 1 past a multiple of P), and at once on a level's first frame, when the maps or the settings they were drawn for
+  change (the size, the factor, the reach), when the light has turned by half a texel at the box's corner since (the
+  same angle for every level: about 0.02 degrees at 2048; with the test frame's 2-minute day the sun turns more than
+  that every frame, with the game's 20-minute day every fourth) or across the up vector's switch near straight up
+  (every box turns about the light there), when the camera has moved by 2 % of its half size (the box would no longer
+  hold what it is read for), and after frames without the levels or for another world (the renderer forgets every map
+  then, and when the frame's visibility cannot be built after the levels were told to render). A level that does not render keeps its map and the light frame it
+  was drawn with (its centre in the world, in double, and the light's direction); its matrices are built again from them
+  for each frame's origin (`WorldRenderSpace_GetCascadeAt`), so its lookups read its map as it was drawn. A moving
+  thing's shadow in a level of period P lags by up to P - 1 frames of its motion.
+- **The shadow light** is the frame's (`WorldEnvironment_ChooseShadowLight`, from the light the sun and the moon give
+  the camera's surroundings through the air): the brighter of the sun and the moon by luminance, once it stands above
+  0.05 (the sine of its elevation; full shadows from 0.15), faded out while the two are about as bright (0 where they are
+  equal, full once one is 4 times the other) and for a light too dim for a shadow to show (a thin crescent). So dusk
+  with the moon up goes from sun shadows through none to moon shadows without a jump. The levels darken only that light's
+  direct term (`sunShadowFade` / `moonShadowFade`; both 0, and no map read, while the levels do not run).
+- **Off the surface.** The maps hold the casters' faces turned away from the light (front faces culled), so a lit
+  surface never meets itself there. Models and the terrain read them off the triangle's own face (`FaceNormal`: from the
+  position's derivatives, turned to the interpolated normal's side): a face turned away from the light takes the whole
+  shadow, the map holding that very face (no sunlit specks inside a cave or on a cliff's shaded side); a face toward it is
+  looked up off itself along that normal by a texel and a half at grazing incidence (`sin` of the angle to the light: none
+  facing it) with a depth bias of half a texel, both in texels of the level read (0.8 cm and 2.3 cm in the first,
+  `SHADOW_DEPTH_BIAS_TEXELS`, `SHADOW_NORMAL_OFFSET_TEXELS` in `WorldRendererShadows.c`), so a shadow reaches the foot of
+  what casts it and a roof's shadow the top of the wall under it. A smooth low-poly model's terminator follows its faces.
+  A sprite is read on its quad facing the light, off that face.
+- **The debug view** (`WorldRenderer_SetShadowLevelViewEnabled`, keypad * in the test frame): every lit surface tinted by
+  the level its shadow comes from (red, green, blue, yellow, magenta, cyan, orange, white from the first out), mixed
+  across the bands, dark beyond the levels or the reach. The status line (I) lists the levels used with their widths,
+  which rendered this frame and their casters, the maps' size and the reach.
+- **Cost** (a GTX 980 Ti at 1417 MHz, the windowless harness at 1280 x 720 with the defaults; the GPU's timestamps read
+  frames later and the CPU's clock, averaged over 1500 frames). The start view: the levels 0.46 ms of GPU time and
+  0.61 ms of CPU a frame (per render the 32 m level 0.05 ms, the 128 m 0.13, the 512 m 0.46 every second frame, the
+  2048 m 0.14 every fourth, the 8192 m 0.012 every eighth), the lookup 0.1 ms in the lit passes. Over a forest of 4000
+  instanced trees from 30 m up: 0.8 ms of GPU and 1.0 ms of CPU a frame, about 1.0 ms in the frames that render the
+  512 m level, which holds most of the forest's cells (their instanced draws' calls, on the CPU). Over the far field from 80 m up the lookups over the whole lit plain cost about 0.5 ms more than
+  shadows that end at 80 m would. Shorter periods, more levels or larger maps cost more.
+- Active when shadows are enabled, the strength is above 0, the reach is above 0 and there is a shadow light.
 
 **Contact shadows.** The seam the maps' texels and filter still leave at a caster's foot, and the hairline where a roof
 meets a wall, the ambient pre-pass closes: from each pixel it marches the depth toward the shadow light over 0.25 m (a
 pixel a step, at most 32; every depth sample taken 0.25 m thick, so a thin thing casts no endless shadow), and the lit
-shaders take the larger of the cascades' shadow and that one for the shadow light's direct term (`FaceShadowAmount`).
-Only what the camera sees casts it, so it only adds to the cascades. It runs with the cascades;
+shaders take the larger of the shadow levels' shadow and that one for the shadow light's direct term
+(`FaceShadowAmount`). Only what the camera sees casts it, so it only adds to the levels. It runs with the levels;
 `WorldRenderer_SetContactShadowsEnabled` (keypad . in the test frame) switches it, and the status has it as the feature
 "contact shadows".
 
@@ -1111,8 +1217,8 @@ object is solid in the G-buffer but has the dither's holes in the scene's depth.
 which write the scene's depth but are not in the G-buffer, are not darkened as if they were the rim of the surface
 behind them.) The AO and the outlines are under the post-effects toggle (`WorldRenderer_SetPostEffectsEnabled`, O key in
 the test frame); the contact shadows and the sky's visibility are lighting and stay. Cost (GTX 980 Ti, 1280 x 720): the
-pre-pass's AO with its blur 0.36 to 0.42 ms, the contact shadows up to 0.23 ms more (none while the cascades do not
-run), the sky's visibility as "Interior lighting" says.
+pre-pass's AO with its blur 0.36 to 0.42 ms, the contact shadows up to 0.23 ms more (none while the shadow levels do
+not run), the sky's visibility as "Interior lighting" says.
 
 **Bloom and sun shafts.** Half-resolution HDR passes added by the tonemap: a depth-masked bright pass (the sky
 does not bloom) with a separable blur, and a radial blur of the unoccluded sky toward the sun's screen position
@@ -1189,7 +1295,8 @@ get no AO and no outlines.
   sprites with how many are decals and how many blended or additive). The
   "stars" feature is inactive by day, while twilight, light pollution and the moonlit sky hide every star, and at
   density 0; the "Milky Way" is unavailable without its texture and inactive while it cannot be seen; "sun shadows" and
-  "moon shadows" are the cascades cast by either light; "moon" is the disc (inactive below the horizon, near the sun or
+  "moon shadows" are the shadow levels cast by either light (unavailable without their depth shader or the GL functions
+  of their maps); "moon" is the disc (inactive below the horizon, near the sun or
   switched off; drawn flat grey without its texture), "moonlight" the moon's light on the world, "night vision" the
   eye's night vision (active while it changes something: dusk and night, with a strength above 0), "sprite shading" the
   sprites at all (unavailable without the sprite shader or quad: then no sprite is drawn), "sprite lighting" the lit
@@ -1208,7 +1315,7 @@ get no AO and no outlines.
   is 0; the status adds the scale, the ground haze's density and the debug view), "reversed depth" the camera's reversed
   depth (see "Render space": unavailable without clip control, logged once, when the camera keeps raylib's
   projection and its 4 km; a camera pass's 32-bit depth that cannot be made is logged once and the pass's target fails
-  as any target does), "sky visibility" the sky's visibility map (unavailable without the cascades' depth shader or its
+  as any target does), "sky visibility" the sky's visibility map (unavailable without the depth shader or its
   target, inactive while interior lighting is off), "ambient zones" the zones' light (active while interior lighting
   runs and a zone is listed). It also counts what the camera's passes
   drew and what culling and fading removed (see "Visibility"). The renderer logs the status once after its first
@@ -1225,9 +1332,11 @@ get no AO and no outlines.
 | `WorldRendererScene.c` | Scene target size, HDR tiers and recreation on resize (asks each pass to recreate its targets); the scene pass. |
 | `WorldRendererGeometry.c` | Model meshes one LOD at a time with per-draw materials (both LODs of a cross-fade in the lit passes; `WorldRendererGeometry_PrepareMaterial` builds each, the instanced draws use it too), each mesh with its pass's rigid shader or, posed and skinned, its skinned twin after the pose's palette; the unlit fallback's skinned shader; the LOD tinting, light gizmos, the pixelation filter. |
 | `WorldRendererInstances.c` | The model instances' copies (see "Model instances"): each entry's records buffer, the G-buffer's and the shadows' instanced twins (the lit one is the lighting file's), the instanced draw that mirrors `DrawMesh`, each pass's cells instanced or one at a time (the A/B and every fallback), the status line. |
-| `WorldRendererSprites.c` | The sprites: the unit quad, the lit sprite shader, each frame's sprite matrices (camera, cascades' light, cube's lamp) and transparent draw order, the lit cutout / decal / sorted transparent draws. The G-buffer and shadow passes draw sprites with this file's quad and matrices. |
+| `WorldRendererSprites.c` | The sprites: the unit quad, the lit sprite shader, each frame's sprite matrices (camera, the shadow levels' light, cube's lamp) and transparent draw order, the lit cutout / decal / sorted transparent draws. The G-buffer and shadow passes draw sprites with this file's quad and matrices. |
 | `WorldRendererLighting.c` | The PBR programs (rigid, skinned, instanced: `WorldRendererPbrProgram`) and their location tables, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: every PBR program, the sprite shader and the terrain shader, the night vision's and interior lighting's among them), forward point lights, each lit draw's place (`WorldRendererLighting_SetDrawPlace`: its haze multiplier and its ambient zones), per-material factors. |
-| `WorldRendererShadows.c` | The shadow cascades of the sun or the moon, and the point-light cube shadow (models, terrain chunks, and cutout sprites through alpha-tested depth shaders). |
+| `WorldRendererShadows.c` | The shadow levels of the sun or the moon (their settings from the config and the world, their maps through `GLShadowArray`, each frame's levels from `WorldShadowLevels`, the levels' passes with depth clamping, the maps' bind, the status line), and the point-light cube shadow (models, model instances, terrain chunks, and cutout sprites through alpha-tested depth shaders). |
+| `GLShadowArray.c` (not a pass) | The shadow levels' maps: a texture array of 32-bit float depth with the hardware's comparison, its layers attached to a framebuffer one at a time, depth clamping; direct OpenGL calls in `GLTextureArray`'s manner; private (`source/GLShadowArray.h`). |
+| `WorldShadowLevels.c` (pure maths, not a pass) | The levels' sizes, the reach's levels, the lookup's C mirror, the size cut, the LOD distances, the update schedule and the kept levels' light frames; see "Sun and moon shadows". |
 | `WorldRendererSkyVisibility.c` | The sky's occupancy volume (see "Interior lighting"): its integer texture with its levels and their framebuffers, the scratch volume, its frame (the map's matrices and box, the window), its pass (the models' layers, the parity and the slices from above, both faces, the pyramid) and its bind on unit 7. |
 | `WorldRendererInterior.c` | Interior lighting's other parts: the lit shaders' interior uniforms (`WorldRendererInteriorLocations`), the camera's interior for the eye (its openness and the ambient zones at it, eased), each lit draw's zones (through `WorldRendererLighting_SetDrawPlace`), the zones' wireframes (the debug view), the status line. |
 | `WorldRendererGBuffer.c` | The normal/flag G-buffer (models, terrain chunks and cutout sprites) and the ambient pre-pass (the AO, the contact shadows, the sky's visibility) with its blur. |
@@ -1247,7 +1356,7 @@ get no AO and no outlines.
 | `WorldLod.c` (with the cache, not a pass) | LOD selection and the cross-fade's state; the cache's `WorldRenderCache_UpdateLods` runs it per entry; see "LODs". |
 | `WorldAtmosphere.c` (pure maths, not a pass) | The atmosphere's model: the air from the environment, the stale check and the tables' build record, the view height, the tables' layout (the C mirror of `common/atmosphere`); see "Atmosphere". |
 | `WorldInterior.c` (pure maths, not a pass) | Interior lighting's model: zones in render space, their weights, the draws' choice and the composition, the haze inside, the sky's occupancy volume (its map, slices and window), the march through it and the read straight above, the camera's interior and the light the eye is in (the C mirror of `common/interior`); see "Interior lighting". |
-| `WorldRenderSpace.c` (pure maths, not a pass) | The frame's origin and its rotation-only view and projection (`BuildFrame` calls it; also the reversed infinite projection and its inverse), the sky shader's ray in C, the cascades snapped to their texels and their grids from frame to frame (`WorldRendererShadows_PrepareFrame` calls it); see "Render space". |
+| `WorldRenderSpace.c` (pure maths, not a pass) | The frame's origin and its rotation-only view and projection (`BuildFrame` calls it; also the reversed infinite projection and its inverse), the sky shader's ray in C, the shadow levels' boxes snapped to their texels and their grids from frame to frame, and a kept box for a new origin (`WorldShadowLevels_BeginFrame` calls it); see "Render space". |
 
 The renderer keeps receiving features, so:
 
@@ -1276,10 +1385,11 @@ The renderer keeps receiving features, so:
   | 0–11 | raylib's `DrawMesh` | A drawn material's maps, map i on unit i (`GL_TEXTURE_2D`, cubes on 7–9); the 2D batch uses 0–4. Free in a program whose materials carry no maps. |
   | 7–8 | the sky pass and the stars; the lit programs (models, sprites, terrain) | In the sky pass and the stars 7 the transmittance table, 8 the sky-view table (`sampler2D`, `WorldRendererTextureUnit_Atmosphere*`). In the lit programs 7 the sky's occupancy volume (`usampler2D skyVolume`, an integer texture whose levels are its pyramid, `WorldRendererTextureUnit_SkyVisibility`; their transmittance sampler there is declared and unused, so it never meets the volume's: they read no table) and 8 the haze's volume (`sampler2D atmosphereVolume`, `WorldRendererTextureUnit_HazeVolume`, also for the sky's light by height in its last row, while the haze is off too). raylib binds only cube maps there (`MATERIAL_MAP_CUBEMAP`, `_IRRADIANCE`, filled by no material of ours) and the 2D batch only 0–4, so what a pass binds stays bound; the lit passes bind the occupancy volume on 7 and the haze's volume on 8 with their frame textures, the sky pass and the stars the tables before their draws (the sky pass and the outlines take the volume through `SetShaderValueTexture`). Units chosen because they are free in every lit program, the terrain's included, with no capability check (units 16 and up would have needed GL_MAX_TEXTURE_IMAGE_UNITS above 16). |
   | 9–11 | the terrain program only | Its material arrays (`sampler2DArray`: albedo and height, normal, roughness and AO). The terrain draws with no raylib maps, and an array sampler reads only a unit's `GL_TEXTURE_2D_ARRAY` target, which nothing else binds, so the models' maps on the same units never meet them. |
-  | 12–15 | every lit program | The frame's textures: the near and far cascades, the cube shadow, the ambient pre-pass's map (the AO, the sky's visibility, the contact shadows). Full. |
+  | 12, 14–15 | every lit program | The frame's textures: 12 the shadow levels' maps (`sampler2DArrayShadow shadowLevels`, the array's `GL_TEXTURE_2D_ARRAY` target), 14 the cube shadow, 15 the ambient pre-pass's map (the AO, the sky's visibility, the contact shadows). |
+  | 13 | nobody | Free in every lit program. |
 
-  The wetness and puddle masks (rain and wetness) will need units in the lit programs too, and 7, 8 and 12–15 are
-  taken: a frame texture for the model programs takes a unit below 12 that no material map the models
+  The wetness and puddle masks (rain and wetness) will need units in the lit programs too: 13 is free, and 7, 8, 12,
+  14 and 15 are taken; beyond 13, a frame texture for the model programs takes a unit below 12 that no material map the models
   use binds (the PBR materials use maps 0, 1, 2 and 5: albedo, the packed ORM, normal, emission; raylib's glTF import
   also fills 3 (roughness) and 4 (occlusion) and its OBJ import 6 (height) when the file has those maps, so 10 and 11
   are the safe ones there), and the terrain program keeps 9–11 for its arrays (units 0–6 are free in it). Beyond that,
@@ -1361,7 +1471,7 @@ off and the horizon a dark brown band), `common/haze` (the volume's readers, the
 compositing, see "Haze"; used by `common/lighting`, `world_sky`, `world_stars` and `world_postfx`), `common/night_sky`
 (air mass, extinction and the skyglow profile, used by `world_sky` and `world_stars`) and `common/night_vision` (the eye's night vision: the rods' share
 and the blend into their grey; used by `world_sky` and `common/lighting`), `common/lighting` (the frame's lighting: its
-uniforms, the BRDF and its wrapped variant, the cascades' shadow off the face with the contact shadows, point lights
+uniforms, the BRDF and its wrapped variant, the shadow levels' shadow off the face with the contact shadows, point lights
 and the cube shadow, the pre-pass's AO and sky visibility, the
 night vision, the haze through `common/haze`: `ApplyAerialPerspective`, and interior lighting through
 `common/interior`; used by `world_pbr`, `world_terrain` and `world_sprite`), `common/interior` (interior lighting: the
@@ -1410,8 +1520,8 @@ an empty object turned 15 degrees that holds its parts (`desk_top` and two `desk
 `cup` and a `desk_lamp` (a thin post) whose child `desk_lamp_light` is a warm point light (intensity 3, reach 4, no
 shadow) 0.35 lamp units above the post's centre (0.28 m: a child's position is in its parent's scaled space). Its
 world models: two cubes behind the centre row, `variant_cube_left` (red) and `variant_cube_right` (blue), show the
-`painted_cube` world model's two variants; the crisp cube and the shadow tiers of the PBR demo cubes, the cup and the
-lamp are placement overrides (`overrides_omit_pixelation`, `overrides_shadow_tier`). Its LODs: a row of six
+`painted_cube` world model's two variants; the crisp cube and the 16 m shadow distances of the PBR demo cubes, the cup
+and the lamp are placement overrides (`overrides_omit_pixelation`, `overrides_shadow_distance`). Its LODs: a row of six
 `lod_test` spheres (`lod_test_1` to `_6`, ids 25 to 30) along the left edge of the ground, at x = 8 from z = -6 to 9,
 switching at 13 and 16 m, and beside it `lod_test_forced` (id 31, LOD 2 forced) and `lod_test_own_distances` (id 32, its
 own switch distances 3 and 6 m). Its collision ([WorldCollision.md](WorldCollision.md)): 43 colliders (the slab,
@@ -1430,6 +1540,10 @@ Its interior lighting (see "Interior lighting"): a `test_room` (id 54) 15 m in f
 (1, 0.05, 8) whose children are four walls with a doorway facing the start view and a flat roof (`test` cubes with
 colliders, ids 55 to 61), around its ambient zone (`room_zone`, id 62: to the walls' middle and 0.1 m past the floor and
 the ceiling, still air, the default light).
+Its two-sided shadows: two `test_card`s (a one-sided 1 m square facing up, `models/placeholder_props/card.obj`), scaled
+to 1.4 m and floating 1.6 m above the ground right of the test room, `card_one_sided` (id 63) and `card_two_sided` (id 64,
+`overrides_has_two_sided_shadows`): the shadow levels hold the faces turned away from the light, so in daylight the first
+casts nothing (it has no face turned away) and the second a square shadow.
 Edit the file and restart to change the test world.
 The frame owns a `WorldCollision` too, created after the world, and a `WorldCharacters` (the character
 system, [Characters.md](Characters.md)) created after that, with its test characters (the private
@@ -1467,8 +1581,8 @@ mouse wheel (the flycam's speed, up faster and down slower, three notches to a d
 6 m/s at start; the sprint key still multiplies it by 3; each change is logged and the I key's camera line shows it;
 not while walking, and the UI takes it first while the pointer is over a widget) and the debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11, the
-digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/`, the keypad's digits and its `.` are taken already; the keypad's
-other operators are free. Leave F12 free: raylib's `EndDrawing`
+digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/`, the keypad's digits, its `.`, `+` and `*` are taken already; the
+keypad's other operators are free. Leave F12 free: raylib's `EndDrawing`
 takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
@@ -1490,6 +1604,11 @@ takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png`
 - **the moon and the seasons:** F pins the moon full (`MoonPhaseSource` fixed at 0.5) and gives it back to the
   calendar; Y switches the seasons (`AreSeasonsEnabled`). Every clock and moon log line carries the moon: `WorldTest:
   next day: Mon 2026-10-19 12:00:00; first quarter (phase 0.27, 59% lit, from the calendar).`;
+- **the shadows (see "Sun and moon shadows"; `source/WorldTestShadows.{h,c}`, test content):** keypad + shows and hides
+  the far field (made when first shown, not saved with the world: a 12 km plain just under the slab and 24 towers of the
+  test cube, 6 x 40 m at 300 m, 15 x 100 m at 1 km and 40 x 250 m at 3 km in eight directions, every ring a little
+  turned, all seen to 20 km, around the terrain's object), keypad * the shadow levels' debug view; each logged, and the
+  I key's status says both;
 - **the renderer and the sky:** O post effects, B bloom, G sun shafts, keypad . contact shadows, C crisp overlay, V
   night vision (logged), K
   sprite lighting (off draws every sprite unlit; logged), L light gizmos, N cycle the

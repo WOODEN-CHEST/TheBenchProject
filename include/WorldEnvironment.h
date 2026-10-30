@@ -64,6 +64,10 @@
 #define WORLD_ENVIRONMENT_DEFAULT_GRAVITY 15.0f
 /** @brief The largest gravity a world may set, in metres per second squared (a bound for hostile content). */
 #define WORLD_ENVIRONMENT_MAX_GRAVITY 1000.0
+/** @brief The longest shadow reach a world may give, in metres: the shadow levels' depth runs the reach both ways along
+ *  the light, so a longer one would cost the nearest level its depth precision (about 2.5 mm here, against its 8 mm
+ *  bias at the default 2048-texel maps; finer maps keep a floor of two of the depth's steps). */
+#define WORLD_ENVIRONMENT_MAX_SHADOW_REACH 20000.0
 /** @brief The most bytes a texture name (MilkyWayTexture, MoonTexture) may have, without the terminator. */
 #define WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH ((size_t)128)
 /** @brief The haze's scale height's limits (HazeHeight), in metres: below 10 m it would fall between the rows of the
@@ -351,6 +355,10 @@ typedef struct WorldEnvironmentStruct
     bool AreShadowsEnabled;
     /** @brief World-side shadow intensity multiplier (multiplied by the config's shadow strength). Finite and >= 0. */
     float ShadowStrength;
+    /** @brief How far from the camera the sun's and the moon's shadows reach, in metres (they fade out over its last
+     *  tenth); in [0, WORLD_ENVIRONMENT_MAX_SHADOW_REACH], 0 for none. The player's shadow levels may end them nearer.
+     *  Default 4000. */
+    float ShadowReach;
 
     /** @brief When false, this world suppresses screen-space ambient occlusion regardless of the config. */
     bool IsAmbientOcclusionEnabled;

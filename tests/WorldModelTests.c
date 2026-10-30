@@ -125,7 +125,10 @@ static bool AreColorsEqual(Color a, Color b)
 static bool AreSettingsEqual(const WorldModelSettings* a, const WorldModelSettings* b)
 {
     return (a->HasOutline == b->HasOutline) && (a->OmitsPixelation == b->OmitsPixelation)
-        && (a->ShadowTier == b->ShadowTier) && (a->CastsShadows == b->CastsShadows)
+        && (a->CastsShadows == b->CastsShadows) && (a->HasShadowDistance == b->HasShadowDistance)
+        && (a->ShadowDistance == b->ShadowDistance) && (a->IsShadowDistanceFixed == b->IsShadowDistanceFixed)
+        && (a->IsShadowOnly == b->IsShadowOnly) && (a->HasTwoSidedShadows == b->HasTwoSidedShadows)
+        && (a->HasShadowLod == b->HasShadowLod) && (a->ShadowLod == b->ShadowLod)
         && (a->DrawDistance == b->DrawDistance) && (a->IsDrawDistanceFixed == b->IsDrawDistanceFixed)
         && (a->Haze == b->Haze) && (a->OccludesSky == b->OccludesSky);
 }
@@ -151,8 +154,12 @@ static void AMinimalDefinitionGetsTheDefaults(TestRun* run)
             TEST_CHECK(run, (WorldModel_GetLodCount(Loaded) == 1U) && (WorldModel_GetLodModel(Loaded, 0U) != NULL)
                 && (WorldModel_GetLodModel(Loaded, 1U) == NULL) && (WorldModel_GetLodMaxDistance(Loaded, 0U) == 25.0f)
                 && (WorldModel_GetLodMaxDistance(Loaded, 1U) == 0.0f));
-            TEST_CHECK(run, Settings->HasOutline && !Settings->OmitsPixelation
-                && (Settings->ShadowTier == WorldShadowTier_Both) && Settings->CastsShadows);
+            TEST_CHECK(run, Settings->HasOutline && !Settings->OmitsPixelation && Settings->CastsShadows);
+            // Casting as far as it is drawn, drawn itself, from its front faces, with the LODs the renderer picks.
+            TEST_CHECK(run, !Settings->HasShadowDistance
+                && (Settings->ShadowDistance == WORLD_MODEL_DEFAULT_SHADOW_DISTANCE) && !Settings->IsShadowDistanceFixed
+                && !Settings->IsShadowOnly && !Settings->HasTwoSidedShadows && !Settings->HasShadowLod
+                && (Settings->ShadowLod == 0U));
             TEST_CHECK(run, (Settings->DrawDistance == 25.0f) && !Settings->IsDrawDistanceFixed);
             TEST_CHECK(run, Settings->Haze == 1.0f); // the real air's haze
             TEST_CHECK(run, (WorldModel_GetLodFadeSeconds(Loaded) == WORLD_MODEL_DEFAULT_LOD_FADE_SECONDS)
@@ -189,8 +196,10 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
         "  \"is_draw_distance_fixed\": true,\n"
         "  \"lod_fade_seconds\": 0.5,\n"
         "  \"lod_hysteresis\": 0.1,\n"
-        "  \"render\": { \"has_outline\": false, \"omit_pixelation\": true, \"shadow_tier\": \"near\", "
-        "\"casts_shadows\": false, \"haze\": 0.25, \"occludes_sky\": false },\n"
+        "  \"render\": { \"has_outline\": false, \"omit_pixelation\": true, \"casts_shadows\": false, "
+        "\"has_shadow_distance\": true, \"shadow_distance\": 35, \"is_shadow_distance_fixed\": true, "
+        "\"is_shadow_only\": true, \"has_two_sided_shadows\": true, \"has_shadow_lod\": true, \"shadow_lod\": 2, "
+        "\"haze\": 0.25, \"occludes_sky\": false },\n"
         "  \"variants\": [\n"
         "    { \"name\": \"dark_wood\", \"material_overrides\": [ { \"slot\": 0, \"albedo\": \"dark_albedo\", "
         "\"tint\": \"#d0c0b0\" } ] },\n"
@@ -217,9 +226,11 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
             && (WorldModel_GetLodModel(Loaded, 2U) != NULL));
         const WorldModelSettings* Settings = WorldModel_GetSettings(Loaded);
         TEST_CHECK(run, !Settings->HasOutline && Settings->OmitsPixelation
-            && (Settings->ShadowTier == WorldShadowTier_Near)
             && !Settings->CastsShadows && (Settings->DrawDistance == 120.0f) && Settings->IsDrawDistanceFixed
             && (Settings->Haze == 0.25f) && !Settings->OccludesSky);
+        TEST_CHECK(run, Settings->HasShadowDistance && (Settings->ShadowDistance == 35.0f)
+            && Settings->IsShadowDistanceFixed && Settings->IsShadowOnly && Settings->HasTwoSidedShadows
+            && Settings->HasShadowLod && (Settings->ShadowLod == 2U));
         TEST_CHECK(run, (WorldModel_GetLodFadeSeconds(Loaded) == 0.5f)
             && (WorldModel_GetLodHysteresis(Loaded) == 0.1f));
         Vector3 Center = WorldModel_GetBoundsCenter(Loaded);
@@ -303,6 +314,22 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": {\"shadow_tier\": "
             "\"middle\"}}", ErrorCode_InvalidAssetDefinition,
             "render.shadow_tier is \"middle\"; it must be \"both\", \"near\" or \"far\"" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": {\"shadow_tier\": "
+            "3}}", ErrorCode_InvalidAssetDefinition, "render.shadow_tier must be \"both\", \"near\" or \"far\"" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": "
+            "{\"shadow_distance\": 0}}", ErrorCode_InvalidAssetDefinition,
+            "render.shadow_distance is 0; it must be above 0" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": "
+            "{\"shadow_distance\": \"far\"}}", ErrorCode_InvalidJSON, "render" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": "
+            "{\"has_shadow_distance\": 1}}", ErrorCode_InvalidAssetDefinition,
+            "render.has_shadow_distance must be true or false" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": "
+            "{\"is_shadow_only\": \"yes\"}}", ErrorCode_InvalidAssetDefinition, "render.is_shadow_only must be true or false" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": "
+            "{\"shadow_lod\": -1}}", ErrorCode_InvalidAssetDefinition, "render.shadow_lod is -1; it must be 0 or above" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": "
+            "{\"shadow_lod\": 1.5}}", ErrorCode_InvalidAssetDefinition, "render.shadow_lod must be a whole number" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": {\"has_outline\": "
             "\"yes\"}}", ErrorCode_InvalidAssetDefinition, "render.has_outline must be true or false" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": {\"haze\": -1}}",
@@ -588,6 +615,90 @@ static void AnUnusedVariantSlotIsLoggedOnce(TestRun* run)
     Memory_Free(Directory._data);
 }
 
+/* The shadow settings' hand-written forms: a shadow_distance or a shadow_lod given without its has_ flag turns the flag
+ * on; an explicit flag wins, and the value is then kept as given. */
+static void HandWrittenShadowKeysTurnTheirFlagsOn(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    BoundingBox Box = { .min = { -1.0f, -1.0f, -1.0f }, .max = { 1.0f, 1.0f, 1.0f } };
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    if (TestAssetFixture_Construct(run, &Fixture) && TestAssets_AddModel(run, &Fixture, "box", Box, NULL)
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"shed\", \"lods\": [{\"model\": \"box\", "
+            "\"max_distance\": 40}], \"render\": {\"shadow_distance\": 25, \"shadow_lod\": 1}}")
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"kept\", \"lods\": [{\"model\": \"box\", "
+            "\"max_distance\": 40}], \"render\": {\"has_shadow_distance\": false, \"shadow_distance\": 25, "
+            "\"has_shadow_lod\": false, \"shadow_lod\": 1}}"))
+    {
+        WorldModel* Shed = LoadWorldModel(run, &Fixture, "shed", &User);
+        WorldModel* Kept = LoadWorldModel(run, &Fixture, "kept", &User);
+        if ((Shed != NULL) && (Kept != NULL))
+        {
+            const WorldModelSettings* Given = WorldModel_GetSettings(Shed);
+            const WorldModelSettings* Off = WorldModel_GetSettings(Kept);
+            TEST_CHECK(run, Given->HasShadowDistance && (Given->ShadowDistance == 25.0f) && Given->HasShadowLod
+                && (Given->ShadowLod == 1U));
+            TEST_CHECK(run, !Off->HasShadowDistance && (Off->ShadowDistance == 25.0f) && !Off->HasShadowLod
+                && (Off->ShadowLod == 1U));
+        }
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+/* An older definition's render.shadow_tier is read with one warning each: "near" as a 16 m shadow distance (or the
+ * definition's own), "far" and "both" as nothing. */
+static void AnOlderDefinitionsShadowTierIsReadAsTheShadowDistance(TestRun* run)
+{
+    GenericBuffer Directory;
+    GenericBuffer_AllocateVariable(&Directory, WORLD_MODEL_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    Logger Log;
+    if (!TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "legacy_shadow_tier", &Directory))
+        || !TEST_CHECK_SUCCESS(run, Logger_Construct(&Log, Directory._data)))
+    {
+        Memory_Free(Directory._data);
+        return;
+    }
+    TestAssetFixture Fixture;
+    Memory_Zero(&Fixture, sizeof(Fixture));
+    BoundingBox Box = { .min = { -1.0f, -1.0f, -1.0f }, .max = { 1.0f, 1.0f, 1.0f } };
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    if (TEST_CHECK_SUCCESS(run, AssetManager_Construct1(&Log, &Fixture.Manager))
+        && TEST_CHECK_SUCCESS(run, AssetManager_CreateStandardAssetTypes(Fixture.Manager, &Fixture.Types,
+            &Fixture.Pool))
+        && TestAssets_AddModel(run, &Fixture, "box", Box, NULL)
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"cup\", \"lods\": [{\"model\": \"box\", "
+            "\"max_distance\": 40}], \"render\": {\"shadow_tier\": \"near\"}}")
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"vase\", \"lods\": [{\"model\": \"box\", "
+            "\"max_distance\": 40}], \"render\": {\"shadow_tier\": \"near\", \"shadow_distance\": 30}}")
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"tower\", \"lods\": [{\"model\": \"box\", "
+            "\"max_distance\": 40}], \"render\": {\"shadow_tier\": \"far\"}}")
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"crate\", \"lods\": [{\"model\": \"box\", "
+            "\"max_distance\": 40}], \"render\": {\"shadow_tier\": \"both\"}}"))
+    {
+        WorldModel* Cup = LoadWorldModel(run, &Fixture, "cup", &User);
+        WorldModel* Vase = LoadWorldModel(run, &Fixture, "vase", &User);
+        WorldModel* Tower = LoadWorldModel(run, &Fixture, "tower", &User);
+        WorldModel* Crate = LoadWorldModel(run, &Fixture, "crate", &User);
+        TEST_CHECK(run, (Cup != NULL) && WorldModel_GetSettings(Cup)->HasShadowDistance
+            && (WorldModel_GetSettings(Cup)->ShadowDistance == WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE));
+        TEST_CHECK(run, (Vase != NULL) && WorldModel_GetSettings(Vase)->HasShadowDistance
+            && (WorldModel_GetSettings(Vase)->ShadowDistance == 30.0f));
+        TEST_CHECK(run, (Tower != NULL) && !WorldModel_GetSettings(Tower)->HasShadowDistance);
+        TEST_CHECK(run, (Crate != NULL) && !WorldModel_GetSettings(Crate)->HasShadowDistance
+            && WorldModel_GetSettings(Crate)->CastsShadows);
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+    TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "render.shadow_tier \"near\" is read as "
+        "render.shadow_distance") == 2U);
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "World model \"cup\": render.shadow_tier \"near\" is read "
+        "as render.shadow_distance 16") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "World model \"tower\": render.shadow_tier \"far\" is not "
+        "read") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "World model \"crate\": render.shadow_tier \"both\" is what "
+        "every model does") == 1U);
+    Memory_Free(Directory._data);
+}
+
 /* The model type's material_overrides read the factors with the same parser, so they keep to the same rules. */
 static void TheModelTypeSharesTheFactorRules(TestRun* run)
 {
@@ -687,13 +798,17 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
     {
         [WorldModelSetting_HasOutline] = "has_outline",
         [WorldModelSetting_OmitPixelation] = "omit_pixelation",
-        [WorldModelSetting_ShadowTier] = "shadow_tier",
         [WorldModelSetting_CastsShadows] = "casts_shadows",
         [WorldModelSetting_DrawDistance] = "draw_distance",
         [WorldModelSetting_IsDrawDistanceFixed] = "is_draw_distance_fixed",
         [WorldModelSetting_LodDistances] = "lod_distances",
         [WorldModelSetting_Haze] = "haze",
         [WorldModelSetting_OccludesSky] = "occludes_sky",
+        [WorldModelSetting_ShadowDistance] = "shadow_distance",
+        [WorldModelSetting_IsShadowDistanceFixed] = "is_shadow_distance_fixed",
+        [WorldModelSetting_IsShadowOnly] = "is_shadow_only",
+        [WorldModelSetting_HasTwoSidedShadows] = "has_two_sided_shadows",
+        [WorldModelSetting_ShadowLod] = "shadow_lod",
     };
     const PropertyTable* Table = WorldModelComponent_GetPropertyTable();
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(Table));
@@ -762,14 +877,20 @@ static void TheFlagsChooseBetweenTheWorldModelAndThePlacement(TestRun* run)
         WorldModelComponent* Placement = WorldModelComponent_FromComponent(Component);
         WorldModelSettings Asset =
         {
-            .HasOutline = false, .OmitsPixelation = false, .ShadowTier = WorldShadowTier_Far, .CastsShadows = false,
-            .DrawDistance = 80.0f, .IsDrawDistanceFixed = true, .Haze = 0.5f, .OccludesSky = false
+            .HasOutline = false, .OmitsPixelation = false, .CastsShadows = false, .HasShadowDistance = true,
+            .ShadowDistance = 50.0f, .IsShadowDistanceFixed = true, .IsShadowOnly = false, .HasTwoSidedShadows = false,
+            .HasShadowLod = false, .ShadowLod = 0U, .DrawDistance = 80.0f, .IsDrawDistanceFixed = true, .Haze = 0.5f,
+            .OccludesSky = false
         };
         // The placement's own values, all different from the asset's; their flags stay off for now.
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHasOutline(Placement, true));
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOmitsPixelation(Placement, true));
-        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowTier(Placement, WorldShadowTier_Near));
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetCastsShadows(Placement, true));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowDistance(Placement, 12.0f));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsShadowDistanceFixed(Placement, false));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsShadowOnly(Placement, true));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHasTwoSidedShadows(Placement, true));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowLod(Placement, 3U));
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetDrawDistance(Placement, 30.0f));
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsDrawDistanceFixed(Placement, false));
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHaze(Placement, 0.0f));
@@ -785,9 +906,15 @@ static void TheFlagsChooseBetweenTheWorldModelAndThePlacement(TestRun* run)
             Resolved = WorldModelComponent_ResolveSettings(Placement, &Asset);
             TEST_CHECK(run, Resolved.HasOutline == (Setting == (int)WorldModelSetting_HasOutline));
             TEST_CHECK(run, Resolved.OmitsPixelation == (Setting == (int)WorldModelSetting_OmitPixelation));
-            TEST_CHECK(run, Resolved.ShadowTier
-                == ((Setting == (int)WorldModelSetting_ShadowTier) ? WorldShadowTier_Near : WorldShadowTier_Far));
             TEST_CHECK(run, Resolved.CastsShadows == (Setting == (int)WorldModelSetting_CastsShadows));
+            TEST_CHECK(run, Resolved.HasShadowDistance
+                && (Resolved.ShadowDistance == ((Setting == (int)WorldModelSetting_ShadowDistance) ? 12.0f : 50.0f)));
+            TEST_CHECK(run, Resolved.IsShadowDistanceFixed
+                == (Setting != (int)WorldModelSetting_IsShadowDistanceFixed));
+            TEST_CHECK(run, Resolved.IsShadowOnly == (Setting == (int)WorldModelSetting_IsShadowOnly));
+            TEST_CHECK(run, Resolved.HasTwoSidedShadows == (Setting == (int)WorldModelSetting_HasTwoSidedShadows));
+            TEST_CHECK(run, (Resolved.HasShadowLod == (Setting == (int)WorldModelSetting_ShadowLod))
+                && (Resolved.ShadowLod == ((Setting == (int)WorldModelSetting_ShadowLod) ? 3U : 0U)));
             TEST_CHECK(run, Resolved.DrawDistance
                 == ((Setting == (int)WorldModelSetting_DrawDistance) ? 30.0f : 80.0f));
             TEST_CHECK(run, Resolved.IsDrawDistanceFixed == (Setting != (int)WorldModelSetting_IsDrawDistanceFixed));
@@ -860,7 +987,6 @@ static void TheComponentStartsAtItsDefaults(TestRun* run)
             TEST_CHECK(run, !WorldModelComponent_IsOverridden(Placement, (WorldModelSetting)Setting));
         }
         TEST_CHECK(run, WorldModelComponent_HasOutline(Placement) && !WorldModelComponent_OmitsPixelation(Placement)
-            && (WorldModelComponent_GetShadowTier(Placement) == WorldShadowTier_Both)
             && WorldModelComponent_CastsShadows(Placement)
             && (WorldModelComponent_GetDrawDistance(Placement) == WORLD_MODEL_DEFAULT_DRAW_DISTANCE)
             && (WorldModelComponent_GetDrawDistanceMultiplier(Placement) == 1.0f)
@@ -871,9 +997,96 @@ static void TheComponentStartsAtItsDefaults(TestRun* run)
         TEST_CHECK(run, (WorldModelComponent_GetLodDistances(Placement, &LodDistanceCount) == NULL)
             && (LodDistanceCount == 0U) && (WorldModelComponent_GetLodDistanceMultiplier(Placement) == 1.0f)
             && !WorldModelComponent_IsLodForced(Placement) && (WorldModelComponent_GetForcedLod(Placement) == 0U));
+        // Its own shadow values: 600 m, a multiplier of 1, not fixed, drawn, front faces, shadow LOD 0 kept.
+        TEST_CHECK(run, (WorldModelComponent_GetShadowDistance(Placement) == WORLD_MODEL_DEFAULT_SHADOW_DISTANCE)
+            && (WorldModelComponent_GetShadowDistanceMultiplier(Placement) == 1.0f)
+            && !WorldModelComponent_IsShadowDistanceFixed(Placement) && !WorldModelComponent_IsShadowOnly(Placement)
+            && !WorldModelComponent_HasTwoSidedShadows(Placement) && (WorldModelComponent_GetShadowLod(Placement) == 0U));
+        // The world model's settings, the shadow distance being the draw distance (it casts as far as it is drawn).
         WorldModelSettings Defaults = WorldModelSettings_CreateDefault();
+        Defaults.DrawDistance = 250.0f;
         WorldModelSettings Resolved = WorldModelComponent_ResolveSettings(Placement, &Defaults);
+        TEST_CHECK(run, !Resolved.HasShadowDistance && (Resolved.ShadowDistance == 250.0f));
+        Resolved.ShadowDistance = Defaults.ShadowDistance;
         TEST_CHECK(run, AreSettingsEqual(&Resolved, &Defaults));
+    }
+    TestWorld_Deconstruct(run, &TestWorld, &Keys);
+}
+
+/* The shadow distance in effect: the placement's own while it overrides it, else its world model's, else its draw
+ * distance in effect (the draw distance's multiplier in it); then times the shadow multiplier, which also scales the draw
+ * distance standing in for one; +infinity past the float range, 0 below it. */
+static void TheShadowDistanceComesFromThePlacementTheWorldModelOrTheDrawDistance(TestRun* run)
+{
+    World TestWorld;
+    KeyRegistry Keys;
+    if (!TestWorld_Construct(run, &TestWorld, &Keys, NULL, NULL))
+    {
+        return;
+    }
+    WorldObject* Object = NULL;
+    WorldComponent* Component = NULL;
+    WorldComponent* InstancesComponent = NULL;
+    if (TEST_CHECK_SUCCESS(run, World_CreateObject(&TestWorld, NULL, &Object))
+        && TEST_CHECK_SUCCESS(run, World_AddComponent(&TestWorld, WorldObject_GetId(Object), WorldComponentType_Model,
+            &Component))
+        && TEST_CHECK_SUCCESS(run, World_AddComponent(&TestWorld, WorldObject_GetId(Object),
+            WorldComponentType_ModelInstances, &InstancesComponent)))
+    {
+        WorldModelComponent* Placement = WorldModelComponent_FromComponent(Component);
+        WorldModelInstancesComponent* Instances = WorldModelInstancesComponent_FromComponent(InstancesComponent);
+        WorldModelSettings Asset = WorldModelSettings_CreateDefault();
+        Asset.DrawDistance = 80.0f;
+        Asset.ShadowDistance = 999.0f; // kept unused while the asset has no shadow distance of its own
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetDrawDistanceMultiplier(Placement, 2.0f));
+        TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetDrawDistanceMultiplier(Instances, 2.0f));
+
+        // Without one: the draw distance in effect (80 x 2), not the asset's kept value.
+        WorldModelSettings Resolved = WorldModelComponent_ResolveSettings(Placement, &Asset);
+        TEST_CHECK(run, !Resolved.HasShadowDistance && (Resolved.ShadowDistance == 160.0f)
+            && (Resolved.DrawDistance == 160.0f));
+        // The shadow multiplier scales the draw distance that stands in for it.
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowDistanceMultiplier(Placement, 0.25f));
+        TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetShadowDistanceMultiplier(Instances, 0.25f));
+        Resolved = WorldModelComponent_ResolveSettings(Placement, &Asset);
+        TEST_CHECK(run, !Resolved.HasShadowDistance && (Resolved.ShadowDistance == 40.0f));
+        // The world model's own: its value times the shadow multiplier (the draw multiplier does not touch it).
+        Asset.HasShadowDistance = true;
+        Asset.ShadowDistance = 30.0f;
+        Resolved = WorldModelComponent_ResolveSettings(Placement, &Asset);
+        TEST_CHECK(run, Resolved.HasShadowDistance && (Resolved.ShadowDistance == 7.5f));
+        // The placement's own wins over both, times the shadow multiplier.
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowDistance(Placement, 100.0f));
+        TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetShadowDistance(Instances, 100.0f));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Placement, WorldModelSetting_ShadowDistance, true));
+        TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Instances, WorldModelSetting_ShadowDistance,
+            true));
+        Resolved = WorldModelComponent_ResolveSettings(Placement, &Asset);
+        TEST_CHECK(run, Resolved.HasShadowDistance && (Resolved.ShadowDistance == 25.0f));
+        Asset.HasShadowDistance = false;
+        Resolved = WorldModelComponent_ResolveSettings(Placement, &Asset);
+        TEST_CHECK(run, Resolved.HasShadowDistance && (Resolved.ShadowDistance == 25.0f));
+        WorldModelSettings FromInstances = WorldModelInstancesComponent_ResolveSettings(Instances, &Asset);
+        TEST_CHECK(run, FromInstances.HasShadowDistance && (FromInstances.ShadowDistance == 25.0f));
+
+        // Past the float range +infinity (casting from everywhere, never a broken number); two tiny factors 0.
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowDistance(Placement, 3e38f));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowDistanceMultiplier(Placement, 1e10f));
+        TEST_CHECK(run, isinf(WorldModelComponent_ResolveSettings(Placement, &Asset).ShadowDistance));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowDistance(Placement, 1e-30f));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowDistanceMultiplier(Placement, 1e-30f));
+        TEST_CHECK(run, WorldModelComponent_ResolveSettings(Placement, &Asset).ShadowDistance == 0.0f);
+
+        // The rules: the distance and the multiplier above 0 and finite; nothing changes on a refusal.
+        TEST_CHECK_ERROR(run, WorldModelComponent_SetShadowDistance(Placement, -1.0f), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldModelComponent_SetShadowDistance(Placement, INFINITY), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldModelInstancesComponent_SetShadowDistance(Instances, 0.0f),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldModelInstancesComponent_SetShadowDistanceMultiplier(Instances, -2.0f),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK(run, (WorldModelComponent_GetShadowDistance(Placement) == 1e-30f)
+            && (WorldModelInstancesComponent_GetShadowDistance(Instances) == 100.0f)
+            && (WorldModelInstancesComponent_GetShadowDistanceMultiplier(Instances) == 0.25f));
     }
     TestWorld_Deconstruct(run, &TestWorld, &Keys);
 }
@@ -1103,7 +1316,7 @@ static void TheInstancesComponentResolvesLikeAModel(TestRun* run)
         && TestAssets_AddModel(run, &Fixture, "bush_lod1", Box, NULL)
         && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"bush\", \"lods\": [{\"model\": \"bush_lod0\", "
             "\"max_distance\": 12}, {\"model\": \"bush_lod1\", \"max_distance\": 45}], \"lod_hysteresis\": 0.15, "
-            "\"render\": {\"omit_pixelation\": true, \"shadow_tier\": \"far\"}}")
+            "\"render\": {\"omit_pixelation\": true, \"shadow_distance\": 70, \"has_shadow_lod\": true}}")
         && ((Loaded = LoadWorldModel(run, &Fixture, "bush", &User)) != NULL)
         && (IsWorldBuilt = TestWorld_Construct(run, &TestWorld, &Keys, NULL, NULL))
         && TEST_CHECK_SUCCESS(run, World_CreateObject(&TestWorld, NULL, &Object))
@@ -1129,13 +1342,24 @@ static void TheInstancesComponentResolvesLikeAModel(TestRun* run)
             }
             float Distance = 5.0f + (float)(Seed % 97U);
             float Multiplier = 0.5f + ((float)((Seed >> 4) % 7U) * 0.25f);
-            WorldShadowTier Tier = (WorldShadowTier)((Seed >> 20) % 3U);
+            float ShadowDistance = 2.0f + (float)((Seed >> 20) % 31U);
+            uint32_t ShadowLod = (Seed >> 24) % 4U;
             const float Own[] = { 3.0f + (float)(Round % 5), 30.0f + (float)Round };
             size_t OwnCount = Bits[6] ? 2U : 1U;
             TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHasOutline(Placement, Bits[0]));
             TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetHasOutline(Instances, Bits[0]));
-            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowTier(Placement, Tier));
-            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetShadowTier(Instances, Tier));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowDistance(Placement, ShadowDistance));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetShadowDistance(Instances, ShadowDistance));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowDistanceMultiplier(Placement, Multiplier));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetShadowDistanceMultiplier(Instances, Multiplier));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsShadowDistanceFixed(Placement, Bits[4]));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetIsShadowDistanceFixed(Instances, Bits[4]));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsShadowOnly(Placement, Bits[5]));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetIsShadowOnly(Instances, Bits[5]));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHasTwoSidedShadows(Placement, Bits[6] != Bits[0]));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetHasTwoSidedShadows(Instances, Bits[6] != Bits[0]));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowLod(Placement, ShadowLod));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetShadowLod(Instances, ShadowLod));
             TEST_CHECK_SUCCESS(run, WorldModelComponent_SetCastsShadows(Placement, Bits[1]));
             TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetCastsShadows(Instances, Bits[1]));
             TEST_CHECK_SUCCESS(run, WorldModelComponent_SetDrawDistance(Placement, Distance));
@@ -1560,12 +1784,17 @@ void WorldModelTests_Run(TestRun* run)
             LoadingHoldsTheDependenciesUntilTheLastHolderGoes },
         { "a_missing_dependency_fails_the_load_and_holds_nothing", AMissingDependencyFailsTheLoadAndHoldsNothing },
         { "an_unused_variant_slot_is_logged_once", AnUnusedVariantSlotIsLoggedOnce },
+        { "hand_written_shadow_keys_turn_their_flags_on", HandWrittenShadowKeysTurnTheirFlagsOn },
+        { "an_older_definitions_shadow_tier_is_read_as_the_shadow_distance",
+            AnOlderDefinitionsShadowTierIsReadAsTheShadowDistance },
         { "the_model_type_shares_the_factor_rules", TheModelTypeSharesTheFactorRules },
         { "variants_are_found_by_name_and_change_only_their_slots", VariantsAreFoundByNameAndChangeOnlyTheirSlots },
         { "every_override_is_a_flag_next_to_its_value", EveryOverrideIsAFlagNextToItsValue },
         { "the_flags_choose_between_the_world_model_and_the_placement",
             TheFlagsChooseBetweenTheWorldModelAndThePlacement },
         { "the_component_starts_at_its_defaults", TheComponentStartsAtItsDefaults },
+        { "the_shadow_distance_comes_from_the_placement_the_world_model_or_the_draw_distance",
+            TheShadowDistanceComesFromThePlacementTheWorldModelOrTheDrawDistance },
         { "the_placement_picks_its_lod_settings", ThePlacementPicksItsLodSettings },
         { "the_instances_component_shares_the_model_rows", TheInstancesComponentSharesTheModelRows },
         { "the_instances_component_resolves_like_a_model", TheInstancesComponentResolvesLikeAModel },

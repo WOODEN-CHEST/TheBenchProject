@@ -5,6 +5,7 @@
 #include "AssetTypesStandard.h"
 #include "AssetDefinitionCommon.h"
 #include "CollisionLayer.h"
+#include "Logger.h"
 #include "TerrainAsset.h"
 #include "wr/WRJSON.h"
 #include "wr/WRMemory.h"
@@ -104,8 +105,11 @@ static const unsigned char* const ModelOnlyKeys[] =
 static const unsigned char* const MappingKeys[] = { u8"attribute", u8"r", u8"g", u8"b", u8"a" };
 static const unsigned char* const RenderKeys[] =
 {
-    u8"has_outline", u8"shadow_tier", u8"casts_shadows", u8"draw_distance", u8"is_draw_distance_fixed", u8"haze"
+    u8"has_outline", u8"casts_shadows", u8"has_shadow_distance", u8"shadow_distance", u8"is_shadow_distance_fixed",
+    u8"draw_distance", u8"is_draw_distance_fixed", u8"haze", u8"shadow_tier"
 };
+/* The names an older definition's render.shadow_tier may hold: which of two shadow maps the terrain cast into. */
+static const unsigned char* const LegacyShadowTierNames[] = { u8"both", u8"near", u8"far" };
 static const unsigned char* const CollisionKeys[] = { u8"is_enabled", u8"layer", u8"collides_with" };
 static const unsigned char* const RuleKeys[] =
 {
@@ -560,8 +564,103 @@ static Error ReadEnum(const TerrainDefinition* definition, JSONCompound* compoun
         (const char*)table->Name);
 }
 
-/* "render": the placements' render defaults. */
-static Error ParseRender(TerrainDefinition* definition, JSONCompound* root)
+/* An older definition's "shadow_tier" (which of two shadow maps the terrain cast into), read into the shadow distance
+ * with one warning to @p log (may be NULL) naming what replaces it: "near" cast within WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE
+ * metres of the camera (that shadow distance, unless the definition gives its own), "both" is what every terrain does,
+ * "far" (only the coarse shadow far out) is no setting. Anything else is refused, as before. */
+static Error ParseLegacyShadowTier(TerrainDefinition* definition, JSONCompound* render, bool hasOwnShadowDistance,
+    Logger* log)
+{
+    unsigned char* Text = NULL;
+    bool IsFound = false;
+    Error Result = AssetJSON_ReadOptionalOwnedString(render, (const unsigned char*)u8"shadow_tier", &Text, &IsFound);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&Result);
+        return Fail(definition, "render.shadow_tier must be \"both\", \"near\" or \"far\".");
+    }
+    if (!IsFound)
+    {
+        return Error_CreateSuccess();
+    }
+    size_t Tier = KEY_COUNT(LegacyShadowTierNames);
+    for (size_t Index = 0U; (Text != NULL) && (Index < KEY_COUNT(LegacyShadowTierNames)); Index++)
+    {
+        if (AreNamesEqual(Text, LegacyShadowTierNames[Index]))
+        {
+            Tier = Index;
+        }
+    }
+    if (Tier >= KEY_COUNT(LegacyShadowTierNames))
+    {
+        char Printable[NAME_PRINT_CAPACITY];
+        AssetJSON_CopyPrintable(Text, Printable, sizeof(Printable));
+        Memory_Free(Text);
+        return Fail(definition, "render.shadow_tier is \"%s\"; it must be \"both\", \"near\" or \"far\".", Printable);
+    }
+    Memory_Free(Text);
+
+    TerrainRenderSettings* Settings = &definition->Settings.Render;
+    const char* Warning = "render.shadow_tier \"both\" is what every terrain does; leave it out.";
+    if (Tier == 1U)
+    {
+        if (!hasOwnShadowDistance)
+        {
+            Settings->HasShadowDistance = true;
+            Settings->ShadowDistance = WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE;
+        }
+        Warning = "render.shadow_tier \"near\" is read as render.shadow_distance; write that instead.";
+    }
+    else if (Tier == 2U)
+    {
+        Warning = "render.shadow_tier \"far\" is not read: every caster casts from the camera out to its shadow "
+            "distance; leave it out.";
+    }
+    if (log != NULL)
+    {
+        char Name[NAME_PRINT_CAPACITY];
+        AssetJSON_CopyPrintable(definition->Base.Name, Name, sizeof(Name));
+        Error LogResult = Logger_LogWarningFormatted(log, (const unsigned char*)u8"Terrain \"%s\": %s", Name, Warning);
+        Error_Deconstruct(&LogResult);
+    }
+    return Error_CreateSuccess();
+}
+
+/* The render block's shadow distance: a value given without has_shadow_distance turns it on (the hand-written form; an
+ * explicit has_shadow_distance wins), its fixed flag, then an older definition's shadow tier. */
+static Error ParseRenderShadowDistance(TerrainDefinition* definition, JSONCompound* render, Logger* log)
+{
+    TerrainRenderSettings* Settings = &definition->Settings.Render;
+    bool HasDistance = false;
+    Error Result = AssetJSON_ReadOptionalFloat(render, (const unsigned char*)u8"shadow_distance", Settings->ShadowDistance,
+        &Settings->ShadowDistance, &HasDistance);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&Result);
+        return Fail(definition, "render.shadow_distance must be a number of metres.");
+    }
+    if (!(Settings->ShadowDistance > 0.0f))
+    {
+        return Fail(definition, "render.shadow_distance is %g; it must be above 0 (metres from the camera).",
+            (double)Settings->ShadowDistance);
+    }
+    Settings->HasShadowDistance = HasDistance;
+    Result = ReadBoolean(definition, render, "render", (const unsigned char*)u8"has_shadow_distance",
+        &Settings->HasShadowDistance);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadBoolean(definition, render, "render", (const unsigned char*)u8"is_shadow_distance_fixed",
+            &Settings->IsShadowDistanceFixed);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ParseLegacyShadowTier(definition, render, HasDistance, log);
+    }
+    return Result;
+}
+
+/* "render": the placements' render defaults; warnings go to @p log (may be NULL). */
+static Error ParseRender(TerrainDefinition* definition, JSONCompound* root, Logger* log)
 {
     JSONCompound* Render = NULL;
     Error Result = GetOptionalCompound(definition, root, (const unsigned char*)u8"render", &Render);
@@ -587,12 +686,9 @@ static Error ParseRender(TerrainDefinition* definition, JSONCompound* root)
         Result = ReadBoolean(definition, Render, "render", (const unsigned char*)u8"is_draw_distance_fixed",
             &Settings->IsDrawDistanceFixed);
     }
-    int32_t Tier = (int32_t)Settings->ShadowTier;
     if (Result.Code == ErrorCode_Success)
     {
-        Result = ReadEnum(definition, Render, "render", (const unsigned char*)u8"shadow_tier", &WORLD_SHADOW_TIER_ENUM,
-            &Tier);
-        Settings->ShadowTier = (WorldShadowTier)Tier;
+        Result = ParseRenderShadowDistance(definition, Render, log);
     }
     if (Result.Code == ErrorCode_Success)
     {
@@ -931,7 +1027,8 @@ static Error ParseRules(TerrainDefinition* definition, JSONCompound* root)
     return Error_CreateSuccess();
 }
 
-static Error ParseDefinition(TerrainDefinition* definition, JSONCompound* root, const unsigned char* sourceDescription)
+static Error ParseDefinition(TerrainDefinition* definition, JSONCompound* root, const unsigned char* sourceDescription,
+    Logger* log)
 {
     char Where[WHERE_CAPACITY];
     Error Result = AssetJSON_RejectUnknownKeys(root, RootKeys, KEY_COUNT(RootKeys),
@@ -987,7 +1084,7 @@ static Error ParseDefinition(TerrainDefinition* definition, JSONCompound* root, 
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = ParseRender(definition, root);
+        Result = ParseRender(definition, root, log);
     }
     if (Result.Code == ErrorCode_Success)
     {
@@ -1218,7 +1315,6 @@ static const AssetDefinitionVTable TerrainDefinitionVTable = { TerrainDefinition
 Error TerrainDefinition_Construct(AssetManager* manager, const UserData* userData,
     const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition)
 {
-    (void)manager;
     *outDefinition = NULL;
     JSONObjectPool* Pool = UserData_GetPointer(userData);
     JSONObjectValue Root;
@@ -1238,7 +1334,8 @@ Error TerrainDefinition_Construct(AssetManager* manager, const UserData* userDat
     Result = AssetJSON_ReadName(RootCompound, sourceDescription, &Definition->Base.Name);
     if (Result.Code == ErrorCode_Success)
     {
-        Result = ParseDefinition(Definition, RootCompound, sourceDescription);
+        Result = ParseDefinition(Definition, RootCompound, sourceDescription,
+            (manager != NULL) ? AssetManager_GetLogger(manager) : NULL);
     }
     Error ReturnResult = JSONObjectPool_ReturnValue(Pool, &Root);
     Error_Deconstruct(&ReturnResult);

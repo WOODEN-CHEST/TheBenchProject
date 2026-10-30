@@ -1,6 +1,6 @@
-// The world model asset's data functions: the shadow tier's names, the default settings, the variants (lookup by
-// name, and applying one to a per-draw copy of a material's maps), the collision sets (lookup by name) and the sockets
-// (lookup by name, a socket's frame in a pose). The definition and the loader are in WorldModelDefinition.c, the
+// The world model asset's data functions: the default settings, the variants (lookup by name, and applying one to a
+// per-draw copy of a material's maps), the collision sets (lookup by name) and the sockets (lookup by name, a socket's
+// frame in a pose). The definition and the loader are in WorldModelDefinition.c, the
 // collision section's in WorldModelCollisionDefinition.c.
 
 #include "WorldModel.h"
@@ -9,21 +9,6 @@
 #include "raylib/raymath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
-
-
-// Fields.
-static const PropertyEnumEntry ShadowTierEntries[] =
-{
-    { .Name = u8"both", .Value = WorldShadowTier_Both },
-    { .Name = u8"near", .Value = WorldShadowTier_Near },
-    { .Name = u8"far", .Value = WorldShadowTier_Far },
-};
-
-const PropertyEnumTable WORLD_SHADOW_TIER_ENUM =
-{
-    .Name = u8"shadow_tier", .Entries = ShadowTierEntries,
-    .EntryCount = sizeof(ShadowTierEntries) / sizeof(ShadowTierEntries[0])
-};
 
 
 // Static functions.
@@ -78,8 +63,14 @@ WorldModelSettings WorldModelSettings_CreateDefault(void)
     {
         .HasOutline = true,
         .OmitsPixelation = false,
-        .ShadowTier = WorldShadowTier_Both,
         .CastsShadows = true,
+        .HasShadowDistance = false,
+        .ShadowDistance = WORLD_MODEL_DEFAULT_SHADOW_DISTANCE,
+        .IsShadowDistanceFixed = false,
+        .IsShadowOnly = false,
+        .HasTwoSidedShadows = false,
+        .HasShadowLod = false,
+        .ShadowLod = 0U,
         .DrawDistance = WORLD_MODEL_DEFAULT_DRAW_DISTANCE,
         .IsDrawDistanceFixed = false,
         .Haze = 1.0f,

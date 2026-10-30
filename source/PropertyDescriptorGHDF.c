@@ -1003,17 +1003,36 @@ Error Properties_WriteGHDF(const PropertyTable* table, const void* instance, GHD
     return Error_CreateSuccess();
 }
 
+Error Properties_MigrateGHDF(const PropertyTable* table, GHDFCompound* compound, const PropertyReadOptions* options)
+{
+    if ((table == NULL) || (compound == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Properties_MigrateGHDF: table and compound must not be NULL.");
+    }
+    PropertyReadOptions Options = (options != NULL) ? *options : PropertyReadOptions_CreateDefault();
+    if ((Options.DataVersion == 0U) || (Options.DataVersion >= table->Version) || (table->MigrateGHDF == NULL))
+    {
+        return Error_CreateSuccess();
+    }
+    Error MigrateResult = table->MigrateGHDF(Options.DataVersion, compound, Options.GHDFPool, Options.Logger);
+    return (MigrateResult.Code == ErrorCode_Success) ? MigrateResult
+        : PropertyInternal_WrapError(MigrateResult.Code, table, NULL, &MigrateResult);
+}
+
 Error Properties_ReadGHDF(const PropertyTable* table, GHDFCompound* compound, void* instance,
     const PropertyReadOptions* options)
 {
-    // TODO: no GHDF migration exists yet; when a table first needs one, give PropertyTable a GHDF Migrate slot and run
-    // it here for an older options->DataVersion, as Properties_ReadJSON does.
     if ((table == NULL) || (compound == NULL) || (instance == NULL))
     {
         return Error_Construct2(ErrorCode_IllegalArgument,
             "Properties_ReadGHDF: table, compound and instance must not be NULL.");
     }
     PropertyReadOptions Options = (options != NULL) ? *options : PropertyReadOptions_CreateDefault();
+    Error MigrateResult = Properties_MigrateGHDF(table, compound, &Options);
+    if (MigrateResult.Code != ErrorCode_Success)
+    {
+        return MigrateResult;
+    }
 
     // All or nothing, for the key registry too: a refused read forgets the keys its data rows interned.
     size_t KeyCheckpoint = (Options.Keys != NULL) ? KeyRegistry_GetCount(Options.Keys) : 0U;

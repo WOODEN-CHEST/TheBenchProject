@@ -450,7 +450,7 @@ typedef struct PropertyEnumEntryStruct
  */
 typedef struct PropertyEnumTableStruct
 {
-    /** @brief The enum's name for messages and tooling, e.g. u8"shadow_tier". */
+    /** @brief The enum's name for messages and tooling, e.g. u8"collision_layer". */
     const unsigned char* Name;
     /** @brief The entries; must not be NULL. */
     const PropertyEnumEntry* Entries;
@@ -522,9 +522,24 @@ typedef void (*PropertyAfterSetFunction)(void* instance, const PropertyDescripto
  * @param fromVersion The version the data was written with; lower than the table's Version.
  * @param compound The data, changed in place.
  * @param pool The pool owning @p compound, for any new values; may be NULL if the read options gave none.
+ * @param logger The read options' logger, for a warning about data the upgrade cannot keep; may be NULL (no warning).
  * @returns Success, or an error that fails the read.
  */
-typedef Error (*PropertyMigrateFunction)(uint32_t fromVersion, JSONCompound* compound, JSONObjectPool* pool);
+typedef Error (*PropertyMigrateFunction)(uint32_t fromVersion, JSONCompound* compound, JSONObjectPool* pool,
+    Logger* logger);
+
+/**
+ * @brief Upgrades GHDF data written by an older table version, before it is read: the GHDF twin of
+ *        PropertyMigrateFunction, by wire ids.
+ * @param fromVersion The version the data was written with; lower than the table's Version.
+ * @param compound The data, changed in place.
+ * @param pool The pool owning @p compound, for any new strings, arrays or compounds; may be NULL if the read options gave
+ *        none.
+ * @param logger The read options' logger, for a warning about data the upgrade cannot keep; may be NULL (no warning).
+ * @returns Success, or an error that fails the read.
+ */
+typedef Error (*PropertyMigrateGHDFFunction)(uint32_t fromVersion, GHDFCompound* compound, GHDFObjectPool* pool,
+    Logger* logger);
 
 /**
  * @brief The property table of one data type: its descriptors plus what the table needs as a whole.
@@ -552,6 +567,9 @@ typedef struct PropertyTableStruct
     PropertyAfterSetFunction AfterSet;
     /** @brief Optional JSON migration for data older than Version (see PropertyMigrateFunction); may be NULL. */
     PropertyMigrateFunction Migrate;
+    /** @brief Optional GHDF migration for data older than Version (see PropertyMigrateGHDFFunction); may be NULL. A
+     *  table whose change needs a Migrate needs this too, unless its GHDF data reads correctly without one. */
+    PropertyMigrateGHDFFunction MigrateGHDF;
 } PropertyTable;
 
 /**
@@ -574,13 +592,16 @@ typedef struct PropertyReadOptionsStruct
 {
     /** @brief JSON only: what unknown keys do (GHDF always skips unknown ids, for forward compatibility). */
     PropertyUnknownKeyMode UnknownKeyMode;
-    /** @brief Borrowed logger for PropertyUnknownKeyMode_Warn; with NULL, Warn behaves like Ignore. */
+    /** @brief Borrowed logger for PropertyUnknownKeyMode_Warn and the migrations' warnings; with NULL, Warn behaves like
+     *  Ignore and a migration warns nothing. */
     Logger* Logger;
-    /** @brief The table version the data was written with; 0 means the current version. JSON data from an older
-     *  version runs the table's Migrate first. */
+    /** @brief The table version the data was written with; 0 means the current version. Data from an older version
+     *  runs the table's Migrate (JSON) or MigrateGHDF (GHDF) first. */
     uint32_t DataVersion;
     /** @brief Borrowed pool owning the JSON data, handed to Migrate; may be NULL when no migration needs one. */
     JSONObjectPool* Pool;
+    /** @brief Borrowed pool owning the GHDF data, handed to MigrateGHDF; may be NULL when no migration needs one. */
+    GHDFObjectPool* GHDFPool;
     /** @brief Borrowed key registry the keys of DataMap properties are interned in; required to read a DataMap that
      *  is not empty (the read fails without it). */
     KeyRegistry* Keys;
@@ -603,7 +624,7 @@ typedef struct PropertyWriteOptionsStruct
 
 // Functions: values.
 /**
- * @brief Default read options: unknown JSON keys fail the read, no logger, current data version, no pool, no key
+ * @brief Default read options: unknown JSON keys fail the read, no logger, current data version, no pools, no key
  *        registry (set Keys to read data maps), the default namespace.
  * @returns The options.
  */
@@ -615,6 +636,7 @@ static inline PropertyReadOptions PropertyReadOptions_CreateDefault(void)
         .Logger = NULL,
         .DataVersion = 0U,
         .Pool = NULL,
+        .GHDFPool = NULL,
         .Keys = NULL,
         .DefaultNamespace = NULL
     };
@@ -1138,7 +1160,7 @@ Error Properties_WriteJSON(const PropertyTable* table, const void* instance, JSO
  * result validated it is committed into @p instance (and the table's AfterSet called with a NULL descriptor). On any
  * failure @p instance is unchanged, and the options' Keys forget the keys the read interned (KeyRegistry_TruncateTo).
  * Unknown keys follow the options. When the options' DataVersion is older than the table's Version, the table's
- * Migrate runs first and changes @p compound in place.
+ * Migrate runs first and changes @p compound in place (Properties_MigrateJSON).
  * @param table The table; must not be NULL.
  * @param compound The data; must not be NULL.
  * @param instance A constructed instance to fill; must not be NULL.
@@ -1151,6 +1173,22 @@ Error Properties_WriteJSON(const PropertyTable* table, const void* instance, JSO
  */
 Error Properties_ReadJSON(const PropertyTable* table, JSONCompound* compound, void* instance,
     const PropertyReadOptions* options);
+
+/**
+ * @brief Upgrades JSON data an older version of the table wrote to the table's current format, in place: runs the
+ *        table's Migrate when the options' DataVersion is older than its Version.
+ *
+ * Nothing happens for data of the current version (a DataVersion of 0 or of the table's Version), for data a newer
+ * version wrote, and for a table without a Migrate. Properties_ReadJSON runs it first; a reader that looks at the keys
+ * itself before the read (one that reports unknown keys) runs it before that, then reads with a DataVersion of 0.
+ * @param table The table; must not be NULL.
+ * @param compound The data, changed in place; must not be NULL.
+ * @param options The options (their DataVersion, Pool and Logger), or NULL for PropertyReadOptions_CreateDefault (the
+ *        current version: nothing to do).
+ * @returns Success; ErrorCode_IllegalArgument if @p table or @p compound is NULL; the Migrate's error, its message
+ *          prefixed with the table's name.
+ */
+Error Properties_MigrateJSON(const PropertyTable* table, JSONCompound* compound, const PropertyReadOptions* options);
 
 
 // Functions: GHDF.
@@ -1180,16 +1218,30 @@ Error Properties_WriteGHDF(const PropertyTable* table, const void* instance, GHD
  * Like Properties_ReadJSON: absent wire ids give the defaults, non-persistent properties keep their values, the
  * result is validated before it is committed and AfterSet is called with a NULL descriptor, and a failure leaves the
  * instance and the options' Keys as they were. Entries with ids the table does not know (or has retired) are skipped,
- * for forward compatibility. The options' UnknownKeyMode, Logger and Pool are JSON-only, and there is no GHDF
- * migration yet, so DataVersion is not used either; the parameter is there for when one is needed.
+ * for forward compatibility. When the options' DataVersion is older than the table's Version, the table's MigrateGHDF
+ * runs first and changes @p compound in place (Properties_MigrateGHDF). The options' UnknownKeyMode and Pool are
+ * JSON-only.
  * @param table The table; must not be NULL.
  * @param compound The data; must not be NULL.
  * @param instance A constructed instance to fill; must not be NULL.
  * @param options The options, or NULL for PropertyReadOptions_CreateDefault.
  * @returns Success; ErrorCode_IllegalArgument if an argument is NULL; ErrorCode_Deserialize for an entry of the wrong
- *          type or shape, or a value breaking its rules (the message names the table and the key).
+ *          type or shape, or a value breaking its rules (the message names the table and the key); a MigrateGHDF
+ *          error.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
 Error Properties_ReadGHDF(const PropertyTable* table, GHDFCompound* compound, void* instance,
     const PropertyReadOptions* options);
+
+/**
+ * @brief Upgrades GHDF data an older version of the table wrote to the table's current format, in place: runs the
+ *        table's MigrateGHDF when the options' DataVersion is older than its Version (Properties_MigrateJSON's GHDF
+ *        twin, with the options' GHDFPool and Logger).
+ * @param table The table; must not be NULL.
+ * @param compound The data, changed in place; must not be NULL.
+ * @param options The options, or NULL for PropertyReadOptions_CreateDefault (the current version: nothing to do).
+ * @returns Success; ErrorCode_IllegalArgument if @p table or @p compound is NULL; the MigrateGHDF's error, its message
+ *          prefixed with the table's name.
+ */
+Error Properties_MigrateGHDF(const PropertyTable* table, GHDFCompound* compound, const PropertyReadOptions* options);

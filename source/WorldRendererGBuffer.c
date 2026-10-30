@@ -19,8 +19,8 @@
 #define AO_SHADER_ASSET_NAME ((const unsigned char*)u8"world_ao")
 /** Asset name of the pre-pass's blur: the raw target into the one the lit passes read, the pattern averaged away. */
 #define AO_BLUR_SHADER_ASSET_NAME ((const unsigned char*)u8"world_ao_blur")
-/** How far the contact shadows' march reaches toward the light, in metres: several near-cascade texels and their
- *  filter's width, the seam it closes at the foot of every caster. */
+/** How far the contact shadows' march reaches toward the light, in metres: several of the first shadow level's texels
+ *  and its filter's width, the seam it closes at the foot of every caster. */
 #define CONTACT_SHADOW_LENGTH 0.25f
 
 
@@ -349,7 +349,7 @@ void WorldRendererGBuffer_RenderAo(WorldRenderer* self, const WorldRenderFrame* 
     SetShaderValueMatrix(RayShader, self->_ao._locInvProjection, frame->InvProjection);
     SetShaderValue(RayShader, self->_ao._locStrength, &Strength, SHADER_UNIFORM_FLOAT);
     WorldRendererCommon_SetDepthConvention(RayShader, self->_ao._locDepthReversed, frame);
-    // The contact shadows march toward the cascades' light, in view space (the view is a rotation of render space).
+    // The contact shadows march toward the shadow levels' light, in view space (the view is a rotation of render space).
     float ContactLength = frame->AreContactShadowsActive ? CONTACT_SHADOW_LENGTH : 0.0f;
     Vector3 ContactLight = Vector3Normalize(Vector3Transform(frame->ShadowDirection, frame->View));
     float ContactDirection[3] = { ContactLight.x, ContactLight.y, ContactLight.z };

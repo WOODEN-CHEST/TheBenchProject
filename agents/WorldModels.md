@@ -1,7 +1,7 @@
 # World models
 
-`include/WorldModel.h`, `source/WorldModel.c` (the asset's data functions: the shadow tier's names, the default settings,
-variants by name and on one material) and `source/WorldModelDefinition.c` (the `world_model` asset type: the definition's
+`include/WorldModel.h`, `source/WorldModel.c` (the asset's data functions: the default settings, variants by name and
+on one material) and `source/WorldModelDefinition.c` (the `world_model` asset type: the definition's
 parser and the loader). The placements' side is the model component, `include/WorldModelComponent.h` and
 `source/WorldModelComponent.c` ([WorldData.md](WorldData.md)), and the model instances component, many copies
 of one world model with the model component's settings (`include/WorldModelInstancesComponent.h`; its LODs change in
@@ -25,8 +25,9 @@ as dependencies; world sprites do the same for sprite animations: [WorldSprites.
 - **Definitions are checked when they are read** (a bad file is skipped at startup with one error, like every asset
   type): 1 to `WORLD_MODEL_MAX_LODS` (8) LODs naming valid model assets, their `max_distance` finite, above 0 and rising;
   `draw_distance` at least the last `max_distance` (left out, it is that distance); `lod_fade_seconds` >= 0;
-  `lod_hysteresis` in [0, 1); `render`'s six settings (`haze` in [0, 1000]); at most `WORLD_MODEL_MAX_VARIANTS` (64)
-  variants with unique names (`[a-z][a-z0-9_.-]*`, at most 128 bytes) and at most
+  `lod_hysteresis` in [0, 1); `render`'s settings (`shadow_distance` above 0, `shadow_lod` a whole number >= 0, `haze`
+  in [0, 1000]; an older definition's `shadow_tier` is read with a warning, "Shadows" below); at most
+  `WORLD_MODEL_MAX_VARIANTS` (64) variants with unique names (`[a-z][a-z0-9_.-]*`, at most 128 bytes) and at most
   `WORLD_MODEL_MAX_VARIANT_OVERRIDES` (32) material overrides each, one per slot; `bounds` with a centre and a radius
   >= 0; `animation_libraries` at most `WORLD_MODEL_MAX_ANIMATION_LIBRARIES` (16) unique asset names; `animation_graph`
   (an asset name),
@@ -72,15 +73,14 @@ as dependencies; world sprites do the same for sprite animations: [WorldSprites.
 
 Pure data, read-only, owned by the asset manager (never keep it past your asset user). Accessors:
 `WorldModel_GetLodCount`, `_GetLodModel(index)` (the `GameModel*`), `_GetLodMaxDistance(index)`, `_GetSettings` (the
-placements' defaults, a `WorldModelSettings`: outline, crisp, shadow tier, casts shadows, haze, keeps the sky out,
-draw distance, fixed),
+placements' defaults, a `WorldModelSettings`: outline, crisp, the shadow settings ("Shadows" below), haze, keeps the
+sky out, draw distance, fixed),
 `_GetLodFadeSeconds`, `_GetLodHysteresis`, `_GetBoundsCenter` / `_GetBoundsRadius` / `_GetBoundsTransform` /
 `_HasOwnBounds`, the animation's `_GetSkeleton`, `_GetSkeletonLod` and libraries, its graph, sockets and
 first-person block,
 `_GetVariantCount`,
 `_GetVariantName(index)`, `WorldModel_TryFindVariant(name, &index)` and `WorldModel_ApplyVariant`.
-`WorldShadowTier` and its names (`WORLD_SHADOW_TIER_ENUM`, which the component's `shadow_tier` row uses too) live in
-`WorldModel.h`; `WorldModelSettings_CreateDefault` is what a world model and a placement start from.
+`WorldModelSettings_CreateDefault` is what a world model and a placement start from.
 
 ## Variants
 
@@ -119,8 +119,12 @@ and `PropertyTable_Check` enforces the pairing for every table ([PropertyDescrip
 |---|---|---|
 | `HasOutline` | `overrides_has_outline` | `has_outline` |
 | `OmitPixelation` | `overrides_omit_pixelation` | `omit_pixelation` |
-| `ShadowTier` | `overrides_shadow_tier` | `shadow_tier` |
 | `CastsShadows` | `overrides_casts_shadows` | `casts_shadows` |
+| `ShadowDistance` | `overrides_shadow_distance` | `shadow_distance` |
+| `IsShadowDistanceFixed` | `overrides_is_shadow_distance_fixed` | `is_shadow_distance_fixed` |
+| `IsShadowOnly` | `overrides_is_shadow_only` | `is_shadow_only` |
+| `HasTwoSidedShadows` | `overrides_has_two_sided_shadows` | `has_two_sided_shadows` |
+| `ShadowLod` | `overrides_shadow_lod` | `shadow_lod` |
 | `Haze` | `overrides_haze` | `haze` |
 | `OccludesSky` | `overrides_occludes_sky` | `occludes_sky` |
 | `DrawDistance` | `overrides_draw_distance` | `draw_distance` |
@@ -138,8 +142,8 @@ lighting"), so a roof, a wall or a tree's canopy shades what is under it; off fo
 whose shade the AO and the shadows give. It is independent of `casts_shadows` (a roof that casts no sun shadow still
 keeps the sky out). The model instances component has the same pair for all its copies.
 `draw_distance_multiplier` (above 0, default 1) is a plain setting: it multiplies whichever draw distance is in effect;
-`lod_distance_multiplier` likewise for the LOD switch distances, and `is_lod_forced` with `forced_lod` force a LOD (see
-"LODs").
+`shadow_distance_multiplier` likewise for the shadow distance ("Shadows" below), `lod_distance_multiplier` for the LOD
+switch distances, and `is_lod_forced` with `forced_lod` force a LOD (see "LODs").
 In C: `WorldModelComponent_IsOverridden` / `_SetOverridden(self, setting, isOverridden)` for the flags, the typed
 getters and setters for the values. **`WorldModelComponent_ResolveSettings(component, modelSettings)`** is the one pure
 function that turns the world model's settings and the overrides into the settings in effect; the renderer's cache
@@ -159,6 +163,37 @@ An object's draw distance is resolved in two steps:
 
 A placement may draw less far than its world model's last LOD distance: its coarser LODs are then never reached.
 Sprites follow the same two steps, through world sprites ([WorldSprites.md](WorldSprites.md)).
+
+## Shadows
+
+The renderer decides most of a caster's shadow cost by itself (which shadow levels it reaches, the LOD each level takes:
+[WorldRuntime.md](WorldRuntime.md), "Sun and moon shadows"). What only a creator knows are the world model's `render`
+settings, each an override pair of its placements:
+- **`casts_shadows`** (default true): whether it casts at all; it receives shadows either way.
+- **`has_shadow_distance` and `shadow_distance`** (default false and `WORLD_MODEL_DEFAULT_SHADOW_DISTANCE`, 600 m;
+  above 0): how far from the camera it still casts. Without a distance of its own a model casts as far as it is drawn.
+- **`is_shadow_distance_fixed`** (default false): the player's `shadow_distance_scale` leaves its shadow distance as it is
+  (a tower whose shadow matters to the view).
+- **`is_shadow_only`** (default false): it casts and is not drawn (a cheap stand-in shape casting for a detailed model
+  whose own `casts_shadows` is off).
+- **`has_two_sided_shadows`** (default false): it casts from both faces of its triangles (an open mesh: a single-plane
+  roof, a sign, leaves on a card).
+- **`has_shadow_lod` and `shadow_lod`** (default false and 0): the LOD it casts with in every shadow level (0 the
+  finest; past its last LOD, its last); without one, the renderer picks.
+
+A definition may write a value without its flag: `shadow_distance` alone turns `has_shadow_distance` on, `shadow_lod`
+alone `has_shadow_lod` (a flag written next to its value wins).
+
+**Per placement** (`WorldModelComponent_ResolveSettings`): the placement has a shadow distance when it overrides
+`shadow_distance` or its world model has one; the distance in effect is the placement's own (while overridden), else the
+world model's (while it has one), else the resolved draw distance, times `shadow_distance_multiplier` (above 0, default
+1). `HasShadowLod` is on when the placement overrides `shadow_lod` or the world model has one. The fixed, shadow-only and
+two-sided flags are plain override pairs.
+
+**Older definitions:** `render.shadow_tier` (which of two shadow maps a model cast into: `both`, `near` or `far`; any
+other value is refused) is still read, with one warning each: `near` is read as a shadow distance of
+`WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE` (16 m) unless the definition gives its own `shadow_distance`; `far` and `both`
+change nothing (every caster casts from the camera out to its shadow distance).
 
 ## LODs
 
@@ -226,7 +261,7 @@ name, 600 m), and `painted_cube` (the test cube with the variants `red` and
 `blue`, tints only), and `lod_test`: three LODs of a sphere (the placeholder models `lod_test_lod0` to `_lod2`,
 `models/placeholder_lod_test/`: UV spheres of radius 0.5 m at 32x16, 16x8 and 8x4 segments, written by a generator
 script) switching at 13 and 16 m, seen 60 m. The test world (`compile/out/worlds/test.world.json`) names world models;
-its per-object crisp and shadow tier settings are override pairs. Two cubes behind the centre row show
+its per-object crisp and shadow distance settings are override pairs. Two cubes behind the centre row show
 `painted_cube`'s variants; the test frame's E key steps them (their own, swapped, none) and Z zooms the camera to 15
 degrees ([WorldRuntime.md](WorldRuntime.md), "WorldTestFrame"). A row of six `lod_test` spheres stands along the left
 edge of the ground (x = 8, z = -6 to 9), with two more beside it: `lod_test_forced` (LOD 2 forced) and

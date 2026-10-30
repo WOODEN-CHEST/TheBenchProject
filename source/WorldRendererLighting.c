@@ -22,13 +22,6 @@
 /** Asset name of its instanced twin: the same fragment stage over a vertex stage that places every copy of a cell
  *  (WorldRendererInstances.c draws with it). */
 #define PBR_INSTANCED_SHADER_ASSET_NAME ((const unsigned char*)u8"world_pbr_instanced")
-/** The cascades' depth bias and normal offset, in texels of each cascade: half a texel of depth (the maps hold the
- *  casters' faces turned away from the light, so a lit surface never meets itself there), and the lookup moved off the
- *  surface along its normal by a texel and a half at grazing incidence (no surface shadows itself through the map's
- *  texels at a slant). In the near cascade that is 0.8 cm and 2.3 cm: a shadow reaches the foot of what casts it, and a
- *  roof's shadow the top of the wall under it. */
-#define SHADOW_DEPTH_BIAS_TEXELS 0.5f
-#define SHADOW_NORMAL_OFFSET_TEXELS 1.5f
 /** The exposure the sun's disc is drawn for whatever the eye's: the disc's radiance is divided by the exposure and
  *  multiplied by this, so it keeps its look on screen through dusk, when the exposure rises far above the noon's (it
  *  would turn the setting disc white): about a clear noon's exposure, the one the disc's look is tuned at. */
@@ -97,15 +90,16 @@ static void CacheLitLocations(WorldRendererLitLocations* lit, Shader shader)
     lit->_locSkyVisibilityOnScreen = GetShaderLocation(shader, "skyVisibilityOnScreen");
     lit->_locDrawInPrepass = GetShaderLocation(shader, "drawInPrepass");
 
-    lit->_locLightVP = GetShaderLocation(shader, "lightVP");
-    lit->_locShadowMap = GetShaderLocation(shader, "shadowMap");
-    lit->_locLightVPFar = GetShaderLocation(shader, "lightVPFar");
-    lit->_locShadowMapFar = GetShaderLocation(shader, "shadowMapFar");
-    lit->_locShadowFarActive = GetShaderLocation(shader, "shadowFarActive");
+    lit->_locShadowLevelCount = GetShaderLocation(shader, "shadowLevelCount");
+    lit->_locShadowLevelMatrices = GetShaderLocation(shader, "shadowLevelMatrices");
+    lit->_locShadowLevelOffsets = GetShaderLocation(shader, "shadowLevelOffsets");
+    lit->_locShadowLevelEdge = GetShaderLocation(shader, "shadowLevelEdge");
+    lit->_locShadowLevelBandStart = GetShaderLocation(shader, "shadowLevelBandStart");
+    lit->_locShadowLevelLogFactor = GetShaderLocation(shader, "shadowLevelLogFactor");
+    lit->_locShadowReachFade = GetShaderLocation(shader, "shadowReachFade");
+    lit->_locShadowLevels = GetShaderLocation(shader, "shadowLevels");
+    lit->_locShadowLevelView = GetShaderLocation(shader, "shadowLevelView");
     lit->_locShadowStrength = GetShaderLocation(shader, "shadowStrength");
-    lit->_locShadowDepthBias = GetShaderLocation(shader, "shadowDepthBias");
-    lit->_locShadowNormalOffset = GetShaderLocation(shader, "shadowNormalOffset");
-    lit->_locShadowTexelSize = GetShaderLocation(shader, "shadowTexelSize");
     lit->_locShadowLightDirection = GetShaderLocation(shader, "shadowLightDirection");
     lit->_locSunShadowFade = GetShaderLocation(shader, "sunShadowFade");
     lit->_locMoonShadowFade = GetShaderLocation(shader, "moonShadowFade");
@@ -249,24 +243,8 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
 {
     CacheLitLocations(outLocations, shader);
 
-    // Constant shadow parameters; upload once. Each cascade's by its texel's world size (the depth bias in its depth
-    // units: the light frustum's near to far plane is 0 to 1).
-    float ShadowTexel = 1.0f / (float)SHADOW_MAP_SIZE;
-    float TexelWorld[2] = { SHADOW_NEAR_ORTHO_SIZE * ShadowTexel, SHADOW_FAR_ORTHO_SIZE * ShadowTexel };
-    float DepthBias[2];
-    float NormalOffset[2];
-    for (int Cascade = 0; Cascade < 2; Cascade++)
-    {
-        DepthBias[Cascade] = SHADOW_DEPTH_BIAS_TEXELS * TexelWorld[Cascade] / (SHADOW_FAR - SHADOW_NEAR);
-        NormalOffset[Cascade] = SHADOW_NORMAL_OFFSET_TEXELS * TexelWorld[Cascade];
-    }
-    SetShaderValue(shader, outLocations->_locShadowDepthBias, DepthBias, SHADER_UNIFORM_VEC2);
-    SetShaderValue(shader, outLocations->_locShadowNormalOffset, NormalOffset, SHADER_UNIFORM_VEC2);
-    SetShaderValue(shader, outLocations->_locShadowTexelSize, &ShadowTexel, SHADER_UNIFORM_FLOAT);
-
     // Point the renderer-owned samplers at their fixed units once (see WorldRendererTextureUnit).
-    AssignSamplerUnit(shader, outLocations->_locShadowMap, WorldRendererTextureUnit_ShadowNear);
-    AssignSamplerUnit(shader, outLocations->_locShadowMapFar, WorldRendererTextureUnit_ShadowFar);
+    AssignSamplerUnit(shader, outLocations->_locShadowLevels, WorldRendererTextureUnit_ShadowLevels);
     AssignSamplerUnit(shader, outLocations->_locPointShadowCube, WorldRendererTextureUnit_PointShadowCube);
     AssignSamplerUnit(shader, outLocations->_locAmbientOcclusionMap, WorldRendererTextureUnit_AmbientOcclusion);
     // The air and the haze (the volume's sampler on its own unit), and interior lighting (the sky's visibility map on
@@ -343,10 +321,10 @@ void WorldRendererLighting_PrepareFrame(WorldRenderer* self, WorldRenderFrame* f
 {
     const WorldEnvironment* Environment = frame->Environment;
 
-    // shadowStrength is shared by the cascades' and the point shadow's visibility, so it is gated on global shadow
+    // shadowStrength is shared by the shadow levels' and the point shadow's visibility, so it is gated on global shadow
     // enablement (NOT the sun being up) — otherwise a point light would cast no shadow at night. Which directional
-    // light the cascades darken, and how much, is the shader's sunShadowFade / moonShadowFade (0 for both while the
-    // cascades do not run, so a stale map is never sampled).
+    // light the levels darken, and how much, is the shader's sunShadowFade / moonShadowFade (0 for both while the
+    // levels do not run, so a stale map is never sampled).
     float EffectiveShadowStrength = Environment->ShadowStrength * WorldRendererCommon_ConfigShadowStrength(self);
     frame->ShadowStrength = (Environment->AreShadowsEnabled && (EffectiveShadowStrength > 0.0f))
         ? EffectiveShadowStrength : 0.0f;
@@ -363,8 +341,48 @@ static const WorldRenderLight* GetPointShadowLight(const WorldRenderer* self, co
         : NULL;
 }
 
+/* Uploads the shadow levels to one lit shader (common/lighting): how many are read (0 while they did not run), each one's
+ * matrices as its map holds them and its lookups' offsets, where a level's lookups end and its band starts, the factor
+ * between the levels, the reach's fade, the maps' texel and the debug view. */
+static void UploadShadowLevels(const WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
+    const WorldRendererLitLocations* lit)
+{
+    int Count = frame->AreShadowLevelsActive ? (int)frame->ShadowLevelCount : 0;
+    SetShaderValue(shader, lit->_locShadowLevelCount, &Count, SHADER_UNIFORM_INT);
+    int View = self->_shadowLevels._isLevelViewEnabled ? 1 : 0;
+    SetShaderValue(shader, lit->_locShadowLevelView, &View, SHADER_UNIFORM_INT);
+    if (Count == 0)
+    {
+        return;
+    }
+    const WorldShadowLevelsSettings* Settings = &frame->ShadowLevelSettings;
+    Matrix Matrices[WORLD_RENDERER_MAX_SHADOW_LEVELS];
+    float Offsets[WORLD_RENDERER_MAX_SHADOW_LEVELS * 2];
+    for (int Level = 0; Level < Count; Level++)
+    {
+        Matrices[Level] = frame->ShadowLevels[Level].ViewProjection;
+        Offsets[(Level * 2) + 0] = frame->ShadowLevels[Level].DepthBias;
+        Offsets[(Level * 2) + 1] = frame->ShadowLevels[Level].NormalOffset;
+    }
+    if (lit->_locShadowLevelMatrices >= 0)
+    {
+        rlEnableShader(shader.id);
+        rlSetUniformMatrices(lit->_locShadowLevelMatrices, Matrices, Count);
+    }
+    SetShaderValueV(shader, lit->_locShadowLevelOffsets, Offsets, SHADER_UNIFORM_VEC2, Count);
+    float Edge = WorldShadowLevels_GetEdge(Settings);
+    float BandStart = Edge * (1.0f - WORLD_SHADOW_BLEND_SHARE);
+    float LogFactor = logf(Settings->Factor);
+    float ReachFade[2] = { WorldShadowLevels_GetReachFadeStart(Settings), Settings->Reach };
+    SetShaderValue(shader, lit->_locShadowLevelEdge, &Edge, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, lit->_locShadowLevelBandStart, &BandStart, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, lit->_locShadowLevelLogFactor, &LogFactor, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, lit->_locShadowReachFade, ReachFade, SHADER_UNIFORM_VEC2);
+}
+
 /* Uploads the frame's lighting values to one lit shader (common/lighting): the sun and the moon, the ambient, the haze,
- * the night vision, the cascades' fades, light direction and matrices, the AO switch and the cube-shadow light.
+ * the night vision, the shadow levels' fades, light direction, matrices and lookups, the AO switch and the cube-shadow
+ * light.
  * Positions and matrices are in render space, where the camera sits at the origin (so it needs no uniform). The
  * textures are bound once for every lit shader (BindFrameTextures). */
 static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
@@ -407,12 +425,11 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     SetShaderValue(shader, lit->_locNightVisionStrength, &frame->NightVisionStrength, SHADER_UNIFORM_FLOAT);
     SetShaderValue(shader, lit->_locNightVisionTint, frame->NightVisionTint, SHADER_UNIFORM_VEC3);
 
-    // The cascades darken the light they were rendered from (the sun or the moon), by the frame's shadow fade; with
-    // both fades 0 (the cascades did not run) the shader samples no shadow map at all. Their light matrices go up when
-    // they ran this frame: the near cascade always, the far one only when its map exists.
+    // The levels darken the light they were rendered from (the sun or the moon), by the frame's shadow fade; with both
+    // fades 0, or no level read (they did not run), the shader samples no map at all.
     float SunShadowFade = 0.0f;
     float MoonShadowFade = 0.0f;
-    if (frame->IsCascadeShadowActive)
+    if (frame->AreShadowLevelsActive)
     {
         SunShadowFade = (frame->ShadowLight == WorldShadowLight_Sun) ? frame->ShadowFade : 0.0f;
         MoonShadowFade = (frame->ShadowLight == WorldShadowLight_Moon) ? frame->ShadowFade : 0.0f;
@@ -421,16 +438,7 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     SetShaderValue(shader, lit->_locMoonShadowFade, &MoonShadowFade, SHADER_UNIFORM_FLOAT);
     float ShadowDir[3] = { frame->ShadowDirection.x, frame->ShadowDirection.y, frame->ShadowDirection.z };
     SetShaderValue(shader, lit->_locShadowLightDirection, ShadowDir, SHADER_UNIFORM_VEC3);
-    if (frame->IsCascadeShadowActive)
-    {
-        SetShaderValueMatrix(shader, lit->_locLightVP, frame->NearCascade.ViewProjection);
-        int ShadowFarActive = self->_cascades._hasFarMap ? 1 : 0;
-        SetShaderValue(shader, lit->_locShadowFarActive, &ShadowFarActive, SHADER_UNIFORM_INT);
-        if (self->_cascades._hasFarMap)
-        {
-            SetShaderValueMatrix(shader, lit->_locLightVPFar, frame->FarCascade.ViewProjection);
-        }
-    }
+    UploadShadowLevels(self, frame, shader, lit);
 
     // Screen-space AO: the crisp overlay passes applyScreenAo=false (its full-res gl_FragCoord would mis-sample this
     // low-res map). aoMapActive false => the shader leaves the ambient term unoccluded.
@@ -480,16 +488,7 @@ static void BindFrameTextures(WorldRenderer* self, const WorldRenderFrame* frame
 {
     WorldRendererAtmosphere_BindVolume(self, frame);
     WorldRendererSkyVisibility_BindMap(self, frame);
-    if (frame->IsCascadeShadowActive)
-    {
-        rlActiveTextureSlot(WorldRendererTextureUnit_ShadowNear);
-        rlEnableTexture(self->_cascades._nearMap.depth.id);
-        if (self->_cascades._hasFarMap)
-        {
-            rlActiveTextureSlot(WorldRendererTextureUnit_ShadowFar);
-            rlEnableTexture(self->_cascades._farMap.depth.id);
-        }
-    }
+    WorldRendererShadows_BindLevels(self, frame);
     if (applyScreenAo && frame->IsAmbientPrepassActive)
     {
         rlActiveTextureSlot(WorldRendererTextureUnit_AmbientOcclusion);

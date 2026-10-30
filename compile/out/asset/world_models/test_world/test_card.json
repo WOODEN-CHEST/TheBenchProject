@@ -1,0 +1,6 @@
+{
+    "name": "test_card",
+    "lods": [
+        { "model": "test_card", "max_distance": 200 }
+    ]
+}

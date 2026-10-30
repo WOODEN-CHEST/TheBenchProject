@@ -177,6 +177,8 @@ static void DefaultsAreValid(TestRun* run)
         && (Environment.AmbientSkylightColor.b == 255) && (Environment.AmbientSkylightIntensity == 1.0f));
     TEST_CHECK(run, (Environment.NightLightColor.r == 161) && (Environment.NightLightColor.g == 178)
         && (Environment.NightLightColor.b == 255) && (Environment.NightLightIntensity == 0.011f));
+    // The sun's and the moon's shadows reach 4 km.
+    TEST_CHECK(run, Environment.AreShadowsEnabled && (Environment.ShadowReach == 4000.0f));
     WorldEnvironment_Deconstruct(&Environment);
     WorldEnvironment_Deconstruct(&Environment); // safe to repeat
     TEST_CHECK(run, (Environment.MilkyWayTexture == NULL) && (Environment.MoonTexture == NULL));
@@ -186,6 +188,17 @@ static void ValidateNamesTheBrokenField(TestRun* run)
 {
     WorldEnvironment Environment;
     WorldEnvironment_SetDefaults(&Environment);
+
+    // The shadows' reach: from none to WORLD_ENVIRONMENT_MAX_SHADOW_REACH (the levels' depth precision).
+    Environment.ShadowReach = 0.0f;
+    TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));
+    Environment.ShadowReach = (float)WORLD_ENVIRONMENT_MAX_SHADOW_REACH;
+    TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));
+    Environment.ShadowReach = (float)WORLD_ENVIRONMENT_MAX_SHADOW_REACH + 1.0f;
+    CheckRejected(run, &Environment, "shadow_reach");
+    Environment.ShadowReach = -1.0f;
+    CheckRejected(run, &Environment, "shadow_reach");
+    ResetEnvironment(&Environment);
 
     Environment.TimeOfDay = NAN;
     CheckRejected(run, &Environment, "TimeOfDay");

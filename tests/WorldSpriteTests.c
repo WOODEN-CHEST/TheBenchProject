@@ -71,6 +71,10 @@ static bool AreSettingsEqual(const WorldSpriteSettings* a, const WorldSpriteSett
         && (a->IsDecal == b->IsDecal) && (a->DecalOffset == b->DecalOffset)
         && (a->Render.HasOutline == b->Render.HasOutline) && (a->Render.OmitsPixelation == b->Render.OmitsPixelation)
         && (a->Render.CastsShadows == b->Render.CastsShadows) && (a->Render.Haze == b->Render.Haze)
+        && (a->Render.HasShadowDistance == b->Render.HasShadowDistance)
+        && (!a->Render.HasShadowDistance || (a->Render.ShadowDistance == b->Render.ShadowDistance))
+        && (a->Render.IsShadowDistanceFixed == b->Render.IsShadowDistanceFixed)
+        && (a->Render.IsShadowOnly == b->Render.IsShadowOnly)
         && (a->HasDrawDistance == b->HasDrawDistance)
         && (!a->HasDrawDistance || (a->DrawDistance == b->DrawDistance))
         && (a->IsDrawDistanceFixed == b->IsDrawDistanceFixed);
@@ -108,6 +112,7 @@ static WorldSpriteSettings CreateAssetSettings(void)
     Settings.IsDecal = false;
     Settings.DecalOffset = 0.05f;
     Settings.Render = (WorldSpriteRenderSettings){ .HasOutline = false, .OmitsPixelation = false, .CastsShadows = false,
+        .HasShadowDistance = true, .ShadowDistance = 40.0f, .IsShadowDistanceFixed = true, .IsShadowOnly = false,
         .Haze = 0.5f };
     Settings.HasDrawDistance = true;
     Settings.DrawDistance = 80.0f;
@@ -136,6 +141,9 @@ static void SetPlacementValues(TestRun* run, WorldSpriteComponent* placement)
     TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetHaze(placement, 0.0f));
     TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDrawDistance(placement, 30.0f));
     TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetIsDrawDistanceFixed(placement, false));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetShadowDistance(placement, 12.0f));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetIsShadowDistanceFixed(placement, false));
+    TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetIsShadowOnly(placement, true));
 }
 
 /* Whether a resolved setting is the placement's own (true) or the asset's (false), for the values above. */
@@ -161,6 +169,9 @@ static bool IsSettingFromPlacement(const WorldSpriteSettings* resolved, WorldSpr
         case WorldSpriteSetting_Haze:                return resolved->Render.Haze == 0.0f;
         case WorldSpriteSetting_DrawDistance:        return resolved->DrawDistance == 30.0f;
         case WorldSpriteSetting_IsDrawDistanceFixed: return !resolved->IsDrawDistanceFixed;
+        case WorldSpriteSetting_ShadowDistance:      return resolved->Render.ShadowDistance == 12.0f;
+        case WorldSpriteSetting_IsShadowDistanceFixed: return !resolved->Render.IsShadowDistanceFixed;
+        case WorldSpriteSetting_IsShadowOnly:        return resolved->Render.IsShadowOnly;
         case WorldSpriteSetting_Count:               break;
     }
     return false;
@@ -197,6 +208,9 @@ static void AMinimalDefinitionGetsTheDefaults(TestRun* run)
                 && !Settings->IsDecal && (Settings->DecalOffset == 0.01f));
             TEST_CHECK(run, Settings->Render.HasOutline && !Settings->Render.OmitsPixelation
                 && Settings->Render.CastsShadows && (Settings->Render.Haze == 1.0f));
+            TEST_CHECK(run, !Settings->Render.HasShadowDistance
+                && (Settings->Render.ShadowDistance == WORLD_SPRITE_DEFAULT_SHADOW_DISTANCE)
+                && !Settings->Render.IsShadowDistanceFixed && !Settings->Render.IsShadowOnly);
             TEST_CHECK(run, !Settings->HasDrawDistance && !Settings->IsDrawDistanceFixed);
             TEST_CHECK(run, WorldSprite_GetAnimation(Loaded) == Animation); // the one shared animation asset
         }
@@ -223,7 +237,9 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
         "  \"light_wrap\": 0.75,\n"
         "  \"is_decal\": true,\n"
         "  \"decal_offset\": 0.02,\n"
-        "  \"render\": { \"has_outline\": false, \"omit_pixelation\": true, \"casts_shadows\": false, \"haze\": 0 },\n"
+        "  \"render\": { \"has_outline\": false, \"omit_pixelation\": true, \"casts_shadows\": false, "
+            "\"has_shadow_distance\": true, \"shadow_distance\": 35, \"is_shadow_distance_fixed\": true, "
+            "\"is_shadow_only\": true, \"haze\": 0 },\n"
         "  \"draw_distance\": 90,\n"
         "  \"is_draw_distance_fixed\": true\n"
         "}\n";
@@ -246,6 +262,8 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
             && (Settings->DecalOffset == 0.02f));
         TEST_CHECK(run, !Settings->Render.HasOutline && Settings->Render.OmitsPixelation
             && !Settings->Render.CastsShadows && (Settings->Render.Haze == 0.0f));
+        TEST_CHECK(run, Settings->Render.HasShadowDistance && (Settings->Render.ShadowDistance == 35.0f)
+            && Settings->Render.IsShadowDistanceFixed && Settings->Render.IsShadowOnly);
         TEST_CHECK(run, Settings->HasDrawDistance && (Settings->DrawDistance == 90.0f) && Settings->IsDrawDistanceFixed);
     }
     TestAssetFixture_Deconstruct(run, &Fixture);
@@ -275,7 +293,8 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
             "World sprite \"s\": render must be a JSON object." },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"render\": {\"outline\": true}}",
             ErrorCode_InvalidAssetDefinition, "Unknown key \"outline\" in world sprite \"s\", render; the keys allowed "
-                "there are: has_outline, omit_pixelation, casts_shadows, haze." },
+                "there are: has_outline, omit_pixelation, casts_shadows, has_shadow_distance, shadow_distance, "
+                "is_shadow_distance_fixed, is_shadow_only, haze." },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"render\": {\"haze\": -1}}", ErrorCode_InvalidJSON,
             "world_sprite_render.haze (Haze) must be finite and in [0, 1000]." },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"render\": {\"pivot\": [0, 0]}}",
@@ -344,14 +363,29 @@ static void TheDefinitionSharesTheComponentsRows(TestRun* run)
         for (size_t Index = 0U; Index < Tables[Table]->DescriptorCount; Index++)
         {
             const PropertyDescriptor* Asset = &Tables[Table]->Descriptors[Index];
-            if (strcmp((const char*)Asset->Key, "has_draw_distance") == 0)
+            // The asset's own flags (a distance of its own or its kind's / as drawn), each right before its value and
+            // with the placement's override flag's wire id.
+            static const char* const OwnFlags[][3] =
             {
-                const PropertyDescriptor* Value = Asset + 1;
-                TEST_CHECK(run, (Asset->Type == PropertyType_Bool) && !Asset->Default.BoolValue
-                    && ((Index + 1U) < Tables[Table]->DescriptorCount)
-                    && (strcmp((const char*)Value->Key, "draw_distance") == 0)
-                    && (PropertyTable_FindByKey(Component, (const unsigned char*)u8"overrides_draw_distance")->WireId
-                        == Asset->WireId));
+                { "has_draw_distance", "draw_distance", "overrides_draw_distance" },
+                { "has_shadow_distance", "shadow_distance", "overrides_shadow_distance" },
+            };
+            bool IsOwnFlag = false;
+            for (size_t Own = 0U; Own < (sizeof(OwnFlags) / sizeof(OwnFlags[0])); Own++)
+            {
+                if (strcmp((const char*)Asset->Key, OwnFlags[Own][0]) == 0)
+                {
+                    const PropertyDescriptor* Value = Asset + 1;
+                    TEST_CHECK(run, (Asset->Type == PropertyType_Bool) && !Asset->Default.BoolValue
+                        && ((Index + 1U) < Tables[Table]->DescriptorCount)
+                        && (strcmp((const char*)Value->Key, OwnFlags[Own][1]) == 0)
+                        && (PropertyTable_FindByKey(Component, (const unsigned char*)OwnFlags[Own][2])->WireId
+                            == Asset->WireId));
+                    IsOwnFlag = true;
+                }
+            }
+            if (IsOwnFlag)
+            {
                 continue;
             }
             const PropertyDescriptor* Placement = PropertyTable_FindByKey(Component, Asset->Key);
@@ -587,6 +621,9 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
         [WorldSpriteSetting_Haze] = "haze",
         [WorldSpriteSetting_DrawDistance] = "draw_distance",
         [WorldSpriteSetting_IsDrawDistanceFixed] = "is_draw_distance_fixed",
+        [WorldSpriteSetting_ShadowDistance] = "shadow_distance",
+        [WorldSpriteSetting_IsShadowDistanceFixed] = "is_shadow_distance_fixed",
+        [WorldSpriteSetting_IsShadowOnly] = "is_shadow_only",
     };
     const PropertyTable* Table = WorldSpriteComponent_GetPropertyTable();
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(Table));
@@ -758,6 +795,99 @@ static void TheDrawDistanceComesFromThePlacementTheWorldSpriteOrTheKind(TestRun*
     TestWorld_Deconstruct(run, &TestWorld, &Keys);
 }
 
+/* Whether a world sprite gives its own shadow distance is the render block's has_shadow_distance (a hand-written
+ * shadow_distance without it is on, an explicit flag wins); the shadow distance in effect is the placement's own while it
+ * overrides it, else the world sprite's, else the draw distance in effect (the kind's for a decal), times the shadow
+ * multiplier in every case. */
+static void TheShadowDistanceComesFromThePlacementTheWorldSpriteOrTheDrawDistance(TestRun* run)
+{
+    static const struct
+    {
+        const char* Json;
+        bool HasShadowDistance;
+        float ShadowDistance;
+    }
+    Cases[] =
+    {
+        { "{\"name\": \"plain\", \"sprite_animation\": \"leaves\"}", false, WORLD_SPRITE_DEFAULT_SHADOW_DISTANCE },
+        { "{\"name\": \"given\", \"sprite_animation\": \"leaves\", \"render\": {\"shadow_distance\": 20}}", true,
+            20.0f },
+        { "{\"name\": \"kept\", \"sprite_animation\": \"leaves\", \"render\": {\"has_shadow_distance\": false, "
+            "\"shadow_distance\": 20}}", false, 20.0f },
+        { "{\"name\": \"flagged\", \"sprite_animation\": \"leaves\", \"render\": {\"has_shadow_distance\": true}}",
+            true, WORLD_SPRITE_DEFAULT_SHADOW_DISTANCE },
+    };
+    TestAssetFixture Fixture;
+    if (TestAssetFixture_Construct(run, &Fixture) && TestAssets_AddSpriteAnimation(run, &Fixture, "leaves", NULL))
+    {
+        for (size_t Index = 0U; Index < (sizeof(Cases) / sizeof(Cases[0])); Index++)
+        {
+            char Name[16];
+            AssetUserID User = ASSET_USER_ID_INVALID;
+            WorldSprite* Loaded = NULL;
+            sscanf(Cases[Index].Json, "{\"name\": \"%15[a-z]\"", Name);
+            if (TestAssets_AddWorldSprite(run, &Fixture, Cases[Index].Json)
+                && ((Loaded = LoadWorldSprite(run, &Fixture, Name, &User)) != NULL))
+            {
+                const WorldSpriteRenderSettings* Render = &WorldSprite_GetSettings(Loaded)->Render;
+                TEST_CHECK(run, (Render->HasShadowDistance == Cases[Index].HasShadowDistance)
+                    && (Render->ShadowDistance == Cases[Index].ShadowDistance));
+            }
+        }
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+
+    World TestWorld;
+    KeyRegistry Keys;
+    if (!TestWorld_Construct(run, &TestWorld, &Keys, NULL, NULL))
+    {
+        return;
+    }
+    WorldSpriteComponent* Placement = AddPlacement(run, &TestWorld);
+    if (Placement != NULL)
+    {
+        WorldSpriteSettings Plain = WorldSpriteSettings_CreateDefault();
+        WorldSpriteSettings Decal = WorldSpriteSettings_CreateDefault();
+        Decal.Orientation = WorldSpriteOrientation_Fixed;
+        Decal.IsDecal = true;
+        WorldSpriteSettings Given = WorldSpriteSettings_CreateDefault();
+        Given.Render.HasShadowDistance = true;
+        Given.Render.ShadowDistance = 30.0f;
+
+        // Without one: the draw distance in effect, the kind's when nothing gives one, times the draw multiplier.
+        WorldSpriteSettings Resolved = WorldSpriteComponent_ResolveSettings(Placement, &Plain);
+        TEST_CHECK(run, !Resolved.Render.HasShadowDistance
+            && (Resolved.Render.ShadowDistance == WORLD_SPRITE_DEFAULT_DRAW_DISTANCE));
+        TEST_CHECK(run, WorldSpriteComponent_ResolveSettings(Placement, &Decal).Render.ShadowDistance
+            == WORLD_SPRITE_DEFAULT_DECAL_DRAW_DISTANCE);
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetDrawDistanceMultiplier(Placement, 2.0f));
+        TEST_CHECK(run, WorldSpriteComponent_ResolveSettings(Placement, &Plain).Render.ShadowDistance
+            == (2.0f * WORLD_SPRITE_DEFAULT_DRAW_DISTANCE));
+        // The shadow multiplier on every source; the world sprite's own (the draw multiplier does not touch it).
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetShadowDistanceMultiplier(Placement, 0.5f));
+        TEST_CHECK(run, WorldSpriteComponent_ResolveSettings(Placement, &Plain).Render.ShadowDistance
+            == WORLD_SPRITE_DEFAULT_DRAW_DISTANCE);
+        Resolved = WorldSpriteComponent_ResolveSettings(Placement, &Given);
+        TEST_CHECK(run, Resolved.Render.HasShadowDistance && (Resolved.Render.ShadowDistance == 15.0f));
+        // The placement's own wins over both.
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetShadowDistance(Placement, 8.0f));
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(Placement, WorldSpriteSetting_ShadowDistance, true));
+        TEST_CHECK(run, (WorldSpriteComponent_ResolveSettings(Placement, &Given).Render.ShadowDistance == 4.0f)
+            && WorldSpriteComponent_ResolveSettings(Placement, &Plain).Render.HasShadowDistance
+            && (WorldSpriteComponent_ResolveSettings(Placement, &Plain).Render.ShadowDistance == 4.0f));
+        // Past the float range +infinity; refused values change nothing.
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetShadowDistance(Placement, 3e38f));
+        TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetShadowDistanceMultiplier(Placement, 1e10f));
+        TEST_CHECK(run, isinf(WorldSpriteComponent_ResolveSettings(Placement, &Given).Render.ShadowDistance));
+        TEST_CHECK_ERROR(run, WorldSpriteComponent_SetShadowDistance(Placement, 0.0f), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldSpriteComponent_SetShadowDistanceMultiplier(Placement, -1.0f),
+            ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK(run, (WorldSpriteComponent_GetShadowDistance(Placement) == 3e38f)
+            && (WorldSpriteComponent_GetShadowDistanceMultiplier(Placement) == 1e10f));
+    }
+    TestWorld_Deconstruct(run, &TestWorld, &Keys);
+}
+
 /* Changing the world sprite's name keeps the object and its overrides, advances the revision and binds the new world
  * sprite; the settings in effect follow it. */
 static void SwappingTheWorldSpriteKeepsTheObjectAndItsOverrides(TestRun* run)
@@ -922,6 +1052,8 @@ void WorldSpriteTests_Run(TestRun* run)
             TheFlagsChooseBetweenTheWorldSpriteAndThePlacement },
         { "the_draw_distance_comes_from_the_placement_the_world_sprite_or_the_kind",
             TheDrawDistanceComesFromThePlacementTheWorldSpriteOrTheKind },
+        { "the_shadow_distance_comes_from_the_placement_the_world_sprite_or_the_draw_distance",
+            TheShadowDistanceComesFromThePlacementTheWorldSpriteOrTheDrawDistance },
         { "swapping_the_world_sprite_keeps_the_object_and_its_overrides",
             SwappingTheWorldSpriteKeepsTheObjectAndItsOverrides },
         { "the_shipped_world_sprites_are_read", TheShippedWorldSpritesAreRead },

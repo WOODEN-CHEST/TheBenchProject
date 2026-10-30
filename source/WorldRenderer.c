@@ -82,9 +82,9 @@ static void EnsureShaders(WorldRenderer* self)
 
 // What each optional feature needs to be able to run at all (its shaders and targets), independent of whether it
 // is wanted this frame.
-static bool IsCascadeShadowAvailable(const WorldRenderer* self)
+static bool AreShadowLevelsAvailable(const WorldRenderer* self)
 {
-    return self->_cascades._hasNearMap && (self->_cascades._depthShader != NULL) && (self->_pbr._rigid._shader != NULL);
+    return WorldRendererShadows_AreLevelsAvailable(self) && (self->_pbr._rigid._shader != NULL);
 }
 
 static bool IsPointShadowAvailable(const WorldRenderer* self)
@@ -151,7 +151,7 @@ static bool IsNightVisionAvailable(const WorldRenderer* self)
 static bool AreSpriteShadowsAvailable(const WorldRenderer* self)
 {
     return WorldRendererSprites_IsAvailable(self)
-        && ((IsCascadeShadowAvailable(self) && (self->_cascades._spriteDepthShader != NULL))
+        && ((AreShadowLevelsAvailable(self) && (self->_shadowLevels._spriteDepthShader != NULL))
             || (IsPointShadowAvailable(self) && (self->_pointShadow._spriteShader != NULL)));
 }
 
@@ -163,16 +163,19 @@ static bool DoSpritesCastShadows(const WorldRenderer* self, const WorldRenderFra
     {
         return false;
     }
-    size_t NearCount = 0;
-    size_t FarCount = 0;
+    size_t LevelCount = 0;
+    for (uint32_t Level = 0U; frame->AreShadowLevelsActive && (Level < frame->ShadowLevelCount); Level++)
+    {
+        size_t Count = 0;
+        WorldVisibility_GetSprites(&self->_visibility, &self->_cache, WorldVisibility_GetShadowLevelPass(Level), &Count);
+        LevelCount += Count;
+    }
     size_t CubeCount = 0;
-    WorldVisibility_GetSprites(&self->_visibility, &self->_cache, WorldVisibilityPass_NearCascade, &NearCount);
-    WorldVisibility_GetSprites(&self->_visibility, &self->_cache, WorldVisibilityPass_FarCascade, &FarCount);
     WorldVisibility_GetSprites(&self->_visibility, &self->_cache, WorldVisibilityPass_PointShadow, &CubeCount);
-    bool IsCascadeCasting = frame->IsCascadeShadowActive && (self->_cascades._spriteDepthShader != NULL)
-        && ((NearCount > 0) || (self->_cascades._hasFarMap && (FarCount > 0)));
+    bool IsLevelCasting = frame->AreShadowLevelsActive && (self->_shadowLevels._spriteDepthShader != NULL)
+        && (LevelCount > 0);
     bool IsCubeCasting = frame->IsPointShadowActive && (self->_pointShadow._spriteShader != NULL) && (CubeCount > 0);
-    return IsCascadeCasting || IsCubeCasting;
+    return IsLevelCasting || IsCubeCasting;
 }
 
 /* The eye's night vision this frame: how strongly it applies (the renderer toggle x the world's strength), the field
@@ -273,9 +276,10 @@ static void UpdateLods(WorldRenderer* self, const WorldRenderFrame* frame, doubl
     WorldRenderCache_UpdateLods(&self->_cache, &View, self->_logger);
 }
 
-/* Decides which shadow passes run this frame (both are rendered before the scene pass). The cascades follow the sky's
- * shadow light (the sun by day, the moon on bright nights, none while both are low or handing over:
- * WorldRendererLighting_PrepareSkyLight chose it from their light at the camera); the point-light shadow is independent of the sky (shadows at night), cast by
+/* Decides which shadow passes run this frame (both are rendered before the scene pass). The shadow levels follow the
+ * sky's shadow light (the sun by day, the moon on bright nights, none while both are low or handing over:
+ * WorldRendererLighting_PrepareSkyLight chose it from their light at the camera), with the player's quality and the
+ * world's reach (none at a reach of 0); the point-light shadow is independent of the sky (shadows at night), cast by
  * the nearest shadow-casting light. Both need to be available and wanted (the world's switch, world x config strength
  * above 0). */
 static void DecideShadows(WorldRenderer* self, WorldRenderFrame* frame)
@@ -284,8 +288,10 @@ static void DecideShadows(WorldRenderer* self, WorldRenderFrame* frame)
     bool AreShadowsWanted = Environment->AreShadowsEnabled
         && ((Environment->ShadowStrength * WorldRendererCommon_ConfigShadowStrength(self)) > 0.0f);
 
-    frame->IsCascadeShadowActive = IsCascadeShadowAvailable(self) && AreShadowsWanted
-        && (frame->ShadowLight != WorldShadowLight_None) && (frame->ShadowFade > 0.0f);
+    frame->ShadowLevelSettings = WorldRendererShadows_GetSettings(self, Environment);
+    frame->AreShadowLevelsActive = AreShadowLevelsAvailable(self) && AreShadowsWanted
+        && (frame->ShadowLight != WorldShadowLight_None) && (frame->ShadowFade > 0.0f)
+        && (frame->ShadowLevelSettings.Reach > 0.0f);
     if (IsPointShadowAvailable(self) && AreShadowsWanted)
     {
         frame->ShadowLightIndex = WorldRendererShadows_SelectPointLight(self);
@@ -295,7 +301,8 @@ static void DecideShadows(WorldRenderer* self, WorldRenderFrame* frame)
 
 /* Builds the frame's visibility from the render cache: what the camera's passes draw (its frustum, the draw distances
  * under the quality setting and the camera's zoom, the opacities), which casters each shadow pass that runs draws
- * (each cascade's box, the cube's reach) and what keeps the sky out in the sky's occupancy volume (its map's box).
+ * (each shadow level's box, ring and size cut within the shadow distances and the reach, the cube's reach) and what keeps the
+ * sky out in the sky's occupancy volume (its map's box).
  * Needs the shadow decisions, WorldRendererShadows_PrepareFrame and WorldRendererSkyVisibility_PrepareFrame. In render
  * space: the camera at the origin. */
 static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
@@ -305,10 +312,9 @@ static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
         .CameraPosition = { 0.0f, 0.0f, 0.0f },
         .CameraFrustum = frame->CameraFrustum,
         .IsCullingEnabled = self->_isCullingEnabled,
-        .IsNearCascadeActive = frame->IsCascadeShadowActive,
-        .NearCascade = frame->NearCascade.Box,
-        .IsFarCascadeActive = frame->IsCascadeShadowActive && self->_cascades._hasFarMap,
-        .FarCascade = frame->FarCascade.Box,
+        .ShadowLevelCount = frame->AreShadowLevelsActive ? frame->ShadowLevelCount : 0U,
+        .ShadowReach = frame->ShadowLevelSettings.Reach,
+        .ShadowDistanceScale = WorldRendererCommon_ConfigShadowDistanceScale(self),
         .IsPointShadowActive = frame->IsPointShadowActive,
         .PointShadowPosition = frame->PointShadowPosition,
         .PointShadowReach = frame->PointShadowFar,
@@ -317,6 +323,16 @@ static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
         .DrawDistanceScale = WorldRendererCommon_ConfigDrawDistanceScale(self),
         .ZoomFactor = frame->ZoomFactor
     };
+    for (uint32_t Level = 0U; Level < View.ShadowLevelCount; Level++)
+    {
+        View.ShadowLevels[Level] = (WorldVisibilityShadowLevel)
+        {
+            .IsRendered = frame->ShadowLevels[Level].IsRendered,
+            .Box = frame->ShadowLevels[Level].Box,
+            .MinRadius = WorldShadowLevels_GetMinRadius(&frame->ShadowLevelSettings, Level),
+            .InnerInset = WorldShadowLevels_GetInnerInset(&frame->ShadowLevelSettings, Level)
+        };
+    }
     return WorldVisibility_Build(&self->_visibility, &self->_cache, &View);
 }
 
@@ -340,8 +356,8 @@ static void DecidePasses(WorldRenderer* self, WorldRenderFrame* frame)
         ? (Environment->AmbientOcclusionStrength * WorldRendererCommon_ConfigAoStrength(self)) : 0.0f;
     frame->IsAoActive = self->_postfxEnabled && (AoStrength > 0.0f) && IsAoAvailable(self);
     frame->AoStrength = frame->IsAoActive ? AoStrength : 0.0f;
-    // The contact shadows close the cascades' seams from the same pre-pass; it runs for either.
-    frame->AreContactShadowsActive = self->_areContactShadowsEnabled && frame->IsCascadeShadowActive
+    // The contact shadows close the shadow levels' seams from the same pre-pass; it runs for either.
+    frame->AreContactShadowsActive = self->_areContactShadowsEnabled && frame->AreShadowLevelsActive
         && IsAoAvailable(self);
     // So does the sky's visibility, per pixel (the lit passes read it there), while the occupancy volume is drawn.
     frame->IsSkyVisibilityOnScreen = frame->IsSkyVisibilityActive && IsAoAvailable(self);
@@ -405,10 +421,10 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->Features[WorldRendererFeature_SpriteLighting] = StateOf(HasSprites, self->_isSpriteLightingEnabled);
     Status->Features[WorldRendererFeature_SpriteShadows] = StateOf(AreSpriteShadowsAvailable(self),
         DoSpritesCastShadows(self, frame));
-    Status->Features[WorldRendererFeature_SunShadows] = StateOf(IsCascadeShadowAvailable(self),
-        frame->IsCascadeShadowActive && (frame->ShadowLight == WorldShadowLight_Sun));
-    Status->Features[WorldRendererFeature_MoonShadows] = StateOf(IsCascadeShadowAvailable(self),
-        frame->IsCascadeShadowActive && (frame->ShadowLight == WorldShadowLight_Moon));
+    Status->Features[WorldRendererFeature_SunShadows] = StateOf(AreShadowLevelsAvailable(self),
+        frame->AreShadowLevelsActive && (frame->ShadowLight == WorldShadowLight_Sun));
+    Status->Features[WorldRendererFeature_MoonShadows] = StateOf(AreShadowLevelsAvailable(self),
+        frame->AreShadowLevelsActive && (frame->ShadowLight == WorldShadowLight_Moon));
     Status->Features[WorldRendererFeature_PointLightShadow] = StateOf(IsPointShadowAvailable(self),
         frame->IsPointShadowActive);
     Status->Features[WorldRendererFeature_AmbientOcclusion] = StateOf(IsAoAvailable(self), frame->IsAoActive);
@@ -580,6 +596,7 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->CameraSceneLuminance = frame->CameraSceneLuminance;
     Status->ExposureBias = frame->ExposureBias;
     Status->InteriorView = self->_interior._view;
+    WorldRendererShadows_UpdateStatus(self, frame);
     Status->Features[WorldRendererFeature_SkyVisibility] = StateOf(WorldRendererSkyVisibility_IsAvailable(self),
         frame->IsSkyVisibilityActive);
     // The terrain's and the sprites' shaders take the zones too, so they run without the PBR shader as well.
@@ -851,7 +868,7 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     // The stars and the Milky Way by the sky's brightness behind them (the twilight from the sky's light).
     WorldRendererSky_PrepareNightSky(&Frame);
     // Every model's LOD and its cross-fade, then which shadow passes run and their light matrices and the sky's visibility
-    // map's box, then what every pass draws: the camera's frustum, each cascade's box, the cube's reach and the map's box
+    // map's box, then what every pass draws: the camera's frustum, each shadow level's box, the cube's reach and the map's box
     // cull, the draw distances and opacities fade.
     UpdateLods(self, &Frame, deltaSeconds);
     DecideShadows(self, &Frame);
@@ -860,6 +877,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     Error VisibilityResult = BuildVisibility(self, &Frame);
     if (VisibilityResult.Code != ErrorCode_Success)
     {
+        // The shadow levels were told they render this frame: they will not, so none of their maps is what it says.
+        WorldShadowLevels_Invalidate(&self->_shadowLevels._levels);
         return VisibilityResult;
     }
     DecidePasses(self, &Frame);
@@ -871,9 +890,9 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     // The atmosphere's tables and the haze's volume first: the sky, the stars and every lit surface read them.
     // Then the shadow maps and the sky's occupancy volume: the pre-pass, the scene and crisp passes sample them.
     WorldRendererAtmosphere_Render(self, &Frame);
-    if (Frame.IsCascadeShadowActive)
+    if (Frame.AreShadowLevelsActive)
     {
-        WorldRendererShadows_RenderCascades(self, &Frame);
+        WorldRendererShadows_RenderLevels(self, &Frame);
     }
     if (Frame.IsPointShadowActive)
     {
@@ -1037,11 +1056,12 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
     Memory_Free(Lods._data);
     Memory_Free(Lists._data);
     // Each terrain's materials and texture arrays, the copies of the model instances components, the atmosphere's
-    // tables with the render's CPU time, the light at the camera and interior lighting.
+    // tables with the render's CPU time, the light at the camera, the shadow levels and interior lighting.
     WorldRendererTerrain_LogMaterials(self);
     WorldRendererInstances_LogStatus(self);
     WorldRendererAtmosphere_LogStatus(self);
     WorldRendererLighting_LogStatus(self);
+    WorldRendererShadows_LogStatus(self);
     WorldRendererInterior_LogStatus(self);
 }
 
@@ -1161,6 +1181,16 @@ void WorldRenderer_SetContactShadowsEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_AreContactShadowsEnabled(const WorldRenderer* self)
 {
     return self->_areContactShadowsEnabled;
+}
+
+void WorldRenderer_SetShadowLevelViewEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_shadowLevels._isLevelViewEnabled = enabled;
+}
+
+bool WorldRenderer_IsShadowLevelViewEnabled(const WorldRenderer* self)
+{
+    return self->_shadowLevels._isLevelViewEnabled;
 }
 
 void WorldRenderer_SetNightVisionEnabled(WorldRenderer* self, bool enabled)

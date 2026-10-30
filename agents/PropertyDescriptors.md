@@ -44,7 +44,7 @@ static const PropertyTable ThingTable =
 {
     .Name = u8"thing", .Version = 1U, .StructSize = sizeof(Thing),
     .Descriptors = ThingProperties, .DescriptorCount = sizeof(ThingProperties) / sizeof(ThingProperties[0]),
-    .RetiredWireIds = NULL, .RetiredWireIdCount = 0U, .AfterSet = NULL, .Migrate = NULL
+    .RetiredWireIds = NULL, .RetiredWireIdCount = 0U, .AfterSet = NULL, .Migrate = NULL, .MigrateGHDF = NULL
 };
 ```
 
@@ -183,9 +183,13 @@ A property without `Persistent` is runtime state the table still copies, compare
   - **Unknown keys** (and keys of non-persistent properties) follow `PropertyReadOptions.UnknownKeyMode`: `Error` (the
     default: the read fails, naming them), `Warn` (one warning per read through the options' `Logger`, naming up to 8
     keys; without a logger it acts like `Ignore`), `Ignore`.
-  - **Migration**: when `options.DataVersion` is older than the table's `Version`, the table's `Migrate(fromVersion,
-    compound, options.Pool)` runs first and rewrites the compound in place (rename keys, convert values). No table
-    has one yet; raise `Version` together with adding the first.
+  - **Migration**: when `options.DataVersion` is older than the table's `Version` (and not 0, "current"), the table's
+    `Migrate(fromVersion, compound, options.Pool, options.Logger)` runs first and rewrites the compound in place
+    (rename keys, convert values; the logger, which may be NULL, takes its warnings). `Properties_MigrateJSON(table,
+    compound, options)` runs it on its own: a reader that reports unknown keys itself (the world files) migrates first,
+    then reports, then reads with `DataVersion` 0. A migration's error is returned with the table's name in front. A
+    table raises `Version` together with adding its migrations (the model, model instances and terrain components'
+    move their version 1 shadow tier into the shadow distance, [WorldFile.md](WorldFile.md), "Versions").
   - **Data maps** are read from their two keys (both count as known keys) with `options.Keys`, the key registry their
     keys are interned in (required when the data holds anything: the read fails without it), and
     `options.DefaultNamespace` for keys written without one. Their errors name where in the data the problem is,
@@ -193,7 +197,10 @@ A property without `Persistent` is runtime state the table still copies, compare
     that fails, for any reason, gives back the keys it interned (`KeyRegistry_TruncateTo`).
 - **GHDF.** `Properties_WriteGHDF` / `Properties_ReadGHDF`: the same as JSON with wire ids as entry ids. Unknown and
   retired ids are skipped (forward compatibility); a known id with the wrong type, a wrong array length or a broken
-  rule fails with `Deserialize`. There is no GHDF migration slot yet (a `// TODO:` in `PropertyDescriptorGHDF.c`).
+  rule fails with `Deserialize`. Migration is the same as JSON's through the table's `MigrateGHDF(fromVersion, compound,
+  options.GHDFPool, options.Logger)` (`Properties_MigrateGHDF` on its own); the GHDF pool is `PropertyReadOptions.GHDFPool`
+  (NULL by default: a migration that adds entries needs it). A table with a `Migrate` should have a `MigrateGHDF` too,
+  reading the old wire ids (retired in the table, so nothing else reads them).
 - **The `AfterSet` hook** (optional, on the table) is called after `Properties_Set` with the descriptor, and after a
   committed read or a `CopyTo` with NULL (anything may have changed). The world objects use it to advance their
   revision, so caches notice changes made through tables; every component table uses the world's

@@ -5,7 +5,7 @@
 
 /*
  * Private header (source/): slice maps, one of the modules of direct OpenGL calls (BUILDING.md, "Direct OpenGL calls";
- * GLTextureArray.h, GLDepth.h and GLReadback.h are the others). The sky's occupancy volume (interior lighting:
+ * GLTextureArray.h, GLDepth.h, GLReadback.h and GLShadowArray.h are the others). The sky's occupancy volume (interior lighting:
  * WorldInterior.h) is a 2D texture of unsigned integers, four 32-bit words a texel, whose bits are height slices; it is
  * drawn with a logic operation (XOR, then OR) instead of blending, cleared with integers, and reduced into a pyramid of
  * its own mipmap levels, each drawn from the one below. raylib has no integer textures, no logic operations and no

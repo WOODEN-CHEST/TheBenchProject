@@ -31,6 +31,11 @@ typedef struct SpriteAnimationStruct SpriteAnimation;
  * table is built from the same rows: a setting has one key, default, rule and description wherever it is stored. The
  * two tables together describe every field of WorldSpriteSettings (copy, compare and write with both).
  *
+ * SHADOW DISTANCE. A world sprite's "render" block may give a shadow distance (has_shadow_distance, shadow_distance: how
+ * far from the camera it still casts; by default as far as it is drawn) with its fixed flag, and make the sprite cast
+ * without being drawn (is_shadow_only); a shadow_distance given without has_shadow_distance has it on, as the draw
+ * distance's (and a writer must write the flag with the value, as below).
+ *
  * DRAW DISTANCE. A world sprite gives its draw distance or leaves it to its kind (has_draw_distance off): a sprite is
  * then seen WORLD_SPRITE_DEFAULT_DRAW_DISTANCE metres, a decal WORLD_SPRITE_DEFAULT_DECAL_DRAW_DISTANCE. The kind is
  * decided per placement, after its overrides, since a placement may turn a sprite into a decal. A definition that gives
@@ -62,6 +67,9 @@ typedef struct SpriteAnimationStruct SpriteAnimation;
 /** @brief The largest haze multiplier a world sprite or a placement may give (render.haze, the sprite component's
  *  haze): far beyond it every surface is the sky already. */
 #define WORLD_SPRITE_MAX_HAZE 1000.0f
+/** @brief What a world sprite's and a placement's own shadow distance start at, in metres (unused until
+ *  render.has_shadow_distance or the placement's override is on: by default a sprite casts as far as it is drawn). */
+#define WORLD_SPRITE_DEFAULT_SHADOW_DISTANCE WORLD_SPRITE_DEFAULT_DRAW_DISTANCE
 
 
 // Types.
@@ -110,6 +118,20 @@ typedef struct WorldSpriteRenderSettingsStruct
     bool OmitsPixelation;
     /** @brief Whether the sprite casts shadows (cutout sprites that are not decals; it receives them either way). */
     bool CastsShadows;
+    /** @brief Whether ShadowDistance is a shadow distance of its own (the row has_shadow_distance; off: the sprite casts
+     *  as far as it is drawn). Once resolved for a placement, whether the placement or its world sprite gives one. */
+    bool HasShadowDistance;
+    /** @brief How far from the camera the sprite still casts, in metres, before the player's shadow_distance_scale and
+     *  the zoom: above 0 in a world sprite (meaningful while HasShadowDistance). Once resolved for a placement: its own
+     *  (or its world sprite's), or without one its draw distance in effect, times its shadow_distance_multiplier; without
+     *  its own the renderer scales it as the draw distance before the shadow scale (WorldModelSettings.ShadowDistance's
+     *  rule). */
+    float ShadowDistance;
+    /** @brief Whether the player's shadow_distance_scale leaves the shadow distance as it is. */
+    bool IsShadowDistanceFixed;
+    /** @brief Whether the sprite only casts and is not drawn (a stand-in shape, something out of sight throwing a shadow
+     *  into view). */
+    bool IsShadowOnly;
     /** @brief How hazy the sprite looks at a distance: it multiplies the haze in front of it, 1 (the default) the real
      *  air's, 0 as if the air were clear (a sign that must read from far away). In [0, WORLD_SPRITE_MAX_HAZE]. */
     float Haze;
@@ -207,8 +229,8 @@ const PropertyTable* WorldSprite_GetRenderPropertyTable(void);
 
 /**
  * @brief The settings a world sprite and a placement start from: the tables' defaults (a centred, camera-facing,
- *        lit cutout sprite at WORLD_SPRITE_DEFAULT_PIXELS_PER_UNIT, outlined, casting shadows) and no draw distance of
- *        its own (the kind's default applies).
+ *        lit cutout sprite at WORLD_SPRITE_DEFAULT_PIXELS_PER_UNIT, outlined, drawn and casting shadows as far as it is
+ *        drawn) and no draw distance of its own (the kind's default applies).
  * @returns The settings.
  */
 WorldSpriteSettings WorldSpriteSettings_CreateDefault(void);

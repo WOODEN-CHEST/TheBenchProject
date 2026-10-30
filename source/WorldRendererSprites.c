@@ -178,7 +178,7 @@ static void DrawLitSprite(WorldRenderer* self, const WorldRenderSprite* sprite, 
     GetFadedDraw(sprite, fade, &DitherFade, &Tint);
 
     SetShaderValue(RayShader, self->_sprites._locUvRect, sprite->UvRect, SHADER_UNIFORM_VEC4);
-    SetShaderValueMatrix(RayShader, self->_sprites._locShadowModel, matrices->CascadeTransform);
+    SetShaderValueMatrix(RayShader, self->_sprites._locShadowModel, matrices->ShadowTransform);
     SetShaderValueMatrix(RayShader, self->_sprites._locPointShadowModel, matrices->PointTransform);
     SetShaderValue(RayShader, self->_sprites._locDecalOffset, &DecalOffset, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_sprites._locAlphaMode, &AlphaMode, SHADER_UNIFORM_INT);
@@ -258,7 +258,7 @@ void WorldRendererSprites_PrepareFrame(WorldRenderer* self, const WorldRenderFra
     Vector3 CameraUp = { frame->View.m1, frame->View.m5, frame->View.m9 };
     Vector3 CameraForward = { -frame->View.m2, -frame->View.m6, -frame->View.m10 };
     SpriteViewer CameraViewer = SpriteViewer_FromPoint(CameraPosition, CameraUp);
-    SpriteViewer CascadeViewer = SpriteViewer_FromDirection(frame->ShadowDirection, WorldUp);
+    SpriteViewer LevelViewer = SpriteViewer_FromDirection(frame->ShadowDirection, WorldUp);
     const WorldRenderLight* PointLight = GetPointShadowLight(self, frame);
     SpriteViewer PointViewer = SpriteViewer_FromPoint((PointLight != NULL) ? PointLight->RenderPosition
         : CameraPosition, WorldUp);
@@ -270,14 +270,14 @@ void WorldRendererSprites_PrepareFrame(WorldRenderer* self, const WorldRenderFra
         if (Sprite->Shape.Orientation == WorldSpriteOrientation_Fixed)
         {
             Entry.CameraTransform = Sprite->FixedTransform;
-            Entry.CascadeTransform = Sprite->FixedTransform;
+            Entry.ShadowTransform = Sprite->FixedTransform;
             Entry.PointTransform = Sprite->FixedTransform;
         }
         else
         {
             Entry.CameraTransform = SpriteTransform_GetMatrix(&Sprite->Shape, &CameraViewer);
-            Entry.CascadeTransform = frame->IsCascadeShadowActive
-                ? SpriteTransform_GetMatrix(&Sprite->Shape, &CascadeViewer) : Entry.CameraTransform;
+            Entry.ShadowTransform = frame->AreShadowLevelsActive
+                ? SpriteTransform_GetMatrix(&Sprite->Shape, &LevelViewer) : Entry.CameraTransform;
             Entry.PointTransform = (PointLight != NULL)
                 ? SpriteTransform_GetMatrix(&Sprite->Shape, &PointViewer) : Entry.CameraTransform;
         }

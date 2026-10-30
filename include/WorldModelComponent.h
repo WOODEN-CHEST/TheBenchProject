@@ -35,14 +35,23 @@
  * them into the switch distances in effect; the renderer measures the distance, adds the player's lod_distance_scale and
  * the zoom, and cross-fades every change.
  *
+ * SHADOWS. Besides casting at all (casts_shadows), a placement may give its own shadow distance (how far from the camera
+ * it still casts; by default as far as it is drawn), scale the one in effect (shadow_distance_multiplier, a plain
+ * multiplier like the draw distance's), keep it fixed against the player's shadow quality, only cast and not be drawn,
+ * cast from both faces, or cast with one LOD at every distance (overrides_shadow_lod with shadow_lod; without it the
+ * renderer casts the drawn LOD near and coarser ones far out).
+ *
  * Added with World_AddComponent(world, id, WorldComponentType_Model, &component); reach its fields with
- * WorldModelComponent_FromComponent. Its properties are the rows of its table ("model_component"), in this order:
- * world_model, uses_variant, variant, overrides_has_outline, has_outline, overrides_omit_pixelation, omit_pixelation,
- * overrides_shadow_tier, shadow_tier ("both" / "near" / "far"), overrides_casts_shadows, casts_shadows, overrides_haze,
- * haze, overrides_occludes_sky, occludes_sky, overrides_draw_distance, draw_distance, draw_distance_multiplier,
- * overrides_is_draw_distance_fixed,
- * is_draw_distance_fixed, overrides_lod_distances, lod_distances, lod_distance_multiplier, is_lod_forced and forced_lod.
- * Every change advances the component's revision (WorldComponent_GetRevision).
+ * WorldModelComponent_FromComponent. Its properties are the rows of its table ("model_component", version 2), in this
+ * order: world_model, uses_variant, variant, overrides_has_outline, has_outline, overrides_omit_pixelation,
+ * omit_pixelation, overrides_casts_shadows, casts_shadows, overrides_shadow_distance, shadow_distance,
+ * shadow_distance_multiplier, overrides_is_shadow_distance_fixed, is_shadow_distance_fixed, overrides_is_shadow_only,
+ * is_shadow_only, overrides_has_two_sided_shadows, has_two_sided_shadows, overrides_shadow_lod, shadow_lod,
+ * overrides_haze, haze, overrides_occludes_sky, occludes_sky, overrides_draw_distance, draw_distance,
+ * draw_distance_multiplier, overrides_is_draw_distance_fixed, is_draw_distance_fixed, overrides_lod_distances,
+ * lod_distances, lod_distance_multiplier, is_lod_forced and forced_lod. Older world files' shadow tier is read into the
+ * shadow distance (source/WorldModelComponentInternal.h). Every change advances the component's revision
+ * (WorldComponent_GetRevision).
  */
 
 
@@ -61,8 +70,6 @@ typedef enum WorldModelSettingEnum
     WorldModelSetting_HasOutline,
     /** @brief Drawing at full resolution (omit_pixelation, flag overrides_omit_pixelation). */
     WorldModelSetting_OmitPixelation,
-    /** @brief The shadow cascades (shadow_tier, flag overrides_shadow_tier). */
-    WorldModelSetting_ShadowTier,
     /** @brief Casting shadows (casts_shadows, flag overrides_casts_shadows). */
     WorldModelSetting_CastsShadows,
     /** @brief The draw distance (draw_distance, flag overrides_draw_distance). */
@@ -76,6 +83,17 @@ typedef enum WorldModelSettingEnum
     WorldModelSetting_Haze,
     /** @brief Keeping the sky's light off what lies under it (occludes_sky, flag overrides_occludes_sky). */
     WorldModelSetting_OccludesSky,
+    /** @brief How far from the camera it still casts (shadow_distance, flag overrides_shadow_distance). */
+    WorldModelSetting_ShadowDistance,
+    /** @brief Keeping the shadow distance fixed against the shadow quality setting (is_shadow_distance_fixed, flag
+     *  overrides_is_shadow_distance_fixed). */
+    WorldModelSetting_IsShadowDistanceFixed,
+    /** @brief Casting without being drawn (is_shadow_only, flag overrides_is_shadow_only). */
+    WorldModelSetting_IsShadowOnly,
+    /** @brief Casting from both faces (has_two_sided_shadows, flag overrides_has_two_sided_shadows). */
+    WorldModelSetting_HasTwoSidedShadows,
+    /** @brief The LOD it casts with (shadow_lod, flag overrides_shadow_lod). */
+    WorldModelSetting_ShadowLod,
     /** @brief The number of settings; not a setting. */
     WorldModelSetting_Count
 } WorldModelSetting;
@@ -103,14 +121,35 @@ typedef struct WorldModelComponentStruct
     bool _overridesOmitPixelation;
     /** @brief This placement's "drawn at full resolution over the pixelated image" (default false). */
     bool _omitPixelation;
-    /** @brief Whether _shadowTier replaces the world model's (default false). */
-    bool _overridesShadowTier;
-    /** @brief This placement's shadow cascade(s) (default WorldShadowTier_Both). */
-    WorldShadowTier _shadowTier;
     /** @brief Whether _castsShadows replaces the world model's (default false). */
     bool _overridesCastsShadows;
     /** @brief This placement's "casts shadows" (default true). */
     bool _castsShadows;
+    /** @brief Whether _shadowDistance is this placement's shadow distance (default false: its world model's, or as far
+     *  as it is drawn). */
+    bool _overridesShadowDistance;
+    /** @brief This placement's shadow distance, in metres, above 0 (default WORLD_MODEL_DEFAULT_SHADOW_DISTANCE). */
+    float _shadowDistance;
+    /** @brief Multiplies the shadow distance in effect (the placement's, the world model's, or the draw distance without
+     *  either), above 0 (default 1). A plain setting, not an override. */
+    float _shadowDistanceMultiplier;
+    /** @brief Whether _isShadowDistanceFixed replaces the world model's (default false). */
+    bool _overridesIsShadowDistanceFixed;
+    /** @brief This placement's "the shadow quality setting leaves the shadow distance as it is" (default false). */
+    bool _isShadowDistanceFixed;
+    /** @brief Whether _isShadowOnly replaces the world model's (default false). */
+    bool _overridesIsShadowOnly;
+    /** @brief This placement's "casts but is not drawn" (default false). */
+    bool _isShadowOnly;
+    /** @brief Whether _hasTwoSidedShadows replaces the world model's (default false). */
+    bool _overridesHasTwoSidedShadows;
+    /** @brief This placement's "casts from both faces" (default false). */
+    bool _hasTwoSidedShadows;
+    /** @brief Whether the placement casts with _shadowLod (default false: its world model's choice). */
+    bool _overridesShadowLod;
+    /** @brief The LOD this placement casts with while _overridesShadowLod is on, 0 the finest (default 0); past the
+     *  world model's last LOD, its last. Kept while the flag is off. */
+    uint32_t _shadowLod;
     /** @brief Whether _haze replaces the world model's (default false). */
     bool _overridesHaze;
     /** @brief This placement's haze multiplier, in [0, WORLD_MODEL_MAX_HAZE] (default 1: the real air's haze; 0 as if the
@@ -298,24 +337,6 @@ static inline bool WorldModelComponent_OmitsPixelation(const WorldModelComponent
 Error WorldModelComponent_SetOmitsPixelation(WorldModelComponent* self, bool omitPixelation);
 
 /**
- * @brief Returns this placement's own shadow cascade(s) (they apply while WorldModelSetting_ShadowTier is overridden).
- * @param self The model component; must not be NULL.
- * @returns The tier.
- */
-static inline WorldShadowTier WorldModelComponent_GetShadowTier(const WorldModelComponent* self)
-{
-    return self->_shadowTier;
-}
-
-/**
- * @brief Sets this placement's own shadow cascade(s) (they apply while WorldModelSetting_ShadowTier is overridden).
- * @param self The model component; must not be NULL.
- * @param shadowTier A WorldShadowTier value.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for any other value.
- */
-Error WorldModelComponent_SetShadowTier(WorldModelComponent* self, WorldShadowTier shadowTier);
-
-/**
  * @brief Returns this placement's own "casts shadows" (it applies while WorldModelSetting_CastsShadows is overridden).
  * @param self The model component; must not be NULL.
  * @returns true if it casts shadows.
@@ -333,6 +354,124 @@ static inline bool WorldModelComponent_CastsShadows(const WorldModelComponent* s
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
  */
 Error WorldModelComponent_SetCastsShadows(WorldModelComponent* self, bool castsShadows);
+
+/**
+ * @brief Returns this placement's own shadow distance (it applies while WorldModelSetting_ShadowDistance is overridden).
+ * @param self The model component; must not be NULL.
+ * @returns Metres, above 0.
+ */
+static inline float WorldModelComponent_GetShadowDistance(const WorldModelComponent* self)
+{
+    return self->_shadowDistance;
+}
+
+/**
+ * @brief Sets this placement's own shadow distance (it applies while WorldModelSetting_ShadowDistance is overridden):
+ *        how far from the camera it still casts.
+ * @param self The model component; must not be NULL.
+ * @param shadowDistance Metres; finite and above 0.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for a value that is not
+ *          finite or not above 0.
+ */
+Error WorldModelComponent_SetShadowDistance(WorldModelComponent* self, float shadowDistance);
+
+/**
+ * @brief Returns the shadow distance multiplier: it multiplies the shadow distance in effect (0.5 = casts half as far).
+ * @param self The model component; must not be NULL.
+ * @returns The multiplier, above 0 (default 1).
+ */
+static inline float WorldModelComponent_GetShadowDistanceMultiplier(const WorldModelComponent* self)
+{
+    return self->_shadowDistanceMultiplier;
+}
+
+/**
+ * @brief Sets the shadow distance multiplier (it multiplies the placement's or the world model's shadow distance, or the
+ *        draw distance in effect when neither gives one).
+ * @param self The model component; must not be NULL.
+ * @param multiplier Finite and above 0; 1 changes nothing.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for a value that is not
+ *          finite or not above 0.
+ */
+Error WorldModelComponent_SetShadowDistanceMultiplier(WorldModelComponent* self, float multiplier);
+
+/**
+ * @brief Returns this placement's own "the shadow quality setting leaves the shadow distance as it is" (it applies while
+ *        WorldModelSetting_IsShadowDistanceFixed is overridden).
+ * @param self The model component; must not be NULL.
+ * @returns true if fixed.
+ */
+static inline bool WorldModelComponent_IsShadowDistanceFixed(const WorldModelComponent* self)
+{
+    return self->_isShadowDistanceFixed;
+}
+
+/**
+ * @brief Sets this placement's own "the shadow quality setting leaves the shadow distance as it is" (it applies while
+ *        WorldModelSetting_IsShadowDistanceFixed is overridden).
+ * @param self The model component; must not be NULL.
+ * @param isFixed Whether the player's shadow_distance_scale leaves the shadow distance as it is.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error WorldModelComponent_SetIsShadowDistanceFixed(WorldModelComponent* self, bool isFixed);
+
+/**
+ * @brief Returns this placement's own "casts but is not drawn" (it applies while WorldModelSetting_IsShadowOnly is
+ *        overridden).
+ * @param self The model component; must not be NULL.
+ * @returns true if it only casts.
+ */
+static inline bool WorldModelComponent_IsShadowOnly(const WorldModelComponent* self)
+{
+    return self->_isShadowOnly;
+}
+
+/**
+ * @brief Sets this placement's own "casts but is not drawn" (it applies while WorldModelSetting_IsShadowOnly is
+ *        overridden).
+ * @param self The model component; must not be NULL.
+ * @param isShadowOnly Whether it only casts.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error WorldModelComponent_SetIsShadowOnly(WorldModelComponent* self, bool isShadowOnly);
+
+/**
+ * @brief Returns this placement's own "casts from both faces" (it applies while WorldModelSetting_HasTwoSidedShadows is
+ *        overridden).
+ * @param self The model component; must not be NULL.
+ * @returns true if it casts from both faces.
+ */
+static inline bool WorldModelComponent_HasTwoSidedShadows(const WorldModelComponent* self)
+{
+    return self->_hasTwoSidedShadows;
+}
+
+/**
+ * @brief Sets this placement's own "casts from both faces" (it applies while WorldModelSetting_HasTwoSidedShadows is
+ *        overridden).
+ * @param self The model component; must not be NULL.
+ * @param hasTwoSidedShadows Whether it casts from both faces.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error WorldModelComponent_SetHasTwoSidedShadows(WorldModelComponent* self, bool hasTwoSidedShadows);
+
+/**
+ * @brief Returns the LOD this placement casts with while WorldModelSetting_ShadowLod is overridden, 0 the finest.
+ * @param self The model component; must not be NULL.
+ * @returns The LOD's index.
+ */
+static inline uint32_t WorldModelComponent_GetShadowLod(const WorldModelComponent* self)
+{
+    return self->_shadowLod;
+}
+
+/**
+ * @brief Sets the LOD this placement casts with (it applies while WorldModelSetting_ShadowLod is overridden).
+ * @param self The model component; must not be NULL.
+ * @param lod The LOD's index, 0 the finest; any value: one past the world model's last LOD casts its last.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error WorldModelComponent_SetShadowLod(WorldModelComponent* self, uint32_t lod);
 
 /**
  * @brief Returns this placement's own haze multiplier (it applies while WorldModelSetting_Haze is overridden).
@@ -537,14 +676,17 @@ bool WorldModelComponent_ResolveLodSettings(const WorldModelComponent* self, con
 
 /**
  * @brief The settings that apply to this placement: each setting from the world model, or the placement's own value
- *        while its override flag is on (the haze too), and the draw distance in effect times the multiplier.
+ *        while its override flag is on (the haze and the shadows too), the draw distance in effect times its
+ *        multiplier, and the shadow distance in effect (the placement's, else the world model's, else the draw distance
+ *        in effect; HasShadowDistance says whether it is one of their own) times its multiplier.
  *
- * A pure function (the renderer calls it for every model each frame).
+ * A pure function (the renderer calls it for every model each frame). The shadow LOD is the raw index (HasShadowLod
+ * while the placement or its world model gives one); the renderer clamps it to the LODs there are.
  * @param self The model component; must not be NULL.
  * @param modelSettings The world model's settings (WorldModel_GetSettings), or WorldModelSettings_CreateDefault()
  *        while it is not resolved; must not be NULL.
- * @returns The settings in effect. Their draw distance is at least 0: +infinity when the product overflows, 0 when two
- *          tiny factors underflow (nothing within reach is drawn then).
+ * @returns The settings in effect. Their draw and shadow distances are at least 0: +infinity when a product overflows, 0
+ *          when two tiny factors underflow (nothing within reach is drawn, or casts, then).
  */
 WorldModelSettings WorldModelComponent_ResolveSettings(const WorldModelComponent* self,
     const WorldModelSettings* modelSettings);

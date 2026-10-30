@@ -1,9 +1,9 @@
 #version 330
 
 // The terrain's lit fragment stage: up to sixteen terrain materials blended per pixel from texture arrays, lit as
-// world_pbr lights a dielectric (the sun and the moon with the cascades'
-// shadow, the point lights, the ambient with the screen's AO, the night vision and the haze), dithered by the draw's
-// fade. The blend, in order (its C mirror is source/TerrainBlend.c: change both together):
+// world_pbr lights a dielectric (the sun and the moon with the shadow levels' shadow, the point lights, the ambient with
+// the screen's AO, the night vision and the haze), dithered by the draw's fade. The blend, in order (its C mirror is
+// source/TerrainBlend.c: change both together):
 // 1. the painted weights, interpolated and divided by their sum (none at all: the first material);
 // 2. the terrain's rules, in order: each moves its strength (opacity x slope x height x noise) of every covered
 //    material's weight to its own; a face material's faces are left as they are;
@@ -464,7 +464,7 @@ void main()
     vec3 v = normalize(-fragPosition); // render space: the camera at the origin
     vec3 f0 = vec3(0.04);
 
-    // The sun and the moon, darkened by the cascades' shadow, read off the triangle's own face (what the shadow map
+    // The sun and the moon, darkened by the shadow levels' shadow, read off the triangle's own face (what the shadow map
     // holds); then the point lights, the cube-shadow light read at the fragment itself.
     SkyLightValues light = SkyLightAt(fragPosition);
     float shadowAmount = FaceShadowAmount(fragPosition, FaceNormal(fragPosition, geometric));
@@ -476,6 +476,7 @@ void main()
     vec3 color = NightVisionOf(ambient + direct + pointTotal);
     color = ApplyAerialPerspective(color, fragPosition);
     color = InteriorViewColor(color, fragPosition, geometric, skyVisibility);
+    color = ShadowLevelViewColor(color, fragPosition);
 
     // The fade is tested last, after every derivative and mipmapped fetch above, so those stay defined for the pixels
     // that are drawn.

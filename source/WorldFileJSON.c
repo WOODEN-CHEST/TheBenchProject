@@ -115,6 +115,17 @@ static uint64_t GetRequestedParent(JSONCompound* json)
     return ParentId;
 }
 
+/* A table's block brought up to the table's current version (its migration, for a file of an older format), before the
+ * load notes its unknown keys; @p outOptions then reads it as current data. */
+static Error MigrateBlock(const WorldFileLoad* load, const PropertyTable* table, JSONCompound* block,
+    PropertyReadOptions* outOptions)
+{
+    *outOptions = WorldFileLoad_GetTableOptions(load, table);
+    Error Result = Properties_MigrateJSON(table, block, outOptions);
+    outOptions->DataVersion = 0U;
+    return Result;
+}
+
 /* One component block: a known type is added and read through its table, an unknown one noted and skipped. */
 static Error ReadComponent(WorldFileLoad* load, WorldObject* object, const JSONCompoundEntry* entry)
 {
@@ -134,14 +145,19 @@ static Error ReadComponent(WorldFileLoad* load, WorldObject* object, const JSONC
 
     const PropertyTable* Table = World_GetComponentTypeInfo(load->Target, Type)->Table;
     WorldComponent* Component = NULL;
+    PropertyReadOptions Options;
     Error Result = WorldFileLoad_AddComponent(load, object, Type, &Component);
     if (Result.Code == ErrorCode_Success)
     {
+        Result = MigrateBlock(load, Table, entry->Value.Value.Compound, &Options);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return WorldFileLoad_WrapObject(load, Id, &Result);
+        }
         Result = NoteUnknownKeys(load, entry->Value.Value.Compound, Table, NULL, 0U, Table->Name, Id);
     }
     if (Result.Code == ErrorCode_Success)
     {
-        PropertyReadOptions Options = WorldFileLoad_GetTableOptions(load, Table);
         Result = Properties_ReadJSON(Table, entry->Value.Value.Compound, Component, &Options);
         if (Result.Code != ErrorCode_Success)
         {
@@ -196,15 +212,19 @@ static Error ReadObject(WorldFileLoad* load, JSONCompound* json, WorldObject* ob
 {
     uint64_t Id = WorldObject_GetId(object);
     const PropertyTable* Table = WorldObject_GetPropertyTable();
-    Error Result = NoteUnknownKeys(load, json, Table, ObjectKeys, sizeof(ObjectKeys) / sizeof(ObjectKeys[0]),
-        Table->Name, Id);
+    PropertyReadOptions Options;
+    Error Result = MigrateBlock(load, Table, json, &Options);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return WorldFileLoad_WrapObject(load, Id, &Result);
+    }
+    Result = NoteUnknownKeys(load, json, Table, ObjectKeys, sizeof(ObjectKeys) / sizeof(ObjectKeys[0]), Table->Name, Id);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
     uint64_t RefusedBefore = World_GetRefusedParentCount(load->Target);
-    PropertyReadOptions Options = WorldFileLoad_GetTableOptions(load, Table);
     Result = Properties_ReadJSON(Table, json, object, &Options);
     if (Result.Code != ErrorCode_Success)
     {
@@ -324,10 +344,15 @@ static Error ReadEnvironment(WorldFileLoad* load, JSONCompound* root)
         return Error_Construct2(load->FormatErrorCode, "\"environment\" must be an object.");
     }
     const PropertyTable* Table = WorldEnvironment_GetPropertyTable();
+    PropertyReadOptions Options;
+    Result = MigrateBlock(load, Table, Value.Value.Compound, &Options);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return WorldFileLoad_Wrap(load, "environment", &Result);
+    }
     Result = NoteUnknownKeys(load, Value.Value.Compound, Table, NULL, 0U, Table->Name, 0U);
     if (Result.Code == ErrorCode_Success)
     {
-        PropertyReadOptions Options = WorldFileLoad_GetTableOptions(load, Table);
         Result = Properties_ReadJSON(Table, Value.Value.Compound, World_GetEnvironment(load->Target), &Options);
         if (Result.Code != ErrorCode_Success)
         {
@@ -576,6 +601,7 @@ Error WorldFile_ReadJSON(const unsigned char* bytes, size_t byteCount, const Wor
         Result = WorldFileLoad_Begin(&Load, options, outWorld, ErrorCode_InvalidJSON);
         if (Result.Code == ErrorCode_Success)
         {
+            Load.JSONPool = Pool;
             Result = ReadWorld(&Load, Root.Value.Compound);
         }
     }

@@ -145,8 +145,19 @@ static uint64_t GetRequestedParent(GHDFCompound* compound)
     return IsFound ? ParentId : 0U;
 }
 
-/* One component entry: a known type is added and read through its table, an unknown one noted and skipped. */
-/* The component entry @p entryId of @p components: a component of a known type, read through its table. */
+/* A table's block brought up to the table's current version (its migration, for a file of an older format), before the
+ * load notes its unknown entries; @p outOptions then reads it as current data. */
+static Error MigrateBlock(const WorldFileLoad* load, const PropertyTable* table, GHDFCompound* block,
+    PropertyReadOptions* outOptions)
+{
+    *outOptions = WorldFileLoad_GetTableOptions(load, table);
+    Error Result = Properties_MigrateGHDF(table, block, outOptions);
+    outOptions->DataVersion = 0U;
+    return Result;
+}
+
+/* The component entry @p entryId of @p components: a component of a known type, read through its table (an unknown type
+ * is noted and skipped). */
 static Error ReadComponent(WorldFileLoad* load, WorldObject* object, GHDFCompound* components, GHDFEntryID entryId)
 {
     uint64_t Id = WorldObject_GetId(object);
@@ -168,14 +179,19 @@ static Error ReadComponent(WorldFileLoad* load, WorldObject* object, GHDFCompoun
     }
 
     WorldComponent* Component = NULL;
+    PropertyReadOptions Options;
     Result = WorldFileLoad_AddComponent(load, object, Type, &Component);
     if (Result.Code == ErrorCode_Success)
     {
+        Result = MigrateBlock(load, Info->Table, Block.Value.Compound, &Options);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return WorldFileLoad_WrapObject(load, Id, &Result);
+        }
         Result = NoteUnknownEntries(load, Block.Value.Compound, Info->Table, NULL, 0U, Info->Table->Name, Id);
     }
     if (Result.Code == ErrorCode_Success)
     {
-        PropertyReadOptions Options = WorldFileLoad_GetTableOptions(load, Info->Table);
         Result = Properties_ReadGHDF(Info->Table, Block.Value.Compound, Component, &Options);
         if (Result.Code != ErrorCode_Success)
         {
@@ -229,15 +245,20 @@ static Error ReadObject(WorldFileLoad* load, GHDFCompound* compound, WorldObject
 {
     uint64_t Id = WorldObject_GetId(object);
     const PropertyTable* Table = WorldObject_GetPropertyTable();
-    Error Result = NoteUnknownEntries(load, compound, Table, ObjectIds, sizeof(ObjectIds) / sizeof(ObjectIds[0]),
-        Table->Name, Id);
+    PropertyReadOptions Options;
+    Error Result = MigrateBlock(load, Table, compound, &Options);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return WorldFileLoad_WrapObject(load, Id, &Result);
+    }
+    Result = NoteUnknownEntries(load, compound, Table, ObjectIds, sizeof(ObjectIds) / sizeof(ObjectIds[0]), Table->Name,
+        Id);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
 
     uint64_t RefusedBefore = World_GetRefusedParentCount(load->Target);
-    PropertyReadOptions Options = WorldFileLoad_GetTableOptions(load, Table);
     Result = Properties_ReadGHDF(Table, compound, object, &Options);
     if (Result.Code != ErrorCode_Success)
     {
@@ -335,10 +356,15 @@ static Error ReadEnvironment(WorldFileLoad* load, GHDFCompound* root)
         return Result;
     }
     const PropertyTable* Table = WorldEnvironment_GetPropertyTable();
+    PropertyReadOptions Options;
+    Result = MigrateBlock(load, Table, Environment, &Options);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return WorldFileLoad_Wrap(load, "environment", &Result);
+    }
     Result = NoteUnknownEntries(load, Environment, Table, NULL, 0U, Table->Name, 0U);
     if (Result.Code == ErrorCode_Success)
     {
-        PropertyReadOptions Options = WorldFileLoad_GetTableOptions(load, Table);
         Result = Properties_ReadGHDF(Table, Environment, World_GetEnvironment(load->Target), &Options);
         if (Result.Code != ErrorCode_Success)
         {
@@ -621,6 +647,7 @@ Error WorldFile_ReadGHDF(const unsigned char* bytes, size_t byteCount, const Wor
         Result = WorldFileLoad_Begin(&Load, options, outWorld, ErrorCode_Deserialize);
         if (Result.Code == ErrorCode_Success)
         {
+            Load.GHDFPool = Pool;
             Result = ReadWorld(&Load, Root);
         }
     }

@@ -57,8 +57,11 @@ static bool AreNamesEqual(const unsigned char* a, const char* b)
 /* Field by field (the structs have padding). */
 static bool AreSettingsEqual(const TerrainSettings* a, const TerrainSettings* b)
 {
-    return (a->Render.HasOutline == b->Render.HasOutline) && (a->Render.ShadowTier == b->Render.ShadowTier)
-        && (a->Render.CastsShadows == b->Render.CastsShadows) && (a->Render.DrawDistance == b->Render.DrawDistance)
+    return (a->Render.HasOutline == b->Render.HasOutline) && (a->Render.CastsShadows == b->Render.CastsShadows)
+        && (a->Render.HasShadowDistance == b->Render.HasShadowDistance)
+        && (a->Render.ShadowDistance == b->Render.ShadowDistance)
+        && (a->Render.IsShadowDistanceFixed == b->Render.IsShadowDistanceFixed)
+        && (a->Render.DrawDistance == b->Render.DrawDistance)
         && (a->Render.IsDrawDistanceFixed == b->Render.IsDrawDistanceFixed) && (a->Render.Haze == b->Render.Haze)
         && (a->Collision.IsEnabled == b->Collision.IsEnabled) && (a->Collision.Layer == b->Collision.Layer)
         && (a->Collision.HasCollidesWith == b->Collision.HasCollidesWith)
@@ -230,11 +233,59 @@ static void AMinimalDefinitionGetsTheDefaults(TestRun* run)
         const TerrainSettings* Settings = TerrainAsset_GetSettings(Loaded);
         TerrainSettings Defaults = TerrainSettings_CreateDefault();
         TEST_CHECK(run, AreSettingsEqual(Settings, &Defaults));
-        TEST_CHECK(run, Settings->Render.HasOutline && (Settings->Render.ShadowTier == WorldShadowTier_Both)
-            && Settings->Render.CastsShadows && (Settings->Render.DrawDistance == TERRAIN_DEFAULT_DRAW_DISTANCE)
+        TEST_CHECK(run, Settings->Render.HasOutline && Settings->Render.CastsShadows
+            && !Settings->Render.HasShadowDistance
+            && (Settings->Render.ShadowDistance == TERRAIN_DEFAULT_SHADOW_DISTANCE)
+            && !Settings->Render.IsShadowDistanceFixed
+            && (Settings->Render.DrawDistance == TERRAIN_DEFAULT_DRAW_DISTANCE)
             && Settings->Render.IsDrawDistanceFixed && (Settings->Render.Haze == 1.0f));
         TEST_CHECK(run, Settings->Collision.IsEnabled && (Settings->Collision.Layer == CollisionLayer_World)
             && !Settings->Collision.HasCollidesWith);
+    }
+    ClosePack(run, &Pack);
+    Memory_Free(Glb._data);
+    TestTerrain_FreeGrid(&Grid);
+}
+
+/* An older definition's render.shadow_tier is read into the shadow distance: "near" as WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE
+ * metres (or the definition's own), "far" and "both" as casting as far as it is drawn. */
+static void AnOlderDefinitionsShadowTierIsReadAsTheShadowDistance(TestRun* run)
+{
+    static const char* const Files[] =
+    {
+        "terrains/near.json", "{\"name\": \"near\", \"source\": \"model\", \"model\": \"hill\", \"materials\": "
+            "[\"grass\"], \"render\": {\"shadow_tier\": \"near\"}}",
+        "terrains/near_own.json", "{\"name\": \"near_own\", \"source\": \"model\", \"model\": \"hill\", "
+            "\"materials\": [\"grass\"], \"render\": {\"shadow_tier\": \"near\", \"shadow_distance\": 50}}",
+        "terrains/far.json", "{\"name\": \"far\", \"source\": \"model\", \"model\": \"hill\", \"materials\": "
+            "[\"grass\"], \"render\": {\"shadow_tier\": \"far\"}}",
+        "terrains/both.json", "{\"name\": \"both\", \"source\": \"model\", \"model\": \"hill\", \"materials\": "
+            "[\"grass\"], \"render\": {\"shadow_tier\": \"both\"}}",
+        NULL
+    };
+    TestTerrainGrid Grid;
+    TestTerrain_BuildGrid(&Grid, 4U, 4U, 2.0f, -4.0f, -4.0f, Slope);
+    const char* Slots[1] = { "blend" };
+    uint32_t Counts[1] = { Grid.TriangleCount };
+    GenericBuffer Glb;
+    GenericBuffer_AllocateVariable(&Glb, 0U, sizeof(unsigned char));
+    WriteGridGlb(&Grid, Slots, Counts, 1U, NULL, 0U, &Glb);
+    TerrainPack Pack;
+    static const char* const Palette[] = { "grass" };
+    if (CreatePackFiles(run, &Pack, "legacy_tier", Files) && WriteMaterials(run, &Pack, Palette, 1U)
+        && WriteBytes(run, &Pack.Root, "terrains/hill.glb", &Glb) && OpenPack(run, &Pack))
+    {
+        TerrainAsset* Near = LoadTerrain(run, &Pack, "near");
+        TerrainAsset* NearOwn = LoadTerrain(run, &Pack, "near_own");
+        TerrainAsset* Far = LoadTerrain(run, &Pack, "far");
+        TerrainAsset* Both = LoadTerrain(run, &Pack, "both");
+        TEST_CHECK(run, (Near != NULL) && TerrainAsset_GetSettings(Near)->Render.HasShadowDistance
+            && (TerrainAsset_GetSettings(Near)->Render.ShadowDistance == WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE));
+        TEST_CHECK(run, (NearOwn != NULL) && TerrainAsset_GetSettings(NearOwn)->Render.HasShadowDistance
+            && (TerrainAsset_GetSettings(NearOwn)->Render.ShadowDistance == 50.0f));
+        TEST_CHECK(run, (Far != NULL) && !TerrainAsset_GetSettings(Far)->Render.HasShadowDistance);
+        TEST_CHECK(run, (Both != NULL) && !TerrainAsset_GetSettings(Both)->Render.HasShadowDistance
+            && TerrainAsset_GetSettings(Both)->Render.CastsShadows);
     }
     ClosePack(run, &Pack);
     Memory_Free(Glb._data);
@@ -260,8 +311,9 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
         "  \"normals\": \"imported\",\n"
         "  \"blend_slot\": \"paint\",\n"
         "  \"chunk_size\": 16,\n"
-        "  \"render\": {\"has_outline\": false, \"shadow_tier\": \"near\", \"casts_shadows\": false, "
-            "\"draw_distance\": 900, \"is_draw_distance_fixed\": false, \"haze\": 0.5},\n"
+        "  \"render\": {\"has_outline\": false, \"casts_shadows\": false, \"shadow_distance\": 300, "
+            "\"is_shadow_distance_fixed\": true, \"draw_distance\": 900, \"is_draw_distance_fixed\": false, "
+            "\"haze\": 0.5},\n"
         "  \"collision\": {\"is_enabled\": false, \"layer\": \"prop\", \"collides_with\": [\"world\", \"character\"]}\n"
         "}\n",
         NULL
@@ -317,8 +369,9 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
             && (TerrainMesh_GetTriangle(Terrain, 40U)->_material == 2U));
         TEST_CHECK(run, TerrainMesh_GetTriangle(Terrain, 47U)->_flags == TERRAIN_TRIANGLE_FLAG_HOLE);
         const TerrainSettings* Settings = TerrainAsset_GetSettings(Loaded);
-        TEST_CHECK(run, !Settings->Render.HasOutline && (Settings->Render.ShadowTier == WorldShadowTier_Near)
-            && !Settings->Render.CastsShadows && (Settings->Render.DrawDistance == 900.0f)
+        TEST_CHECK(run, !Settings->Render.HasOutline && !Settings->Render.CastsShadows
+            && Settings->Render.HasShadowDistance && (Settings->Render.ShadowDistance == 300.0f)
+            && Settings->Render.IsShadowDistanceFixed && (Settings->Render.DrawDistance == 900.0f)
             && !Settings->Render.IsDrawDistanceFixed && (Settings->Render.Haze == 0.5f));
         TEST_CHECK(run, !Settings->Collision.IsEnabled && (Settings->Collision.Layer == CollisionLayer_Prop)
             && Settings->Collision.HasCollidesWith
@@ -448,7 +501,13 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
         { MODEL_HEAD "\"materials\": [\"g\"], \"render\": {\"has_outline\": \"yes\"}}",
             ErrorCode_InvalidAssetDefinition, "render.has_outline must be true or false." },
         { MODEL_HEAD "\"materials\": [\"g\"], \"render\": {\"shadow_tier\": \"middle\"}}",
-            ErrorCode_InvalidAssetDefinition, "render.shadow_tier is \"middle\"; it must be one of the" },
+            ErrorCode_InvalidAssetDefinition, "render.shadow_tier is \"middle\"; it must be \"both\", \"near\" or \"far\"." },
+        { MODEL_HEAD "\"materials\": [\"g\"], \"render\": {\"shadow_distance\": 0}}", ErrorCode_InvalidAssetDefinition,
+            "render.shadow_distance is 0; it must be above 0" },
+        { MODEL_HEAD "\"materials\": [\"g\"], \"render\": {\"shadow_distance\": \"near\"}}",
+            ErrorCode_InvalidAssetDefinition, "render.shadow_distance must be a number of metres." },
+        { MODEL_HEAD "\"materials\": [\"g\"], \"render\": {\"is_shadow_distance_fixed\": 2}}",
+            ErrorCode_InvalidAssetDefinition, "render.is_shadow_distance_fixed must be true or false." },
         { MODEL_HEAD "\"materials\": [\"g\"], \"render\": {\"draw_distance\": 0}}", ErrorCode_InvalidAssetDefinition,
             "render.draw_distance is 0; it must be above 0." },
         { MODEL_HEAD "\"materials\": [\"g\"], \"render\": {\"draw_distance\": -5}}", ErrorCode_InvalidAssetDefinition,
@@ -860,9 +919,10 @@ static void TheComponentStartsAtItsDefaults(TestRun* run)
         {
             TEST_CHECK(run, !WorldTerrainComponent_IsOverridden(Placement, (WorldTerrainSetting)Setting));
         }
-        TEST_CHECK(run, WorldTerrainComponent_HasOutline(Placement)
-            && (WorldTerrainComponent_GetShadowTier(Placement) == WorldShadowTier_Both)
-            && WorldTerrainComponent_CastsShadows(Placement)
+        TEST_CHECK(run, WorldTerrainComponent_HasOutline(Placement) && WorldTerrainComponent_CastsShadows(Placement)
+            && (WorldTerrainComponent_GetShadowDistance(Placement) == TERRAIN_DEFAULT_SHADOW_DISTANCE)
+            && (WorldTerrainComponent_GetShadowDistanceMultiplier(Placement) == 1.0f)
+            && !WorldTerrainComponent_IsShadowDistanceFixed(Placement)
             && (WorldTerrainComponent_GetDrawDistance(Placement) == TERRAIN_DEFAULT_DRAW_DISTANCE)
             && (WorldTerrainComponent_GetDrawDistanceMultiplier(Placement) == 1.0f)
             && WorldTerrainComponent_IsDrawDistanceFixed(Placement) && (WorldTerrainComponent_GetHaze(Placement) == 1.0f));
@@ -870,9 +930,13 @@ static void TheComponentStartsAtItsDefaults(TestRun* run)
             && (WorldTerrainComponent_GetCollisionLayer(Placement) == CollisionLayer_World)
             && (WorldTerrainComponent_GetCollidesWith(Placement) == CollisionLayer_GetDefaultMask(CollisionLayer_World)));
         TerrainSettings Defaults = TerrainSettings_CreateDefault();
+        Defaults.Render.DrawDistance = 2500.0f;
         TerrainSettings Resolved = WorldTerrainComponent_ResolveSettings(Placement, &Defaults);
         TEST_CHECK(run, Resolved.Collision.HasCollidesWith
             && (Resolved.Collision.CollidesWith == CollisionLayer_GetDefaultMask(CollisionLayer_World)));
+        // Without a shadow distance of its own it casts as far as it is drawn.
+        TEST_CHECK(run, !Resolved.Render.HasShadowDistance && (Resolved.Render.ShadowDistance == 2500.0f));
+        Resolved.Render.ShadowDistance = Defaults.Render.ShadowDistance;
         Resolved.Collision.HasCollidesWith = false;
         TEST_CHECK(run, AreSettingsEqual(&Resolved, &Defaults));
     }
@@ -886,7 +950,6 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
     static const char* const ValueKeys[WorldTerrainSetting_Count] =
     {
         [WorldTerrainSetting_HasOutline] = "has_outline",
-        [WorldTerrainSetting_ShadowTier] = "shadow_tier",
         [WorldTerrainSetting_CastsShadows] = "casts_shadows",
         [WorldTerrainSetting_DrawDistance] = "draw_distance",
         [WorldTerrainSetting_IsDrawDistanceFixed] = "is_draw_distance_fixed",
@@ -894,6 +957,8 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
         [WorldTerrainSetting_CollisionLayer] = "collision_layer",
         [WorldTerrainSetting_CollidesWith] = "collides_with",
         [WorldTerrainSetting_Haze] = "haze",
+        [WorldTerrainSetting_ShadowDistance] = "shadow_distance",
+        [WorldTerrainSetting_IsShadowDistanceFixed] = "is_shadow_distance_fixed",
     };
     const PropertyTable* Table = WorldTerrainComponent_GetPropertyTable();
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(Table));
@@ -944,8 +1009,10 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
         uint32_t Revision = WorldComponent_GetRevision(Component);
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetTerrain(Placement, (const unsigned char*)u8"town"));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetHasOutline(Placement, false));
-        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetShadowTier(Placement, WorldShadowTier_Far));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetCastsShadows(Placement, false));
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetShadowDistance(Placement, 700.0f));
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetShadowDistanceMultiplier(Placement, 2.0f));
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetIsShadowDistanceFixed(Placement, true));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetDrawDistance(Placement, 1500.0f));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetDrawDistanceMultiplier(Placement, 0.5f));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetIsDrawDistanceFixed(Placement, false));
@@ -954,12 +1021,13 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetCollidesWith(Placement,
             COLLISION_LAYER_BIT(CollisionLayer_Prop)));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetHaze(Placement, 0.25f));
-        TEST_CHECK(run, WorldComponent_GetRevision(Component) == (Revision + 11U));
+        TEST_CHECK(run, WorldComponent_GetRevision(Component) == (Revision + 13U));
         TEST_CHECK(run, WorldTerrainComponent_GetHaze(Placement) == 0.25f);
         TEST_CHECK(run, AreNamesEqual(WorldTerrainComponent_GetTerrain(Placement), "town")
-            && !WorldTerrainComponent_HasOutline(Placement)
-            && (WorldTerrainComponent_GetShadowTier(Placement) == WorldShadowTier_Far)
-            && !WorldTerrainComponent_CastsShadows(Placement)
+            && !WorldTerrainComponent_HasOutline(Placement) && !WorldTerrainComponent_CastsShadows(Placement)
+            && (WorldTerrainComponent_GetShadowDistance(Placement) == 700.0f)
+            && (WorldTerrainComponent_GetShadowDistanceMultiplier(Placement) == 2.0f)
+            && WorldTerrainComponent_IsShadowDistanceFixed(Placement)
             && (WorldTerrainComponent_GetDrawDistance(Placement) == 1500.0f)
             && (WorldTerrainComponent_GetDrawDistanceMultiplier(Placement) == 0.5f)
             && !WorldTerrainComponent_IsDrawDistanceFixed(Placement)
@@ -970,7 +1038,8 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
         Revision = WorldComponent_GetRevision(Component);
         TEST_CHECK_ERROR(run, WorldTerrainComponent_SetTerrain(Placement, (const unsigned char*)u8"Town"),
             ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK_ERROR(run, WorldTerrainComponent_SetShadowTier(Placement, (WorldShadowTier)9),
+        TEST_CHECK_ERROR(run, WorldTerrainComponent_SetShadowDistance(Placement, 0.0f), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldTerrainComponent_SetShadowDistanceMultiplier(Placement, NAN),
             ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, WorldTerrainComponent_SetDrawDistance(Placement, 0.0f), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, WorldTerrainComponent_SetDrawDistance(Placement, NAN), ErrorCode_ArgumentOutOfRange);
@@ -1025,15 +1094,16 @@ static void TheFlagsChooseBetweenTheTerrainAndThePlacement(TestRun* run)
         const uint32_t OwnMask = COLLISION_LAYER_BIT(CollisionLayer_Vehicle);
         TerrainSettings Asset =
         {
-            .Render = { .HasOutline = false, .ShadowTier = WorldShadowTier_Far, .CastsShadows = false,
-                .DrawDistance = 800.0f, .IsDrawDistanceFixed = true, .Haze = 0.5f },
+            .Render = { .HasOutline = false, .CastsShadows = false, .HasShadowDistance = true, .ShadowDistance = 600.0f,
+                .IsShadowDistanceFixed = true, .DrawDistance = 800.0f, .IsDrawDistanceFixed = true, .Haze = 0.5f },
             .Collision = { .IsEnabled = false, .Layer = CollisionLayer_Dynamic, .HasCollidesWith = true,
                 .CollidesWith = AssetMask }
         };
         // The placement's own values, all different from the asset's; their flags stay off for now.
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetHasOutline(Placement, true));
-        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetShadowTier(Placement, WorldShadowTier_Near));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetCastsShadows(Placement, true));
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetShadowDistance(Placement, 90.0f));
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetIsShadowDistanceFixed(Placement, false));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetDrawDistance(Placement, 300.0f));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetIsDrawDistanceFixed(Placement, false));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetIsCollisionEnabled(Placement, true));
@@ -1050,9 +1120,11 @@ static void TheFlagsChooseBetweenTheTerrainAndThePlacement(TestRun* run)
             TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetOverridden(Placement, (WorldTerrainSetting)Setting, true));
             Resolved = WorldTerrainComponent_ResolveSettings(Placement, &Asset);
             TEST_CHECK(run, Resolved.Render.HasOutline == (Setting == (int)WorldTerrainSetting_HasOutline));
-            TEST_CHECK(run, Resolved.Render.ShadowTier
-                == ((Setting == (int)WorldTerrainSetting_ShadowTier) ? WorldShadowTier_Near : WorldShadowTier_Far));
             TEST_CHECK(run, Resolved.Render.CastsShadows == (Setting == (int)WorldTerrainSetting_CastsShadows));
+            TEST_CHECK(run, Resolved.Render.HasShadowDistance && (Resolved.Render.ShadowDistance
+                == ((Setting == (int)WorldTerrainSetting_ShadowDistance) ? 90.0f : 600.0f)));
+            TEST_CHECK(run, Resolved.Render.IsShadowDistanceFixed
+                == (Setting != (int)WorldTerrainSetting_IsShadowDistanceFixed));
             TEST_CHECK(run, Resolved.Render.DrawDistance
                 == ((Setting == (int)WorldTerrainSetting_DrawDistance) ? 300.0f : 800.0f));
             TEST_CHECK(run, Resolved.Render.IsDrawDistanceFixed
@@ -1075,6 +1147,21 @@ static void TheFlagsChooseBetweenTheTerrainAndThePlacement(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetDrawDistance(Placement, 3e38f));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetDrawDistanceMultiplier(Placement, 1e10f));
         TEST_CHECK(run, isinf(WorldTerrainComponent_ResolveSettings(Placement, &Asset).Render.DrawDistance));
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetOverridden(Placement, WorldTerrainSetting_DrawDistance, false));
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetDrawDistanceMultiplier(Placement, 2.5f));
+
+        // The shadow distance in effect: the terrain's (times its multiplier, not the draw distance's), the placement's,
+        // or without either the draw distance in effect times both multipliers.
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetShadowDistanceMultiplier(Placement, 0.5f));
+        Resolved = WorldTerrainComponent_ResolveSettings(Placement, &Asset);
+        TEST_CHECK(run, Resolved.Render.HasShadowDistance && (Resolved.Render.ShadowDistance == 300.0f));
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetOverridden(Placement, WorldTerrainSetting_ShadowDistance, true));
+        TEST_CHECK(run, WorldTerrainComponent_ResolveSettings(Placement, &Asset).Render.ShadowDistance == 45.0f);
+        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetOverridden(Placement, WorldTerrainSetting_ShadowDistance, false));
+        Asset.Render.HasShadowDistance = false;
+        Resolved = WorldTerrainComponent_ResolveSettings(Placement, &Asset);
+        TEST_CHECK(run, !Resolved.Render.HasShadowDistance && (Resolved.Render.ShadowDistance == 1000.0f));
+        Asset.Render.HasShadowDistance = true;
 
         // A terrain without a mask: the default mask of the layer in effect, the asset's layer or the placement's (the
         // world layer's leaves out triggers, the prop layer's does not).
@@ -1232,6 +1319,8 @@ void TerrainAssetTests_Run(TestRun* run)
     {
         { "a_minimal_definition_gets_the_defaults", AMinimalDefinitionGetsTheDefaults },
         { "a_full_definition_reads_every_key", AFullDefinitionReadsEveryKey },
+        { "an_older_definitions_shadow_tier_is_read_as_the_shadow_distance",
+            AnOlderDefinitionsShadowTierIsReadAsTheShadowDistance },
         { "each_rule_is_refused_with_a_clear_message", EachRuleIsRefusedWithAClearMessage },
         { "the_binary_form_loads_the_saved_mesh", TheBinaryFormLoadsTheSavedMesh },
         { "a_broken_file_fails_the_load_with_the_terrains_name", ABrokenFileFailsTheLoadWithTheTerrainsName },

@@ -582,7 +582,7 @@ static void FillEnvironment(WorldEnvironment* environment)
  * (61 and 62), every one off its default. The names go through the table, which clones them and frees the old ones. */
 static const uint16_t LaterSettingWireIds[] =
     { 31U, 32U, 33U, 34U, 35U, 36U, 37U, 38U, 39U, 40U, 41U, 42U, 43U, 44U, 45U, 46U, 47U, 48U, 49U, 50U, 51U, 52U, 53U,
-        54U, 55U, 56U, 57U, 58U, 59U, 60U, 61U, 62U };
+        54U, 55U, 56U, 57U, 58U, 59U, 60U, 61U, 62U, 63U };
 
 static void FillLaterSettings(TestRun* run, WorldEnvironment* environment)
 {
@@ -616,6 +616,7 @@ static void FillLaterSettings(TestRun* run, WorldEnvironment* environment)
     environment->HorizonGroundHeight = 340.0f;
     environment->NightLightColor = (Color){ 90, 100, 255, 255 };
     environment->NightLightIntensity = 0.03f;
+    environment->ShadowReach = 1500.0f;
     const PropertyTable* Table = WorldEnvironment_GetPropertyTable();
     TEST_CHECK_SUCCESS(run, Properties_Set(Table, environment, u8"moon_texture",
         &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"pack.red_moon" }));
@@ -1952,9 +1953,10 @@ static void BigStructsReadThroughAHeapScratch(TestRun* run)
     TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
 }
 
-static Error MigrateOldWeight(uint32_t fromVersion, JSONCompound* compound, JSONObjectPool* pool)
+static Error MigrateOldWeight(uint32_t fromVersion, JSONCompound* compound, JSONObjectPool* pool, Logger* logger)
 {
     (void)pool;
+    (void)logger;
     if (fromVersion >= 2U)
     {
         return Error_CreateSuccess();
@@ -2009,8 +2011,129 @@ static void MigrationRunsForOlderData(TestRun* run)
     TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
 }
 
+/* A GHDF twin of MigrateOldWeight: version 1 held the weight under wire id 99 (an integer), the current one under its
+ * row's id (a float); counts its calls. */
+static size_t GHDFMigrationCount = 0U;
+
+static Error MigrateOldWeightGHDF(uint32_t fromVersion, GHDFCompound* compound, GHDFObjectPool* pool, Logger* logger)
+{
+    (void)pool;
+    (void)logger;
+    GHDFMigrationCount++;
+    if (fromVersion >= 2U)
+    {
+        return Error_CreateSuccess();
+    }
+    int64_t Old = 0;
+    bool IsFound = false;
+    Error Result = GameGHDF_GetOptionalSigned(compound, 99U, INT64_MIN, INT64_MAX, &Old, &IsFound);
+    if ((Result.Code != ErrorCode_Success) || !IsFound)
+    {
+        return Result;
+    }
+    GHDFObjectValue Weight = GHDFObjectValue_CreateFloat((float)Old);
+    Result = GHDFCompound_SetValue(compound, 5U, GHDF_CreateRegularType(GHDFValueType_Float), &Weight);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = GHDFCompound_Remove(compound, 99U);
+    }
+    return Result;
+}
+
+/* GHDF data of an older version runs the table's MigrateGHDF first (by itself or through Properties_MigrateGHDF), data of
+ * the current version and DataVersion 0 do not, and a migration's error fails the read with the table's name. */
+static void GHDFMigrationRunsForOlderData(TestRun* run)
+{
+    GHDFObjectPool* Pool = NULL;
+    if (!TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&Pool)))
+    {
+        return;
+    }
+    PropertyTable Table = RecordTable;
+    Table.Version = 2U;
+    Table.MigrateGHDF = MigrateOldWeightGHDF;
+    TestRecord Record;
+    GHDFCompound* Compound = NULL;
+    if (TEST_CHECK_SUCCESS(run, PropertyTable_Check(&Table)) && CheckConstruct(run, &Record)
+        && TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Pool, &Compound)))
+    {
+        PropertyReadOptions Options = PropertyReadOptions_CreateDefault();
+        Options.GHDFPool = Pool;
+        Options.DataVersion = 1U;
+        TEST_CHECK_SUCCESS(run, GameGHDF_PutSigned(Compound, 99U, 6));
+        GHDFMigrationCount = 0U;
+        TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&Table, Compound, &Record, &Options));
+        TEST_CHECK(run, (Record.Weight == 6.0f) && (GHDFMigrationCount == 1U));
+        // The current version and "the current one" (0) run nothing; so does a table without the slot.
+        TEST_CHECK_SUCCESS(run, GameGHDF_PutSigned(Compound, 99U, 7));
+        Options.DataVersion = 2U;
+        TEST_CHECK_SUCCESS(run, Properties_MigrateGHDF(&Table, Compound, &Options));
+        Options.DataVersion = 0U;
+        TEST_CHECK_SUCCESS(run, Properties_MigrateGHDF(&Table, Compound, &Options));
+        Options.DataVersion = 1U;
+        TEST_CHECK_SUCCESS(run, Properties_MigrateGHDF(&RecordTable, Compound, &Options));
+        TEST_CHECK(run, GHDFMigrationCount == 1U);
+        // Called directly, it upgrades in place: the read that follows reads the current data.
+        TEST_CHECK_SUCCESS(run, Properties_MigrateGHDF(&Table, Compound, &Options));
+        Options.DataVersion = 0U;
+        TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&Table, Compound, &Record, &Options));
+        TEST_CHECK(run, (Record.Weight == 7.0f) && (GHDFMigrationCount == 2U));
+        // A migration's error fails the read, the record unchanged, the message naming the table.
+        GHDFObjectValue Text = { .Type = GHDFValueType_Boolean, .Value.Boolean = true };
+        TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Compound, 99U, GHDF_CreateRegularType(GHDFValueType_Boolean),
+            &Text));
+        Options.DataVersion = 1U;
+        const char* const Fragments[] = { "test_record", NULL };
+        TestText_CheckErrorMessage(run, Properties_ReadGHDF(&Table, Compound, &Record, &Options), ErrorCode_Deserialize,
+            Fragments);
+        TEST_CHECK(run, Record.Weight == 7.0f);
+        Properties_Deconstruct(&Table, &Record);
+    }
+    if (Compound != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Compound, true));
+    }
+    TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(Pool));
+}
+
+/* Properties_MigrateJSON upgrades JSON data in place without reading it (a reader that reports unknown keys first);
+ * nothing for the current version, for 0 or for a table without a Migrate. */
+static void JSONMigrationRunsOnItsOwn(TestRun* run)
+{
+    JSONObjectPool* Pool = NULL;
+    if (!TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)))
+    {
+        return;
+    }
+    PropertyTable Table = RecordTable;
+    Table.Version = 2U;
+    Table.Migrate = MigrateOldWeight;
+    JSONObjectValue Value;
+    if (TestText_ParseJSON(run, Pool, "{\"old_weight\": 6}", &Value))
+    {
+        PropertyReadOptions Options = PropertyReadOptions_CreateDefault();
+        Options.Pool = Pool;
+        Options.DataVersion = 2U;
+        TEST_CHECK_SUCCESS(run, Properties_MigrateJSON(&Table, Value.Value.Compound, &Options));
+        Options.DataVersion = 1U;
+        TEST_CHECK_SUCCESS(run, Properties_MigrateJSON(&RecordTable, Value.Value.Compound, &Options));
+        JSONObjectValue Found;
+        bool IsFound = false;
+        TEST_CHECK(run, TEST_CHECK_SUCCESS(run, JSONCompound_GetOptional(Value.Value.Compound, u8"old_weight", &Found,
+            &IsFound)) && IsFound);
+        TEST_CHECK_SUCCESS(run, Properties_MigrateJSON(&Table, Value.Value.Compound, &Options));
+        TEST_CHECK(run, TEST_CHECK_SUCCESS(run, JSONCompound_GetOptional(Value.Value.Compound, u8"old_weight", &Found,
+            &IsFound)) && !IsFound);
+        TEST_CHECK(run, TEST_CHECK_SUCCESS(run, JSONCompound_GetOptional(Value.Value.Compound, u8"weight", &Found,
+            &IsFound)) && IsFound);
+        TEST_CHECK_ERROR(run, Properties_MigrateJSON(NULL, Value.Value.Compound, &Options), ErrorCode_IllegalArgument);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+    }
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+}
+
 /* The table writes the same GHDF tree as the reference encoder, for defaults and for changed values, except for the
- * retired ids 2 and 3 (left out), the date (id 30) and the settings the reference lacks (ids 31 to 62, left out of the
+ * retired ids 2 and 3 (left out), the date (id 30) and the settings the reference lacks (ids 31 to 63, left out of the
  * comparison here; environment_ghdf_round_trip covers them). The reference's tree, with the retired ids and no date,
  * still reads. */
 static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
@@ -2057,7 +2180,7 @@ static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
             TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Expected, 30U,
                 GHDF_CreateRegularType(GHDFValueType_EncodedInteger), &Date));
             TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(Table, &Environment, Pool, Actual, &Everything));
-            TEST_CHECK(run, GHDFCompound_GetEntryCount(Actual) == 60U);
+            TEST_CHECK(run, GHDFCompound_GetEntryCount(Actual) == 61U);
             for (size_t Index = 0U; Index < (sizeof(LaterSettingWireIds) / sizeof(LaterSettingWireIds[0])); Index++)
             {
                 TEST_CHECK_SUCCESS(run, GHDFCompound_Remove(Actual, LaterSettingWireIds[Index]));
@@ -2088,7 +2211,7 @@ static void EnvironmentJSONRoundTrip(TestRun* run)
     if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
     {
         TEST_CHECK_SUCCESS(run, WorldEnvironment_WriteJSON(&Source, Pool, Compound, NULL));
-        TEST_CHECK(run, JSONCompound_GetEntryCount(Compound) == 60U);
+        TEST_CHECK(run, JSONCompound_GetEntryCount(Compound) == 61U);
         JSONObjectValue Parsed;
         if (ReparseCompound(run, Pool, Compound, &Parsed))
         {
@@ -2217,7 +2340,7 @@ static void EnvironmentGHDFRoundTrip(TestRun* run)
     if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Pool, &Compound)))
     {
         TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(Table, &Source, Pool, Compound, NULL));
-        TEST_CHECK(run, GHDFCompound_GetEntryCount(Compound) == 60U);
+        TEST_CHECK(run, GHDFCompound_GetEntryCount(Compound) == 61U);
         TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(Table, Compound, &Restored, NULL));
         TEST_CHECK(run, Properties_Equals(Table, &Source, &Restored));
         TEST_CHECK(run, (Restored.MoonTexture != Source.MoonTexture) && AreStringsEqual(Restored.MoonTexture, u8"pack.red_moon"));
@@ -2925,6 +3048,8 @@ void PropertyDescriptorTests_Run(TestRun* run)
         { "enum_sets_go_through_the_tables", EnumSetsGoThroughTheTables },
         { "big_structs_read_through_a_heap_scratch", BigStructsReadThroughAHeapScratch },
         { "migration_runs_for_older_data", MigrationRunsForOlderData },
+        { "ghdf_migration_runs_for_older_data", GHDFMigrationRunsForOlderData },
+        { "json_migration_runs_on_its_own", JSONMigrationRunsOnItsOwn },
         { "environment_ghdf_matches_the_old_encoder", EnvironmentGHDFMatchesTheOldEncoder },
         { "environment_json_round_trip", EnvironmentJSONRoundTrip },
         { "environment_ghdf_round_trip", EnvironmentGHDFRoundTrip },

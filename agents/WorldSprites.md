@@ -27,8 +27,8 @@ settings creators get, the better).
   starts with `World sprite "<name>": `.
 - **The settings are read through property tables**, not hand-written code: `WorldSprite_GetSettingsPropertyTable`
   (`world_sprite`, the root's 15 rows, over `WorldSpriteSettings`) and `WorldSprite_GetRenderPropertyTable`
-  (`world_sprite_render`, the `render` block's three flags and its `haze` multiplier, over
-  `WorldSpriteRenderSettings`). Together they describe
+  (`world_sprite_render`, the `render` block's eight rows: the outline, crisp and shadow flags, the shadow distance and
+  the `haze` multiplier, over `WorldSpriteRenderSettings`). Together they describe
   every field of `WorldSpriteSettings`, so copying, comparing, validating and writing go through both. A value that breaks a rule
   is refused with the table's message: `World sprite "tree": world_sprite.pixels_per_unit (PixelsPerUnit) must be
   finite and > 0.`
@@ -48,17 +48,18 @@ and each table adds its wire id, its member and its `SinceVersion`:
 ```
 
 So an asset's value and a placement's own value follow the same rules, and a new rule changes both. Both tables give a
-setting the same wire id (world sprites are JSON only today). The one row of the asset alone is `has_draw_distance` (a
-Bool, off by default, right before `draw_distance`; wire 32, where the component has its `overrides_draw_distance`).
-The test `the_definition_shares_the_components_rows` checks every row pair. The enums' names are public (`WORLD_SPRITE_ORIENTATION_ENUM`, `WORLD_SPRITE_ALPHA_MODE_ENUM`),
-as the shadow tier's are for world models.
+setting the same wire id (world sprites are JSON only today). The rows of the asset alone are `has_draw_distance` (a
+Bool, off by default, right before `draw_distance`; wire 32, where the component has its `overrides_draw_distance`) and
+`has_shadow_distance` (the same before `shadow_distance`; wire 39, the component's `overrides_shadow_distance`).
+The test `the_definition_shares_the_components_rows` checks every row pair. The enums' names are public
+(`WORLD_SPRITE_ORIENTATION_ENUM`, `WORLD_SPRITE_ALPHA_MODE_ENUM`).
 
 ## The loaded `WorldSprite`
 
 Pure data, read-only, owned by the asset manager (never keep it past your asset user): `WorldSprite_GetAnimation` (the
 `SpriteAnimation*`, borrowed from the dependency) and `WorldSprite_GetSettings` (a `WorldSpriteSettings`: the defaults of
 its placements). `WorldSpriteSettings_CreateDefault` gives the tables' defaults (a centred, camera-facing, lit
-cutout sprite at 32 pixels per metre, outlined, casting shadows) and no draw distance of its own.
+cutout sprite at 32 pixels per metre, outlined, casting shadows) and no draw distance or shadow distance of its own.
 `WorldSpriteSettings_IsDrawnAsDecal` (marked a decal and fixed) and `WorldSpriteSettings_GetDefaultDrawDistance` (the
 kind's) work on any settings.
 
@@ -85,6 +86,9 @@ getters and setters, which read and write the placement's own value.
 | `Emission` | `overrides_emission` | `emission` |
 | `LightWrap` | `overrides_light_wrap` | `light_wrap` |
 | `CastsShadows` | `overrides_casts_shadows` | `casts_shadows` |
+| `ShadowDistance` | `overrides_shadow_distance` | `shadow_distance` |
+| `IsShadowDistanceFixed` | `overrides_is_shadow_distance_fixed` | `is_shadow_distance_fixed` |
+| `IsShadowOnly` | `overrides_is_shadow_only` | `is_shadow_only` |
 | `IsDecal` | `overrides_is_decal` | `is_decal` |
 | `DecalOffset` | `overrides_decal_offset` | `decal_offset` |
 | `HasOutline` | `overrides_has_outline` | `has_outline` |
@@ -96,7 +100,8 @@ getters and setters, which read and write the placement's own value.
 `haze` ([0, 1000], default the world sprite's `render.haze`, 1) multiplies the haze in front of the sprite
 ([WorldRuntime.md](WorldRuntime.md), "Haze"): 1 the real air's, 0 as if the air were clear (a sign that must read from
 far away). It applies to every kind of sprite (lit, unlit, blended, additive, decals) and to a cutout sprite's outline.
-`draw_distance_multiplier` (above 0, default 1) is a plain setting: it multiplies whichever draw distance is in effect.
+`draw_distance_multiplier` (above 0, default 1) is a plain setting: it multiplies whichever draw distance is in effect;
+`shadow_distance_multiplier` likewise the shadow distance ("Shadows" below).
 **`WorldSpriteComponent_ResolveSettings(component, spriteSettings)`** is the one pure function that turns the world
 sprite's settings and the overrides into the settings in effect; the renderer's cache calls it for every sprite each
 frame.
@@ -115,6 +120,17 @@ frame.
    for sprites too: times the player's `draw_distance_scale` unless fixed, against the distance to the nearest point of
    the sprite's sphere times the zoom factor.
 
+## Shadows
+
+A cutout sprite that is not a decal casts while `casts_shadows` is on (`WorldRenderSprite_CastsShadows`). The `render`
+block's shadow settings are the world models' ([WorldModels.md](WorldModels.md), "Shadows"): `has_shadow_distance` and
+`shadow_distance` (default false and `WORLD_SPRITE_DEFAULT_SHADOW_DISTANCE`, 150 m; above 0; a definition that gives
+`shadow_distance` without its flag has it on; without a distance of its own a sprite casts as far as it is drawn),
+`is_shadow_distance_fixed` (the player's `shadow_distance_scale` leaves it as it is) and `is_shadow_only` (it casts and is
+not drawn). Per placement (`WorldSpriteComponent_ResolveSettings`): the placement's own shadow distance while
+`overrides_shadow_distance` is on, else the world sprite's while it has one, else the resolved draw distance, times
+`shadow_distance_multiplier`; `HasShadowDistance` is on when either gives one.
+
 ## Binding
 
 The component binds its world sprite under the world's asset user (`AssetManager_LoadWorldSprite`) when it is attached
@@ -131,8 +147,9 @@ sprite in place (its pointer stays valid), and the cache reads the settings ever
 once; a reloaded animation must also rebuild the world sprites built on it and rebind their placements' instances. Not
 built yet. The editor can edit a world sprite through its two tables and write it back as JSON: the root's keys, the
 `render` block from the second table, and `name` and `sprite_animation`. A writer that leaves out default values must
-still write `has_draw_distance` whenever it writes `draw_distance` (or write every key, `PropertyWriteOptions.
-AreDefaultsWritten`): left out, a `draw_distance` kept while the flag is off would read back as on.
+still write `has_draw_distance` whenever it writes `draw_distance`, and `has_shadow_distance` with `shadow_distance` (or
+write every key, `PropertyWriteOptions.AreDefaultsWritten`): left out, a distance kept while its flag is off would read
+back as on.
 
 ## Test content
 

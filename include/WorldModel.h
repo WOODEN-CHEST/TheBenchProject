@@ -3,13 +3,12 @@
 #include <stddef.h>
 #include <stdint.h>
 // raylib.h is needed for Vector3 (the bounds) and MaterialMap (variants apply to a material's maps); GameModel.h for
-// GameModel and GameMaterialFactors; PropertyDescriptor.h for the shadow tier's names (a PropertyEnumTable);
-// CollisionShape.h and CollisionLayer.h for the collision sets and their placements' defaults.
+// GameModel and GameMaterialFactors; CollisionShape.h and CollisionLayer.h for the collision sets and their
+// placements' defaults.
 #include "raylib/raylib.h"
 #include "CollisionLayer.h"
 #include "CollisionShape.h"
 #include "GameModel.h"
-#include "PropertyDescriptor.h"
 
 /** @brief A standalone texture asset (GameTexture.h); variants name textures as dependencies. */
 typedef struct GameTextureStruct GameTexture;
@@ -87,6 +86,13 @@ typedef struct AnimationGraphStruct AnimationGraph;
 /** @brief The draw distance of WorldModelSettings_CreateDefault, in metres: what a model component's own draw distance
  *  starts at (its override is off by default). A world model's own draw distance defaults to its last LOD's. */
 #define WORLD_MODEL_DEFAULT_DRAW_DISTANCE 600.0f
+/** @brief The shadow distance of WorldModelSettings_CreateDefault, in metres: what a world model's and a placement's own
+ *  shadow distance start at (unused until has_shadow_distance or the override is on: by default a model casts as far
+ *  as it is drawn). */
+#define WORLD_MODEL_DEFAULT_SHADOW_DISTANCE 600.0f
+/** @brief The shadow distance an older file's shadow_tier "near" is read as, in metres: how far a "near" caster cast,
+ *  the 32-metre box around the camera its shadow was drawn into. */
+#define WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE 16.0f
 /** @brief The largest haze multiplier a world model or a placement may give (render.haze, the components' haze):
  *  far beyond it every surface is the sky already. Terrain and model instances take the same bound. */
 #define WORLD_MODEL_MAX_HAZE 1000.0f
@@ -102,26 +108,13 @@ typedef struct AnimationGraphStruct AnimationGraph;
 
 // Types.
 /**
- * @brief Which shadow cascade(s) of the sun or the moon a model casts into.
- *
- * The shadow light uses two cascaded directional shadow maps: a NEAR map (small extent, sharp, for close detail) and a
- * FAR map (large extent, coarse, for big or distant casters). A small detailed prop can cast only up close (Near: no
- * coarse shadow at a distance, and cheaper), a large object at long range (Far), or both (the default, correct
- * everywhere). Saved by its value: never renumber.
- */
-typedef enum WorldShadowTierEnum
-{
-    /** @brief Casts into both cascades (default): a correct shadow at every distance. */
-    WorldShadowTier_Both = 0,
-    /** @brief Casts into the NEAR cascade only: sharp up close, no shadow past the near range (detail props). */
-    WorldShadowTier_Near = 1,
-    /** @brief Casts into the FAR cascade only: a long-range coarse shadow (large objects, buildings, terrain). */
-    WorldShadowTier_Far = 2
-} WorldShadowTier;
-
-/**
  * @brief The settings a placed object can override: as a world model sets them (the defaults of its placements), or as
  *        they apply to one placement (WorldModelComponent_ResolveSettings).
+ *
+ * SHADOWS. The renderer decides most of a caster's shadow cost by itself: a caster too small for a shadow level's texels
+ * stays out of that level, far levels take coarser LODs, and nothing casts beyond its draw distance. What only a creator
+ * knows is here: whether it casts, how far from the camera it still casts (its shadow distance), whether it is drawn at
+ * all or only casts, whether it casts from both faces, and the LOD it casts with.
  *
  * A plain value type.
  */
@@ -131,10 +124,35 @@ typedef struct WorldModelSettingsStruct
     bool HasOutline;
     /** @brief Whether the model is drawn at full resolution over the pixelated image (a readable screen). */
     bool OmitsPixelation;
-    /** @brief Which shadow cascade(s) the model casts into. */
-    WorldShadowTier ShadowTier;
     /** @brief Whether the model casts shadows at all (it receives them either way). */
     bool CastsShadows;
+    /** @brief Whether ShadowDistance is a shadow distance of its own: in a world model its has_shadow_distance; once
+     *  resolved for a placement, whether the placement or its world model gives one. False: the model casts as far as it
+     *  is drawn. */
+    bool HasShadowDistance;
+    /** @brief How far from the camera the model still casts, in metres, before the player's shadow_distance_scale and
+     *  the zoom; beyond it its shadow fades out (never beyond its draw distance). Above 0 in a world model, meaningful
+     *  while HasShadowDistance. Once resolved for a placement: its own (or its world model's) shadow distance, or without
+     *  one (HasShadowDistance false) its draw distance in effect, times the placement's shadow_distance_multiplier
+     *  (+infinity when the product overflows, 0 when two tiny factors underflow). Without its own, the renderer scales it
+     *  as it scales the draw distance (the player's draw_distance_scale unless IsDrawDistanceFixed) before the shadow
+     *  scale. */
+    float ShadowDistance;
+    /** @brief Whether the player's shadow_distance_scale leaves the shadow distance as it is (landmarks, a tower whose
+     *  shadow matters to the view). */
+    bool IsShadowDistanceFixed;
+    /** @brief Whether the model only casts and is not drawn: a cheap stand-in shape casting for a detailed model (whose
+     *  own CastsShadows is then off), or something out of sight throwing a shadow into view. */
+    bool IsShadowOnly;
+    /** @brief Whether the model casts from both faces of its triangles: open meshes (a single-plane roof, a sign, leaves
+     *  on a card) cast nothing otherwise while their front faces the light. */
+    bool HasTwoSidedShadows;
+    /** @brief Whether ShadowLod is the LOD the model casts with in every shadow level (false: the drawn LOD near the
+     *  camera and coarser ones far out, as the renderer decides). */
+    bool HasShadowLod;
+    /** @brief The LOD the model casts with while HasShadowLod, 0 the finest (its lowest for cheap shadows, 0 where a
+     *  coarse LOD's silhouette is wrong); past the world model's last LOD, its last. */
+    uint32_t ShadowLod;
     /** @brief How far the model is seen, in metres, before the player's draw_distance_scale and the zoom; beyond it the
      *  model fades out. Above 0 in a world model; once resolved for a placement, the product with its multiplier:
      *  +infinity when it overflows (never faded by distance), 0 when two tiny factors underflow (never drawn). */
@@ -317,16 +335,12 @@ typedef struct WorldModelStruct
 } WorldModel;
 
 
-// Fields.
-/** @brief The names of WorldShadowTier ("both", "near", "far"): the world model definition's render.shadow_tier and the
- *  model component's shadow_tier row read them. */
-extern const PropertyEnumTable WORLD_SHADOW_TIER_ENUM;
-
-
 // Functions.
 /**
- * @brief The settings a world model and a placement start from: an outline, pixelated, casting into both shadow
- *        cascades, casting shadows, WORLD_MODEL_DEFAULT_DRAW_DISTANCE metres, not fixed.
+ * @brief The settings a world model and a placement start from: an outline, pixelated, casting shadows as far as it is
+ *        drawn (no shadow distance of its own; WORLD_MODEL_DEFAULT_SHADOW_DISTANCE kept unused), drawn and casting from
+ *        its front faces with the LODs the renderer picks, WORLD_MODEL_DEFAULT_DRAW_DISTANCE metres, not fixed, the real
+ *        air's haze, keeping the sky out.
  * @returns The settings.
  */
 WorldModelSettings WorldModelSettings_CreateDefault(void);

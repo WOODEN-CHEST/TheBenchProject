@@ -54,9 +54,10 @@ typedef struct LoggerStruct Logger;
 
 
 // Macros.
-/** @brief The world file format this game writes and the newest it reads. Raise it only for changes older games cannot
- *  read by skipping what they do not know (a renamed key, a value read another way). */
-#define WORLD_FILE_FORMAT_VERSION ((uint32_t)1)
+/** @brief The world file format this game writes and the newest it reads (2; format 1's files are read too, their
+ *  tables' data upgraded by the tables' migrations). Raise it only for changes older games cannot read by skipping what
+ *  they do not know (a renamed key, a value read another way). */
+#define WORLD_FILE_FORMAT_VERSION ((uint32_t)2)
 /** @brief The most objects a world file may hold. */
 #define WORLD_FILE_MAX_OBJECT_COUNT ((size_t)100000)
 /** @brief The most bytes a world file may have (64 MiB), checked before anything is parsed. */

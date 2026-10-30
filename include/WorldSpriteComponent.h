@@ -62,8 +62,10 @@
  * WorldSpriteComponent_FromComponent. Its properties are the rows of its table ("sprite_component"), in this order:
  * world_sprite; then for each setting its flag and its value: orientation, pivot, pixels_per_unit, flip_x, flip_y,
  * alpha_mode, alpha_cutoff, is_lit, emission, light_wrap, casts_shadows, is_decal, decal_offset, has_outline,
- * omit_pixelation, haze and draw_distance (followed by draw_distance_multiplier) and is_draw_distance_fixed. Every change
- * advances the component's revision.
+ * omit_pixelation, haze, draw_distance (followed by draw_distance_multiplier), is_draw_distance_fixed, shadow_distance
+ * (followed by shadow_distance_multiplier: how far from the camera it still casts, by default as far as it is drawn),
+ * is_shadow_distance_fixed and is_shadow_only (it casts but is not drawn). Every change advances the component's
+ * revision.
  */
 
 
@@ -115,6 +117,12 @@ typedef enum WorldSpriteSettingEnum
     WorldSpriteSetting_DrawDistance,
     /** @brief Keeping the draw distance fixed against the quality setting (is_draw_distance_fixed). */
     WorldSpriteSetting_IsDrawDistanceFixed,
+    /** @brief How far from the camera it still casts (shadow_distance). */
+    WorldSpriteSetting_ShadowDistance,
+    /** @brief Keeping the shadow distance fixed against the shadow quality setting (is_shadow_distance_fixed). */
+    WorldSpriteSetting_IsShadowDistanceFixed,
+    /** @brief Casting without being drawn (is_shadow_only). */
+    WorldSpriteSetting_IsShadowOnly,
     /** @brief The number of settings; not a setting. */
     WorldSpriteSetting_Count
 } WorldSpriteSetting;
@@ -172,6 +180,15 @@ typedef struct WorldSpriteComponentStruct
     float _drawDistanceMultiplier;
     /** @brief This placement's "the quality setting leaves the draw distance as it is" (default false). */
     bool _isDrawDistanceFixed;
+    /** @brief This placement's shadow distance, in metres, above 0 (default WORLD_SPRITE_DEFAULT_SHADOW_DISTANCE). */
+    float _shadowDistance;
+    /** @brief Multiplies the shadow distance in effect (the placement's, the world sprite's, or the draw distance in
+     *  effect without either), above 0 (default 1). A plain setting, not an override. */
+    float _shadowDistanceMultiplier;
+    /** @brief This placement's "the shadow quality setting leaves the shadow distance as it is" (default false). */
+    bool _isShadowDistanceFixed;
+    /** @brief This placement's "casts but is not drawn" (default false). */
+    bool _isShadowOnly;
     /** @brief The playback state of the bound world sprite's animation; empty (no source) while nothing is bound. Never
      *  moved or copied by value. Reach it with WorldSpriteComponent_GetAnimationInstance. */
     SpriteAnimationInstance _animationInstance;
@@ -668,16 +685,98 @@ static inline bool WorldSpriteComponent_IsDrawDistanceFixed(const WorldSpriteCom
 Error WorldSpriteComponent_SetIsDrawDistanceFixed(WorldSpriteComponent* self, bool isFixed);
 
 /**
+ * @brief Returns this placement's own shadow distance (it applies while WorldSpriteSetting_ShadowDistance is overridden).
+ * @param self The sprite component; must not be NULL.
+ * @returns Metres, above 0.
+ */
+static inline float WorldSpriteComponent_GetShadowDistance(const WorldSpriteComponent* self)
+{
+    return self->_shadowDistance;
+}
+
+/**
+ * @brief Sets this placement's own shadow distance (it applies while WorldSpriteSetting_ShadowDistance is overridden):
+ *        how far from the camera it still casts.
+ * @param self The sprite component; must not be NULL.
+ * @param shadowDistance Metres; finite and above 0.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for a value that is not
+ *          finite or not above 0.
+ */
+Error WorldSpriteComponent_SetShadowDistance(WorldSpriteComponent* self, float shadowDistance);
+
+/**
+ * @brief Returns the shadow distance multiplier: it multiplies the shadow distance in effect.
+ * @param self The sprite component; must not be NULL.
+ * @returns The multiplier, above 0 (default 1).
+ */
+static inline float WorldSpriteComponent_GetShadowDistanceMultiplier(const WorldSpriteComponent* self)
+{
+    return self->_shadowDistanceMultiplier;
+}
+
+/**
+ * @brief Sets the shadow distance multiplier (it multiplies the placement's or the world sprite's shadow distance, or
+ *        the draw distance in effect when neither gives one).
+ * @param self The sprite component; must not be NULL.
+ * @param multiplier Finite and above 0; 1 changes nothing.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for a value that is not
+ *          finite or not above 0.
+ */
+Error WorldSpriteComponent_SetShadowDistanceMultiplier(WorldSpriteComponent* self, float multiplier);
+
+/**
+ * @brief Returns this placement's own "the shadow quality setting leaves the shadow distance as it is" (it applies while
+ *        WorldSpriteSetting_IsShadowDistanceFixed is overridden).
+ * @param self The sprite component; must not be NULL.
+ * @returns true if fixed.
+ */
+static inline bool WorldSpriteComponent_IsShadowDistanceFixed(const WorldSpriteComponent* self)
+{
+    return self->_isShadowDistanceFixed;
+}
+
+/**
+ * @brief Sets this placement's own "the shadow quality setting leaves the shadow distance as it is" (it applies while
+ *        WorldSpriteSetting_IsShadowDistanceFixed is overridden).
+ * @param self The sprite component; must not be NULL.
+ * @param isFixed Whether the player's shadow_distance_scale leaves the shadow distance as it is.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error WorldSpriteComponent_SetIsShadowDistanceFixed(WorldSpriteComponent* self, bool isFixed);
+
+/**
+ * @brief Returns this placement's own "casts but is not drawn" (it applies while WorldSpriteSetting_IsShadowOnly is
+ *        overridden).
+ * @param self The sprite component; must not be NULL.
+ * @returns true if it only casts.
+ */
+static inline bool WorldSpriteComponent_IsShadowOnly(const WorldSpriteComponent* self)
+{
+    return self->_isShadowOnly;
+}
+
+/**
+ * @brief Sets this placement's own "casts but is not drawn" (it applies while WorldSpriteSetting_IsShadowOnly is
+ *        overridden).
+ * @param self The sprite component; must not be NULL.
+ * @param isShadowOnly Whether it only casts.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error WorldSpriteComponent_SetIsShadowOnly(WorldSpriteComponent* self, bool isShadowOnly);
+
+/**
  * @brief The settings that apply to this placement: each setting from the world sprite, or the placement's own value
  *        while its override flag is on; then the draw distance in effect (the overriding one, else the world sprite's,
  *        else the kind's default for the settings in effect: WorldSpriteSettings_GetDefaultDrawDistance) times the
- *        multiplier.
+ *        multiplier; then the shadow distance in effect (the overriding one, else the world sprite's, else that draw
+ *        distance; Render.HasShadowDistance says whether it is one of their own) times its multiplier.
  *
  * A pure function (the renderer calls it for every sprite each frame).
  * @param self The sprite component; must not be NULL.
  * @param spriteSettings The world sprite's settings (WorldSprite_GetSettings); must not be NULL.
- * @returns The settings in effect. HasDrawDistance is always true and DrawDistance at least 0: +infinity when the
- *          product overflows, 0 when two tiny factors underflow (nothing within reach is drawn then).
+ * @returns The settings in effect. HasDrawDistance is always true; DrawDistance and Render.ShadowDistance are at least 0:
+ *          +infinity when a product overflows, 0 when two tiny factors underflow (nothing within reach is drawn, or
+ *          casts, then).
  */
 WorldSpriteSettings WorldSpriteComponent_ResolveSettings(const WorldSpriteComponent* self,
     const WorldSpriteSettings* spriteSettings);

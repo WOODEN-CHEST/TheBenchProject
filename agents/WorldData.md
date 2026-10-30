@@ -14,15 +14,15 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 |---|---|---|
 | WorldObject | `include/WorldObject.h`, `source/WorldObject.c` | The one object type: id, name, parent, transform (relative to the parent), tint, enabled, visible, mobility, and its component slots. |
 | WorldComponent | `include/WorldComponent.h`, `source/WorldComponent.c` | The component base, the component types and the registry entry that describes each (`WorldComponentTypeInfo`). |
-| WorldModelComponent | `include/WorldModelComponent.h`, `source/WorldModelComponent.c` | A world model by asset name ([WorldModels.md](WorldModels.md)), the variant drawn, and the settings this placement overrides (explicit flags next to its own values: outline, crisp, shadow tier, casts shadows, haze, keeps the sky out, draw distance, fixed draw distance; a draw distance multiplier), with the pure function that resolves the settings in effect. |
+| WorldModelComponent | `include/WorldModelComponent.h`, `source/WorldModelComponent.c` | A world model by asset name ([WorldModels.md](WorldModels.md)), the variant drawn, and the settings this placement overrides (explicit flags next to its own values: outline, crisp, casts shadows, shadow distance, fixed shadow distance, shadow only, two-sided shadows, shadow LOD, haze, keeps the sky out, draw distance, fixed draw distance; draw and shadow distance multipliers), with the pure function that resolves the settings in effect. |
 | WorldModelInstancesComponent | `include/WorldModelInstancesComponent.h`, `source/WorldModelInstancesComponent.c`, `source/WorldModelComponentInternal.h` (the rows it shares with the model component) | Many copies of one world model: the model component's settings, shared through macros (all but `omit_pixelation`: copies are never crisp), and the copies as an `InstanceList` (each a double position, a rotation, a scale and a tint), with the pure functions that resolve the settings and the LOD settings in effect. |
-| WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A world sprite by asset name ([WorldSprites.md](WorldSprites.md)), bound by the world with its animation's playback instance, and every setting this placement overrides (explicit flags next to its own values: orientation, pivot, size, flips, alpha mode, lighting, decal, render flags, draw distance, fixed draw distance; a draw distance multiplier), with the pure function that resolves the settings in effect. |
+| WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A world sprite by asset name ([WorldSprites.md](WorldSprites.md)), bound by the world with its animation's playback instance, and every setting this placement overrides (explicit flags next to its own values: orientation, pivot, size, flips, alpha mode, lighting, decal, render flags, shadow distance, fixed shadow distance, shadow only, draw distance, fixed draw distance; draw and shadow distance multipliers), with the pure function that resolves the settings in effect. |
 | WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point light (colour, intensity, range, casts shadows). |
 | WorldAmbientZoneComponent | `include/WorldAmbientZoneComponent.h`, `source/WorldAmbientZoneComponent.c` | A volume that sets a room's own light (a box or a sphere: its light, the sky's share in it, the eye's exposure bias, its priority and its air's haze). |
 | WorldColliderComponent | `include/WorldColliderComponent.h`, `source/WorldColliderComponent.c` | How the object collides ([WorldCollision.md](WorldCollision.md)): its world model's collision set (or one primitive of its own), its layer, mask and trigger flag (each overriding the world model's default with an explicit flag), a local offset, rotation and scale, and a rotation mode, with the pure function that resolves the settings in effect. |
 | WorldCharacterComponent | `include/WorldCharacterComponent.h`, `source/WorldCharacterComponent.c` | The player or an NPC ([Characters.md](Characters.md)): a character asset by name and every setting this placement overrides (explicit flags next to its own values), the input its driver gives it and the state it is in; the first transform driver. |
 | WorldAnimatorComponent | `include/WorldAnimatorComponent.h`, `source/WorldAnimatorComponent.c` | What plays the object's skeletal animation ([Animation.md](Animation.md)): the clip row and how it plays, the placement's own libraries, and the pose the animation system publishes. |
-| WorldTerrainComponent | `include/WorldTerrainComponent.h`, `source/WorldTerrainComponent.c` | A terrain asset by name ([Terrain.md](Terrain.md)) and the settings this placement overrides (explicit flags next to its own values: outline, shadow tier, casts shadows, haze, draw distance, fixed draw distance, collision enabled, layer and mask; a draw distance multiplier), with the pure function that resolves the settings in effect. |
+| WorldTerrainComponent | `include/WorldTerrainComponent.h`, `source/WorldTerrainComponent.c` | A terrain asset by name ([Terrain.md](Terrain.md)) and the settings this placement overrides (explicit flags next to its own values: outline, casts shadows, shadow distance, fixed shadow distance, haze, draw distance, fixed draw distance, collision enabled, layer and mask; draw and shadow distance multipliers), with the pure function that resolves the settings in effect. |
 | WorldEnvironment | `include/WorldEnvironment.h`, `source/WorldEnvironment.c` | Per-world sky/sun/moon/haze/effect settings, described by a property table (defaults, validation, copying, JSON, GHDF), and the sky's model: the sun, the moon, the stars' rotation, the two lights. |
 | World | `include/World.h`, `source/World.c`, `source/WorldData.c` (tags and data, the tag index), `source/WorldHierarchy.c` (parents, world matrices, effective flags, subtrees; also the `WorldObject_` functions about them) | Owns the objects and their components, mints ids, keeps the id map, the hierarchy and the per-type component arrays, borrows the key registry, keeps the tag index and the data byte count, holds the environment and its own asset user. |
 | WorldTransform (private) | `source/WorldTransform.h`, `source/WorldTransform.c` | The pure maths of transforms, in double: compose (DrawModelEx's order), the one decomposition back to position / Euler XYZ / scale, a local matrix under a parent, a bound on a matrix's stretch. Used by the hierarchy, the renderer's cache, collision and the characters. |
@@ -237,13 +237,18 @@ changing it swaps the model and keeps the object), `_usesVariant` (false) and `_
 
 The settings a placement can override (`WorldModelSetting`) are each a pair: an override flag, `_overrides...` (false:
 the world model's value applies), and the placement's own value, kept while the flag is off: `_hasOutline` (true),
-`_omitPixelation` (false: drawn crisp at full resolution over the pixelated image), `_shadowTier` (`WorldShadowTier`,
-declared in `WorldModel.h`: Both / Near / Far, the shadow cascade(s) it casts into), `_castsShadows` (true;
-false skips it in every shadow pass, it still receives shadows), `_haze` ([0, 1000], 1: how hazy it looks), `_occludesSky`
+`_omitPixelation` (false: drawn crisp at full resolution over the pixelated image), `_castsShadows` (true;
+false skips it in every shadow pass, it still receives shadows), `_shadowDistance` (600 m, above 0: how far from the
+camera it still casts; while not overridden the world model's own applies, or without one its draw distance),
+`_isShadowDistanceFixed` (false: the player's `shadow_distance_scale` applies), `_isShadowOnly` (false: true casts
+without being drawn), `_hasTwoSidedShadows` (false: true casts from both faces of its triangles), `_shadowLod` (a
+`uint32_t`, 0: the LOD it casts with in every shadow level while overridden; past the world model's last LOD, its last;
+[WorldModels.md](WorldModels.md), "Shadows"), `_haze` ([0, 1000], 1: how hazy it looks), `_occludesSky`
 (true: it keeps the sky's light off what lies under it, in the sky's visibility map of [WorldRuntime.md](WorldRuntime.md),
 "Interior lighting"; off for grass, small plants, people and poles), `_drawDistance` (600 m, above 0) and
 `_isDrawDistanceFixed` (false: the player's `draw_distance_scale` applies). `_drawDistanceMultiplier` (above 0, default
-1) multiplies whichever draw distance is in effect. The flags are set with `WorldModelComponent_SetOverridden(self,
+1) multiplies whichever draw distance is in effect, `_shadowDistanceMultiplier` (likewise) whichever shadow distance. The
+flags are set with `WorldModelComponent_SetOverridden(self,
 setting, isOverridden)` and read with `_IsOverridden`; `WorldModelComponent_ResolveSettings(self, modelSettings)` is the
 pure function that gives the `WorldModelSettings` in effect. The getters of the values (`WorldModelComponent_HasOutline`
 and the others) return the placement's own values, not the ones in effect.
@@ -268,8 +273,10 @@ changes.
 Places many **copies** of one world model: trees, bushes, posts, fence pieces, later scattered things and grass. Its
 table shares the model component's rows through the `WORLD_MODEL_PLACEMENT_ROW_*` macros of
 `source/WorldModelComponentInternal.h` (the names, wire ids, defaults, rules and categories are the model component's):
-`world_model`, `uses_variant` / `variant`, the override pairs `has_outline`, `shadow_tier`,
-`casts_shadows`, `haze`, `occludes_sky`, `draw_distance`, `is_draw_distance_fixed`, `draw_distance_multiplier`, the LOD rows (`lod_distances`
+`world_model`, `uses_variant` / `variant`, the override pairs `has_outline`, `casts_shadows`, `shadow_distance`,
+`is_shadow_distance_fixed`, `is_shadow_only`, `has_two_sided_shadows`, `shadow_lod`, `haze`, `occludes_sky`,
+`draw_distance`, `is_draw_distance_fixed`, the multipliers `draw_distance_multiplier` and `shadow_distance_multiplier`,
+the LOD rows (`lod_distances`
 with its flag, `lod_distance_multiplier`, `is_lod_forced` / `forced_lod`), **all but `omit_pixelation`**: copies are
 never crisp (`WorldModelInstancesComponent_SetOverridden(self, WorldModelSetting_OmitPixelation, ...)` is refused, and
 `ResolveSettings` gives `OmitsPixelation` false). Every setting applies to every copy; the variant too.
@@ -378,8 +385,9 @@ driver: it bends the object's model, never moves the object.
 ### Terrain component (`terrain_component`)
 Places a terrain (everything about terrain is in [Terrain.md](Terrain.md)): `terrain` (the asset name of a
 terrain, `terrains/`; none places nothing), then the override pairs over the asset's defaults, as the model
-component's: `overrides_has_outline` / `has_outline`, `overrides_shadow_tier` / `shadow_tier`,
-`overrides_casts_shadows` / `casts_shadows`, `overrides_haze` / `haze` (wires 19 and 20), `overrides_draw_distance` /
+component's: `overrides_has_outline` / `has_outline`, `overrides_casts_shadows` / `casts_shadows`,
+`overrides_shadow_distance` / `shadow_distance`, `shadow_distance_multiplier`, `overrides_is_shadow_distance_fixed` /
+`is_shadow_distance_fixed` (wires 21 to 25), `overrides_haze` / `haze` (wires 19 and 20), `overrides_draw_distance` /
 `draw_distance`, `draw_distance_multiplier`
 (above 0, default 1), `overrides_is_draw_distance_fixed` / `is_draw_distance_fixed`, and the collision's,
 `overrides_is_collision_enabled` / `is_collision_enabled`, `overrides_collision_layer` / `collision_layer`,
@@ -526,10 +534,19 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `has_outline` | 2 | Bool | true |
 | | `overrides_omit_pixelation` | 9 | Bool | false |
 | | `omit_pixelation` | 3 | Bool | false |
-| | `overrides_shadow_tier` | 10 | Bool | false |
-| | `shadow_tier` | 4 | Enum `both` / `near` / `far` | `both` |
 | | `overrides_casts_shadows` | 11 | Bool | false |
 | | `casts_shadows` | 5 | Bool | true |
+| | `overrides_shadow_distance` | 27 | Bool | false |
+| | `shadow_distance` | 28 | Float > 0 | 600 |
+| | `shadow_distance_multiplier` | 29 | Float > 0 | 1 |
+| | `overrides_is_shadow_distance_fixed` | 30 | Bool | false |
+| | `is_shadow_distance_fixed` | 31 | Bool | false |
+| | `overrides_is_shadow_only` | 32 | Bool | false |
+| | `is_shadow_only` | 33 | Bool | false |
+| | `overrides_has_two_sided_shadows` | 34 | Bool | false |
+| | `has_two_sided_shadows` | 35 | Bool | false |
+| | `overrides_shadow_lod` | 36 | Bool | false |
+| | `shadow_lod` | 37 | UInt32 | 0 |
 | | `overrides_haze` | 23 | Bool | false |
 | | `haze` | 24 | Float in [0, 1000] | 1 |
 | | `overrides_occludes_sky` | 25 | Bool | false |
@@ -582,6 +599,13 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `draw_distance_multiplier` | 34 | Float > 0 | 1 |
 | | `overrides_is_draw_distance_fixed` | 35 | Bool | false |
 | | `is_draw_distance_fixed` | 36 | Bool | false |
+| | `overrides_shadow_distance` | 39 | Bool | false |
+| | `shadow_distance` | 40 | Float > 0 | 150 |
+| | `shadow_distance_multiplier` | 41 | Float > 0 | 1 |
+| | `overrides_is_shadow_distance_fixed` | 42 | Bool | false |
+| | `is_shadow_distance_fixed` | 43 | Bool | false |
+| | `overrides_is_shadow_only` | 44 | Bool | false |
+| | `is_shadow_only` | 45 | Bool | false |
 | `light_component` | `color` | 1 | Color | white |
 | | `intensity` | 2 | Float >= 0 | 1 |
 | | `range` | 3 | Float >= 0 | 1 |
@@ -597,12 +621,14 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `priority` | 9 | Int32 | 0 |
 | | `haze` | 10 | Float in [0, 1000] | 1 |
 
-The model component's wire 1 is `world_model` and wires 2 to 5 are the placement's own values behind their override
-flags; the LOD rows are 17 to 21, 22 is the model instances component's `instances` (the two share their wire ids) and
-23 and 24 are the haze's pair and 25 and 26 the sky's (`occludes_sky`, whose default is the world model's own
-`render.occludes_sky`, true): its next free wire id is 27. The sprite component's wire 1 is `world_sprite`, wires 2 to
-16 the placement's own values behind their flags (wires 17 to 31), 32 to 36 the draw distance rows and 37 and 38 the
-haze's pair, so its next free wire id is 39. The haze multiplies the haze in front of the placement
+The model component's wire 1 is `world_model` and wires 2, 3 and 5 are the placement's own values behind their override
+flags (8, 9 and 11); the LOD rows are 17 to 21, 22 is the model instances component's `instances` (the two share their
+wire ids), 23 and 24 are the haze's pair, 25 and 26 the sky's (`occludes_sky`, whose default is the world model's own
+`render.occludes_sky`, true) and 27 to 37 the shadow rows; 4 and 10 are retired (the shadow tier pair of the tables'
+version 1, which their migrations read: [WorldFile.md](WorldFile.md), "Versions"). Both tables are at version 2, and
+their next free wire id is 38. The sprite component's wire 1 is `world_sprite`, wires 2 to 16 the placement's own values
+behind their flags (wires 17 to 31), 32 to 36 the draw distance rows, 37 and 38 the haze's pair and 39 to 45 the shadow
+distance's rows, so its next free wire id is 46. The haze multiplies the haze in front of the placement
 ([WorldRuntime.md](WorldRuntime.md), "Haze"): 1 the real air's, 0 as if the air were clear (a sign that must read from far
 away); its default is the world model's or world sprite's own `render.haze` (1). The sprite's value rows
 share their key, type, default, rules and texts with the world sprite's tables (`source/WorldSpriteInternal.h`,
@@ -626,7 +652,7 @@ multiply it by their own `gravity_multiplier`).
 GHDF wire id, the type, the default, the rules, the inspector text. `WorldEnvironment_SetDefaults`, `_Validate`,
 `_CopyTo` and `_Deconstruct` are thin wrappers over the table, and `WorldEnvironment_ReadJSON` / `_WriteJSON` are the
 JSON entry points for the world files. **To add a setting, add the field and one table row** with a new,
-never-used wire id (the next free one is 63; 2 and 3 are retired); nothing else needs writing. The field comments state
+never-used wire id (the next free one is 64; 2 and 3 are retired); nothing else needs writing. The field comments state
 each value's rule; validation enforces them (finite, `TimeOfDay`, `LightPollution`, `StarTwinkle`, `MoonPhase`,
 `NightVisionStrength` and `NightVisionBlueShift` in [0, 1], `SunSizeMultiplier`, `MoonSizeMultiplier` and `MoonCycleDays` > 0, every strength/intensity/density/brightness
 >= 0, `Date` inside the calendar, the texture names valid asset names of at most 128 bytes, `MoonPhaseSource` one of
@@ -728,6 +754,11 @@ so the sun's colour is its colour above the air and the ambient is the sky's own
 | `ambient_skylight_intensity` | 14 | >= 0 | 1 | Multiplies the sky's light on surfaces: 1 the sky's own, 0 leaves shade lit only by the night's light and lamps. |
 | `night_light_color` | 61 | colour | (161, 178, 255) | The colour of the moonless night's own light on surfaces (starlight and the air's glow, raised for play as the moonlight is). |
 | `night_light_intensity` | 62 | >= 0 | 0.011 | How bright the moonless night's own light is (its linear colour times this, added to every surface's ambient): 0 gives a pitch-black moonless night outside the moon's and the town's light. |
+
+The sun's and the moon's shadows ([WorldRuntime.md](WorldRuntime.md), "Sun and moon shadows"): `are_shadows_enabled`
+(default true) and `shadow_reach` (wire id 63, [0, 20000] m, default 4000: how far from the camera they reach, fading out
+over the last tenth; 0 none; `WORLD_ENVIRONMENT_MAX_SHADOW_REACH`, the levels' depth precision). How sharp they are is
+the player's ([Config.md](Config.md)).
 
 The night vision settings (the eye's dim-light vision, [WorldRuntime.md](WorldRuntime.md), "Night vision"):
 `night_vision_strength` ([0, 1], default 1: the eye; 0 keeps every colour, a long-exposure photo's night) and

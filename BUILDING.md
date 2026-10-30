@@ -110,7 +110,7 @@ skinning (the test world's figures bend, no warning).
 
 ## Direct OpenGL calls
 
-Everything draws through raylib, with four exceptions, each in a private module of its own and nowhere else:
+Everything draws through raylib, with five exceptions, each in a private module of its own and nowhere else:
 - **texture arrays** (`GL_TEXTURE_2D_ARRAY`, `source/GLTextureArray.{h,c}`), which raylib does not have and the
   terrain's materials need (up to sixteen materials blended per pixel, one array layer each);
 - **readbacks that do not wait** (`source/GLReadback.{h,c}`): raylib reads a texture back only by stalling until
@@ -135,9 +135,18 @@ Everything draws through raylib, with four exceptions, each in a private module 
   integers, and reduced into a pyramid of its own mipmap levels, each level drawn from the one below while only that one
   is readable; raylib has no integer textures, no logic operations and no per-level reads (`glGenTextures`,
   `glDeleteTextures`, `glBindTexture`, `glTexImage2D`, `glTexParameteri`, `glEnable`, `glDisable`, `glLogicOp`,
-  `glClearBufferuiv`, `glGetError`: OpenGL 3.0 core; a missing one leaves the sky's visibility open, logged once).
+  `glClearBufferuiv`, `glGetError`: OpenGL 3.0 core; a missing one leaves the sky's visibility open, logged once);
+- **shadow map arrays** (`source/GLShadowArray.{h,c}`): the sun's and the moon's shadow levels are the layers of one
+  texture array of 32-bit float depth, read with the hardware's depth comparison (a `sampler2DArrayShadow`: one lookup
+  weighs four texels bilinearly), drawn layer by layer through a framebuffer without colour, with depth clamping (casters
+  nearer the light than a level's box land on its near plane); raylib has no texture arrays, no depth comparison, no
+  layer attachments and no depth clamping (`glGenTextures`, `glDeleteTextures`, `glBindTexture`, `glTexImage3D`,
+  `glTexParameteri`, `glGenFramebuffers`, `glDeleteFramebuffers`, `glBindFramebuffer`, `glFramebufferTextureLayer`,
+  `glDrawBuffer`, `glReadBuffer`, `glCheckFramebufferStatus`, `glEnable`, `glDisable`, `glGetIntegerv`, `glGetError`:
+  OpenGL 3.2 core at the newest; a missing one, or maps the GPU refuses, leave the sun and the moon without shadows,
+  logged once).
 
-The texture arrays' module, as the pattern all four follow:
+The texture arrays' module, as the pattern all five follow:
 - the function pointers (`glGenTextures`, `glDeleteTextures`, `glBindTexture`, `glTexImage3D`, `glTexSubImage3D`,
   `glGenerateMipmap`, `glTexParameteri`, `glTexParameterf`, `glPixelStorei`, `glGetIntegerv`, `glGetFloatv`,
   `glGetError`) come through raylib's `rlGetProcAddress`, the loader raylib itself was initialized with (GLFW's on the

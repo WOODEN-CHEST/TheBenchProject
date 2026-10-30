@@ -8,6 +8,7 @@
 #include "WorldInstancing.h"
 #include "WorldInterior.h"
 #include "WorldLod.h"
+#include "WorldShadowLevels.h"
 #include "WorldSkyLight.h"
 #include "WorldVisibility.h"
 #include "wr/WRFileSystem.h"
@@ -985,8 +986,10 @@ static double GetDefinedValue(const GenericBuffer* text, const char* name)
 
 /* The instanced twins: each definition loads, defines WORLD_INSTANCED and pairs its own vertex stage with its rigid
  * shader's fragment stage. Every instanced vertex stage places its copies through the one shared include, which takes
- * the records at locations 9 to 13 and whose constants are its C mirror's (source/WorldInstancing.h); with the define,
- * the fragment stages' dither reads the copy's flat values through the formula the uniforms use. */
+ * the records at locations 9 to 13 and whose constants and shadow pass rules (the shadow distance's fade, the level's
+ * size cut, its LOD distance, the component's shadow LOD) are its C mirror's (source/WorldInstancing.h,
+ * WorldInstancing_EvaluateShadow); with the define, the fragment stages' dither reads the copy's flat values through the
+ * formula the uniforms use. */
 static void ShippedInstancedTwinsShareTheirStages(TestRun* run)
 {
     static const char* const Definitions[][3] =
@@ -1044,7 +1047,13 @@ static void ShippedInstancedTwinsShareTheirStages(TestRun* run)
                 && (GetDefinedValue(&Fixture.Text, "INSTANCE_MAX_BANDS") == (double)WORLD_INSTANCE_MAX_BANDS)
                 && (GetDefinedValue(&Fixture.Text, "INSTANCE_SOLID_SHARE") == (double)WORLD_LOD_SOLID_SHARE)
                 && (GetDefinedValue(&Fixture.Text, "INSTANCE_GBUFFER_FADE_LIMIT")
-                    == (double)WORLD_VISIBILITY_GBUFFER_FADE_LIMIT);
+                    == (double)WORLD_VISIBILITY_GBUFFER_FADE_LIMIT)
+                && (CountOccurrences(&Fixture.Text,
+                    "fade = max(fade, Instancing_GetShadowDistanceFade(fadeDistance));") == 1U)
+                && (CountOccurrences(&Fixture.Text, "fade = (radius >= instanceShadowMinRadius) ? fade : 1.0;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "lodDistance = max(lodDistance, instanceShadowLodDistance);") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "forcedLod = (instanceShadowLod >= 0) ? instanceShadowLod : forcedLod;") == 1U);
 
             bool IsDithered = ExpandShippedStageWithDefines(run, &Fixture, Definitions[Index][2], Instanced, 1U)
                 && (CountOccurrences(&Fixture.Text, "#define WORLD_INSTANCED\n") == 1U)
@@ -1258,11 +1267,13 @@ static void ShippedSkyVolumeMatchesItsMirror(TestRun* run)
     ShaderFixture_Deconstruct(run, &Fixture);
 }
 
-/* The cascades' shadow: every lit stage reads it off its surface, with the near and the far cascade's depth bias and
- * normal offset, and no single bias of the old kind. Models and the terrain read it off the triangle's own face (what
- * the maps hold), a face turned away from the light taking the whole shadow and the contact shadow darkening the rest;
- * sprites off their quad facing the light. */
-static void ShippedCascadesAreReadOffTheSurface(TestRun* run)
+/* The shadow levels: every lit stage reads them off its surface, each level with its own depth bias and normal offset,
+ * through the hardware's comparison of the levels' array, and no single bias of an older kind; the level a point reads
+ * is chosen by the levels' C mirror's rule (the larger light clip coordinate against the edge, the band to the next
+ * level, the reach's fade), with as many levels as the renderer may use. Models and the terrain read them off the
+ * triangle's own face (what the maps hold), a face turned away from the light taking the whole shadow and the contact
+ * shadow darkening the rest; sprites off their quad facing the light. */
+static void ShippedShadowLevelsAreReadOffTheSurface(TestRun* run)
 {
     ShaderFixture Fixture;
     if (ShaderFixture_Construct(run, &Fixture)
@@ -1281,11 +1292,23 @@ static void ShippedCascadesAreReadOffTheSurface(TestRun* run)
             {
                 continue;
             }
-            bool IsOffTheSurface = (CountOccurrences(&Fixture.Text, "uniform vec2 shadowDepthBias;") == 1U)
-                && (CountOccurrences(&Fixture.Text, "uniform vec2 shadowNormalOffset;") == 1U)
+            bool IsOffTheSurface = (GetDefinedValue(&Fixture.Text, "SHADOW_MAX_LEVELS")
+                    == (double)WORLD_SHADOW_MAX_LEVELS)
+                && (CountOccurrences(&Fixture.Text, "uniform vec2 shadowLevelOffsets[SHADOW_MAX_LEVELS];") == 1U)
+                && (CountOccurrences(&Fixture.Text, "uniform mat4 shadowLevelMatrices[SHADOW_MAX_LEVELS];") == 1U)
+                && (CountOccurrences(&Fixture.Text, "uniform sampler2DArrayShadow shadowLevels;") == 1U)
                 && (CountOccurrences(&Fixture.Text, "uniform float shadowBias;") == 0U)
-                && (CountOccurrences(&Fixture.Text, "vec4 clip = vp*vec4(worldPos + normal*(normalOffset*slant), 1.0);")
+                && (CountOccurrences(&Fixture.Text, "uniform sampler2D shadowMap;") == 0U)
+                && (CountOccurrences(&Fixture.Text,
+                    "vec3 proj = (shadowLevelMatrices[level]*vec4(worldPos + normal*(offsets.y*slant), 1.0)).xyz*0.5 + 0.5;")
                     == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "float lit = texture(shadowLevels, vec4(proj.xy, float(level), proj.z - offsets.x));") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "choice.nextWeight = clamp((box - shadowLevelBandStart)/max(shadowLevelEdge - shadowLevelBandStart, "
+                    "1e-6), 0.0, 1.0);") == 1U)
+                && (CountOccurrences(&Fixture.Text, "shadow = mix(shadow, next, choice.nextWeight);") == 1U)
+                && (CountOccurrences(&Fixture.Text, "return shadow*reachFade;") == 1U)
                 && (CountOccurrences(&Fixture.Text, "vec3 face = cross(dFdx(worldPos), dFdy(worldPos));") == 1U)
                 && (CountOccurrences(&Fixture.Text, "return (dot(face, side) < 0.0) ? -face : face;") == 1U)
                 && (CountOccurrences(&Fixture.Text,
@@ -1293,6 +1316,7 @@ static void ShippedCascadesAreReadOffTheSurface(TestRun* run)
                 && (CountOccurrences(&Fixture.Text,
                     "return max(SkyShadowAmount(worldPos, faceNormal, faceDotL), ScreenContactShadow()*strength);")
                     == 1U)
+                && (CountOccurrences(&Fixture.Text, "color = ShadowLevelViewColor(color, ") == 1U)
                 && (CountOccurrences(&Fixture.Text, Stages[Index][1]) == 1U);
             if (!TEST_CHECK(run, IsOffTheSurface))
             {
@@ -1332,7 +1356,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "shipped_depth_readers_share_one_convention", ShippedDepthReadersShareOneConvention },
         { "shipped_interior_matches_its_mirror", ShippedInteriorMatchesItsMirror },
         { "shipped_sky_volume_matches_its_mirror", ShippedSkyVolumeMatchesItsMirror },
-        { "shipped_cascades_are_read_off_the_surface", ShippedCascadesAreReadOffTheSurface },
+        { "shipped_shadow_levels_are_read_off_the_surface", ShippedShadowLevelsAreReadOffTheSurface },
     };
     TestRun_RunSuite(run, "ShaderSource", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

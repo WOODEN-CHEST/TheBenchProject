@@ -2,8 +2,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-// CollisionLayer.h for the collision settings' layer; WorldModel.h for WorldShadowTier (a terrain casts as a model
-// does); TerrainMesh.h for the mesh the asset owns; TerrainMaterial.h for its palette's materials.
+// CollisionLayer.h for the collision settings' layer; WorldModel.h for the haze's bound a terrain shares with models;
+// TerrainMesh.h for the mesh the asset owns; TerrainMaterial.h for its palette's materials.
 #include "CollisionLayer.h"
 #include "TerrainMaterial.h"
 #include "TerrainMesh.h"
@@ -45,6 +45,9 @@
 /** @brief The draw distance a terrain has unless its definition says, in metres: far, and fixed, so a quality setting
  *  never makes hills vanish. */
 #define TERRAIN_DEFAULT_DRAW_DISTANCE 4000.0f
+/** @brief The shadow distance a terrain's own starts at, in metres (unused until has_shadow_distance or a placement's
+ *  override is on: by default a terrain casts as far as its chunks are drawn). */
+#define TERRAIN_DEFAULT_SHADOW_DISTANCE TERRAIN_DEFAULT_DRAW_DISTANCE
 /** @brief The most bytes a palette material's or density channel's name may have. */
 #define TERRAIN_NAME_MAX_LENGTH ((size_t)128)
 /** @brief The material slot name a definition's faces use for the painted weights unless it says otherwise. */
@@ -64,10 +67,19 @@ typedef struct TerrainRenderSettingsStruct
 {
     /** @brief Whether the renderer outlines it (default true). */
     bool HasOutline;
-    /** @brief Which shadow cascade(s) it casts into (default both). */
-    WorldShadowTier ShadowTier;
     /** @brief Whether it casts shadows at all (default true; it receives them either way). */
     bool CastsShadows;
+    /** @brief Whether ShadowDistance is a shadow distance of its own (default false: it casts as far as its chunks are
+     *  drawn). Once resolved for a placement, whether the placement or the terrain gives one. */
+    bool HasShadowDistance;
+    /** @brief How far from the camera its chunks still cast, in metres, before the player's shadow_distance_scale and the
+     *  zoom (above 0; default TERRAIN_DEFAULT_SHADOW_DISTANCE; meaningful while HasShadowDistance). Once resolved for a
+     *  placement: its own (or the terrain's), or without one its draw distance in effect, times its
+     *  shadow_distance_multiplier; without its own the renderer scales it as the draw distance before the shadow
+     *  scale (WorldModelSettings.ShadowDistance's rule). */
+    float ShadowDistance;
+    /** @brief Whether the player's shadow_distance_scale leaves the shadow distance as it is (default false). */
+    bool IsShadowDistanceFixed;
     /** @brief How far its chunks are seen, in metres (above 0; default TERRAIN_DEFAULT_DRAW_DISTANCE): each chunk fades
      *  out past it, times the zoom. Once resolved for a placement, times its multiplier (+infinity on overflow). */
     float DrawDistance;
@@ -195,8 +207,8 @@ typedef struct TerrainAssetStruct
 
 // Functions.
 /**
- * @brief The default settings: outlined, casting into both cascades, seen TERRAIN_DEFAULT_DRAW_DISTANCE metres with a
- *        fixed draw distance; colliding on the world layer with that layer's default mask.
+ * @brief The default settings: outlined, casting shadows as far as it is drawn, seen TERRAIN_DEFAULT_DRAW_DISTANCE
+ *        metres with a fixed draw distance; colliding on the world layer with that layer's default mask.
  * @returns The settings.
  */
 TerrainSettings TerrainSettings_CreateDefault(void);

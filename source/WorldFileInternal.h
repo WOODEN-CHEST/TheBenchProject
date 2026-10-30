@@ -75,6 +75,9 @@ typedef struct WorldFileLoadStruct
     size_t KeyCheckpoint;
     /** The file's format version (1 to WORLD_FILE_FORMAT_VERSION) once read. */
     uint32_t FormatVersion;
+    /** The pool owning the file's parsed tree (the format's; the other one NULL), handed to the tables' migrations. */
+    JSONObjectPool* JSONPool;
+    GHDFObjectPool* GHDFPool;
     /** WorldFileUnknownName entries, at most WORLD_FILE_UNKNOWN_NAME_LIMIT; owned. */
     GenericBuffer UnknownNames;
     /** Unknown names met beyond the limit (each time counted). */
@@ -92,7 +95,9 @@ Error WorldFileLoad_Begin(WorldFileLoad* self, const WorldFileReadOptions* optio
 Error WorldFileLoad_SetFormatVersion(WorldFileLoad* self, uint64_t version);
 
 /** The read options of a table's block: the registry, the namespace, the data version the file's format wrote the
- *  table with, and unknown keys ignored (the load reports them once per name itself). */
+ *  table with (its migration upgrades older data: run it before reporting unknown keys, then read with a DataVersion of
+ *  0), the load's pool and logger for that migration, and unknown keys ignored (the load reports them once per name
+ *  itself). */
 PropertyReadOptions WorldFileLoad_GetTableOptions(const WorldFileLoad* self, const PropertyTable* table);
 
 /** The world's name from the file (@p byteCount bytes, no NUL inside; World_SetName's rules). */

@@ -1,10 +1,12 @@
 // Drawing of world model objects and light gizmos for the renderer's passes, from the render cache's lists. Meshes draw
 // with materials built on the stack, so no pass writes into a shared model asset. A model is drawn one LOD at a time:
 // the lit passes draw both LODs of a cross-fade with complementary dithers (WorldLod.h). A posed object's skinned meshes
-// draw with each pass's skinned shader and the pose's palette. Sprites have their own file (WorldRendererSprites.c).
+// draw with each pass's skinned shader and the pose's palette; the depth passes draw the meshes alone, with no material.
+// Sprites have their own file (WorldRendererSprites.c).
 
 #include "WorldRendererInternal.h"
 #include "GameSkeleton.h"
+#include "raylib/rlgl.h"
 #include "wr/WRMemory.h"
 
 
@@ -133,7 +135,7 @@ void WorldRendererGeometry_ResetPalettes(WorldRenderer* self)
     WorldRendererPalette* Palettes[] =
     {
         &self->_pbr._skinned._palette, &self->_unlit._skinnedPalette, &self->_gbuffer._skinnedPalette,
-        &self->_cascades._skinnedPalette, &self->_pointShadow._skinnedPalette, &self->_skyVisibility._skinnedPalette
+        &self->_shadowLevels._skinnedPalette, &self->_pointShadow._skinnedPalette, &self->_skyVisibility._skinnedPalette
     };
     for (size_t Index = 0U; Index < (sizeof(Palettes) / sizeof(Palettes[0])); Index++)
     {
@@ -181,6 +183,32 @@ void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel
         Material DrawMaterial = WorldRendererGeometry_PrepareMaterial(self, model, RayModel, MeshIndex, lod,
             IsSkinned ? shaders->Skinned : shaders->Rigid, LitProgram, Maps);
         DrawMesh(RayModel.meshes[MeshIndex], DrawMaterial, LodTransform);
+    }
+}
+
+void WorldRendererGeometry_DrawModelDepth(const WorldRenderModel* model, size_t lod,
+    const WorldRendererMeshShaders* shaders)
+{
+    GameModel* LodModel = WorldRenderModel_GetLodModel(model, lod);
+    if ((LodModel == NULL) || (shaders->Rigid == NULL))
+    {
+        return;
+    }
+    Model RayModel = GameModel_GetRaylibModel(LodModel);
+    Matrix LodTransform = WorldRenderModel_GetLodTransform(model, lod);
+    const GameSkeleton* Skeleton = GameModel_GetSkeleton(LodModel);
+    bool IsPosed = CanSkin(model, Skeleton, shaders);
+    unsigned int Bound = 0U;
+    for (int MeshIndex = 0; MeshIndex < RayModel.meshCount; MeshIndex++)
+    {
+        bool IsSkinned = IsPosed && GameSkeleton_IsMeshSkinned(Skeleton, (uint32_t)MeshIndex);
+        Shader MeshShader = IsSkinned ? *shaders->Skinned : *shaders->Rigid;
+        if (MeshShader.id != Bound)
+        {
+            rlEnableShader(MeshShader.id);
+            Bound = MeshShader.id;
+        }
+        WorldRendererCommon_DrawDepthMesh(MeshShader, RayModel.meshes[MeshIndex], LodTransform);
     }
 }
 

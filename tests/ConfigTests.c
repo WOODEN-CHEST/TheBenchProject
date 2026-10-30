@@ -111,6 +111,42 @@ static void OutOfRangeValuesFallBackToDefaults(TestRun* run)
     TEST_CHECK(run, (Config.LodDistanceScale == Defaults.LodDistanceScale) && (Defaults.LodDistanceScale == 1.0f));
 }
 
+static void ReadsTheShadowQuality(TestRun* run)
+{
+    GameConfig Defaults;
+    GameConfig_SetDefaults(&Defaults);
+    // The defaults: five levels, a factor of 4, 2048 texels, the periods 1, 1, 2, 4, ... 64, a scale of 1.
+    TEST_CHECK(run, (Defaults.ShadowLevelCount == 5) && (Defaults.ShadowLevelFactor == 4.0f));
+    TEST_CHECK(run, (Defaults.ShadowMapSize == 2048) && (Defaults.ShadowDistanceScale == 1.0f));
+    const int32_t Periods[CONFIG_MAX_SHADOW_LEVELS] = { 1, 1, 2, 4, 8, 16, 32, 64 };
+    for (size_t Level = 0U; Level < (size_t)CONFIG_MAX_SHADOW_LEVELS; Level++)
+    {
+        TEST_CHECK(run, Defaults.ShadowUpdatePeriods[Level] == Periods[Level]);
+    }
+
+    // Every key read; a shorter periods array changes only the levels it gives.
+    GameConfig Config;
+    TEST_CHECK_SUCCESS(run, LoadConfigText(run, "reads_the_shadow_quality",
+        "{ \"shadow_distance_scale\": 0.5, \"shadow_level_count\": 7, \"shadow_level_factor\": 2.5,"
+        "  \"shadow_map_size\": 4096, \"shadow_update_periods\": [ 1, 2, 3 ] }", &Config));
+    TEST_CHECK(run, (Config.ShadowDistanceScale == 0.5f) && (Config.ShadowLevelCount == 7));
+    TEST_CHECK(run, (Config.ShadowLevelFactor == 2.5f) && (Config.ShadowMapSize == 4096));
+    TEST_CHECK(run, (Config.ShadowUpdatePeriods[0] == 1) && (Config.ShadowUpdatePeriods[1] == 2));
+    TEST_CHECK(run, (Config.ShadowUpdatePeriods[2] == 3) && (Config.ShadowUpdatePeriods[3] == 4));
+
+    // Out of range (or not a power of two) keeps each default; a bad period keeps its level's own default.
+    TEST_CHECK_SUCCESS(run, LoadConfigText(run, "shadow_quality_out_of_range",
+        "{ \"shadow_distance_scale\": -1, \"shadow_level_count\": 9, \"shadow_level_factor\": 1.2,"
+        "  \"shadow_map_size\": 3000, \"shadow_update_periods\": [ 0, 1, 2, 999 ] }", &Config));
+    TEST_CHECK(run, (Config.ShadowDistanceScale == 1.0f) && (Config.ShadowLevelCount == 5));
+    TEST_CHECK(run, (Config.ShadowLevelFactor == 4.0f) && (Config.ShadowMapSize == 2048));
+    TEST_CHECK(run, (Config.ShadowUpdatePeriods[0] == 1) && (Config.ShadowUpdatePeriods[2] == 2));
+    TEST_CHECK(run, Config.ShadowUpdatePeriods[3] == 4);
+    TEST_CHECK_SUCCESS(run, LoadConfigText(run, "shadow_map_size_bounds",
+        "{ \"shadow_map_size\": 128, \"shadow_level_factor\": 9 }", &Config));
+    TEST_CHECK(run, (Config.ShadowMapSize == 2048) && (Config.ShadowLevelFactor == 4.0f));
+}
+
 static void UnknownKeysAreIgnored(TestRun* run)
 {
     GameConfig Config;
@@ -146,6 +182,7 @@ void ConfigTests_Run(TestRun* run)
         { "whole_real_integers_are_accepted", WholeRealIntegersAreAccepted },
         { "fractional_integers_keep_the_default", FractionalIntegersKeepTheDefault },
         { "out_of_range_values_fall_back_to_defaults", OutOfRangeValuesFallBackToDefaults },
+        { "reads_the_shadow_quality", ReadsTheShadowQuality },
         { "unknown_keys_are_ignored", UnknownKeysAreIgnored },
         { "non_object_root_fails_with_defaults", NonObjectRootFailsWithDefaults },
         { "malformed_json_fails_with_defaults", MalformedJsonFailsWithDefaults },

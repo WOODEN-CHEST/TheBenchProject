@@ -839,16 +839,23 @@ void WorldRendererTerrain_DrawCasters(WorldRenderer* self, Shader shader, const 
     const WorldRenderTerrainChunk* Chunks = WorldRenderCache_GetTerrainChunks(&self->_cache, &ChunkCount);
     size_t CasterCount = 0U;
     const size_t* Casters = WorldVisibility_GetTerrainChunks(&self->_visibility, &self->_cache, pass, &CasterCount);
-    MaterialMap Maps[WORLD_RENDERER_MATERIAL_MAP_COUNT];
-    Memory_Zero(Maps, sizeof(Maps));
-    Material Draw = { .shader = shader, .maps = Maps };
+    // The shadow passes dither by the chunks' shadow fade (their shadow distance too), the sky's volume by their fade.
+    // One program for every chunk: bound once.
+    bool IsShadowPass = (pass != WorldVisibilityPass_SkyVisibility);
+    WorldRendererDitherRun Run = { 0 };
+    rlEnableShader(shader.id);
     for (size_t Position = 0U; Position < CasterCount; Position++)
     {
         size_t Index = Casters[Position];
-        WorldRendererCommon_SetDither(shader, dither, WorldVisibility_GetTerrainChunkFade(&self->_visibility,
-            Index).Combined, 0.0f, false);
-        DrawChunk(self, &Chunks[Index], Draw, Chunks[Index].RenderMatrix);
+        WorldVisibilityFade Fade = WorldVisibility_GetTerrainChunkFade(&self->_visibility, Index);
+        WorldRendererCommon_SetRunDither(shader, dither, &Run, IsShadowPass ? Fade.Shadow : Fade.Combined);
+        const WorldRendererTerrainChunkMesh* Gpu = FindChunkMesh(self, &Chunks[Index]);
+        for (uint32_t Part = 0U; (Gpu != NULL) && (Part < Gpu->_partCount); Part++)
+        {
+            WorldRendererCommon_DrawDepthMesh(shader, Gpu->_parts[Part]._mesh, Chunks[Index].RenderMatrix);
+        }
     }
+    WorldRendererCommon_EndDepthMeshes();
 }
 
 WorldRendererFeatureState WorldRendererTerrain_GetMaterialsState(const WorldRenderer* self)

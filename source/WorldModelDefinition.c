@@ -100,11 +100,13 @@ typedef struct WorldModelDefinitionStruct
     WorldModelSocketDefinition* Sockets; // owned, NULL without "sockets" and "first_person"
 } WorldModelDefinition;
 
-/* The definition being read and its name in printable form, for messages. */
+/* The definition being read, its name in printable form, for messages, and the asset manager's logger for warnings
+ * (may be NULL). */
 typedef struct ParseContextStruct
 {
     WorldModelDefinition* Definition;
     char Name[NAME_PRINT_CAPACITY];
+    Logger* Log;
 } ParseContext;
 
 typedef struct WorldModelLoadedStruct
@@ -128,8 +130,12 @@ static const unsigned char* const RootKeys[] =
 static const unsigned char* const LodKeys[] = { u8"model", u8"max_distance" };
 static const unsigned char* const RenderKeys[] =
 {
-    u8"has_outline", u8"omit_pixelation", u8"shadow_tier", u8"casts_shadows", u8"haze", u8"occludes_sky"
+    u8"has_outline", u8"omit_pixelation", u8"casts_shadows", u8"has_shadow_distance", u8"shadow_distance",
+    u8"is_shadow_distance_fixed", u8"is_shadow_only", u8"has_two_sided_shadows", u8"has_shadow_lod", u8"shadow_lod",
+    u8"haze", u8"occludes_sky", u8"shadow_tier"
 };
+/* The names an older definition's render.shadow_tier may hold: which of two shadow maps the model cast into. */
+static const char* const LegacyShadowTierNames[] = { "both", "near", "far" };
 static const unsigned char* const VariantKeys[] = { u8"name", u8"material_overrides" };
 static const unsigned char* const OverrideKeys[] =
 {
@@ -415,8 +421,32 @@ static Error ParseDistances(const ParseContext* context, JSONCompound* root)
     return Error_CreateSuccess();
 }
 
-/* "shadow_tier": one of WORLD_SHADOW_TIER_ENUM's names. */
-static Error ParseShadowTier(const ParseContext* context, JSONCompound* render, WorldShadowTier* outTier)
+/* Logs one warning about the definition (no logger: none). */
+static void Warn(const ParseContext* context, const char* format, ...)
+{
+    if (context->Log == NULL)
+    {
+        return;
+    }
+    char Text[MESSAGE_CAPACITY];
+    va_list Arguments;
+    va_start(Arguments, format);
+    int Length = vsnprintf(Text, sizeof(Text), format, Arguments);
+    va_end(Arguments);
+    if (Length < 0)
+    {
+        Text[0] = '\0';
+    }
+    Error LogResult = Logger_LogWarningFormatted(context->Log, (const unsigned char*)u8"World model \"%s\": %s",
+        context->Name, Text);
+    Error_Deconstruct(&LogResult);
+}
+
+/* An older definition's "shadow_tier" (which of two shadow maps the model cast into), read into the shadow settings with
+ * one warning naming what replaces it: "near" cast within WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE metres of the camera
+ * (that shadow distance, unless the definition gives its own), "both" is what every model does, "far" (only the coarse
+ * shadow far out) is no setting. Anything else is refused, as before. */
+static Error ParseLegacyShadowTier(const ParseContext* context, JSONCompound* render, bool hasOwnShadowDistance)
 {
     unsigned char* Text = NULL;
     bool Found = false;
@@ -430,27 +460,134 @@ static Error ParseShadowTier(const ParseContext* context, JSONCompound* render, 
     {
         return Error_CreateSuccess();
     }
-    for (size_t Index = 0U; Index < WORLD_SHADOW_TIER_ENUM.EntryCount; Index++)
+    size_t Tier = KEY_COUNT(LegacyShadowTierNames);
+    for (size_t Index = 0U; Index < KEY_COUNT(LegacyShadowTierNames); Index++)
     {
         bool IsEqual = false;
-        Error CompareResult = StringUTF8_EqualsExact(Text, WORLD_SHADOW_TIER_ENUM.Entries[Index].Name, &IsEqual);
+        Error CompareResult = StringUTF8_EqualsExact(Text, (const unsigned char*)LegacyShadowTierNames[Index], &IsEqual);
         Error_Deconstruct(&CompareResult);
         if (IsEqual)
         {
-            *outTier = (WorldShadowTier)WORLD_SHADOW_TIER_ENUM.Entries[Index].Value;
-            Memory_Free(Text);
-            return Error_CreateSuccess();
+            Tier = Index;
         }
     }
-    char Name[NAME_PRINT_CAPACITY];
-    Result = Fail(context, "render.shadow_tier is \"%s\"; it must be \"both\", \"near\" or \"far\".",
-        Printable(Text, Name, sizeof(Name)));
+    if (Tier >= KEY_COUNT(LegacyShadowTierNames))
+    {
+        char Name[NAME_PRINT_CAPACITY];
+        Result = Fail(context, "render.shadow_tier is \"%s\"; it must be \"both\", \"near\" or \"far\".",
+            Printable(Text, Name, sizeof(Name)));
+        Memory_Free(Text);
+        return Result;
+    }
     Memory_Free(Text);
+
+    WorldModelSettings* Settings = &context->Definition->Settings;
+    if (Tier == 1U)
+    {
+        if (!hasOwnShadowDistance)
+        {
+            Settings->HasShadowDistance = true;
+            Settings->ShadowDistance = WORLD_MODEL_NEAR_TIER_SHADOW_DISTANCE;
+        }
+        Warn(context, "render.shadow_tier \"near\" is read as render.shadow_distance %g; write that instead.",
+            (double)Settings->ShadowDistance);
+    }
+    else if (Tier == 2U)
+    {
+        Warn(context, "render.shadow_tier \"far\" is not read: every caster casts from the camera out to its shadow "
+            "distance; leave it out.");
+    }
+    else
+    {
+        Warn(context, "render.shadow_tier \"both\" is what every model does; leave it out.");
+    }
+    return Error_CreateSuccess();
+}
+
+/* Whether the render block holds @p key. */
+static Error HasRenderKey(const ParseContext* context, JSONCompound* render, const unsigned char* key, bool* outFound)
+{
+    JSONObjectValue Value;
+    Error Result = JSONCompound_GetOptional(render, key, &Value, outFound);
+    return (Result.Code == ErrorCode_Success) ? Result : WrapError(context, "render", &Result);
+}
+
+/* "shadow_lod": the LOD the model casts with while has_shadow_lod, 0 the finest; any LOD is accepted (one past the last
+ * casts the last, as a placement's). *outFound says whether the block gives it. */
+static Error ReadShadowLod(const ParseContext* context, JSONCompound* render, bool* outFound)
+{
+    Error Result = HasRenderKey(context, render, (const unsigned char*)u8"shadow_lod", outFound);
+    if ((Result.Code != ErrorCode_Success) || !*outFound)
+    {
+        return Result;
+    }
+    int64_t Lod = 0;
+    Result = AssetJSON_ReadOptionalInteger(render, (const unsigned char*)u8"shadow_lod", 0, &Lod);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&Result);
+        return Fail(context, "render.shadow_lod must be a whole number: the LOD the model casts with, 0 the finest.");
+    }
+    if ((Lod < 0) || (Lod > (int64_t)UINT32_MAX))
+    {
+        return Fail(context, "render.shadow_lod is %" PRId64 "; it must be 0 or above (0 the finest LOD).", Lod);
+    }
+    context->Definition->Settings.ShadowLod = (uint32_t)Lod;
+    return Error_CreateSuccess();
+}
+
+/* The render block's shadow settings: the shadow distance (a value given without has_shadow_distance turns it on, the
+ * hand-written form; an explicit has_shadow_distance wins), its fixed flag, shadow only, two-sided shadows and the shadow
+ * LOD (the same rule for has_shadow_lod), then an older definition's shadow tier. */
+static Error ParseRenderShadows(const ParseContext* context, JSONCompound* render)
+{
+    WorldModelSettings* Settings = &context->Definition->Settings;
+    bool HasDistance = false;
+    Error Result = ReadFloat(context, render, (const unsigned char*)u8"shadow_distance", Settings->ShadowDistance, "render",
+        &Settings->ShadowDistance, &HasDistance);
+    if ((Result.Code == ErrorCode_Success) && !(Settings->ShadowDistance > 0.0f))
+    {
+        return Fail(context, "render.shadow_distance is %g; it must be above 0 (metres from the camera).",
+            (double)Settings->ShadowDistance);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadBoolean(context, render, (const unsigned char*)u8"has_shadow_distance", HasDistance, "render",
+            &Settings->HasShadowDistance);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadBoolean(context, render, (const unsigned char*)u8"is_shadow_distance_fixed",
+            Settings->IsShadowDistanceFixed, "render", &Settings->IsShadowDistanceFixed);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadBoolean(context, render, (const unsigned char*)u8"is_shadow_only", Settings->IsShadowOnly, "render",
+            &Settings->IsShadowOnly);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadBoolean(context, render, (const unsigned char*)u8"has_two_sided_shadows",
+            Settings->HasTwoSidedShadows, "render", &Settings->HasTwoSidedShadows);
+    }
+    bool HasLod = false;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadShadowLod(context, render, &HasLod);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadBoolean(context, render, (const unsigned char*)u8"has_shadow_lod", HasLod, "render",
+            &Settings->HasShadowLod);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ParseLegacyShadowTier(context, render, HasDistance);
+    }
     return Result;
 }
 
-/* "render": the default render settings of the placements (outline, crisp, shadow tier, casts shadows, haze, occludes
- * the sky). */
+/* "render": the default render settings of the placements (outline, crisp, the shadows, haze, occludes the sky). */
 static Error ParseRender(const ParseContext* context, JSONCompound* root)
 {
     JSONCompound* Render = NULL;
@@ -487,7 +624,7 @@ static Error ParseRender(const ParseContext* context, JSONCompound* root)
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = ParseShadowTier(context, Render, &Settings->ShadowTier);
+        Result = ParseRenderShadows(context, Render);
     }
     if (Result.Code == ErrorCode_Success)
     {
@@ -766,12 +903,13 @@ static Error ParseAnimationLibraries(const ParseContext* context, JSONCompound* 
     return Error_CreateSuccess();
 }
 
-/* Reads everything after the name, in the reference's order. */
-static Error ParseDefinition(WorldModelDefinition* definition, JSONCompound* root)
+/* Reads everything after the name, in the reference's order; warnings go to @p log (may be NULL). */
+static Error ParseDefinition(WorldModelDefinition* definition, JSONCompound* root, Logger* log)
 {
     ParseContext Context;
     Context.Definition = definition;
     AssetJSON_CopyPrintable(definition->Base.Name, Context.Name, sizeof(Context.Name));
+    Context.Log = log;
     definition->Settings = WorldModelSettings_CreateDefault();
     definition->LodFadeSeconds = WORLD_MODEL_DEFAULT_LOD_FADE_SECONDS;
     definition->LodHysteresis = WORLD_MODEL_DEFAULT_LOD_HYSTERESIS;
@@ -1334,7 +1472,6 @@ static const AssetDefinitionVTable WorldModelDefinitionVTable =
 Error WorldModelDefinition_Construct(AssetManager* manager, const UserData* userData, const GenericBuffer* rawData,
     const unsigned char* sourceDescription, AssetDefinition** outDefinition)
 {
-    (void)manager;
     *outDefinition = NULL;
 
     JSONObjectPool* Pool = UserData_GetPointer(userData);
@@ -1355,7 +1492,7 @@ Error WorldModelDefinition_Construct(AssetManager* manager, const UserData* user
     Result = AssetJSON_ReadName(RootCompound, sourceDescription, &Definition->Base.Name);
     if (Result.Code == ErrorCode_Success)
     {
-        Result = ParseDefinition(Definition, RootCompound);
+        Result = ParseDefinition(Definition, RootCompound, (manager != NULL) ? AssetManager_GetLogger(manager) : NULL);
     }
 
     Error ReturnResult = JSONObjectPool_ReturnValue(Pool, &Root);

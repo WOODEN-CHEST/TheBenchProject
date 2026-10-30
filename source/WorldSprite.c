@@ -97,7 +97,9 @@ static const PropertyTable SettingsTable =
     .Migrate = NULL
 };
 
-/* The keys of a definition's "render" block. */
+/* The keys of a definition's "render" block, each row with the sprite component's wire id for the same setting.
+ * has_shadow_distance is the asset's own row (as has_draw_distance at the root): it takes wire 39, the component's
+ * overrides_shadow_distance, the flag in the same place. */
 static const PropertyDescriptor RenderProperties[] =
 {
     {
@@ -110,6 +112,26 @@ static const PropertyDescriptor RenderProperties[] =
     },
     {
         WORLD_SPRITE_ROW_CASTS_SHADOWS, .WireId = 15U, PROPERTY_MEMBER(WorldSpriteRenderSettings, CastsShadows),
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"has_shadow_distance", .WireId = 39U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldSpriteRenderSettings, HasShadowDistance), .Default.BoolValue = false,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = WORLD_SPRITE_CATEGORY_SHADOWS, .DisplayName = u8"Own shadow distance",
+        .Description = u8"Uses this world sprite's shadow distance instead of casting as far as it is drawn. A definition "
+            u8"that gives shadow_distance without this key has it on.",
+        .SinceVersion = 1U
+    },
+    {
+        WORLD_SPRITE_ROW_SHADOW_DISTANCE, .WireId = 40U, PROPERTY_MEMBER(WorldSpriteRenderSettings, ShadowDistance),
+        .SinceVersion = 1U
+    },
+    {
+        WORLD_SPRITE_ROW_IS_SHADOW_DISTANCE_FIXED, .WireId = 43U,
+        PROPERTY_MEMBER(WorldSpriteRenderSettings, IsShadowDistanceFixed), .SinceVersion = 1U
+    },
+    {
+        WORLD_SPRITE_ROW_IS_SHADOW_ONLY, .WireId = 45U, PROPERTY_MEMBER(WorldSpriteRenderSettings, IsShadowOnly),
         .SinceVersion = 1U
     },
     { WORLD_SPRITE_ROW_HAZE, .WireId = 38U, PROPERTY_MEMBER(WorldSpriteRenderSettings, Haze), .SinceVersion = 1U },

@@ -174,9 +174,9 @@ Current module list:
     binary form (source data), the palette's names, the density channels' names, the chunk size, and its placements'
     default render and collision settings; unknown keys refused everywhere.
   * WorldTerrainComponent - Component type 6 (`terrain`): a terrain asset by name and the settings this placement
-    overrides (explicit flags next to its own values: outline, shadow tier, casts shadows, draw distance, fixed draw
-    distance, collision enabled, layer, mask; a draw distance multiplier), with the pure function that resolves the
-    settings in effect. The collision world makes each chunk a one-sided mesh shape (WorldCollision.md, "Terrain");
+    overrides (explicit flags next to its own values: outline, casts shadows, shadow distance, fixed shadow distance,
+    draw distance, fixed draw distance, collision enabled, layer, mask; draw and shadow distance multipliers), with the
+    pure function that resolves the settings in effect. The collision world makes each chunk a one-sided mesh shape (WorldCollision.md, "Terrain");
     the renderer draws the chunks in every pass (source/WorldRendererTerrain.c, WorldRuntime.md).
   * TerrainMaterial - The terrain_material asset type (a standard type, JSON in terrain_materials/;
     include/TerrainMaterial.h, source/TerrainMaterial.c, the definition in source/TerrainMaterialDefinition.c): one
@@ -188,7 +188,7 @@ Current module list:
     (weights, rules with their periodic value noise, height blending, triplanar projections) and the material at a point
     of a terrain (a triangle and barycentrics: footsteps, the scattering's limits).
   * GLTextureArray - Texture arrays (private, source/GLTextureArray.{h,c}): direct OpenGL calls (the
-    project's only ones with GLReadback, GLDepth and GLSliceMap), through the function pointers raylib's rlGetProcAddress resolves
+    project's only ones with GLReadback, GLDepth, GLSliceMap and GLShadowArray), through the function pointers raylib's rlGetProcAddress resolves
     (no raylib rebuild), with their GL constants; used by the renderer's terrain pass. Anything else that needs GL raylib
     lacks belongs in a module like it, never in a pass (BUILDING.md, "Direct OpenGL calls").
   * GLReadback - Reading a small target back without waiting for the GPU (private, source/GLReadback.{h,c}): a
@@ -204,6 +204,11 @@ Current module list:
     integer clear, the logic operations (XOR, OR) that draw them and the per-level reads that build their pyramid;
     direct OpenGL calls in GLTextureArray's manner. Used by the sky's occupancy volume (WorldRendererSkyVisibility.c,
     interior lighting); without them the sky's visibility stays open.
+  * GLShadowArray - The sun's and the moon's shadow maps (private, source/GLShadowArray.{h,c}): one 2D array texture of
+    32-bit float depth, a layer per shadow level, with the hardware's depth comparison and linear filtering, a
+    framebuffer without colour that each layer is attached to in turn, and depth clamping around a level's draw; direct
+    OpenGL calls in GLTextureArray's manner. Used by the shadow pass (WorldRendererShadows.c); without it the sun and
+    the moon cast no shadows.
 * World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
   animation stands, is lit and is seen in the world, kept apart from its placements. WorldSprite (include/WorldSprite.h,
   source/WorldSprite.c) holds the animation it plays (loaded as its dependency) and the defaults of its placements
@@ -328,7 +333,7 @@ Current module list:
     reversed 32-bit float
     depth with no far plane where the GPU has clip control (GLDepth), so whatever has the draw distance draws at any
     distance), in render space: the world's orientation with the camera at the origin, every position relative to the
-    camera (subtracted in double), shadow cascades snapped to their texels; separate from the world data and never
+    camera (subtracted in double), shadow levels snapped to their texels; separate from the world data and never
     writes to it. Split by render pass into source/WorldRenderer*.c behind the private source/WorldRendererInternal.h;
     read "Renderer structure" in WorldRuntime.md before adding to it. WorldRenderer_GetStatus reports which features
     run.
@@ -357,8 +362,15 @@ Current module list:
   * WorldRenderSpace - Render space as pure maths (private, source/WorldRenderSpace.h): the frame's origin (the
     camera's double position) with its rotation-only view and projection (also the reversed infinite projection and
     its closed-form inverse), the C mirror of the sky shader's ray, and the
-    shadow cascades with their centres snapped to their texel grids in double, each grid kept from frame to frame
-    (anchored to the last frame's box). WorldRuntime.md's "Render space" has the rule every pass and shader follows.
+    shadow levels' boxes with their centres snapped to their texel grids in double, each grid kept from frame to frame
+    (anchored to the last frame's box), and a kept level's box built again from its stored centre and light.
+    WorldRuntime.md's "Render space" has the rule every pass and shader follows.
+  * WorldShadowLevels - The sun's and the moon's shadow levels as pure maths (private, source/WorldShadowLevels.h): the
+    nested boxes around the camera (their sizes and texels from the player's quality settings, the levels the world's
+    reach needs, their depth range), which level a point reads and the blend over its band (the C mirror of
+    shaders/common/lighting.glsl's choice), the reach's fade, what a level draws (the size cut, the LOD of its inner edge,
+    its ring) and which levels render each frame (the staggered periods, the turn and move triggers) with the light
+    frame each kept level is read with (WorldRuntime.md, "Sun and moon shadows").
   * WorldInstancing - Instanced drawing as pure maths (private, source/WorldInstancing.h): a component's copies
     sorted into 32 m cells of its object's space with their 56-byte records (each matrix relative to its cell's centre,
     composed in double, rounded once), the copies' LOD bands around the switch distances, their fades, which pass draws
@@ -369,12 +381,14 @@ Current module list:
     across frames (progress over the world model's fade time, turning back without a pop, a third LOD from the larger
     share, the two draws with complementary dithers, the LOD the G-buffer and the shadows draw solid).
   * WorldVisibility - What each pass draws this frame (private, source/WorldVisibility.h): frustum planes and sphere
-    tests (the camera's frustum, without a far plane for reversed depth; each shadow cascade's box), draw
-    distances (each model's and sprite's own, times the
-    config's draw_distance_scale unless fixed, against its distance times the camera's zoom factor) with their
+    tests (the camera's frustum, without a far plane for reversed depth; each shadow level's box, size cut, reach and
+    ring), draw distances (each model's and sprite's own, times the
+    config's draw_distance_scale unless fixed, against its distance times the camera's zoom factor) and shadow
+    distances (scaled by the config's shadow_distance_scale unless fixed, never past the draw distance) with their
     fade band, the opacity's fade, the dither's C mirror (shaders/common/dither.glsl: the draw's fade and the LOD
     cross-fade's complementary masks), and
-    the per-pass lists of cache entries with their fades, built every frame from the render cache.
+    the per-pass lists of cache entries with their fades, built every frame from the render cache; shadow-only entries
+    are in the shadow lists alone.
   * SpriteTransform - A sprite quad's pure maths (private, source/SpriteTransform.h): its matrix for a viewer (the
     camera or a light; billboard, axis billboard, fixed), its world size from pixels per unit, its bounds and the
     back-to-front order of the blended sprites; the sprite pass and the shadow passes draw with it.
@@ -414,7 +428,9 @@ Current module list:
     (the A/B against the direct march), 2 the multiple scattering and 3 the ozone, and I adds the frame times; the
     keypad's 4 to 8 drive the haze (its debug view and slice, the distance scale, a morning mist, the haze strength),
     the keypad's 9 switches interior lighting (the A/B) and 0 steps its debug view (the zones, the sky's share). Its
-    world has a test room with an ambient zone, and its PrepareRender measures how open the camera is to the sky.
+    world has a test room with an ambient zone, and its PrepareRender measures how open the camera is to the sky. The
+    keypad's + shows a far field of towers out to 3 km on a 12 km plain (a runtime object) and * the shadow levels'
+    debug view (the private source/WorldTestShadows.{h,c}).
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown

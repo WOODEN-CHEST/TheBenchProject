@@ -12,6 +12,7 @@
 #include "WorldTestAnimation.h"
 #include "WorldTestCharacters.h"
 #include "WorldTestInstances.h"
+#include "WorldTestShadows.h"
 #include "WorldFile.h"
 #include "WorldObject.h"
 #include "WorldModelComponent.h"
@@ -232,6 +233,8 @@ typedef struct WorldTestFrameStruct
     /** The instanced copies' test content: the pebble field (the apostrophe) and the instancing A/B (the
      *  semicolon). */
     WorldTestInstances _testInstances;
+    /** The shadows' test content: the far field (keypad +) and the shadow levels' debug view (keypad *). */
+    WorldTestShadows _testShadows;
     /** Where the F11 key's far shift has moved the test world, its characters and the camera: an index into FarShifts
      *  (0: not moved). */
     size_t _farShiftIndex;
@@ -942,6 +945,7 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         WorldTestCharacters_LogStatus(&frame->_testCharacters);
         WorldTestAnimation_LogStatus(&frame->_testAnimation);
         WorldTestInstances_LogStatus(&frame->_testInstances);
+        WorldTestShadows_LogStatus(&frame->_testShadows);
         LogCameraStatus(frame);
         LogFrameTimes(frame);
     }
@@ -1696,6 +1700,7 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
     HandleDebugFarShiftInput(frame, input);
     WorldTestAnimation_HandleInput(&frame->_testAnimation, input, &frame->_camera);
     WorldTestInstances_HandleInput(&frame->_testInstances, input);
+    WorldTestShadows_HandleInput(&frame->_testShadows, input);
 }
 
 
@@ -2049,6 +2054,7 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
     WorldTestCharacters_SetAnimation(&Frame->_testCharacters, Frame->_testAnimation._animation);
     WorldTestInstances_Construct(&Frame->_testInstances, &Frame->_world, Frame->_collision, Frame->_renderer,
         services->Logger);
+    WorldTestShadows_Construct(&Frame->_testShadows, &Frame->_world, Frame->_renderer, services->Logger);
 
     Frame->_services = services;
     for (size_t Index = 0U; Index < OPACITY_TEST_OBJECT_COUNT; Index++)

@@ -18,6 +18,8 @@
 #include "GLReadback.h"
 #include "GLDepth.h"
 #include "GLSliceMap.h"
+#include "GLShadowArray.h"
+#include "Config.h"
 #include "EyeAdaptation.h"
 #include "NightVision.h"
 #include "WorldAtmosphere.h"
@@ -25,6 +27,7 @@
 #include "WorldSkyLight.h"
 #include "SpriteTransform.h"
 #include "WorldRenderSpace.h"
+#include "WorldShadowLevels.h"
 #include "WorldVisibility.h"
 #include "raylib/raylib.h"
 // rlgl supplies RL_MAX_SHADER_LOCATIONS and the scene near/far cull distances.
@@ -43,7 +46,7 @@
  *   WorldRendererSprites.c   the sprites: the quad, the lit sprite shader, each frame's sprite matrices, and the lit
  *                            cutout, decal and sorted transparent draws
  *   WorldRendererLighting.c  the PBR shader, the lit shaders' frame uniforms, forward point lights, eye adaptation
- *   WorldRendererShadows.c   the shadow cascades of the sun or the moon, and the point-light cube shadow
+ *   WorldRendererShadows.c   the shadow levels of the sun or the moon, and the point-light cube shadow
  *   WorldRendererGBuffer.c   the normal/flag G-buffer and the ambient-occlusion pre-pass
  *   WorldRendererAtmosphere.c the atmosphere's tables: transmittance, multiple scattering, the sky view, built
  *                            first in the frame and read by the sky and the stars; the haze's volume; the sky's
@@ -97,21 +100,9 @@
  *  view positions from depth. */
 #define SCENE_NEAR_PLANE ((double)RL_CULL_DISTANCE_NEAR)
 #define SCENE_FAR_PLANE ((double)RL_CULL_DISTANCE_FAR)
-/** Resolution (square) of each sun shadow-map cascade, in texels. The PBR shader's PCF needs its texel size. */
-#define SHADOW_MAP_SIZE 2048
-/** The shadow light (the sun or the moon) casts TWO cascaded orthographic shadow maps, both around the camera (their
- *  centres snapped to their texels): a NEAR cascade with a small extent (sharp shadows for close detail; 1.6 cm texels)
- *  and a FAR cascade with a large extent (coarse shadows for big / distant casters; 7.8 cm texels). Per-object
- *  WorldShadowTier routes which cascade(s) each object casts into. World-space width/height of each cascade's
- *  frustum: */
-#define SHADOW_NEAR_ORTHO_SIZE 32.0f
-#define SHADOW_FAR_ORTHO_SIZE 160.0f
-/** Distance the shadow light camera is placed from its focus, along the shadow light's direction. */
-#define SHADOW_DISTANCE 120.0f
-/** Near plane of the shadow orthographic frustum (shared by both cascades). */
-#define SHADOW_NEAR 1.0f
-/** Far plane of the shadow orthographic frustum (brackets the scene around the focus; shared by both cascades). */
-#define SHADOW_FAR (SHADOW_DISTANCE * 2.0f)
+/** The most shadow levels the lit shaders read (common/lighting's SHADOW_MAX_LEVELS; the levels' own and the config's
+ *  limits are the same: checked below). */
+#define WORLD_RENDERER_MAX_SHADOW_LEVELS WORLD_SHADOW_MAX_LEVELS
 /** Number of maps in a raylib Material: the renderer module's RENDERER_MATERIAL_MAP_COUNT (raylib's private
  *  MAX_MATERIAL_MAPS, see BUILDING.md). DrawMesh reads, and binds textures from, exactly this many entries of
  *  Material.maps, so a per-draw material copy must have this many. Changing it means checking
@@ -151,17 +142,18 @@ typedef enum
     WorldRendererTextureUnit_TerrainAlbedoHeight = 9,   // sampler2DArray materialAlbedoHeight
     WorldRendererTextureUnit_TerrainNormal = 10,        // sampler2DArray materialNormal
     WorldRendererTextureUnit_TerrainRoughnessAo = 11,   // sampler2DArray materialRoughnessAo
-    // Every lit program's frame textures.
-    WorldRendererTextureUnit_ShadowNear = 12,       // sampler2D shadowMap (near sun cascade)
-    WorldRendererTextureUnit_ShadowFar = 13,        // sampler2D shadowMapFar (far sun cascade)
+    // Every lit program's frame textures. Unit 13 is free in every lit program (agents/WorldRuntime.md's budget).
+    WorldRendererTextureUnit_ShadowLevels = 12,     // sampler2DArrayShadow shadowLevels (the sun's or the moon's levels)
     WorldRendererTextureUnit_PointShadowCube = 14,  // samplerCube pointShadowCube
     WorldRendererTextureUnit_AmbientOcclusion = 15, // sampler2D ambientOcclusionMap
 } WorldRendererTextureUnit;
 
-_Static_assert(WorldRendererTextureUnit_ShadowNear >= WORLD_RENDERER_MATERIAL_MAP_COUNT,
+_Static_assert(WorldRendererTextureUnit_ShadowLevels >= WORLD_RENDERER_MATERIAL_MAP_COUNT,
     "renderer-owned texture units must sit above raylib's material map units");
-_Static_assert(WorldRendererTextureUnit_TerrainRoughnessAo < WorldRendererTextureUnit_ShadowNear,
+_Static_assert(WorldRendererTextureUnit_TerrainRoughnessAo < WorldRendererTextureUnit_ShadowLevels,
     "the terrain's arrays sit below the frame textures");
+_Static_assert(WORLD_SHADOW_MAX_LEVELS == (unsigned int)CONFIG_MAX_SHADOW_LEVELS,
+    "the config asks for at most as many shadow levels as there may be");
 _Static_assert(WorldRendererTextureUnit_HazeVolume < WorldRendererTextureUnit_TerrainAlbedoHeight,
     "the haze's volume sits below the terrain's arrays (the terrain program reads both)");
 _Static_assert((WorldRendererTextureUnit_SkyVisibility != WorldRendererTextureUnit_HazeVolume)
@@ -187,20 +179,33 @@ typedef struct WorldRendererRadianceStruct
     float Rgb[3];
 } WorldRendererRadiance;
 
-/** @brief One shadow cascade's light matrices and box for a frame, in render space (WorldRendererShadows_PrepareFrame:
- *  WorldRenderSpace_GetCascade). */
-typedef struct WorldRendererCascadeFrameStruct
+/** @brief One shadow level in a frame, in render space (WorldRendererShadows_PrepareFrame, from
+ *  WorldShadowLevels_BeginFrame). */
+typedef struct WorldRendererShadowLevelFrameStruct
 {
-    /** @brief The light's view (looking along the shadow light at the box's centre: the camera's position snapped to the
-     *  cascade's texel grid) and its orthographic projection. */
+    /** @brief Whether its map is drawn this frame; otherwise the lit shaders read it as it was drawn in an earlier frame,
+     *  with these matrices (built again for this frame's origin). */
+    bool IsRendered;
+    /** @brief The light's view (looking along the light at the box's centre: the camera's position snapped to the
+     *  level's texel grid when it was drawn) and its orthographic projection. */
     Matrix View;
     Matrix Projection;
-    /** @brief Render space -> light clip (raymath order: MatrixMultiply(View, Projection)): the lit shaders' lightVP or
-     *  lightVPFar. */
+    /** @brief Render space -> the level's light clip (raymath order: MatrixMultiply(View, Projection)): the lit shaders'
+     *  shadowLevelMatrices[level]. */
     Matrix ViewProjection;
-    /** @brief The cascade's box as six planes (from ViewProjection): its casters are culled against it. */
+    /** @brief The box its casters are culled against while IsRendered: its four sides and its far plane (from
+     *  ViewProjection); its near plane culls nothing, since what lies nearer the light is drawn onto it (depth
+     *  clamping). */
     WorldFrustum Box;
-} WorldRendererCascadeFrame;
+    /** @brief Its texel's width, in metres: the size cut (WorldShadowLevels_IsLargeEnough) and the biases. */
+    float Texel;
+    /** @brief The distance its casters pick their LODs at (WorldShadowLevels_GetLodDistance), before the zoom factor. */
+    float LodDistance;
+    /** @brief The lookups' depth bias in its depth units (half a texel over its depth range) and their move off a surface
+     *  at grazing incidence, in metres (a texel and a half). */
+    float DepthBias;
+    float NormalOffset;
+} WorldRendererShadowLevelFrame;
 
 /** @brief The moon's disc in the sky for one frame (WorldRendererSky_PrepareFrame), as the sky shader draws it. */
 typedef struct WorldRendererMoonDiscStruct
@@ -316,16 +321,18 @@ typedef struct WorldRenderFrameStruct
     /** @brief The exposure of the last render, which the eye is adapted to before this frame's is set (the sun's disc
      *  and the sun shafts' source limit are drawn against it). */
     float LastExposure;
-    /** @brief The light the shadow cascades are rendered from this frame (the brighter one once it stands high
-     *  enough), its unit direction, and how strong its shadows are (0..1: faded near the horizon and while the lights
-     *  hand over). The cascades only run while ShadowLight is not None (IsCascadeShadowActive). */
+    /** @brief The light the shadow levels are rendered from this frame (the brighter one once it stands high enough), its
+     *  unit direction, and how strong its shadows are (0..1: faded near the horizon and while the lights hand over). The
+     *  levels only run while ShadowLight is not None (AreShadowLevelsActive). */
     WorldShadowLight ShadowLight;
     Vector3 ShadowDirection;
     float ShadowFade;
-    /** @brief The shadow cascades' light matrices and boxes (WorldRendererShadows_PrepareFrame), valid while
-     *  IsCascadeShadowActive (the far one is drawn only while its map exists). */
-    WorldRendererCascadeFrame NearCascade;
-    WorldRendererCascadeFrame FarCascade;
+    /** @brief The shadow levels' settings this frame (the player's quality and the world's reach), the levels used (the
+     *  first ShadowLevelCount of ShadowLevels) and each one's matrices, box and lookups (WorldRendererShadows_PrepareFrame);
+     *  valid while AreShadowLevelsActive. */
+    WorldShadowLevelsSettings ShadowLevelSettings;
+    uint32_t ShadowLevelCount;
+    WorldRendererShadowLevelFrame ShadowLevels[WORLD_RENDERER_MAX_SHADOW_LEVELS];
     /** @brief The cube shadow's light: its position in render space (its RenderPosition), and the far range its packed
      *  distances are normalized by (its reach, at least twice the faces' near plane), which is also the reach its
      *  casters must touch; valid while IsPointShadowActive. */
@@ -339,11 +346,12 @@ typedef struct WorldRenderFrameStruct
     float NightVisionField;
     float ShadowStrength;
 
-    /** @brief Whether each optional pass runs this render. */
-    bool IsCascadeShadowActive;
+    /** @brief Whether each optional pass runs this render: the shadow levels of the sun or the moon, the cube shadow of the
+     *  nearest shadow-casting lamp, the AO. */
+    bool AreShadowLevelsActive;
     bool IsPointShadowActive;
     bool IsAoActive;
-    /** @brief Whether the contact shadows run (the cascades run and they are switched on), and whether the ambient
+    /** @brief Whether the contact shadows run (the shadow levels run and they are switched on), and whether the ambient
      *  pre-pass runs for them or the AO: its target then holds this render's values for the lit passes. */
     bool AreContactShadowsActive;
     bool IsAmbientPrepassActive;
@@ -435,6 +443,16 @@ typedef struct WorldRendererDitherLocationsStruct
     int _locIsIncomingLod;
     int _locPixelScale;
 } WorldRendererDitherLocations;
+
+/**
+ * @brief A run of casters' dither in one shader (WorldRendererCommon_SetRunDither): the fade it uploaded last, so a run of
+ *        casters with the same fade (most are solid) uploads it once. Start each run zeroed: nothing uploaded yet.
+ */
+typedef struct WorldRendererDitherRunStruct
+{
+    bool _hasFade;
+    float _fade;
+} WorldRendererDitherRun;
 
 /**
  * @brief A skinned shader's bone palette (shaders/common/skinning.glsl): where it goes, how many bones it holds,
@@ -599,16 +617,19 @@ typedef struct WorldRendererLitLocationsStruct
     /** @brief Per draw: whether the ambient pre-pass saw the draw's surface (WorldRendererLighting_SetDrawPlace). */
     int _locDrawInPrepass;
     int _locAoResolution;
-    /** @brief The cascades, the light they were rendered from and how much they shadow the sun and the moon. */
-    int _locLightVP;
-    int _locShadowMap;
-    int _locLightVPFar;
-    int _locShadowMapFar;
-    int _locShadowFarActive;
+    /** @brief The shadow levels: how many are read, each one's matrices and lookups' offsets, where a level's lookups end
+     *  and its band starts, the log of the factor between the levels, the reach's fade, the maps' texel, the maps'
+     *  sampler, the debug view; the light they were rendered from and how much they shadow the sun and the moon. */
+    int _locShadowLevelCount;
+    int _locShadowLevelMatrices;
+    int _locShadowLevelOffsets;
+    int _locShadowLevelEdge;
+    int _locShadowLevelBandStart;
+    int _locShadowLevelLogFactor;
+    int _locShadowReachFade;
+    int _locShadowLevels;
+    int _locShadowLevelView;
     int _locShadowStrength;
-    int _locShadowDepthBias;
-    int _locShadowNormalOffset;
-    int _locShadowTexelSize;
     int _locShadowLightDirection;
     int _locSunShadowFade;
     int _locMoonShadowFade;
@@ -949,9 +970,9 @@ typedef struct WorldRendererSpriteFrameStruct
 {
     /** @brief The sprite as the camera sees it (scene, G-buffer and crisp passes): a billboard faces the camera. */
     Matrix CameraTransform;
-    /** @brief The sprite as the cascades' light sees it (a billboard faces that light); the camera transform while the
-     *  cascades do not run or for a fixed sprite. */
-    Matrix CascadeTransform;
+    /** @brief The sprite as the shadow levels' light sees it (a billboard faces that light); the camera transform while
+     *  the levels do not run or for a fixed sprite. */
+    Matrix ShadowTransform;
     /** @brief The sprite as the cube shadow's light sees it; the camera transform while the cube shadow does not run or
      *  for a fixed sprite. */
     Matrix PointTransform;
@@ -997,10 +1018,10 @@ typedef struct WorldRendererSpriteStateStruct
     GenericBuffer _transparentOrder;
 } WorldRendererSpriteState;
 
-/** @brief The two shadow cascades of the sky's shadow light (the sun by day, the moon on bright nights). */
-typedef struct WorldRendererCascadeStateStruct
+/** @brief The shadow levels of the sky's shadow light (the sun by day, the moon on bright nights; WorldShadowLevels.h). */
+typedef struct WorldRendererShadowLevelStateStruct
 {
-    /** @brief The depth-only shader used for the cascades, and its dither uniforms; NULL = no sun or moon shadows. */
+    /** @brief The depth-only shader the levels draw with, and its dither uniforms; NULL = no sun or moon shadows. */
     GameShader* _depthShader;
     WorldRendererDitherLocations _dither;
     /** @brief Its skinned twin (world_depth_skinned), its dither and its palette; NULL = skinned meshes cast the
@@ -1014,22 +1035,26 @@ typedef struct WorldRendererCascadeStateStruct
     int _spriteLocUvRect;
     int _spriteLocAlphaCutoff;
     WorldRendererDitherLocations _spriteDither;
-    /** @brief The NEAR cascade (small extent, sharp); its samplable depth texture is in .depth. */
-    RenderTexture2D _nearMap;
-    /** @brief Whether _nearMap has been created (and its framebuffer is complete). */
-    bool _hasNearMap;
-    /** @brief The FAR cascade (large extent, coarse) + its creation flag. Sampled by the PBR shader outside the near
-     *  cascade so big / distant casters still shadow at range. Optional. (Both cascades' light matrices are the frame's:
-     *  WorldRenderFrame.NearCascade and FarCascade.) */
-    RenderTexture2D _farMap;
-    bool _hasFarMap;
-    /** @brief Each cascade's texel grid from frame to frame (WorldRenderSpace_StepCascade: its centre in the world, from
-     *  the last frame the cascades ran): the next frame's centre moves from it by whole texels, so the grid stands still
-     *  while the light does and turns about the camera, not the world's origin, while the light turns. Zeroed with the
-     *  renderer; one pair for the renderer's one camera, like the LOD states. */
-    WorldRenderCascadeGrid _nearGrid;
-    WorldRenderCascadeGrid _farGrid;
-} WorldRendererCascadeState;
+    /** @brief The GL functions of the levels' maps (GLShadowArray_LoadApi, at shader load). */
+    GLShadowArrayApi _api;
+    /** @brief The levels' maps: one layer per level the reach uses (of the player's config's levels), of its map size
+     *  (valid while _hasMaps; made again when either changes: WorldRendererShadows_PrepareFrame). */
+    GLShadowArray _maps;
+    bool _hasMaps;
+    /** @brief The map size and layer count making the maps last failed for (logged once; not tried again until the
+     *  config asks for others); 0 for none. */
+    int _failedMapSize;
+    uint32_t _failedLayerCount;
+    /** @brief The levels from frame to frame (WorldShadowLevels: each level's texel grid, the light and the place its map
+     *  was drawn for, the schedule). Zeroed with the renderer; one for the renderer's one camera, like the LOD states. */
+    WorldShadowLevels _levels;
+    /** @brief The world the levels last ran for and whether they ran the frame before: a frame of another world, or after
+     *  frames without them, renders every level again (WorldShadowLevels_Invalidate). */
+    const World* _world;
+    bool _ranLastFrame;
+    /** @brief Whether the debug view tints every lit surface by the level its shadow comes from. Off by default. */
+    bool _isLevelViewEnabled;
+} WorldRendererShadowLevelState;
 
 /** @brief The cube shadow of the shadow-casting point light. */
 typedef struct WorldRendererPointShadowStateStruct
@@ -1366,6 +1391,14 @@ typedef struct WorldRendererInstancingLocationsStruct
     int _locBoundsCenter;
     int _locBoundsRadius;
     int _locLodTransform;
+    /** @brief The shadow passes' own: the shadow distance with its fade band, the size cut, the LOD distance and the
+     *  shadow LOD (common/instancing's instanceShadow* uniforms). */
+    int _locShadowDistance;
+    int _locShadowFadeStart;
+    int _locShadowFadeBand;
+    int _locShadowMinRadius;
+    int _locShadowLodDistance;
+    int _locShadowLod;
 } WorldRendererInstancingLocations;
 
 /** @brief One cache entry's records on the GPU: one vertex buffer per build of its cells (each cell a range of it),
@@ -1410,7 +1443,7 @@ typedef struct WorldRendererInstanceStateStruct
     int _normalLocHazeMultiplier;
     WorldRendererDitherLocations _normalDither;
     WorldRendererInstancingLocations _normalInstancing;
-    /** @brief The cascades' twin (world_depth_instanced); NULL = copies cast one at a time into the cascades. */
+    /** @brief The shadow levels' twin (world_depth_instanced); NULL = copies cast one at a time into the levels. */
     GameShader* _depthShader;
     WorldRendererDitherLocations _depthDither;
     WorldRendererInstancingLocations _depthInstancing;
@@ -1558,10 +1591,10 @@ struct WorldRendererStruct
     NightVisionCalibration _nightVision;
     /** @brief The per-object render cache and this render's model/sprite/light lists. */
     WorldRenderCache _cache;
-    /** @brief This render's visibility: per pass the cache entries it draws (the camera's frustum, each cascade's box,
+    /** @brief This render's visibility: per pass the cache entries it draws (the camera's frustum, each shadow level's box,
      *  the cube's reach, the draw distances and opacities), per entry its fades. Built right after the cache's sync. */
     WorldVisibility _visibility;
-    /** @brief Toggle for the camera's frustum culling and the cascades' box culling (A/B; on by default). Off draws
+    /** @brief Toggle for the camera's frustum culling and the shadow levels' box culling (A/B; on by default). Off draws
      *  everything within its draw distance. */
     bool _isCullingEnabled;
     /** @brief Whether every model's LOD is shown by a colour multiplied into its albedo (a debug aid; off by default):
@@ -1585,7 +1618,7 @@ struct WorldRendererStruct
     WorldRendererSkyState _sky;
     WorldRendererStarState _stars;
     WorldRendererSpriteState _sprites;
-    WorldRendererCascadeState _cascades;
+    WorldRendererShadowLevelState _shadowLevels;
     WorldRendererPointShadowState _pointShadow;
     WorldRendererGBufferState _gbuffer;
     WorldRendererAoState _ao;
@@ -1622,6 +1655,9 @@ float WorldRendererCommon_ConfigDrawDistanceScale(const WorldRenderer* self);
 /** @brief Config-side LOD distance scale (the config's lod_distance_scale; 1.0 when no config is bound). */
 float WorldRendererCommon_ConfigLodDistanceScale(const WorldRenderer* self);
 
+/** @brief Config-side shadow distance scale (the config's shadow_distance_scale; 1.0 when no config is bound). */
+float WorldRendererCommon_ConfigShadowDistanceScale(const WorldRenderer* self);
+
 /**
  * @brief Caches a geometry shader's dither uniforms (shaders/common/dither.glsl) and uploads their defaults: solid (fade
  *        0), no LOD cross-fade (progress 0, not the incoming LOD), a pixel scale of 1. Call once at load; passes then
@@ -1646,6 +1682,17 @@ void WorldRendererCommon_SetDither(Shader shader, const WorldRendererDitherLocat
     float lodProgress, bool isIncomingLod);
 
 /**
+ * @brief Uploads a caster's dither in a run of a depth pass (its fade, no LOD cross-fade), unless the run's last upload
+ *        into the shader was the same fade. An upload leaves @p shader bound.
+ * @param shader The depth shader (its program).
+ * @param locations Its dither locations (WorldRendererCommon_PrepareDither).
+ * @param run The run's state in this shader (zeroed at the run's start).
+ * @param fade The caster's fade.
+ */
+void WorldRendererCommon_SetRunDither(Shader shader, const WorldRendererDitherLocations* locations,
+    WorldRendererDitherRun* run, float fade);
+
+/**
  * @brief Uploads a pass's dither pixel scale: its pixels per scene pixel (1 at the scene's resolution, window / scene in
  *        the crisp overlay), so the pattern sits on the scene's pixel grid in every pass.
  * @param shader The shader (its program).
@@ -1654,6 +1701,26 @@ void WorldRendererCommon_SetDither(Shader shader, const WorldRendererDitherLocat
  */
 void WorldRendererCommon_SetDitherPixelScale(Shader shader, const WorldRendererDitherLocations* locations,
     Vector2 pixelScale);
+
+/**
+ * @brief Draws one mesh into a depth pass (the shadow levels, the cube shadow, the sky's occupancy volume) as raylib's
+ *        DrawMesh does, with the same matrices multiplied in the same order (the model's matrix, the view and the
+ *        projection uploaded where @p shader has them, then the MVP), but without what no depth stage reads (the
+ *        material's colours and maps, the normal matrix) and without unbinding the program and the vertex array after
+ *        the draw, nor binding the program, which the caller binds once for a run of meshes in one shader
+ *        (rlEnableShader): a pass of many small meshes costs a fraction of DrawMesh's. Call
+ *        WorldRendererCommon_EndDepthMeshes after the pass's last one, before anything else draws. A mesh without a
+ *        vertex array draws nothing.
+ * @param shader The depth shader (its program), bound; the caller uploads its other uniforms (the dither, a palette)
+ *        first.
+ * @param mesh The mesh, uploaded.
+ * @param transform Its matrix into render space.
+ */
+void WorldRendererCommon_DrawDepthMesh(Shader shader, Mesh mesh, Matrix transform);
+
+/** @brief Ends a run of WorldRendererCommon_DrawDepthMesh: unbinds the vertex array, the buffers and the program, as
+ *  DrawMesh does after each mesh. */
+void WorldRendererCommon_EndDepthMeshes(void);
 
 /**
  * @brief Finds a skinned shader's bone palette (bonePalette, shaders/common/skinning.glsl): its location and how many
@@ -1786,7 +1853,7 @@ RenderTexture2D WorldRendererCommon_CreateColorTarget(int width, int height, Pix
 
 /**
  * @brief Creates a depth-only framebuffer whose depth attachment is a samplable texture (in .depth; raylib's own depth
- *        format), for the shadow cascades and the sky's visibility map, read with point filtering.
+ *        format), read with point filtering.
  * @param width The target's width in pixels.
  * @param height Its height.
  * @returns The target, or a zero target (id 0) if the framebuffer could not be made complete.
@@ -1864,6 +1931,19 @@ void WorldRendererGeometry_ResetPalettes(WorldRenderer* self);
 void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel* model, size_t lod,
     const WorldRendererMeshShaders* shaders, bool isLit);
 
+/**
+ * @brief Draws one LOD of a cached model into a depth pass (the shadow levels, the cube shadow, the sky's occupancy
+ *        volume): WorldRendererGeometry_DrawModel's meshes, transform and skinning, each mesh through
+ *        WorldRendererCommon_DrawDepthMesh (no material: depth stages read none), binding the program at the first mesh
+ *        and whenever the next mesh's differs. The caller uploads the dither first and calls
+ *        WorldRendererCommon_EndDepthMeshes after the pass's last mesh.
+ * @param model The cached model; must have an asset.
+ * @param lod The LOD to draw; one past the last draws nothing.
+ * @param shaders The pass's depth shaders; must not be NULL, and nothing draws without a rigid one.
+ */
+void WorldRendererGeometry_DrawModelDepth(const WorldRenderModel* model, size_t lod,
+    const WorldRendererMeshShaders* shaders);
+
 /** @brief Draws the camera's models (the visibility's camera list) that pass @p filter. With the PBR shader (the lit
  *  pass) it uploads each object's forward point lights and draws its LODs (both during a cross-fade) dithered by its fade
  *  and its part of the cross-fade; otherwise (the materials' own shaders, the unlit skinned one for skinned meshes) it
@@ -1929,10 +2009,10 @@ bool WorldRendererSprites_IsAvailable(const WorldRenderer* self);
 
 /**
  * @brief Computes each cached sprite's matrices for this frame, in render space (facing the camera at the origin; facing
- *        the cascades' light and the cube shadow's light while those run) and the draw order of the blended and additive
+ *        the shadow levels' light and the cube shadow's light while those run) and the draw order of the blended and additive
  *        sprites the camera's passes draw, back to front.
  *
- * Needs the frame's View, IsCascadeShadowActive / ShadowDirection, IsPointShadowActive / ShadowLightIndex and the
+ * Needs the frame's View, AreShadowLevelsActive / ShadowDirection, IsPointShadowActive / ShadowLightIndex and the
  * frame's visibility. No allocation once the lists have grown to the sprite count.
  */
 void WorldRendererSprites_PrepareFrame(WorldRenderer* self, const WorldRenderFrame* frame);
@@ -2069,11 +2149,11 @@ void WorldRendererLighting_LogStatus(const WorldRenderer* self);
 
 
 // WorldRendererShadows.c
-/** @brief Loads the depth and cube-depth shaders (and their alpha-tested sprite variants) and creates the cascade maps
- *  and the shadow cube. */
+/** @brief Loads the depth and cube-depth shaders (and their alpha-tested sprite variants), the shadow levels' GL functions
+ *  and the shadow cube (the levels' maps are made by WorldRendererShadows_PrepareFrame, for the config's size). */
 void WorldRendererShadows_LoadShaders(WorldRenderer* self);
 
-/** @brief Unloads the cascade maps and the shadow cube. Needs a live GL context. */
+/** @brief Unloads the shadow levels' maps and the shadow cube. Needs a live GL context. */
 void WorldRendererShadows_Unload(WorldRenderer* self);
 
 /**
@@ -2084,37 +2164,73 @@ void WorldRendererShadows_Unload(WorldRenderer* self);
 size_t WorldRendererShadows_SelectPointLight(const WorldRenderer* self);
 
 /**
- * @brief Fills the frame's shadow values the passes and the visibility share, in render space: both cascades' light
- *        matrices and boxes (while IsCascadeShadowActive; from frame->ShadowDirection, around the camera, each centre
- *        moved from its last one by whole texels and the new one kept: WorldRenderSpace_StepCascade) and the cube
- *        shadow's light position and far range (while IsPointShadowActive). Call after the shadow decisions, before the
- *        visibility; once per frame (it moves the cascades' grids).
+ * @brief Fills the frame's shadow values the passes and the visibility share, in render space: the shadow levels (while
+ *        AreShadowLevelsActive: their maps made for the config's size and level count, then WorldShadowLevels_BeginFrame
+ *        from frame->ShadowDirection and the frame's settings: which levels are used and which render, each one's
+ *        matrices, box, LOD distance and lookups; AreShadowLevelsActive is turned off when the maps cannot be made) and
+ *        the cube shadow's light position and far range (while IsPointShadowActive). Call after the shadow decisions,
+ *        before the visibility; once per frame (it moves the levels' grids and their schedule).
  */
 void WorldRendererShadows_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame);
 
 /**
  * @brief Draws the depth of a pass's model casters (its visibility list) with a depth shader and its skinned twin, each
- *        dithered by its fade (into the twin too, through @p skinnedDither, while the caster has a pose), each the LOD it
- *        heads to, solid (no cross-fade dither): a shadow changes once per change and never shimmers. Ignores the
- *        pixelation filter. The caller has set the target, the matrices and the culling.
+ *        dithered by its shadow fade (into the twin too, through @p skinnedDither, while the caster has a pose), solid
+ *        (no cross-fade dither): a shadow changes once per change and never shimmers. Each casts with its own shadow LOD
+ *        while it has one, otherwise the LOD it heads to, and in a level past the first at least the one it would show
+ *        at the level's inner edge; a two-sided caster draws both faces. Ignores the pixelation filter. The meshes go
+ *        through WorldRendererGeometry_DrawModelDepth, the dither only when it changes (WorldRendererCommon_SetRunDither),
+ *        and the vertex array and the program are unbound at the end. The caller has set the target, the matrices and
+ *        the culling (@p faceCulled, put back after each two-sided caster).
  * @param self The renderer.
  * @param shaders The depth shaders (a light's view: the whole bodies); must not be NULL.
  * @param dither The rigid shader's dither locations.
  * @param skinnedDither The skinned twin's.
  * @param pass The pass whose list is drawn.
+ * @param level The shadow level drawn (its LOD distance), or NULL for the cube shadow.
+ * @param zoomFactor The camera's zoom factor (the level's LOD distance is measured with it).
+ * @param faceCulled The face the pass culls (RL_CULL_FACE_FRONT or RL_CULL_FACE_BACK).
  */
 void WorldRendererShadows_DrawModelCasters(WorldRenderer* self, const WorldRendererMeshShaders* shaders,
     const WorldRendererDitherLocations* dither, const WorldRendererDitherLocations* skinnedDither,
-    WorldVisibilityPass pass);
-
-/** @brief Renders both cascades (the far one only when its map exists) from the frame's shadow light, with the frame's
- *  light matrices. Each draws its visibility list: models cast per their shadow tier, cutout sprites into both, turned
- *  toward the light (WorldRendererSprites_PrepareFrame's CascadeTransform); each caster dithered by its fade. */
-void WorldRendererShadows_RenderCascades(WorldRenderer* self, const WorldRenderFrame* frame);
+    WorldVisibilityPass pass, const WorldRendererShadowLevelFrame* level, float zoomFactor, int faceCulled);
 
 /**
- * @brief Renders the frame's shadow light into the six cube faces, drawing its visibility list: the models and cutout
- *        sprites (turned toward the light) within its reach, each dithered by its fade.
+ * @brief The shadow levels' settings for a frame: the player's quality (the config's level count, factor, map size and
+ *        update periods; the defaults without a config) and the world's reach, brought into range.
+ * @param self The renderer.
+ * @param environment The world's environment; must not be NULL.
+ * @returns The settings.
+ */
+WorldShadowLevelsSettings WorldRendererShadows_GetSettings(const WorldRenderer* self, const WorldEnvironment* environment);
+
+/** @brief Whether the shadow levels can run at all: their depth shader and the GL functions of their maps are there (the
+ *  maps themselves are made for the config's size at the first frame that runs them). */
+bool WorldRendererShadows_AreLevelsAvailable(const WorldRenderer* self);
+
+/** @brief Binds the shadow levels' maps on WorldRendererTextureUnit_ShadowLevels for the lit passes, while the levels run
+ *  this frame. */
+void WorldRendererShadows_BindLevels(const WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief Records the frame's shadow levels in the renderer's status: how many were used, which rendered and how many
+ *  casters each drew, their widths, the reach, the maps' size and the debug view. Needs the frame's visibility. */
+void WorldRendererShadows_UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief Logs the shadow levels' status line (the levels used with their widths, which rendered and their casters, the
+ *  maps' size, the reach); nothing before the first render or without a logger. */
+void WorldRendererShadows_LogStatus(const WorldRenderer* self);
+
+/** @brief Renders the shadow levels that render this frame (IsRendered) from the frame's shadow light into their layers of
+ *  the maps, with depth clamping. Each draws its visibility list (the casters in its box large enough for its texels):
+ *  models, the copies of model instances and terrain chunks (their faces turned away from the light, or both faces for
+ *  two-sided casters), each at its level's LOD, and cutout sprites turned toward the light
+ *  (WorldRendererSprites_PrepareFrame's ShadowTransform); each caster dithered by its shadow fade. */
+void WorldRendererShadows_RenderLevels(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Renders the frame's shadow light into the six cube faces, drawing its visibility list: the models, the copies of
+ *        model instances, the terrain chunks and the cutout sprites (turned toward the light) within its reach, each
+ *        dithered by its shadow fade (two-sided casters with both faces).
  */
 void WorldRendererShadows_RenderPointLight(WorldRenderer* self, const WorldRenderFrame* frame);
 
@@ -2544,7 +2660,8 @@ void WorldRendererTerrain_DrawNormals(WorldRenderer* self, Shader shader, int lo
 
 /**
  * @brief Draws a shadow pass's chunk casters (its visibility list) with @p shader (world_depth or world_cube_depth), each
- *        dithered by its fade. Inside the pass's matrices and culling.
+ *        dithered by its shadow fade (by its fade in the sky's volume), through WorldRendererCommon_DrawDepthMesh with the
+ *        program bound once. Inside the pass's matrices and culling.
  * @param self The renderer.
  * @param shader The depth shader (its program).
  * @param dither Its dither locations.
@@ -2617,17 +2734,20 @@ void WorldRendererInstances_DrawNormals(WorldRenderer* self, const WorldRenderFr
     int locOutlineFlag, int locHazeMultiplier);
 
 /**
- * @brief A shadow pass's copies (its visibility list of cells): each copy as the LOD with the larger share, dithered by
- *        its own fade; instanced through the pass's twin (world_depth_instanced, or world_cube_depth_instanced with the
- *        frame's cube light), or one at a time through @p shader. Inside the pass's matrices and culling.
+ * @brief A shadow pass's copies (its visibility list of cells): each copy as the LOD with the larger share (in a shadow
+ *        level past the first at least the one it would show at the level's inner edge; the component's own shadow LOD
+ *        while it has one), dithered by its own shadow fade, left out of a level it is too small for; both faces for a
+ *        two-sided component. Instanced through the pass's twin (world_depth_instanced, or world_cube_depth_instanced
+ *        with the frame's cube light), or one at a time through @p shader. Inside the pass's matrices and culling.
  * @param self The renderer.
  * @param frame The frame (the zoom factor; the cube's light for PointShadow).
  * @param shader The pass's ordinary depth shader (its program).
  * @param dither Its dither locations.
  * @param pass The shadow pass.
+ * @param level The shadow level drawn (its texel and LOD distance), or NULL for the cube shadow.
  */
 void WorldRendererInstances_DrawCasters(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
-    const WorldRendererDitherLocations* dither, WorldVisibilityPass pass);
+    const WorldRendererDitherLocations* dither, WorldVisibilityPass pass, const WorldRendererShadowLevelFrame* level);
 
 /** @brief The status's "instancing" feature: unavailable without the lit twin (or without PBR lighting), active
  *  while the camera's pass drew a cell instanced, inactive otherwise (switched off, or no copies in view). */

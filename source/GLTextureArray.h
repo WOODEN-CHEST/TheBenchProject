@@ -5,7 +5,7 @@
 
 /*
  * Private header (source/): 2D texture arrays (GL_TEXTURE_2D_ARRAY), direct OpenGL calls (with GLReadback.h's,
- * GLDepth.h's and GLSliceMap.h's, the project's only ones). raylib has no texture arrays, and a
+ * GLDepth.h's, GLSliceMap.h's and GLShadowArray.h's, the project's only ones). raylib has no texture arrays, and a
  * terrain blends up to sixteen materials per pixel anywhere, which raylib's twelve material map slots cannot hold; an
  * array holds one layer per material and the shader picks layers by index.
  *

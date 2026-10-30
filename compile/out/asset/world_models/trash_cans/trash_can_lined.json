@@ -3,23 +3,23 @@
     "lods": [
         {
             "model": "world.trash_can_lined.lod0",
-            "max_distance": 15
+            "max_distance": 10
         },
         {
             "model": "world.trash_can_lined.lod1",
-            "max_distance": 50
+            "max_distance": 35
         },
         {
             "model": "world.trash_can_lined.lod2",
-            "max_distance": 150
+            "max_distance": 90
        },
        {
             "model": "world.trash_can_lined.lod3",
-            "max_distance": 500
+            "max_distance": 300
        }
     ],
 
-    "draw_distance": 400,
+    "draw_distance": 300,
 
     "collision": {
         "mass": 30,

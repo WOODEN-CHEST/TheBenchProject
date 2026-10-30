@@ -559,8 +559,9 @@ default setting of this file for that one placement: an explicit override flag n
     "lod_fade_seconds": 0.3,                       // [OPTIONAL] default 0.3
     "lod_hysteresis": 0.05,                        // [OPTIONAL] default 0.05
     "render": {                                    // [OPTIONAL] each key [OPTIONAL]
-        "has_outline": true, "omit_pixelation": false, "shadow_tier": "both", "casts_shadows": true, "haze": 1.0,
-        "occludes_sky": true
+        "has_outline": true, "omit_pixelation": false, "casts_shadows": true, "shadow_distance": 60.0,
+        "is_shadow_distance_fixed": false, "is_shadow_only": false, "has_two_sided_shadows": false, "shadow_lod": 1,
+        "haze": 1.0, "occludes_sky": true
     },
     "variants": [                                  // [OPTIONAL] at most 64
         {
@@ -587,7 +588,7 @@ default setting of this file for that one placement: an explicit override flag n
 | `is_draw_distance_fixed` | boolean | true: the player's `draw_distance_scale` leaves the draw distance as it is (landmarks, gameplay-critical props). |
 | `lod_fade_seconds` | seconds, >= 0 | How long a LOD cross-fade takes: both LODs are drawn with complementary pixel dithers meanwhile; 0 swaps at once. |
 | `lod_hysteresis` | in [0, 1) | A LOD switches to a coarser one at its switch distance x (1 + h) and back at x (1 - h), so an object standing at a boundary does not flicker. |
-| `render` | object | The default render settings of the placements: `has_outline` (default true: a 1-pixel outline), `omit_pixelation` (default false: true draws it at full resolution over the pixelated image, for readable screens), `shadow_tier` (`both` (default), `near`: only the sharp near shadow, for small props, `far`: only the coarse far one, for big objects), `casts_shadows` (default true), `haze` (in [0, 1000], default 1: times the air's haze in front of it; 0 as if the air were clear, for a beacon or a sign that must read from far away) and `occludes_sky` (default true: it keeps the sky's light off what lies under it, as a roof, a wall or a tree's canopy does; false for grass, small plants, people and poles). |
+| `render` | object | The default render settings of the placements: `has_outline` (default true: a 1-pixel outline), `omit_pixelation` (default false: true draws it at full resolution over the pixelated image, for readable screens), `casts_shadows` (default true), `has_shadow_distance` and `shadow_distance` (metres, above 0; default false and 600: without a distance of its own a model casts as far as it is drawn; `shadow_distance` alone turns the flag on), `is_shadow_distance_fixed` (default false: true keeps the player's `shadow_distance_scale` off it), `is_shadow_only` (default false: true casts without being drawn, a cheap stand-in shape for a detailed model whose own `casts_shadows` is off), `has_two_sided_shadows` (default false: true casts from both faces, for open meshes such as a single-plane roof or a sign), `has_shadow_lod` and `shadow_lod` (an integer >= 0; default false and 0: the LOD it casts with in every shadow level, past the last LOD the last; `shadow_lod` alone turns the flag on), `haze` (in [0, 1000], default 1: times the air's haze in front of it; 0 as if the air were clear, for a beacon or a sign that must read from far away) and `occludes_sky` (default true: it keeps the sky's light off what lies under it, as a roof, a wall or a tree's canopy does; false for grass, small plants, people and poles). An older definition's `shadow_tier` (`both`, `near` or `far`) is still read, with a warning: `near` as a `shadow_distance` of 16 unless the block gives one, `both` and `far` as nothing. |
 | `variants` | at most 64 `{ "name", "material_overrides" }` | Other looks of the same meshes (dark wood, a red car). `name`: `[a-z][a-z0-9_.-]*`, at most 128 bytes, unique in the world model. `material_overrides` (optional; at most 32, one per slot): what the variant changes in each material slot, below. A placed object picks one with `uses_variant` and `variant`. |
 | `bounds` | `{ "center": [x, y, z], "radius": metres >= 0 }` | The bounding sphere culling and draw distances use, in the object's own space (after each LOD's import transform). Left out, it is the sphere around LOD 0's mesh bounds, or, for an object an animator poses, the sphere around its pose. Give it to keep one fixed sphere whatever the pose. |
 | `animation_libraries` | at most 16 asset names, each once | The animation libraries (below, "Animation libraries") whose clips the placements play, loaded with the world model as its dependencies. Two of them may not hold a clip of the same name. The skinned LODs must share one skeleton: every LOD with bones must have the first one's bones and bind poses, or the world model is rejected (a coarse LOD may be rigid). A placement may play its own libraries instead (`references/world_structure.md`, the animator block). |
@@ -727,7 +728,7 @@ every setting of this file for that one placement: an explicit override flag nex
 | `light_wrap` | in [0, 1] | Billboards only: how far light wraps around the sprite. 0 lights it as a flat card facing you, 1 as a round thing, half lit from the side. |
 | `is_decal` | boolean | With `fixed`: lies on a surface (dirt, tire marks), drawn over it without shadow or outline. |
 | `decal_offset` | metres, >= 0 | How far a decal is lifted off its surface so it does not flicker against it. |
-| `render` | object | `has_outline` (a 1-pixel outline), `omit_pixelation` (drawn at full resolution over the pixelated image) and `casts_shadows`: all three for cutout sprites that are not decals only; and `haze` (in [0, 1000], default 1: times the air's haze in front of every kind of sprite; 0 as if the air were clear). The same block as a world model's, without `shadow_tier` (sprites cast into both shadow cascades). |
+| `render` | object | `has_outline` (a 1-pixel outline), `omit_pixelation` (drawn at full resolution over the pixelated image) and `casts_shadows`: all three for cutout sprites that are not decals only; `has_shadow_distance` and `shadow_distance` (metres, above 0; default false and 150: without a distance of its own a sprite casts as far as it is drawn; `shadow_distance` alone turns the flag on; a tool that leaves out default values must write `has_shadow_distance` whenever it writes `shadow_distance`), `is_shadow_distance_fixed` (default false: true keeps the player's `shadow_distance_scale` off it) and `is_shadow_only` (default false: true casts without being drawn); and `haze` (in [0, 1000], default 1: times the air's haze in front of every kind of sprite; 0 as if the air were clear). The world model's block without its two-sided shadows and shadow LOD. |
 | `has_draw_distance` | boolean | Whether `draw_distance` applies. Left out, it is on exactly when `draw_distance` is given, so a hand-written file just gives the distance. Off, the sprite is seen as far as its kind: 150 m, or 60 m for a decal, decided for each placement (a placement may turn a sprite into a decal), and a `draw_distance` next to it is kept unused. A tool that writes definitions and leaves out default values must still write this key whenever it writes `draw_distance`. |
 | `draw_distance` | metres, above 0 | How far the sprite is seen while `has_draw_distance` is on. The player's `draw_distance_scale` (`config.json`) multiplies it unless it is fixed, and a narrower field of view (zooming in) pushes it out. Over its last tenth (at least 3 m) the sprite dithers away (blended and additive ones fade their alpha). |
 | `is_draw_distance_fixed` | boolean | true: the player's `draw_distance_scale` leaves the draw distance as it is (landmarks, gameplay-critical signs). |
@@ -1024,8 +1025,8 @@ under `terrains/`, next to their `.glb` or their binary file; a world places one
     "normals": "smooth",                                 // [OPTIONAL] "smooth" or "imported"
     "blend_slot": "blend",                               // [OPTIONAL] the slot of the painted faces
     "chunk_size": 32.0,                                  // [OPTIONAL]
-    "render": { "has_outline": true, "shadow_tier": "both", "casts_shadows": true, "draw_distance": 4000.0,
-        "is_draw_distance_fixed": true },               // [OPTIONAL] each key optional
+    "render": { "has_outline": true, "casts_shadows": true, "shadow_distance": 1000.0, // [OPTIONAL] each key optional
+        "is_shadow_distance_fixed": false, "draw_distance": 4000.0, "is_draw_distance_fixed": true },
     "collision": { "is_enabled": true, "layer": "world" }, // [OPTIONAL] each key optional
     "rules": [                                           // [OPTIONAL] at most 8, applied in order
         { "material": "rock", "slope": { "min": 35.0, "blend": 8.0 }, "only_on": [ "grass", "dirt" ] },
@@ -1048,8 +1049,11 @@ under `terrains/`, next to their `.glb` or their binary file; a world places one
 | `blend_slot` | a material slot's name (default `blend`); `source: model` only | The slot whose faces use the painted weights. It may not be `hole` or a palette material's name. |
 | `chunk_size` | metres, 8 to 256 (default 32) | The side of the chunks' square cells in the terrain's X and Z. |
 | `render.has_outline` | boolean (true) | Whether the renderer outlines it. |
-| `render.shadow_tier` | `near`, `far`, `both` (`both`) | Which shadow cascades it casts into. |
 | `render.casts_shadows` | boolean (true) | Off: it casts no shadow; it still receives them. |
+| `render.has_shadow_distance` | boolean (false; on when `shadow_distance` is given) | Whether `shadow_distance` applies; off, the chunks cast as far as they are drawn. |
+| `render.shadow_distance` | metres, above 0 (4000) | How far from the camera each chunk still casts. |
+| `render.is_shadow_distance_fixed` | boolean (false) | On: the player's shadow distance setting does not change it. |
+| `render.shadow_tier` | `near`, `far`, `both` | An older definition's key, still read with a warning: `near` as a `shadow_distance` of 16 unless one is given, `both` and `far` as nothing. |
 | `render.haze` | in [0, 1000] (1) | Times the air's haze in front of it; 0 as if the air were clear. |
 | `render.draw_distance` | metres, above 0 (4000) | How far each chunk is seen before it fades out. |
 | `render.is_draw_distance_fixed` | boolean (true) | On: the player's draw distance setting does not change it, so hills never vanish on low settings. |

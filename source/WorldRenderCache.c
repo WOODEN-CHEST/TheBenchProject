@@ -185,8 +185,14 @@ static void UpdateModel(WorldRenderModel* entry, Vector3Double origin, AssetMana
     WorldModelSettings Settings = WorldModelComponent_ResolveSettings(ModelComponent, &Defaults);
     entry->HasOutline = Settings.HasOutline;
     entry->OmitsPixelation = Settings.OmitsPixelation;
-    entry->ShadowTier = Settings.ShadowTier;
     entry->CastsShadows = Settings.CastsShadows;
+    entry->HasShadowDistance = Settings.HasShadowDistance;
+    entry->ShadowDistance = Settings.ShadowDistance;
+    entry->IsShadowDistanceFixed = Settings.IsShadowDistanceFixed;
+    entry->IsShadowOnly = Settings.IsShadowOnly;
+    entry->HasTwoSidedShadows = Settings.HasTwoSidedShadows;
+    entry->HasShadowLod = Settings.HasShadowLod;
+    entry->ShadowLod = Settings.ShadowLod;
     entry->Haze = Settings.Haze;
     entry->OccludesSky = Settings.OccludesSky;
     entry->DrawDistance = Settings.DrawDistance;
@@ -358,6 +364,10 @@ static Error AddSprite(WorldRenderCache* self, WorldSpriteComponent* sprite, Vec
     Entry.IsDecal = WorldSpriteSettings_IsDrawnAsDecal(&Settings);
     Entry.DecalOffset = Settings.DecalOffset;
     Entry.CastsShadows = Settings.Render.CastsShadows;
+    Entry.HasShadowDistance = Settings.Render.HasShadowDistance;
+    Entry.ShadowDistance = Settings.Render.ShadowDistance;
+    Entry.IsShadowDistanceFixed = Settings.Render.IsShadowDistanceFixed;
+    Entry.IsShadowOnly = Settings.Render.IsShadowOnly;
     Entry.HasOutline = Settings.Render.HasOutline;
     Entry.OmitsPixelation = Settings.Render.OmitsPixelation && (Entry.AlphaMode == WorldSpriteAlphaMode_Cutout)
         && !Entry.IsDecal;
@@ -455,6 +465,7 @@ static void UpdateLod(WorldRenderModel* entry, const WorldRenderLodView* view, f
 {
     WorldModelLodSettings Settings;
     bool IsAsAsked = WorldModelComponent_ResolveLodSettings(entry->Component, entry->Asset, &Settings);
+    entry->LodSettings = Settings;
     if (!IsAsAsked && !entry->IsLodListRefused)
     {
         size_t OwnCount = 0U;
@@ -628,7 +639,9 @@ static Error AddTerrainChunks(WorldRenderCache* self, const WorldRenderTerrain* 
         {
             .ObjectId = entry->ObjectId, .Serial = entry->Serial, .Asset = entry->Asset, .ChunkIndex = Chunk,
             .TriangleCount = TerrainChunk_GetSurfaceTriangleCount(Source), .HasOutline = Settings.Render.HasOutline,
-            .ShadowTier = Settings.Render.ShadowTier, .CastsShadows = Settings.Render.CastsShadows,
+            .CastsShadows = Settings.Render.CastsShadows, .HasShadowDistance = Settings.Render.HasShadowDistance,
+            .ShadowDistance = Settings.Render.ShadowDistance,
+            .IsShadowDistanceFixed = Settings.Render.IsShadowDistanceFixed,
             .Haze = Settings.Render.Haze, .DrawDistance = Settings.Render.DrawDistance,
             .IsDrawDistanceFixed = Settings.Render.IsDrawDistanceFixed,
             .WorldMatrix = Matrix4Double_Multiply(&ToCenter, &ObjectWorld), .Radius = (float)((double)SphereRadius
@@ -863,7 +876,11 @@ static Error AddInstanceCells(WorldRenderCache* self, const WorldRenderInstances
         WorldRenderInstanceCell Cell =
         {
             .Entry = entryIndex, .Cell = Index, .FirstRecord = Source->FirstRecord, .RecordCount = Source->RecordCount,
-            .HasOutline = entry->HasOutline, .ShadowTier = entry->ShadowTier, .CastsShadows = entry->CastsShadows,
+            .HasOutline = entry->HasOutline, .CastsShadows = entry->CastsShadows,
+            .HasShadowDistance = entry->HasShadowDistance, .ShadowDistance = entry->ShadowDistance,
+            .IsShadowDistanceFixed = entry->IsShadowDistanceFixed, .IsShadowOnly = entry->IsShadowOnly,
+            .HasTwoSidedShadows = entry->HasTwoSidedShadows, .HasShadowLod = entry->HasShadowLod,
+            .ShadowLod = entry->ShadowLod,
             .OccludesSky = entry->OccludesSky, .DrawDistance = entry->DrawDistance,
             .IsDrawDistanceFixed = entry->IsDrawDistanceFixed, .Tint = entry->Tint,
             .WorldMatrix = Matrix4Double_Multiply(&ToCenter, &entry->WorldMatrix),
@@ -906,8 +923,14 @@ static Error UpdateInstancesEntry(WorldRenderCache* self, WorldRenderInstances* 
         : WorldModelSettings_CreateDefault();
     WorldModelSettings Settings = WorldModelInstancesComponent_ResolveSettings(Component, &Defaults);
     entry->HasOutline = Settings.HasOutline;
-    entry->ShadowTier = Settings.ShadowTier;
     entry->CastsShadows = Settings.CastsShadows;
+    entry->HasShadowDistance = Settings.HasShadowDistance;
+    entry->ShadowDistance = Settings.ShadowDistance;
+    entry->IsShadowDistanceFixed = Settings.IsShadowDistanceFixed;
+    entry->IsShadowOnly = Settings.IsShadowOnly;
+    entry->HasTwoSidedShadows = Settings.HasTwoSidedShadows;
+    entry->HasShadowLod = Settings.HasShadowLod;
+    entry->ShadowLod = Settings.ShadowLod;
     entry->Haze = Settings.Haze;
     entry->OccludesSky = Settings.OccludesSky;
     entry->DrawDistance = Settings.DrawDistance;
@@ -1238,6 +1261,7 @@ void WorldRenderCache_UpdateLods(WorldRenderCache* self, const WorldRenderLodVie
         {
             // When it is drawn again it appears at its LOD at once, not fading from the one it had.
             Entry->Lod = WorldLodState_Create();
+            Entry->LodSettings = (WorldModelLodSettings){ 0 };
             continue;
         }
         UpdateLod(Entry, view, ZoomFactor, logger);

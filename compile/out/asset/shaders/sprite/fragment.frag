@@ -75,7 +75,7 @@ void main()
         vec3 n = FacingNormal(normalize(fragNormal), v);
         placeNormal = isCard ? n : placeNormal;
 
-        // The cascades are read on the sprite as their light sees it, off that quad's face toward the light; the cube
+        // The shadow levels are read on the sprite as their light sees it, off that quad's face toward the light; the cube
         // shadow likewise on the quad facing its light.
         vec3 toShadowLight = normalize(shadowLightDirection);
         vec3 shadowFace = FacingNormal(normalize(fragShadowNormal), toShadowLight);
@@ -118,6 +118,7 @@ void main()
     if (isLit)
     {
         color = InteriorViewColor(color, fragPosition, placeNormal, skyVisibility);
+        color = ShadowLevelViewColor(color, fragShadowPosition);
     }
     finalColor = (alphaMode == ALPHA_MODE_BLEND) ? vec4(color*alpha, alpha) : vec4(color, 1.0);
 }

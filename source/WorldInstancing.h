@@ -155,6 +155,18 @@ typedef struct WorldInstanceViewStruct
     float BoundsRadius;
     /** @brief The LOD bands. */
     WorldInstanceLodBands Bands;
+    /** @brief The shadow passes' own (WorldInstancing_EvaluateShadow; the other passes ignore them): the shadow distance
+     *  in effect with where its fade band starts and how long it is (as the draw distance's: FLT_MAX for one that never
+     *  fades, 0 for none: WorldInstancing_SetShadowDistance fills them), the smallest copy the pass takes (its sphere's
+     *  radius; 0 takes every copy: the size cut of a shadow level), the zoomed distance the pass picks LODs at (a copy
+     *  casts at least the LOD it would show there; 0 for none), and the LOD every copy casts with whatever its distance
+     *  (the component's shadow LOD, below LodCount), or -1 for none. */
+    float ShadowDistance;
+    float ShadowFadeStart;
+    float ShadowFadeBand;
+    float ShadowMinRadius;
+    float ShadowLodDistance;
+    int ShadowLod;
 } WorldInstanceView;
 
 /** @brief Where a copy stands this frame (WorldInstancing_Evaluate). A plain value type. */
@@ -314,6 +326,14 @@ void WorldInstancing_GetLodBands(const WorldModelLodSettings* settings, float di
 void WorldInstancing_SetDrawDistance(WorldInstanceView* self, float drawDistance);
 
 /**
+ * @brief Fills a view's shadow distance, where its fade band starts and the band's length, from the shadow distance in
+ *        effect (already scaled by the quality setting): the draw distance's rule (WorldInstancing_SetDrawDistance).
+ * @param self The view; must not be NULL.
+ * @param shadowDistance The shadow distance in effect, in metres.
+ */
+void WorldInstancing_SetShadowDistance(WorldInstanceView* self, float shadowDistance);
+
+/**
  * @brief A copy's draw-distance fade at a (zoomed) distance to its sphere's nearest point: 0 before the band, rising
  *        linearly to 1 at the draw distance, 1 beyond (and for a NaN). The same as WorldVisibility_GetDistanceFade for
  *        the view's draw distance.
@@ -338,6 +358,33 @@ float WorldInstancing_GetDistanceFade(const WorldInstanceView* view, float dista
  */
 WorldInstanceState WorldInstancing_Evaluate(const WorldInstanceView* view, const Matrix* cellRenderMatrix,
     const WorldInstanceRecord* record);
+
+/**
+ * @brief Where a copy stands this frame for a shadow pass (the vertex stage's per-copy maths in C, instancePass the
+ *        shadows'): as WorldInstancing_Evaluate, but its fade is the larger of that one and its shadow distance's fade
+ *        (by the view's shadow distance, at its fade distance), 1 (it casts nothing) when its sphere is smaller than the
+ *        view's ShadowMinRadius, and its LOD the view's ShadowLod while there is one, otherwise the one it would show at
+ *        the larger of its LOD distance and the view's ShadowLodDistance.
+ * @param view The component's view this frame for the pass; must not be NULL.
+ * @param cellRenderMatrix The cell's matrix in render space; must not be NULL.
+ * @param record The copy; must not be NULL.
+ * @returns The state (WorldInstancing_GetDraw with WorldInstancePass_Shadow then says what the pass draws).
+ */
+WorldInstanceState WorldInstancing_EvaluateShadow(const WorldInstanceView* view, const Matrix* cellRenderMatrix,
+    const WorldInstanceRecord* record);
+
+/**
+ * @brief The LODs a shadow pass can draw of a cell: the shadow LOD's bit while the view has one; with a LOD distance, the
+ *        LODs of the cell's range of distances each raised to at least it (WorldInstancing_GetCellLodMask); otherwise the
+ *        camera's mask.
+ * @param view The component's view for the pass; must not be NULL.
+ * @param cameraMask The cell's mask for the camera (its LodMask).
+ * @param nearest The smallest zoomed LOD distance a copy of the cell can have.
+ * @param farthest The largest.
+ * @returns The mask.
+ */
+uint32_t WorldInstancing_GetShadowLodMask(const WorldInstanceView* view, uint32_t cameraMask, float nearest,
+    float farthest);
 
 /**
  * @brief The LOD a pass that draws one LOD of a copy draws (the G-buffer, the shadows, the unlit fallback): the one with

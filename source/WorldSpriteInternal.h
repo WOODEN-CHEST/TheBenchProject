@@ -20,6 +20,7 @@
 #define WORLD_SPRITE_CATEGORY_LIGHTING ((const unsigned char*)u8"Lighting")
 #define WORLD_SPRITE_CATEGORY_DECAL ((const unsigned char*)u8"Decal")
 #define WORLD_SPRITE_CATEGORY_DRAW_DISTANCE ((const unsigned char*)u8"Draw distance")
+#define WORLD_SPRITE_CATEGORY_SHADOWS ((const unsigned char*)u8"Shadows")
 
 
 // Macros: the rows (in the inspector's order).
@@ -86,9 +87,29 @@
 
 #define WORLD_SPRITE_ROW_CASTS_SHADOWS \
     .Key = u8"casts_shadows", .Type = PropertyType_Bool, .Default.BoolValue = true, .Flags = PROPERTY_FLAGS_SETTING, \
-    .Category = WORLD_SPRITE_CATEGORY_LIGHTING, .DisplayName = u8"Casts shadows", \
+    .Category = WORLD_SPRITE_CATEGORY_SHADOWS, .DisplayName = u8"Casts shadows", \
     .Description = u8"Cutout sprites only: casts a shadow (a billboard's shadow faces the light, so it does not turn " \
         u8"with the camera). Decals and soft sprites never cast."
+
+#define WORLD_SPRITE_ROW_SHADOW_DISTANCE \
+    .Key = u8"shadow_distance", .Type = PropertyType_Float, .Default.FloatValue = WORLD_SPRITE_DEFAULT_SHADOW_DISTANCE, \
+    .Rules = PROPERTY_RULES_ABOVE(0.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = WORLD_SPRITE_CATEGORY_SHADOWS, \
+    .DisplayName = u8"Shadow distance", \
+    .Description = u8"How far from the camera the sprite still casts, in metres, before the shadow quality setting and " \
+        u8"the zoom; beyond it its shadow fades out, and never past its draw distance."
+
+#define WORLD_SPRITE_ROW_IS_SHADOW_DISTANCE_FIXED \
+    .Key = u8"is_shadow_distance_fixed", .Type = PropertyType_Bool, .Default.BoolValue = false, \
+    .Flags = PROPERTY_FLAGS_SETTING, .Category = WORLD_SPRITE_CATEGORY_SHADOWS, \
+    .DisplayName = u8"Fixed shadow distance", \
+    .Description = u8"Keeps the shadow distance as it is when the player lowers or raises the shadow distance quality " \
+        u8"setting."
+
+#define WORLD_SPRITE_ROW_IS_SHADOW_ONLY \
+    .Key = u8"is_shadow_only", .Type = PropertyType_Bool, .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, \
+    .Category = WORLD_SPRITE_CATEGORY_SHADOWS, .DisplayName = u8"Shadow only", \
+    .Description = u8"The sprite casts its shadow but is not drawn: a stand-in shape, or something out of sight " \
+        u8"throwing a shadow into view."
 
 #define WORLD_SPRITE_ROW_IS_DECAL \
     .Key = u8"is_decal", .Type = PropertyType_Bool, .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, \

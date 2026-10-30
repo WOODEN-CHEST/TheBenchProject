@@ -22,6 +22,20 @@
  */
 
 
+// Macros.
+/** @brief The most shadow levels the config may ask for (GameConfig.ShadowLevelCount, the length of
+ *  GameConfig.ShadowUpdatePeriods). */
+#define CONFIG_MAX_SHADOW_LEVELS 8
+/** @brief The bounds of GameConfig.ShadowLevelFactor. */
+#define CONFIG_MIN_SHADOW_LEVEL_FACTOR 1.5f
+#define CONFIG_MAX_SHADOW_LEVEL_FACTOR 8.0f
+/** @brief The bounds of GameConfig.ShadowMapSize (a power of two). */
+#define CONFIG_MIN_SHADOW_MAP_SIZE 256
+#define CONFIG_MAX_SHADOW_MAP_SIZE 8192
+/** @brief The longest shadow level update period, in frames. */
+#define CONFIG_MAX_SHADOW_UPDATE_PERIOD 256
+
+
 // Types.
 /**
  * @brief The set of loaded game configuration values.
@@ -77,6 +91,28 @@ typedef struct GameConfigStruct
      *  keeps the finer LODs farther (more detail), below 1 switches to coarser ones sooner. A fixed draw distance does
      *  not exempt the LODs. Default 1; [0, 16] like the multipliers above (0 always draws the coarsest LOD). */
     float LodDistanceScale;
+
+    // ---- The sun's and the moon's shadows (quality) ----
+    /** @brief Scales every shadow distance that is not fixed (how far from the camera each thing still casts: its own,
+     *  its asset's, or its draw distance when neither gives one); a thing never casts beyond its draw distance. Default
+     *  1; [0, 16] like the multipliers above (0: only fixed shadow distances cast). */
+    float ShadowDistanceScale;
+    /** @brief The most shadow levels (the nested maps around the camera, each ShadowLevelFactor times as wide as the one
+     *  before: 32, 128, 512, 2048 and 8192 m by default); fewer end the shadows nearer than the world's reach. Default
+     *  5; [1, CONFIG_MAX_SHADOW_LEVELS]. */
+    int32_t ShadowLevelCount;
+    /** @brief Each shadow level's width over the level before it. Default 4; [CONFIG_MIN_SHADOW_LEVEL_FACTOR,
+     *  CONFIG_MAX_SHADOW_LEVEL_FACTOR]: smaller keeps the shadows sharper farther out but needs more levels for the same
+     *  reach. */
+    float ShadowLevelFactor;
+    /** @brief Every shadow level's map's texels along each side: a power of two in [CONFIG_MIN_SHADOW_MAP_SIZE,
+     *  CONFIG_MAX_SHADOW_MAP_SIZE]. Default 2048 (1.6 cm texels in the first level); 1024 halves the sharpness and
+     *  quarters the memory (16 MB a level at 2048). */
+    int32_t ShadowMapSize;
+    /** @brief Each shadow level renders every ShadowUpdatePeriods[k] frames (1 every frame; a light that turned or a
+     *  camera that moved far renders it at once). Default 1, 1, 2, 4, 8, 16, 32, 64; each in [1,
+     *  CONFIG_MAX_SHADOW_UPDATE_PERIOD]. Longer periods cost less; a moving thing's shadow there lags by up to a period. */
+    int32_t ShadowUpdatePeriods[CONFIG_MAX_SHADOW_LEVELS];
 } GameConfig;
 
 

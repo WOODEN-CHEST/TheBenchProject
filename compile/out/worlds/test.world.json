@@ -1,7 +1,7 @@
 {
-    "format_version": 1,
+    "format_version": 2,
     "name": "test",
-    "next_object_id": 63,
+    "next_object_id": 65,
     "environment": {},
     "objects": [
         {
@@ -163,8 +163,8 @@
             "components": {
                 "model": {
                     "world_model": "pbr_demo",
-                    "overrides_shadow_tier": true,
-                    "shadow_tier": "near"
+                    "overrides_shadow_distance": true,
+                    "shadow_distance": 16.0
                 },
                 "collider": {}
             }
@@ -176,9 +176,7 @@
             "scale": [2.0, 2.0, 2.0],
             "components": {
                 "model": {
-                    "world_model": "pbr_metal",
-                    "overrides_shadow_tier": true,
-                    "shadow_tier": "far"
+                    "world_model": "pbr_metal"
                 },
                 "collider": {}
             }
@@ -238,8 +236,8 @@
             "components": {
                 "model": {
                     "world_model": "pbr_metal",
-                    "overrides_shadow_tier": true,
-                    "shadow_tier": "near"
+                    "overrides_shadow_distance": true,
+                    "shadow_distance": 16.0
                 },
                 "collider": {
                     "uses_own_shape": true,
@@ -258,8 +256,8 @@
             "components": {
                 "model": {
                     "world_model": "test",
-                    "overrides_shadow_tier": true,
-                    "shadow_tier": "near"
+                    "overrides_shadow_distance": true,
+                    "shadow_distance": 16.0
                 },
                 "collider": {}
             }
@@ -288,8 +286,8 @@
             "components": {
                 "model": {
                     "world_model": "test_cup",
-                    "overrides_shadow_tier": true,
-                    "shadow_tier": "near"
+                    "overrides_shadow_distance": true,
+                    "shadow_distance": 16.0
                 },
                 "collider": {}
             }
@@ -3211,6 +3209,30 @@
                 "ambient_zone": {
                     "half_extents": [1.9, 1.4, 1.7],
                     "haze": 0.0
+                }
+            }
+        },
+        {
+            "id": 63,
+            "name": "card_one_sided",
+            "position": [4.4, 1.6, 7.5],
+            "scale": [1.4, 1.4, 1.4],
+            "components": {
+                "model": {
+                    "world_model": "test_card"
+                }
+            }
+        },
+        {
+            "id": 64,
+            "name": "card_two_sided",
+            "position": [6.2, 1.6, 7.5],
+            "scale": [1.4, 1.4, 1.4],
+            "components": {
+                "model": {
+                    "world_model": "test_card",
+                    "overrides_has_two_sided_shadows": true,
+                    "has_two_sided_shadows": true
                 }
             }
         }

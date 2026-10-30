@@ -125,9 +125,9 @@ static Vector3 TowardLight(void)
     return Vector3Normalize((Vector3){ 0.2f, 1.0f, 0.1f });
 }
 
-/* A shadow cascade as the renderer builds one: an orthographic box of @p size around @p focus, seen from 120 m along
- * the light (depth 1 .. 240 m). */
-static Matrix MakeCascadeViewProjection(Vector3 focus, float size)
+/* A shadow level's box: an orthographic box of @p size around @p focus, seen from 120 m along the light (depth 1 ..
+ * 240 m). */
+static Matrix MakeLevelViewProjection(Vector3 focus, float size)
 {
     Vector3 LightPosition = Vector3Add(focus, Vector3Scale(TowardLight(), 120.0f));
     Matrix View = MatrixLookAt(LightPosition, focus, (Vector3){ 0.0f, 1.0f, 0.0f });
@@ -136,25 +136,31 @@ static Matrix MakeCascadeViewProjection(Vector3 focus, float size)
     return MatrixMultiply(View, Projection);
 }
 
-/* The list tests' view: the camera at @p cameraPosition looking along +Z, both cascades (32 and 160 m boxes around it)
- * running, no cube shadow, TEST_SCALE, no zoom. */
+/* The list tests' view: the camera at @p cameraPosition looking along +Z, two shadow levels rendering (32 and 160 m boxes
+ * around it, no size cut, the second's ring empty: its inner inset is the whole of the first's half size), a shadow reach
+ * that holds everything, no cube shadow, TEST_SCALE, no zoom. */
 static WorldVisibilityView MakeView(Vector3 cameraPosition)
 {
-    return (WorldVisibilityView)
+    WorldVisibilityView View =
     {
         .CameraPosition = cameraPosition,
         .CameraFrustum = MakeCameraFrustum(cameraPosition),
         .IsCullingEnabled = true,
-        .IsNearCascadeActive = true,
-        .NearCascade = WorldVisibility_ExtractFrustum(MakeCascadeViewProjection(cameraPosition, 32.0f)),
-        .IsFarCascadeActive = true,
-        .FarCascade = WorldVisibility_ExtractFrustum(MakeCascadeViewProjection(cameraPosition, 160.0f)),
+        .ShadowLevelCount = 2U,
+        .ShadowReach = 1e6f,
+        .ShadowDistanceScale = 1.0f,
         .IsPointShadowActive = false,
         .PointShadowPosition = { 0.0f, 0.0f, 0.0f },
         .PointShadowReach = 0.0f,
         .DrawDistanceScale = TEST_SCALE,
         .ZoomFactor = 1.0f
     };
+    View.ShadowLevels[0] = (WorldVisibilityShadowLevel){ .IsRendered = true,
+        .Box = WorldVisibility_ExtractFrustum(MakeLevelViewProjection(cameraPosition, 32.0f)), .MinRadius = 0.0f };
+    View.ShadowLevels[1] = (WorldVisibilityShadowLevel){ .IsRendered = true,
+        .Box = WorldVisibility_ExtractFrustum(MakeLevelViewProjection(cameraPosition, 160.0f)), .MinRadius = 0.0f,
+        .InnerInset = 16.0f };
+    return View;
 }
 
 /* Creates an object at @p position with a model component naming the world model @p worldModel; returns the component
@@ -360,12 +366,12 @@ static void ReversedFrustumHasNoFarPlane(TestRun* run)
     TEST_CHECK(run, !WorldVisibility_IsSphereInFrustum(&Frustum, (Vector3){ NAN, 0.0f, 10.0f }, 1.0f));
 }
 
-/* A shadow cascade's orthographic box: inside, past each side by more and by less than the radius, beyond its far
+/* A shadow level's orthographic box: inside, past each side by more and by less than the radius, beyond its far
  * plane, between the light and its near plane, and behind the light. */
-static void CascadeBoxCullsItsCasters(TestRun* run)
+static void LevelBoxCullsItsCasters(TestRun* run)
 {
     Vector3 Focus = { 5.0f, 0.0f, 5.0f };
-    WorldFrustum Box = WorldVisibility_ExtractFrustum(MakeCascadeViewProjection(Focus, 32.0f));
+    WorldFrustum Box = WorldVisibility_ExtractFrustum(MakeLevelViewProjection(Focus, 32.0f));
     // The light view's axes, as MatrixLookAt makes them: Z toward the light, X = up x Z, Y = Z x X.
     Vector3 AxisZ = TowardLight();
     Vector3 AxisX = Vector3Normalize(Vector3CrossProduct((Vector3){ 0.0f, 1.0f, 0.0f }, AxisZ));
@@ -623,8 +629,8 @@ static void CameraListHoldsWhatIsInView(TestRun* run)
 }
 
 /* A caster off screen still shadows what is on it: culled from the camera's list, it stays in the shadow lists of the
- * cascades whose box holds it; a model that does not cast is in none; the shadow tier routes a model to one cascade;
- * the cube shadow takes the casters within its light's reach. */
+ * shadow levels whose box holds it; a model that does not cast is in none; the cube shadow takes the casters within its
+ * light's reach. */
 static void CastersBehindTheCameraStayInTheShadowLists(TestRun* run)
 {
     VisibilityFixture Fixture;
@@ -636,50 +642,42 @@ static void CastersBehindTheCameraStayInTheShadowLists(TestRun* run)
     Vector3 CameraPosition = { 0.0f, 1.0f, 0.0f };
     WorldModelComponent* Behind = AddBox(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, -10.0f });
     WorldModelComponent* NonCaster = AddBox(run, &Fixture.World, (Vector3){ 3.0f, 1.0f, -5.0f });
-    WorldModelComponent* NearOnly = AddBox(run, &Fixture.World, (Vector3){ -1.0f, 1.0f, -3.0f });
-    WorldModelComponent* FarOnly = AddBox(run, &Fixture.World, (Vector3){ 1.0f, 1.0f, -3.0f });
+    WorldModelComponent* Beside = AddBox(run, &Fixture.World, (Vector3){ -1.0f, 1.0f, -3.0f });
     WorldModelComponent* PastTheNearBox = AddBox(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, -25.0f });
     WorldVisibilityView View = MakeView(CameraPosition);
     View.IsPointShadowActive = true;
     View.PointShadowPosition = (Vector3){ 0.0f, 1.0f, -10.0f };
     View.PointShadowReach = 5.0f;
-    if ((Behind != NULL) && (NonCaster != NULL) && (NearOnly != NULL) && (FarOnly != NULL) && (PastTheNearBox != NULL)
+    if ((Behind != NULL) && (NonCaster != NULL) && (Beside != NULL) && (PastTheNearBox != NULL)
         && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(NonCaster, WorldModelSetting_CastsShadows, true))
         && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetCastsShadows(NonCaster, false))
-        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(NearOnly, WorldModelSetting_ShadowTier, true))
-        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowTier(NearOnly, WorldShadowTier_Near))
-        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(FarOnly, WorldModelSetting_ShadowTier, true))
-        && TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowTier(FarOnly, WorldShadowTier_Far))
         && VisibilityFixture_Build(run, &Fixture, &View))
     {
         TEST_CHECK(run, !HasModel(&Fixture, WorldVisibilityPass_Camera, Behind));
-        TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_NearCascade, Behind));
-        TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_FarCascade, Behind));
+        TEST_CHECK(run, HasModel(&Fixture, WorldVisibility_GetShadowLevelPass(0U), Behind));
+        TEST_CHECK(run, HasModel(&Fixture, WorldVisibility_GetShadowLevelPass(1U), Behind));
         TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_PointShadow, Behind));
 
-        TEST_CHECK(run, !HasModel(&Fixture, WorldVisibilityPass_NearCascade, NonCaster)
-            && !HasModel(&Fixture, WorldVisibilityPass_FarCascade, NonCaster)
+        TEST_CHECK(run, !HasModel(&Fixture, WorldVisibility_GetShadowLevelPass(0U), NonCaster)
+            && !HasModel(&Fixture, WorldVisibility_GetShadowLevelPass(1U), NonCaster)
             && !HasModel(&Fixture, WorldVisibilityPass_PointShadow, NonCaster));
-        TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_NearCascade, NearOnly)
-            && !HasModel(&Fixture, WorldVisibilityPass_FarCascade, NearOnly));
-        TEST_CHECK(run, !HasModel(&Fixture, WorldVisibilityPass_NearCascade, FarOnly)
-            && HasModel(&Fixture, WorldVisibilityPass_FarCascade, FarOnly));
+        TEST_CHECK(run, HasModel(&Fixture, WorldVisibility_GetShadowLevelPass(0U), Beside)
+            && HasModel(&Fixture, WorldVisibility_GetShadowLevelPass(1U), Beside));
         // 7 m from the lamp, beyond its 5 m reach plus its own radius.
-        TEST_CHECK(run, !HasModel(&Fixture, WorldVisibilityPass_PointShadow, NearOnly));
+        TEST_CHECK(run, !HasModel(&Fixture, WorldVisibilityPass_PointShadow, Beside));
         // 25 m behind: outside the 32 m box around the camera, inside the 160 m one.
-        TEST_CHECK(run, !HasModel(&Fixture, WorldVisibilityPass_NearCascade, PastTheNearBox)
-            && HasModel(&Fixture, WorldVisibilityPass_FarCascade, PastTheNearBox));
+        TEST_CHECK(run, !HasModel(&Fixture, WorldVisibility_GetShadowLevelPass(0U), PastTheNearBox)
+            && HasModel(&Fixture, WorldVisibility_GetShadowLevelPass(1U), PastTheNearBox));
 
         // Without the shadow passes running, their lists stay empty.
-        View.IsNearCascadeActive = false;
-        View.IsFarCascadeActive = false;
+        View.ShadowLevelCount = 0U;
         View.IsPointShadowActive = false;
         size_t Count = 1;
         if (TEST_CHECK_SUCCESS(run, WorldVisibility_Build(&Fixture.Visibility, &Fixture.Cache, &View)))
         {
-            WorldVisibility_GetModels(&Fixture.Visibility, &Fixture.Cache, WorldVisibilityPass_NearCascade, &Count);
+            WorldVisibility_GetModels(&Fixture.Visibility, &Fixture.Cache, WorldVisibility_GetShadowLevelPass(0U), &Count);
             TEST_CHECK(run, Count == 0);
-            WorldVisibility_GetModels(&Fixture.Visibility, &Fixture.Cache, WorldVisibilityPass_FarCascade, &Count);
+            WorldVisibility_GetModels(&Fixture.Visibility, &Fixture.Cache, WorldVisibility_GetShadowLevelPass(1U), &Count);
             TEST_CHECK(run, Count == 0);
             WorldVisibility_GetModels(&Fixture.Visibility, &Fixture.Cache, WorldVisibilityPass_PointShadow, &Count);
             TEST_CHECK(run, Count == 0);
@@ -709,7 +707,7 @@ static void DrawDistanceAndOpacityFadeAndCull(TestRun* run)
         && SetOpacity(run, OwnerOfModel(Transparent), 0.0f) && SetOpacity(run, OwnerOfModel(Half), 0.5f)
         && VisibilityFixture_Build(run, &Fixture, &View))
     {
-        // 40 m behind: past the draw distance, so not even in the far cascade, whose 160 m box holds it.
+        // 40 m behind: past the draw distance, so not even in the second level, whose 160 m box holds it.
         for (int Pass = 0; Pass < (int)WorldVisibilityPass_Count; Pass++)
         {
             TEST_CHECK(run, !HasModel(&Fixture, (WorldVisibilityPass)Pass, Beyond));
@@ -731,7 +729,7 @@ static void DrawDistanceAndOpacityFadeAndCull(TestRun* run)
             ModelIndex(&Fixture.Cache, Half));
         TEST_CHECK(run, (HalfFade.Distance == 0.0f) && IsNear(HalfFade.Combined, 1.0f - 127.0f / 255.0f));
         TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_Camera, Half)
-            && HasModel(&Fixture, WorldVisibilityPass_NearCascade, Half));
+            && HasModel(&Fixture, WorldVisibility_GetShadowLevelPass(0U), Half));
         WorldVisibilityFade TransparentFade = WorldVisibility_GetModelFade(&Fixture.Visibility,
             ModelIndex(&Fixture.Cache, Transparent));
         TEST_CHECK(run, (TransparentFade.Distance == 0.0f) && (TransparentFade.Combined == 1.0f));
@@ -838,10 +836,10 @@ static void SpritesCullAndFadeByTheirKind(TestRun* run)
         && VisibilityFixture_Build(run, &Fixture, &View))
     {
         TEST_CHECK(run, HasSprite(&Fixture, WorldVisibilityPass_Camera, Ahead)
-            && HasSprite(&Fixture, WorldVisibilityPass_NearCascade, Ahead));
+            && HasSprite(&Fixture, WorldVisibility_GetShadowLevelPass(0U), Ahead));
         TEST_CHECK(run, !HasSprite(&Fixture, WorldVisibilityPass_Camera, Behind)
-            && HasSprite(&Fixture, WorldVisibilityPass_NearCascade, Behind)
-            && HasSprite(&Fixture, WorldVisibilityPass_FarCascade, Behind));
+            && HasSprite(&Fixture, WorldVisibility_GetShadowLevelPass(0U), Behind)
+            && HasSprite(&Fixture, WorldVisibility_GetShadowLevelPass(1U), Behind));
         WorldVisibilityFade FadingFade = WorldVisibility_GetSpriteFade(&Fixture.Visibility,
             SpriteIndex(&Fixture.Cache, Fading));
         TEST_CHECK(run, HasSprite(&Fixture, WorldVisibilityPass_Camera, Fading)
@@ -853,9 +851,9 @@ static void SpritesCullAndFadeByTheirKind(TestRun* run)
             SpriteIndex(&Fixture.Cache, Decal));
         TEST_CHECK(run, HasSprite(&Fixture, WorldVisibilityPass_Camera, Decal)
             && IsNear(DecalFade.Combined, (Vector3Length(DecalOffset) - Radius) / 3.0f));
-        TEST_CHECK(run, !HasSprite(&Fixture, WorldVisibilityPass_NearCascade, Decal));
+        TEST_CHECK(run, !HasSprite(&Fixture, WorldVisibility_GetShadowLevelPass(0U), Decal));
         // A blended sprite casts no shadow either; its opacity is its combined fade (the renderer draws it as alpha).
-        TEST_CHECK(run, !HasSprite(&Fixture, WorldVisibilityPass_NearCascade, Smoke)
+        TEST_CHECK(run, !HasSprite(&Fixture, WorldVisibility_GetShadowLevelPass(0U), Smoke)
             && !HasSprite(&Fixture, WorldVisibilityPass_Camera, Smoke));
         WorldVisibilityFade SmokeFade = WorldVisibility_GetSpriteFade(&Fixture.Visibility,
             SpriteIndex(&Fixture.Cache, Smoke));
@@ -937,7 +935,7 @@ static void SpritesFadeAtTheirOwnDrawDistance(TestRun* run)
     VisibilityFixture_Deconstruct(run, &Fixture);
 }
 
-/* With culling off (the A/B toggle) the camera and the cascades keep everything within its draw distance; the draw
+/* With culling off (the A/B toggle) the camera and the shadow levels keep everything within its draw distance; the draw
  * distances and the opacity still apply. */
 static void CullingOffKeepsEverythingWithinReach(TestRun* run)
 {
@@ -957,9 +955,9 @@ static void CullingOffKeepsEverythingWithinReach(TestRun* run)
     {
         TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_Camera, Behind));
         TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_Camera, FarAside)
-            && HasModel(&Fixture, WorldVisibilityPass_NearCascade, FarAside));
+            && HasModel(&Fixture, WorldVisibility_GetShadowLevelPass(0U), FarAside));
         TEST_CHECK(run, !HasModel(&Fixture, WorldVisibilityPass_Camera, Beyond)
-            && !HasModel(&Fixture, WorldVisibilityPass_FarCascade, Beyond));
+            && !HasModel(&Fixture, WorldVisibility_GetShadowLevelPass(1U), Beyond));
         WorldVisibilityCounts Counts = WorldVisibility_GetCounts(&Fixture.Visibility);
         TEST_CHECK(run, (Counts.DrawnModelCount == 2) && (Counts.OutsideViewCount == 0) && (Counts.FadedOutCount == 1));
     }
@@ -1138,7 +1136,7 @@ static bool AreSnapshotsAlike(const ShiftSnapshot* a, const ShiftSnapshot* b)
 
 /* Render space: a scene's lists, fades and LOD choices are the same with the camera at its place near the origin
  * and with the scene and the camera shifted together 20 km out (where the world's floats round to 2 mm): the cache syncs
- * for the camera's position, and the view and the cascades are in render space, around the camera at (0, 0, 0). A scene
+ * for the camera's position, and the view and the shadow levels are in render space, around the camera at (0, 0, 0). A scene
  * left behind (the camera alone moved) is drawn nowhere. */
 static void ListsAndLodsHoldTwentyKilometresOut(TestRun* run)
 {
@@ -1297,7 +1295,7 @@ static bool HasChunkOf(const VisibilityFixture* fixture, WorldVisibilityPass pas
     return false;
 }
 
-/* Terrain chunks join the passes as models do: the camera's list in view, the cascades by their shadow tier, none
+/* Terrain chunks join the passes as models do: the camera's list in view, the shadow levels whose box holds them, none
  * without casting, none beyond their own draw distance (fixed by default: the quality setting leaves it) or with their
  * object fully transparent; they are counted on their own, with their triangles. */
 static void TerrainChunksJoinThePassesAsModelsDo(TestRun* run)
@@ -1315,7 +1313,7 @@ static void TerrainChunksJoinThePassesAsModelsDo(TestRun* run)
         : NULL;
     WorldObject* Behind = IsReady ? AddTerrainObject(run, &Fixture.World, "patch", (Vector3){ 0.0f, 0.0f, -10.0f })
         : NULL;
-    WorldObject* NearOnly = IsReady ? AddTerrainObject(run, &Fixture.World, "patch", (Vector3){ -1.0f, 0.0f, -3.0f })
+    WorldObject* Beside = IsReady ? AddTerrainObject(run, &Fixture.World, "patch", (Vector3){ -1.0f, 0.0f, -3.0f })
         : NULL;
     WorldObject* NonCaster = IsReady ? AddTerrainObject(run, &Fixture.World, "patch", (Vector3){ 3.0f, 0.0f, -5.0f })
         : NULL;
@@ -1323,31 +1321,27 @@ static void TerrainChunksJoinThePassesAsModelsDo(TestRun* run)
         : NULL;
     WorldObject* Clear = IsReady ? AddTerrainObject(run, &Fixture.World, "patch", (Vector3){ 2.0f, 0.0f, 12.0f }) : NULL;
     WorldVisibilityView View = MakeView((Vector3){ 0.0f, 1.0f, 0.0f });
-    if ((InFront != NULL) && (Distant != NULL) && (Behind != NULL) && (NearOnly != NULL) && (NonCaster != NULL)
+    if ((InFront != NULL) && (Distant != NULL) && (Behind != NULL) && (Beside != NULL) && (NonCaster != NULL)
         && (Beyond != NULL) && (Clear != NULL) && SetOpacity(run, Clear, 0.0f))
     {
-        WorldTerrainComponent* Near = WorldTerrainComponent_FromComponent(WorldObject_GetComponent(NearOnly,
-            WorldComponentType_Terrain));
         WorldTerrainComponent* Unshadowed = WorldTerrainComponent_FromComponent(WorldObject_GetComponent(NonCaster,
             WorldComponentType_Terrain));
-        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetOverridden(Near, WorldTerrainSetting_ShadowTier, true));
-        TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetShadowTier(Near, WorldShadowTier_Near));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetOverridden(Unshadowed, WorldTerrainSetting_CastsShadows, true));
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetCastsShadows(Unshadowed, false));
         if (VisibilityFixture_Build(run, &Fixture, &View))
         {
             TEST_CHECK(run, HasChunkOf(&Fixture, WorldVisibilityPass_Camera, InFront)
-                && HasChunkOf(&Fixture, WorldVisibilityPass_NearCascade, InFront)
-                && HasChunkOf(&Fixture, WorldVisibilityPass_FarCascade, InFront));
+                && HasChunkOf(&Fixture, WorldVisibility_GetShadowLevelPass(0U), InFront)
+                && HasChunkOf(&Fixture, WorldVisibility_GetShadowLevelPass(1U), InFront));
             // 300 m out: past the models' 4 km scaled by the quality setting (200 m), drawn as its distance is fixed.
             TEST_CHECK(run, HasChunkOf(&Fixture, WorldVisibilityPass_Camera, Distant));
             TEST_CHECK(run, !HasChunkOf(&Fixture, WorldVisibilityPass_Camera, Behind)
-                && HasChunkOf(&Fixture, WorldVisibilityPass_NearCascade, Behind)
-                && HasChunkOf(&Fixture, WorldVisibilityPass_FarCascade, Behind));
-            TEST_CHECK(run, HasChunkOf(&Fixture, WorldVisibilityPass_NearCascade, NearOnly)
-                && !HasChunkOf(&Fixture, WorldVisibilityPass_FarCascade, NearOnly));
-            TEST_CHECK(run, !HasChunkOf(&Fixture, WorldVisibilityPass_NearCascade, NonCaster)
-                && !HasChunkOf(&Fixture, WorldVisibilityPass_FarCascade, NonCaster));
+                && HasChunkOf(&Fixture, WorldVisibility_GetShadowLevelPass(0U), Behind)
+                && HasChunkOf(&Fixture, WorldVisibility_GetShadowLevelPass(1U), Behind));
+            TEST_CHECK(run, HasChunkOf(&Fixture, WorldVisibility_GetShadowLevelPass(0U), Beside)
+                && HasChunkOf(&Fixture, WorldVisibility_GetShadowLevelPass(1U), Beside));
+            TEST_CHECK(run, !HasChunkOf(&Fixture, WorldVisibility_GetShadowLevelPass(0U), NonCaster)
+                && !HasChunkOf(&Fixture, WorldVisibility_GetShadowLevelPass(1U), NonCaster));
             for (int Pass = 0; Pass < (int)WorldVisibilityPass_Count; Pass++)
             {
                 TEST_CHECK(run, !HasChunkOf(&Fixture, (WorldVisibilityPass)Pass, Beyond)
@@ -1414,8 +1408,174 @@ static size_t CountCellsOf(const VisibilityFixture* fixture, WorldVisibilityPass
 }
 
 /* Instance cells join the passes as models do, each by its sphere around its copies: the camera's list in view, the
- * cascades by their component's shadow tier, none without casting, none beyond their draw distance (the quality setting
+ * shadow levels whose box holds them, none without casting, none beyond their draw distance (the quality setting
  * scales it, unless fixed) or with their object fully transparent; they are counted on their own, with their copies. */
+/* Each level takes the casters its box holds, as large as its size cut, within the reach; a level past the first leaves
+ * out those deep inside the level before's box (its ring), unless culling is off; a kept level gets no list, and the level
+ * after it still keeps its ring. Under the test's light, world X runs across the levels' boxes (their up axis) at 0.873 of
+ * its length. */
+static void ShadowLevelsTakeTheirRingsAndSizes(TestRun* run)
+{
+    VisibilityFixture Fixture;
+    if (!VisibilityFixture_Construct(run, &Fixture))
+    {
+        VisibilityFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    Vector3 CameraPosition = { 0.0f, 1.0f, 0.0f };
+    // The unit box's sphere is 0.87 m; the first level's sides are 16 m from the camera, the ring's inset 4 m: a box is
+    // left out of the second level up to 11.1 m across (16 - 4 - 0.87), 12.7 m along X. Inner is 8.7 m across, Edge
+    // 11.5 m (its centre 4.5 m inside the sides: within the inset and its radius), Rim 12.2 m (inside the first level's
+    // box, in the second's ring), Outer 19.2 m (outside the first level's box).
+    WorldModelComponent* Centre = AddBox(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, 0.0f });
+    WorldModelComponent* Inner = AddBox(run, &Fixture.World, (Vector3){ 10.0f, 1.0f, 0.0f });
+    WorldModelComponent* Edge = AddBox(run, &Fixture.World, (Vector3){ 13.2f, 1.0f, 0.0f });
+    WorldModelComponent* Rim = AddBox(run, &Fixture.World, (Vector3){ 14.0f, 1.0f, 0.0f });
+    WorldModelComponent* Outer = AddBox(run, &Fixture.World, (Vector3){ 22.0f, 1.0f, 0.0f });
+    WorldVisibilityView View = MakeView(CameraPosition);
+    View.ShadowLevels[1].InnerInset = 4.0f;
+    WorldVisibilityPass First = WorldVisibility_GetShadowLevelPass(0U);
+    WorldVisibilityPass Second = WorldVisibility_GetShadowLevelPass(1U);
+    if ((Centre == NULL) || (Inner == NULL) || (Edge == NULL) || (Rim == NULL) || (Outer == NULL)
+        || !VisibilityFixture_Build(run, &Fixture, &View))
+    {
+        VisibilityFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    TEST_CHECK(run, HasModel(&Fixture, First, Centre) && HasModel(&Fixture, First, Inner)
+        && HasModel(&Fixture, First, Rim) && !HasModel(&Fixture, First, Outer));
+    TEST_CHECK(run, !HasModel(&Fixture, Second, Centre) && !HasModel(&Fixture, Second, Inner)
+        && HasModel(&Fixture, Second, Rim) && HasModel(&Fixture, Second, Outer));
+    // Its sphere reaches nearer the sides than the inset: kept.
+    TEST_CHECK(run, HasModel(&Fixture, First, Edge) && HasModel(&Fixture, Second, Edge));
+
+    // Culling off: the ring keeps everything, as the box does.
+    View.IsCullingEnabled = false;
+    if (TEST_CHECK_SUCCESS(run, WorldVisibility_Build(&Fixture.Visibility, &Fixture.Cache, &View)))
+    {
+        TEST_CHECK(run, HasModel(&Fixture, Second, Centre) && HasModel(&Fixture, Second, Inner)
+            && HasModel(&Fixture, Second, Rim) && HasModel(&Fixture, Second, Outer));
+        TEST_CHECK(run, HasModel(&Fixture, First, Outer));
+    }
+    View.IsCullingEnabled = true;
+
+    // The size cut: a sphere narrower than the level takes stays out of it alone.
+    View.ShadowLevels[1].MinRadius = 0.9f;
+    if (TEST_CHECK_SUCCESS(run, WorldVisibility_Build(&Fixture.Visibility, &Fixture.Cache, &View)))
+    {
+        TEST_CHECK(run, !HasModel(&Fixture, Second, Rim) && !HasModel(&Fixture, Second, Outer));
+        TEST_CHECK(run, HasModel(&Fixture, First, Rim));
+    }
+    View.ShadowLevels[1].MinRadius = 0.0f;
+
+    // A kept first level: no list of its own, and the second still leaves out what lies deep inside its box.
+    View.ShadowLevels[0].IsRendered = false;
+    size_t Count = 1U;
+    if (TEST_CHECK_SUCCESS(run, WorldVisibility_Build(&Fixture.Visibility, &Fixture.Cache, &View)))
+    {
+        WorldVisibility_GetModels(&Fixture.Visibility, &Fixture.Cache, First, &Count);
+        TEST_CHECK(run, Count == 0U);
+        TEST_CHECK(run, !HasModel(&Fixture, Second, Centre) && HasModel(&Fixture, Second, Rim));
+    }
+    View.ShadowLevels[0].IsRendered = true;
+
+    // The reach, to a sphere's nearest point: Outer's centre is 22 m away, its sphere's nearest point 21.1 m.
+    View.ShadowReach = 21.5f;
+    if (TEST_CHECK_SUCCESS(run, WorldVisibility_Build(&Fixture.Visibility, &Fixture.Cache, &View)))
+    {
+        TEST_CHECK(run, HasModel(&Fixture, Second, Outer));
+    }
+    View.ShadowReach = 20.0f;
+    if (TEST_CHECK_SUCCESS(run, WorldVisibility_Build(&Fixture.Visibility, &Fixture.Cache, &View)))
+    {
+        TEST_CHECK(run, !HasModel(&Fixture, First, Outer) && !HasModel(&Fixture, Second, Outer));
+        TEST_CHECK(run, HasModel(&Fixture, Second, Rim));
+    }
+    VisibilityFixture_Deconstruct(run, &Fixture);
+}
+
+/* A caster's shadow ends at its shadow distance: its own (times the player's shadow scale unless fixed) or, without
+ * one, its draw distance times its multiplier (scaled as the draw distance is, then by the shadow scale), never past its
+ * draw distance; a shadow-only object, sprite or set of copies casts but is not in the camera's list. */
+static void ShadowDistancesEndShadowsAndShadowOnlyCasts(TestRun* run)
+{
+    VisibilityFixture Fixture;
+    if (!VisibilityFixture_Construct(run, &Fixture))
+    {
+        VisibilityFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    // In view, 19.1 m from the camera to their spheres; their draw distance is 600 m x TEST_SCALE = 30 m.
+    Vector3 CameraPosition = { 0.0f, 1.0f, 0.0f };
+    WorldModelComponent* Short = AddBox(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, 20.0f });
+    WorldModelComponent* Fixed = AddBox(run, &Fixture.World, (Vector3){ 1.0f, 1.0f, 20.0f });
+    WorldModelComponent* Multiplied = AddBox(run, &Fixture.World, (Vector3){ -1.0f, 1.0f, 20.0f });
+    WorldModelComponent* ShadowOnly = AddBox(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, 5.0f });
+    WorldSpriteComponent* OnlySprite = AddSprite(run, &Fixture.World, (Vector3){ 2.0f, 1.0f, 6.0f }, "cutout");
+    const Vector3 One[1] = { { 0.0f, 0.0f, 0.0f } };
+    WorldObject* OnlyCopies = AddInstancesObject(run, &Fixture.World, "box", (Vector3){ -2.0f, 0.0f, 6.0f }, One, 1U);
+    WorldModelInstancesComponent* Copies = (OnlyCopies != NULL) ? WorldModelInstancesComponent_FromComponent(
+        WorldObject_GetComponent(OnlyCopies, WorldComponentType_ModelInstances)) : NULL;
+    if ((Short == NULL) || (Fixed == NULL) || (Multiplied == NULL) || (ShadowOnly == NULL) || (OnlySprite == NULL)
+        || (Copies == NULL)
+        || !TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetOverridden(OnlySprite, WorldSpriteSetting_IsShadowOnly, true))
+        || !TEST_CHECK_SUCCESS(run, WorldSpriteComponent_SetIsShadowOnly(OnlySprite, true))
+        || !TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Copies, WorldModelSetting_IsShadowOnly,
+            true))
+        || !TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetIsShadowOnly(Copies, true))
+        || !TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Short, WorldModelSetting_ShadowDistance, true))
+        || !TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowDistance(Short, 10.0f))
+        || !TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Fixed, WorldModelSetting_ShadowDistance, true))
+        || !TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowDistance(Fixed, 10.0f))
+        || !TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Fixed, WorldModelSetting_IsShadowDistanceFixed,
+            true))
+        || !TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsShadowDistanceFixed(Fixed, true))
+        || !TEST_CHECK_SUCCESS(run, WorldModelComponent_SetShadowDistanceMultiplier(Multiplied, 0.5f))
+        || !TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(ShadowOnly, WorldModelSetting_IsShadowOnly, true))
+        || !TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsShadowOnly(ShadowOnly, true)))
+    {
+        VisibilityFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    WorldVisibilityView View = MakeView(CameraPosition);
+    WorldVisibilityPass Second = WorldVisibility_GetShadowLevelPass(1U);
+    if (VisibilityFixture_Build(run, &Fixture, &View))
+    {
+        // Drawn, but casting only to 10 m (Short, Fixed) and to 300 m x TEST_SCALE = 15 m (Multiplied).
+        TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_Camera, Short)
+            && HasModel(&Fixture, WorldVisibilityPass_Camera, Fixed)
+            && HasModel(&Fixture, WorldVisibilityPass_Camera, Multiplied));
+        TEST_CHECK(run, !HasModel(&Fixture, Second, Short) && !HasModel(&Fixture, Second, Fixed)
+            && !HasModel(&Fixture, Second, Multiplied));
+        TEST_CHECK(run, IsNear(WorldVisibility_GetModelFade(&Fixture.Visibility, ModelIndex(&Fixture.Cache, Short))
+            .Shadow, 1.0f));
+        TEST_CHECK(run, IsNear(WorldVisibility_GetModelFade(&Fixture.Visibility, ModelIndex(&Fixture.Cache, Short))
+            .Combined, 0.0f));
+        TEST_CHECK(run, !HasModel(&Fixture, WorldVisibilityPass_Camera, ShadowOnly)
+            && HasModel(&Fixture, WorldVisibility_GetShadowLevelPass(0U), ShadowOnly)
+            && HasModel(&Fixture, Second, ShadowOnly));
+        TEST_CHECK(run, !HasSprite(&Fixture, WorldVisibilityPass_Camera, OnlySprite)
+            && HasSprite(&Fixture, WorldVisibility_GetShadowLevelPass(0U), OnlySprite));
+        TEST_CHECK(run, (CountCellsOf(&Fixture, WorldVisibilityPass_Camera, OnlyCopies) == 0U)
+            && (CountCellsOf(&Fixture, WorldVisibility_GetShadowLevelPass(0U), OnlyCopies) == 1U));
+    }
+    // The player's shadow scale 2.5: Short casts to 25 m, Multiplied to 37.5 m held at its 30 m draw distance; Fixed
+    // stays at 10 m.
+    View.ShadowDistanceScale = 2.5f;
+    if (TEST_CHECK_SUCCESS(run, WorldVisibility_Build(&Fixture.Visibility, &Fixture.Cache, &View)))
+    {
+        TEST_CHECK(run, HasModel(&Fixture, Second, Short) && HasModel(&Fixture, Second, Multiplied)
+            && !HasModel(&Fixture, Second, Fixed));
+        TEST_CHECK(run, IsNear(WorldVisibility_ScaleShadowDistance(30.0f, false, 300.0f, false, false, TEST_SCALE,
+            2.5f), 30.0f));
+        TEST_CHECK(run, IsNear(WorldVisibility_ScaleShadowDistance(30.0f, true, 10.0f, false, false, TEST_SCALE, 2.5f),
+            25.0f));
+        TEST_CHECK(run, IsNear(WorldVisibility_ScaleShadowDistance(30.0f, true, 10.0f, false, true, TEST_SCALE, 2.5f),
+            10.0f));
+    }
+    VisibilityFixture_Deconstruct(run, &Fixture);
+}
+
 static void InstanceCellsJoinThePassesAsModelsDo(TestRun* run)
 {
     VisibilityFixture Fixture;
@@ -1427,7 +1587,7 @@ static void InstanceCellsJoinThePassesAsModelsDo(TestRun* run)
         1U) : NULL;
     WorldObject* Behind = IsReady ? AddInstancesObject(run, &Fixture.World, "box", (Vector3){ 0.0f, 0.0f, -10.0f }, One,
         1U) : NULL;
-    WorldObject* NearOnly = IsReady ? AddInstancesObject(run, &Fixture.World, "box", (Vector3){ -1.0f, 0.0f, -3.0f },
+    WorldObject* Beside = IsReady ? AddInstancesObject(run, &Fixture.World, "box", (Vector3){ -1.0f, 0.0f, -3.0f },
         One, 1U) : NULL;
     WorldObject* NonCaster = IsReady ? AddInstancesObject(run, &Fixture.World, "box", (Vector3){ 3.0f, 0.0f, -5.0f },
         One, 1U) : NULL;
@@ -1438,40 +1598,36 @@ static void InstanceCellsJoinThePassesAsModelsDo(TestRun* run)
     WorldObject* TwoCells = IsReady ? AddInstancesObject(run, &Fixture.World, "box", (Vector3){ 1.0f, 0.0f, 15.0f },
         Split, 2U) : NULL;
     WorldVisibilityView View = MakeView((Vector3){ 0.0f, 1.0f, 0.0f });
-    if ((InFront != NULL) && (Behind != NULL) && (NearOnly != NULL) && (NonCaster != NULL) && (Beyond != NULL)
+    if ((InFront != NULL) && (Behind != NULL) && (Beside != NULL) && (NonCaster != NULL) && (Beyond != NULL)
         && (Clear != NULL) && (TwoCells != NULL) && SetOpacity(run, Clear, 0.0f))
     {
-        WorldModelInstancesComponent* Near = WorldModelInstancesComponent_FromComponent(WorldObject_GetComponent(NearOnly,
-            WorldComponentType_ModelInstances));
         WorldModelInstancesComponent* Unshadowed = WorldModelInstancesComponent_FromComponent(WorldObject_GetComponent(
             NonCaster, WorldComponentType_ModelInstances));
-        TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Near, WorldModelSetting_ShadowTier, true));
-        TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetShadowTier(Near, WorldShadowTier_Near));
         TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Unshadowed, WorldModelSetting_CastsShadows,
             true));
         TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetCastsShadows(Unshadowed, false));
         if (VisibilityFixture_Build(run, &Fixture, &View))
         {
             TEST_CHECK(run, (CountCellsOf(&Fixture, WorldVisibilityPass_Camera, InFront) == 1U)
-                && (CountCellsOf(&Fixture, WorldVisibilityPass_NearCascade, InFront) == 1U)
-                && (CountCellsOf(&Fixture, WorldVisibilityPass_FarCascade, InFront) == 1U));
+                && (CountCellsOf(&Fixture, WorldVisibility_GetShadowLevelPass(0U), InFront) == 1U)
+                && (CountCellsOf(&Fixture, WorldVisibility_GetShadowLevelPass(1U), InFront) == 1U));
             TEST_CHECK(run, (CountCellsOf(&Fixture, WorldVisibilityPass_Camera, Behind) == 0U)
-                && (CountCellsOf(&Fixture, WorldVisibilityPass_NearCascade, Behind) == 1U)
-                && (CountCellsOf(&Fixture, WorldVisibilityPass_FarCascade, Behind) == 1U));
-            TEST_CHECK(run, (CountCellsOf(&Fixture, WorldVisibilityPass_NearCascade, NearOnly) == 1U)
-                && (CountCellsOf(&Fixture, WorldVisibilityPass_FarCascade, NearOnly) == 0U));
-            TEST_CHECK(run, (CountCellsOf(&Fixture, WorldVisibilityPass_NearCascade, NonCaster) == 0U)
-                && (CountCellsOf(&Fixture, WorldVisibilityPass_FarCascade, NonCaster) == 0U));
+                && (CountCellsOf(&Fixture, WorldVisibility_GetShadowLevelPass(0U), Behind) == 1U)
+                && (CountCellsOf(&Fixture, WorldVisibility_GetShadowLevelPass(1U), Behind) == 1U));
+            TEST_CHECK(run, (CountCellsOf(&Fixture, WorldVisibility_GetShadowLevelPass(0U), Beside) == 1U)
+                && (CountCellsOf(&Fixture, WorldVisibility_GetShadowLevelPass(1U), Beside) == 1U));
+            TEST_CHECK(run, (CountCellsOf(&Fixture, WorldVisibility_GetShadowLevelPass(0U), NonCaster) == 0U)
+                && (CountCellsOf(&Fixture, WorldVisibility_GetShadowLevelPass(1U), NonCaster) == 0U));
             // The box's 600 m times the test's quality scale is 30 m: 100 m out is beyond it.
             for (int Pass = 0; Pass < (int)WorldVisibilityPass_Count; Pass++)
             {
                 TEST_CHECK(run, (CountCellsOf(&Fixture, (WorldVisibilityPass)Pass, Beyond) == 0U)
                     && (CountCellsOf(&Fixture, (WorldVisibilityPass)Pass, Clear) == 0U));
             }
-            // Each cell on its own: the front one in view, the back one behind the camera; both cast into the far
-            // cascade.
+            // Each cell on its own: the front one in view, the back one behind the camera; both cast into the second
+            // level.
             TEST_CHECK(run, (CountCellsOf(&Fixture, WorldVisibilityPass_Camera, TwoCells) == 1U)
-                && (CountCellsOf(&Fixture, WorldVisibilityPass_FarCascade, TwoCells) == 2U));
+                && (CountCellsOf(&Fixture, WorldVisibility_GetShadowLevelPass(1U), TwoCells) == 2U));
             WorldVisibilityCounts Counts = WorldVisibility_GetCounts(&Fixture.Visibility);
             TEST_CHECK(run, (Counts.DrawnInstanceCellCount == 2U) && (Counts.DrawnInstanceCount == 2U)
                 && (Counts.InstanceCellsOutsideViewCount == 4U) && (Counts.InstanceCellsFadedOutCount == 2U)
@@ -1560,18 +1716,18 @@ static void SkyOccludersJoinTheMapsList(TestRun* run)
             TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_SkyVisibility, Roof)
                 && !HasModel(&Fixture, WorldVisibilityPass_Camera, Roof));
             TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_SkyVisibility, Shed)
-                && !HasModel(&Fixture, WorldVisibilityPass_FarCascade, Shed));
+                && !HasModel(&Fixture, WorldVisibility_GetShadowLevelPass(1U), Shed));
             TEST_CHECK(run, !HasModel(&Fixture, WorldVisibilityPass_SkyVisibility, Awning)
                 && HasModel(&Fixture, WorldVisibilityPass_Camera, Awning));
             TEST_CHECK(run, !HasModel(&Fixture, WorldVisibilityPass_SkyVisibility, Outside)
-                && HasModel(&Fixture, WorldVisibilityPass_FarCascade, Outside));
+                && HasModel(&Fixture, WorldVisibility_GetShadowLevelPass(1U), Outside));
             TEST_CHECK(run, !HasModel(&Fixture, WorldVisibilityPass_SkyVisibility, Hidden)
                 && !HasModel(&Fixture, WorldVisibilityPass_SkyVisibility, Clear));
             TEST_CHECK(run, HasChunkOf(&Fixture, WorldVisibilityPass_SkyVisibility, Patch)
-                && !HasChunkOf(&Fixture, WorldVisibilityPass_FarCascade, Patch));
+                && !HasChunkOf(&Fixture, WorldVisibility_GetShadowLevelPass(1U), Patch));
             TEST_CHECK(run, (CountCellsOf(&Fixture, WorldVisibilityPass_SkyVisibility, Canopy) == 1U)
                 && (CountCellsOf(&Fixture, WorldVisibilityPass_SkyVisibility, Bushes) == 0U)
-                && (CountCellsOf(&Fixture, WorldVisibilityPass_FarCascade, Bushes) == 1U));
+                && (CountCellsOf(&Fixture, WorldVisibility_GetShadowLevelPass(1U), Bushes) == 1U));
             size_t Count = 0U;
             const size_t* List = WorldVisibility_GetModels(&Fixture.Visibility, &Fixture.Cache,
                 WorldVisibilityPass_SkyVisibility, &Count);
@@ -1590,7 +1746,7 @@ void WorldVisibilityTests_Run(TestRun* run)
     {
         { "frustum_planes_from_a_view_projection", FrustumPlanesFromAViewProjection },
         { "reversed_frustum_has_no_far_plane", ReversedFrustumHasNoFarPlane },
-        { "cascade_box_culls_its_casters", CascadeBoxCullsItsCasters },
+        { "level_box_culls_its_casters", LevelBoxCullsItsCasters },
         { "own_draw_distances_and_the_zoom_factor", OwnDrawDistancesAndTheZoomFactor },
         { "distance_fade_rises_over_the_band", DistanceFadeRisesOverTheBand },
         { "opacity_fade_and_the_max_rule", OpacityFadeAndTheMaxRule },
@@ -1609,6 +1765,8 @@ void WorldVisibilityTests_Run(TestRun* run)
         { "sky_occluders_join_the_maps_list", SkyOccludersJoinTheMapsList },
         { "terrain_chunks_join_the_passes_as_models_do", TerrainChunksJoinThePassesAsModelsDo },
         { "instance_cells_join_the_passes_as_models_do", InstanceCellsJoinThePassesAsModelsDo },
+        { "shadow_levels_take_their_rings_and_sizes", ShadowLevelsTakeTheirRingsAndSizes },
+        { "shadow_distances_end_shadows_and_shadow_only_casts", ShadowDistancesEndShadowsAndShadowOnlyCasts },
     };
     TestRun_RunSuite(run, "WorldVisibility", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

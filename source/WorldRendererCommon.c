@@ -1,5 +1,5 @@
-// Shared helpers of the world renderer: config multipliers, colour conversion, shader loading, one-time warnings
-// and render-target constructors.
+// Shared helpers of the world renderer: config multipliers, colour conversion, shader loading, the depth passes' mesh
+// draw, one-time warnings and render-target constructors.
 
 #include <math.h>
 #include <stdio.h>
@@ -8,6 +8,7 @@
 #include "GameSkeleton.h"
 #include "Logger.h"
 #include "SkeletalAnimation.h"
+#include "raylib/raymath.h"
 #include "raylib/rlgl.h"
 
 
@@ -65,6 +66,11 @@ float WorldRendererCommon_ConfigLodDistanceScale(const WorldRenderer* self)
     return (self->_config != NULL) ? self->_config->LodDistanceScale : 1.0f;
 }
 
+float WorldRendererCommon_ConfigShadowDistanceScale(const WorldRenderer* self)
+{
+    return (self->_config != NULL) ? self->_config->ShadowDistanceScale : 1.0f;
+}
+
 void WorldRendererCommon_PrepareDither(Shader shader, WorldRendererDitherLocations* outLocations)
 {
     outLocations->_locFade = GetShaderLocation(shader, "ditherFade");
@@ -84,11 +90,70 @@ void WorldRendererCommon_SetDither(Shader shader, const WorldRendererDitherLocat
     SetShaderValue(shader, locations->_locIsIncomingLod, &IsIncoming, SHADER_UNIFORM_INT);
 }
 
+void WorldRendererCommon_SetRunDither(Shader shader, const WorldRendererDitherLocations* locations,
+    WorldRendererDitherRun* run, float fade)
+{
+    if (run->_hasFade && (run->_fade == fade))
+    {
+        return;
+    }
+    WorldRendererCommon_SetDither(shader, locations, fade, 0.0f, false);
+    run->_hasFade = true;
+    run->_fade = fade;
+    rlEnableShader(shader.id);
+}
+
 void WorldRendererCommon_SetDitherPixelScale(Shader shader, const WorldRendererDitherLocations* locations,
     Vector2 pixelScale)
 {
     float Scale[2] = { pixelScale.x, pixelScale.y };
     SetShaderValue(shader, locations->_locPixelScale, Scale, SHADER_UNIFORM_VEC2);
+}
+
+void WorldRendererCommon_DrawDepthMesh(Shader shader, Mesh mesh, Matrix transform)
+{
+    if ((shader.locs == NULL) || (mesh.vaoId == 0U))
+    {
+        return;
+    }
+    Matrix View = rlGetMatrixModelview();
+    Matrix Projection = rlGetMatrixProjection();
+    if (shader.locs[SHADER_LOC_MATRIX_VIEW] != -1)
+    {
+        rlSetUniformMatrix(shader.locs[SHADER_LOC_MATRIX_VIEW], View);
+    }
+    if (shader.locs[SHADER_LOC_MATRIX_PROJECTION] != -1)
+    {
+        rlSetUniformMatrix(shader.locs[SHADER_LOC_MATRIX_PROJECTION], Projection);
+    }
+    Matrix ModelMatrix = MatrixMultiply(transform, rlGetMatrixTransform());
+    if (shader.locs[SHADER_LOC_MATRIX_MODEL] != -1)
+    {
+        rlSetUniformMatrix(shader.locs[SHADER_LOC_MATRIX_MODEL], ModelMatrix);
+    }
+    rlSetUniformMatrix(shader.locs[SHADER_LOC_MATRIX_MVP],
+        MatrixMultiply(MatrixMultiply(ModelMatrix, View), Projection));
+    if (!rlEnableVertexArray(mesh.vaoId))
+    {
+        return;
+    }
+    // Indexed while the CPU index array is kept, as DrawMesh decides.
+    if (mesh.indices != NULL)
+    {
+        rlDrawVertexArrayElements(0, mesh.triangleCount * 3, 0);
+    }
+    else
+    {
+        rlDrawVertexArray(0, mesh.vertexCount);
+    }
+}
+
+void WorldRendererCommon_EndDepthMeshes(void)
+{
+    rlDisableVertexArray();
+    rlDisableVertexBuffer();
+    rlDisableVertexBufferElement();
+    rlDisableShader();
 }
 
 void WorldRendererCommon_PreparePalette(Shader shader, WorldRendererPalette* outPalette)
