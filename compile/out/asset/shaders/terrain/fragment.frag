@@ -46,7 +46,8 @@ uniform bool hasMaterialArrays;        // false: the materials' mean colours, no
 uniform vec4 materialTint[16];         // rgb: the albedo tint, linear
 uniform vec4 materialSurface[16];      // x: 1 / tile size, y: roughness, z: normal strength, w: height blend strength
 uniform vec4 materialProjection[16];   // x: triplanar (0 off, 1 steep, 2 always), y: triplanar slope (degrees),
-                                       // z: puddles, w: porosity (both for the weather's wetness, not built yet)
+                                       // z: puddles (for the rain's puddles, not built yet), w: porosity (how much the
+                                       // weather's wetness darkens it)
 uniform vec4 materialMeanColor[16];    // rgb: the albedo's mean times the tint, linear
 uniform sampler2DArray materialAlbedoHeight; // a layer per material: rgb the albedo (sRGB), a the height
 uniform sampler2DArray materialNormal;       // rg: the normal map's x and y (OpenGL's convention)
@@ -370,6 +371,7 @@ void main()
     float shareTotal = 0.0;
     vec3 albedoSum = vec3(0.0);
     float roughnessSum = 0.0;
+    float porositySum = 0.0;
     float occlusionSum = 0.0;
     vec3 normalSum = vec3(0.0);
     for (int i = 0; i < 16; i++)
@@ -389,6 +391,7 @@ void main()
         {
             continue;
         }
+        porositySum += share*materialProjection[i].w;
         if (!hasMaterialArrays)
         {
             albedoSum += share*materialMeanColor[i].rgb;
@@ -430,6 +433,7 @@ void main()
     vec3 albedo = vec3(0.0);
     vec3 n = geometric;
     float roughness = DEBUG_ROUGHNESS;
+    float porosity = 0.0;
     float occlusion = 1.0;
     if (terrainView == 3)
     {
@@ -443,16 +447,19 @@ void main()
     {
         albedo = materialMeanColor[0].rgb;
         roughness = materialSurface[0].y;
+        porosity = materialProjection[0].w;
     }
     else if (!hasMaterialArrays)
     {
         albedo = albedoSum/shareTotal;
         roughness = roughnessSum/shareTotal;
+        porosity = porositySum/shareTotal;
     }
     else
     {
         albedo = albedoSum/shareTotal;
         roughness = roughnessSum/shareTotal;
+        porosity = porositySum/shareTotal;
         occlusion = occlusionSum/shareTotal;
         normalSum /= shareTotal;
         n = (dot(normalSum, normalSum) > 1e-12) ? normalize(mat3(matNormal)*normalSum) : geometric;
@@ -460,6 +467,11 @@ void main()
     albedo = mix(albedo, pow(chunkTint.rgb, vec3(2.2)), chunkTint.a);
     albedo *= pow(max(colDiffuse.rgb, vec3(0.0)), vec3(2.2));
     roughness = clamp(roughness, 0.045, 1.0);
+    // The weather's wetness: darker by the materials' porosity, glossier (the debug views stay dry).
+    if (terrainView == 0)
+    {
+        ApplyWetness(albedo, roughness, geometric, porosity);
+    }
 
     vec3 v = normalize(-fragPosition); // render space: the camera at the origin
     vec3 f0 = vec3(0.04);

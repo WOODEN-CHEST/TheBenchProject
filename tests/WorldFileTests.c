@@ -243,7 +243,8 @@ static void FillTable(TestRun* run, const PropertyTable* table, void* instance)
     for (size_t Row = 0U; Row < table->DescriptorCount; Row++)
     {
         const PropertyDescriptor* Descriptor = &table->Descriptors[Row];
-        if ((Descriptor->Flags & PropertyFlags_ReadOnly) != 0U)
+        // Runtime rows (the lightning's) are never written to files, so they could not come back.
+        if (((Descriptor->Flags & PropertyFlags_ReadOnly) != 0U) || ((Descriptor->Flags & PropertyFlags_Persistent) == 0U))
         {
             continue;
         }

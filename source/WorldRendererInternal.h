@@ -25,6 +25,7 @@
 #include "WorldAtmosphere.h"
 #include "WorldInterior.h"
 #include "WorldSkyLight.h"
+#include "WorldWeatherLight.h"
 #include "SpriteTransform.h"
 #include "WorldRenderSpace.h"
 #include "WorldShadowLevels.h"
@@ -397,6 +398,11 @@ typedef struct WorldRenderFrameStruct
      *  active, the volume is available and the haze's distance scale is above 0); false: no haze on anything. */
     WorldAtmosphereHaze Haze;
     float LightPollutionRadiance[3];
+    /** @brief The weather this frame (WorldWeatherLight_GetFrame in BuildFrame; the deck's light added with the sky's
+     *  light, WorldRendererLighting_PrepareSkyLight): the clouds' cover and what it leaves of the sun and the moon, the
+     *  deck's light, a flash's, the wetness, and the wind (its level direction, its speed and gust in metres per second,
+     *  for what sways in it). */
+    WorldWeatherLight Weather;
     bool IsHazeActive;
     /** @brief The eye's night vision this frame, which the sky and PBR shaders apply: how strongly (the renderer toggle
      *  x the world's NightVisionStrength; 0 = off), the field luminance it compares with (NightVisionField: the sky's
@@ -609,6 +615,8 @@ typedef struct WorldRendererLitLocationsStruct
     int _locIsMoonLit;
     int _locAmbientTint;
     int _locNightLight;
+    /** @brief The weather's wetness of surfaces. */
+    int _locSurfaceWetness;
     /** @brief Screen-space AO: the AO map, its active flag and the scene resolution used to map gl_FragCoord to the AO
      *  map's UV. */
     int _locAmbientOcclusionMap;
@@ -838,6 +846,11 @@ typedef struct WorldRendererSkyStateStruct
     int _locNightVisionSteepness;
     int _locNightVisionStrength;
     int _locNightVisionTint;
+    /** @brief The weather: the clouds' deck at the zenith, a flash's light and its direction. */
+    int _locCloudZenithRadiance;
+    int _locFlashIrradiance;
+    int _locFlashDirection;
+    int _locCloudHeight;
     /** @brief The atmosphere (common/atmosphere): the air and the tables. */
     WorldRendererAtmosphereLocations _atmosphere;
     /** @brief The haze (common/haze): the ground haze in front of the sky, seen through the volume's air. */
@@ -877,6 +890,9 @@ typedef struct WorldRendererAtmosphereStateStruct
     int _skyViewLocGroundAlbedo;
     int _skyViewLocAmbientTint;
     int _skyViewLocGroundNightLight;
+    int _skyViewLocCloudSkyIrradiance;
+    int _skyViewLocCloudAmbientRadiance;
+    int _skyViewLocCloudHeight;
     /** @brief The volume's builder (world_atmosphere_volume), its atmosphere locations and its own; NULL = no haze. */
     GameShader* _volumeShader;
     WorldRendererAtmosphereLocations _volumeLocations;
@@ -890,6 +906,9 @@ typedef struct WorldRendererAtmosphereStateStruct
     int _volumeLocSkyTint;
     int _volumeLocGroundHazeBaseHeight;
     int _volumeLocGroundAlbedo;
+    int _volumeLocCloudSkyIrradiance;
+    int _volumeLocCloudAmbientRadiance;
+    int _volumeLocCloudHeight;
     /** @brief The irradiance table's builder (world_atmosphere_irradiance), its atmosphere locations and its own;
      *  NULL = the tables are unavailable. */
     GameShader* _irradianceShader;

@@ -1738,6 +1738,7 @@ Error AssetManager_CreateStandardAssetTypes(AssetManager* self, StandardAssetTyp
         { ASSET_TYPE_NAME_TERRAIN, ASSET_TYPE_DIRECTORY_TERRAIN, TerrainDefinition_Construct, &outTypes->Terrain },
         { ASSET_TYPE_NAME_TERRAIN_MATERIAL, ASSET_TYPE_DIRECTORY_TERRAIN_MATERIAL, TerrainMaterialDefinition_Construct,
             &outTypes->TerrainMaterial },
+        { ASSET_TYPE_NAME_CLIMATE, ASSET_TYPE_DIRECTORY_CLIMATE, ClimateDefinition_Construct, &outTypes->Climate },
     };
 
     for (size_t i = 0; i < (sizeof(Standard) / sizeof(Standard[0])); i++)
@@ -2622,6 +2623,12 @@ Error AssetManager_LoadTerrainMaterial(AssetManager* self, const unsigned char* 
     TerrainMaterial** outAsset)
 {
     return LoadStandard(self, (self != NULL) ? self->_standardTypes.TerrainMaterial : ASSET_TYPE_ID_INVALID, name, user,
+        (void**)outAsset);
+}
+
+Error AssetManager_LoadClimate(AssetManager* self, const unsigned char* name, AssetUserID user, Climate** outAsset)
+{
+    return LoadStandard(self, (self != NULL) ? self->_standardTypes.Climate : ASSET_TYPE_ID_INVALID, name, user,
         (void**)outAsset);
 }
 

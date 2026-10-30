@@ -70,9 +70,10 @@ The scheduler (events at dates and times, with the game core) will wake on these
   (`TimeOfDay = GameClock_GetTimeOfDay`, `Date = GameClock_GetDay`); in a world file they are the sky's starting
   point. The moon's phase and position, the stars' drift and the seasons read the environment's date and time,
   i.e. the clock.
-- **The weather (later)** moves by the game seconds the clock moved: `Crossings.GameSeconds` of each Advance and each
-  fast-forward (a planned `WeatherSystem_Update(..., clock, gameSecondsElapsed)`). A paused clock pauses the
-  weather; sleeping moves it.
+- **The weather** moves by the game seconds the clock moved: `Crossings.GameSeconds` of each Advance and each
+  fast-forward (`WeatherSystem_Update(system, environment, clock, gameSeconds, realSeconds)`,
+  [WeatherSystem.md](WeatherSystem.md)); its gusts and lightning by the real seconds of play. A paused clock pauses the
+  weather; sleeping moves it through every preset it passes.
 - **Later:** the scheduler (game core), NPC schedules, scripts' `wait(2h)` and `time.*` functions,
   story deadlines and office hours.
 

@@ -9,7 +9,9 @@
 // sky's irradiance and the ground's bounce, what lights every surface at that height. Built every frame after the
 // sky-view table, from the transmittance, multiple scattering and irradiance tables (source/WorldRendererAtmosphere.c;
 // only its last row while the haze is off); the lit shaders, the sky pass and the outlines read it (common/haze,
-// common/lighting).
+// common/lighting). Under the weather's clouds (source/WorldWeatherLight.h) the sun and the moon come in dimmed by them,
+// the deck's diffuse light (and a lightning flash's) joins the sky's light on surfaces at every height, and the air is
+// lit by it from all around.
 // Its rays pass through the planet's surface, the air below it as on it: the world's ground is flat and goes on where
 // the planet curves away (a level ray from 1.7 m meets the planet 4.65 km out), and a valley below sea level is hazed
 // like the plain around it.
@@ -24,6 +26,10 @@ uniform vec3 lightPollutionRadiance; // the town's light in the air at the camer
 uniform vec3 skyTint;                // the sky's tint (linear): the haze is the sky's light, tinted as the sky is
 uniform float groundHazeBaseHeight;  // the ground haze's base above the atmosphere's ground, metres
 uniform vec3 groundAlbedo;           // the ground's albedo (sky_ground_albedo, linear): the ground's bounce
+uniform vec3 cloudSkyIrradiance;     // the clouds' deck's diffuse light on a level surface, and the flash's (linear; 0
+                                     // without either)
+uniform vec3 cloudAmbientRadiance;   // the even light the deck (and the flash) gives the air from all around (linear)
+uniform float cloudHeight;           // the deck's height above the atmosphere's ground: the air below it takes that light
 
 out vec4 finalColor;
 
@@ -47,7 +53,8 @@ vec3 SkyLightValue(int value, float height, vec3 sunRadiance, vec3 moonRadiance)
     }
     vec3 sky = (atmosphereSkyIrradiance(height, sunDirection.y)*sunRadiance
         + atmosphereSkyIrradiance(height, moonDirection.y)*moonRadiance
-        + atmosphereLightPollutionIrradiance(height)*lightPollutionRadiance)*max(skyTint, vec3(0.0));
+        + atmosphereLightPollutionIrradiance(height)*lightPollutionRadiance)*max(skyTint, vec3(0.0))
+        + max(cloudSkyIrradiance, vec3(0.0));
     if (value == ATMOSPHERE_SKY_LIGHT_SKY)
     {
         return sky;
@@ -86,10 +93,11 @@ void main()
         else if (texel.x == ATMOSPHERE_VOLUME_GROUND_HAZE_AMBIENT)
         {
             // The sky's light from all around (its multiple scattering table, the light the air sends a point from
-            // every direction), and the town's.
+            // every direction), the town's and the clouds'.
             value = sunRadiance*atmosphereMultipleScattering(baseHeight, sunDirection.y)
                 + moonRadiance*atmosphereMultipleScattering(baseHeight, moonDirection.y)
-                + lightPollutionRadiance*atmosphereLightPollutionShare(baseHeight, 0.0);
+                + lightPollutionRadiance*atmosphereLightPollutionShare(baseHeight, 0.0)
+                + max(cloudAmbientRadiance, vec3(0.0));
         }
         finalColor = vec4(min(value, vec3(HALF_FLOAT_MAX)), 1.0);
         return;
@@ -117,7 +125,8 @@ void main()
     vec3 transmittance;
     vec3 light = atmosphereScatteredLight(atmosphereViewHeight, direction.y, sunDirection.y, cosSun, pathLength,
         stepCount, isTransmittance ? vec3(0.0) : sunRadiance, multipleScattering,
-        isTransmittance ? vec3(0.0) : lightPollutionRadiance, transmittance);
+        isTransmittance ? vec3(0.0) : lightPollutionRadiance,
+        isTransmittance ? vec3(0.0) : max(cloudAmbientRadiance, vec3(0.0)), cloudHeight, transmittance);
     if (isTransmittance)
     {
         finalColor = vec4(transmittance, 1.0);
@@ -128,7 +137,7 @@ void main()
         vec3 moonTransmittance;
         light += atmosphereScatteredLight(atmosphereViewHeight, direction.y, moonDirection.y,
             dot(direction, moonDirection), pathLength, stepCount, moonRadiance, multipleScattering, vec3(0.0),
-            moonTransmittance);
+            vec3(0.0), 0.0, moonTransmittance);
     }
     finalColor = vec4(min(light*max(skyTint, vec3(0.0)), vec3(HALF_FLOAT_MAX)), 1.0);
 }

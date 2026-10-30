@@ -436,6 +436,18 @@ void WorldAtmosphere_GetHaze(const WorldEnvironment* environment, float configFo
     outHaze->GroundHazeThickness = ClampFinite(environment->GroundHazeThickness,
         (float)WORLD_ENVIRONMENT_MIN_GROUND_HAZE_THICKNESS, (float)WORLD_ENVIRONMENT_MAX_GROUND_HAZE_THICKNESS,
         ATMOSPHERE_FALLBACK_GROUND_HAZE_THICKNESS);
+    // The weather's ground fog joins the world's ground haze in one layer: their densities add up at the base, and the
+    // layer thins by the mean of their thicknesses weighed by their densities, so either alone is exactly itself.
+    float FogDensity = ClampFinite(environment->FogDensity, 0.0f, (float)WORLD_ENVIRONMENT_MAX_GROUND_HAZE_DENSITY, 0.0f);
+    if (FogDensity > 0.0f)
+    {
+        float FogHeight = ClampFinite(environment->FogHeight, (float)WORLD_ENVIRONMENT_MIN_GROUND_HAZE_THICKNESS,
+            (float)WORLD_ENVIRONMENT_MAX_GROUND_HAZE_THICKNESS, ATMOSPHERE_FALLBACK_GROUND_HAZE_THICKNESS);
+        float Total = outHaze->GroundHazeDensity + FogDensity;
+        outHaze->GroundHazeThickness = (outHaze->GroundHazeDensity > 0.0f)
+            ? (outHaze->GroundHazeDensity * outHaze->GroundHazeThickness + FogDensity * FogHeight) / Total : FogHeight;
+        outHaze->GroundHazeDensity = fminf(Total, (float)WORLD_ENVIRONMENT_MAX_GROUND_HAZE_DENSITY);
+    }
     ColorToLinear(environment->GroundHazeAlbedo, outHaze->GroundHazeAlbedo);
     outHaze->GroundHazeGlow = ClampFinite(environment->GroundHazeGlow, 0.0f, (float)WORLD_ENVIRONMENT_MAX_SUN_GLOW,
         ATMOSPHERE_FALLBACK_GROUND_HAZE_GLOW);

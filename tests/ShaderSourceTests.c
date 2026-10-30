@@ -1327,6 +1327,72 @@ static void ShippedShadowLevelsAreReadOffTheSurface(TestRun* run)
     ShaderFixture_Deconstruct(run, &Fixture);
 }
 
+/* The weather reaches every reader: each lit shader wets its surface once, both atmosphere builders light the air with
+ * the clouds' light, the volume's values and the far ground take the deck's irradiance, and the sky pass draws the deck
+ * by the overcast sky's zenith (CIE: 9 / (7 pi) of its irradiance, WorldWeatherLight.c's). */
+static void ShippedShadersShowTheWeather(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        const char* const Lit[][2] =
+        {
+            { "pbr/fragment", "ApplyWetness(albedo, rough, surfaceNormal, WET_DEFAULT_POROSITY*(1.0 - metal));" },
+            { "terrain/fragment", "ApplyWetness(albedo, roughness, geometric, porosity);" },
+            { "sprite/fragment", "ApplyWetness(albedo, rough, wetNormal, WET_DEFAULT_POROSITY);" },
+        };
+        for (size_t Index = 0U; Index < (sizeof(Lit) / sizeof(Lit[0])); Index++)
+        {
+            if (!ExpandShippedStage(run, &Fixture, Lit[Index][0]))
+            {
+                continue;
+            }
+            bool IsWet = (CountOccurrences(&Fixture.Text, "uniform float surfaceWetness;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "void ApplyWetness(") == 1U)
+                && (CountOccurrences(&Fixture.Text, "ApplyWetness(albedo, ") == 1U)
+                && (CountOccurrences(&Fixture.Text, Lit[Index][1]) == 1U);
+            if (!TEST_CHECK(run, IsWet))
+            {
+                printf("    in \"%s\"\n", Lit[Index][0]);
+            }
+        }
+        const char* const Builders[][2] =
+        {
+            { "atmosphere/volume", "isTransmittance ? vec3(0.0) : max(cloudAmbientRadiance, vec3(0.0)), cloudHeight, "
+                "transmittance);" },
+            { "atmosphere/skyview", "SKY_VIEW_STEPS, lightRadiance, multipleScattering, lightPollutionRadiance, "
+                "max(cloudAmbientRadiance, vec3(0.0)),\n        cloudHeight, transmittance)" },
+        };
+        for (size_t Index = 0U; Index < (sizeof(Builders) / sizeof(Builders[0])); Index++)
+        {
+            if (!ExpandShippedStage(run, &Fixture, Builders[Index][0]))
+            {
+                continue;
+            }
+            bool IsLit = (CountOccurrences(&Fixture.Text, "source += (scatteringR + scatteringM)*ambientRadiance*below;")
+                    == 1U)
+                && (CountOccurrences(&Fixture.Text, "uniform float cloudHeight;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "uniform vec3 cloudSkyIrradiance;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "+ max(cloudSkyIrradiance, vec3(0.0));") == 1U)
+                && (CountOccurrences(&Fixture.Text, Builders[Index][1]) == 1U);
+            if (!TEST_CHECK(run, IsLit))
+            {
+                printf("    in \"%s\"\n", Builders[Index][0]);
+            }
+        }
+        if (ExpandShippedStage(run, &Fixture, "sky/fragment"))
+        {
+            TEST_CHECK(run, (fabs(GetConstValue(&Fixture.Text, "OVERCAST_ZENITH_PER_IRRADIANCE")
+                    - 9.0 / (7.0 * 3.14159265358979323846)) < 1.0e-5)
+                && (CountOccurrences(&Fixture.Text, "uniform vec3 cloudZenithRadiance;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "sky += weatherSky(rayDir, atmosphereTablesActive ? "
+                    "weatherDeckTransmittance(rayDir) : transmittance)*tint;") == 1U));
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
 
 // Public functions.
 void ShaderSourceTests_Run(TestRun* run)
@@ -1357,6 +1423,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "shipped_interior_matches_its_mirror", ShippedInteriorMatchesItsMirror },
         { "shipped_sky_volume_matches_its_mirror", ShippedSkyVolumeMatchesItsMirror },
         { "shipped_shadow_levels_are_read_off_the_surface", ShippedShadowLevelsAreReadOffTheSurface },
+        { "shipped_shaders_show_the_weather", ShippedShadersShowTheWeather },
     };
     TestRun_RunSuite(run, "ShaderSource", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

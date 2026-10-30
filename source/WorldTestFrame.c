@@ -13,6 +13,7 @@
 #include "WorldTestCharacters.h"
 #include "WorldTestInstances.h"
 #include "WorldTestShadows.h"
+#include "WorldTestWeather.h"
 #include "WorldFile.h"
 #include "WorldObject.h"
 #include "WorldModelComponent.h"
@@ -235,6 +236,9 @@ typedef struct WorldTestFrameStruct
     WorldTestInstances _testInstances;
     /** The shadows' test content: the far field (keypad +) and the shadow levels' debug view (keypad *). */
     WorldTestShadows _testShadows;
+    /** The weather: the test world's climate run on the frame's clock, and its keys (Insert, Home, End, Page Up, Page
+     *  Down, the backslash). */
+    WorldTestWeather _testWeather;
     /** Where the F11 key's far shift has moved the test world, its characters and the camera: an index into FarShifts
      *  (0: not moved). */
     size_t _farShiftIndex;
@@ -946,6 +950,7 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         WorldTestAnimation_LogStatus(&frame->_testAnimation);
         WorldTestInstances_LogStatus(&frame->_testInstances);
         WorldTestShadows_LogStatus(&frame->_testShadows);
+        WorldTestWeather_LogStatus(&frame->_testWeather);
         LogCameraStatus(frame);
         LogFrameTimes(frame);
     }
@@ -1701,6 +1706,7 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
     WorldTestAnimation_HandleInput(&frame->_testAnimation, input, &frame->_camera);
     WorldTestInstances_HandleInput(&frame->_testInstances, input);
     WorldTestShadows_HandleInput(&frame->_testShadows, input);
+    WorldTestWeather_HandleInput(&frame->_testWeather, input, &frame->_clock);
 }
 
 
@@ -1763,6 +1769,9 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
         LogClock(Frame, "a new day");
     }
     ApplyClockToEnvironment(Frame);
+    // The weather moves with the game time the clock moved, its gusts and lightning with the real time of play.
+    WorldTestWeather_Update(&Frame->_testWeather, &Frame->_clock, Crossings.GameSeconds,
+        Frame->_clock.IsPaused ? 0.0 : time.PassedTime);
 
     // The tick's order (agents/WorldData.md): the NPCs' brains set their inputs (the scripts' slot), the drivers move
     // things (the desk, the door, the pushing wall, then the characters, so what moved this tick carries them), the
@@ -1906,6 +1915,7 @@ static void WorldTestFrame_Destroy(void* self)
     WorldTestCharacters_Deconstruct(&Frame->_testCharacters);
     WorldCharacters_Destroy(Frame->_characters);
     WorldCollision_Destroy(Frame->_collision);
+    WorldTestWeather_Deconstruct(&Frame->_testWeather);
 
     Error WorldResult = World_Deconstruct(&Frame->_world);
     Error_Deconstruct(&WorldResult);
@@ -2055,6 +2065,7 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
     WorldTestInstances_Construct(&Frame->_testInstances, &Frame->_world, Frame->_collision, Frame->_renderer,
         services->Logger);
     WorldTestShadows_Construct(&Frame->_testShadows, &Frame->_world, Frame->_renderer, services->Logger);
+    WorldTestWeather_Construct(&Frame->_testWeather, &Frame->_world, services->Assets, services->Logger);
 
     Frame->_services = services;
     for (size_t Index = 0U; Index < OPACITY_TEST_OBJECT_COUNT; Index++)

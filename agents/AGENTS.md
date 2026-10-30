@@ -57,7 +57,7 @@ Current module list:
 * Logger (Logger.md) - Writes timestamped, level-tagged messages to <base>/logs/latest.log and stdout, and rotates the previous log into <base>/logs/archived/ (keeping the newest 30).
 * AssetManager (AssetManager.md) - Loads, shares and unloads assets built from JSON definitions in prioritized search
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
-  caches failed loads, registers the fourteen standard types, and reads a texture asset's image file as CPU pixels
+  caches failed loads, registers the fifteen standard types, and reads a texture asset's image file as CPU pixels
   without loading it (AssetManager_LoadTexturePixels). Read its lifetime rules before touching assets.
 * Game asset wrappers (GameAssets.md) - GameFont, GameModel, GameShader, GameSound and GameTexture: the manager-owned
   wrappers for the standard font, model, shader, sound and texture types, with their ownership rules, accessors and
@@ -405,6 +405,10 @@ Current module list:
     floor at the night's own light), the eye eased in stops, the partial adaptation's curve over night vision's real
     light scale that gives the exposure, and a room's bias on it; the renderer's meter pass and readback feed it
     (WorldRuntime.md, "Eye adaptation").
+  * WorldWeatherLight - The weather's look as pure maths (private, source/WorldWeatherLight.h): the clouds as one even
+    deck (their cover and what it leaves of the sun and the moon, their two-stream transmission, the deck's light on
+    surfaces, in the air and on the sky as an overcast sky shows it), a lightning flash's light and glow, the wetness and
+    the wind, from the environment's weather values each frame (WorldRuntime.md, "Weather").
   * WorldInterior - Interior lighting as pure maths (private, source/WorldInterior.h): ambient zones in render space
     (placed by their objects' world matrices), their weights (the fade from the surface, surfaces facing in), the at
     most four a draw takes and their composition by priority, the haze inside them, the sky's visibility map on its
@@ -430,7 +434,9 @@ Current module list:
     the keypad's 9 switches interior lighting (the A/B) and 0 steps its debug view (the zones, the sky's share). Its
     world has a test room with an ambient zone, and its PrepareRender measures how open the camera is to the sky. The
     keypad's + shows a far field of towers out to 3 km on a 12 km plain (a runtime object) and * the shadow levels'
-    debug view (the private source/WorldTestShadows.{h,c}).
+    debug view (the private source/WorldTestShadows.{h,c}). It runs the weather on its clock (the private
+    source/WorldTestWeather.{h,c}): Insert the next preset, Home the lock, End the speed, Page Up a strike, Page Down the
+    mode, the backslash a forecast.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
@@ -456,6 +462,20 @@ Current module list:
   summation, no drift), a time scale (default 72, a 20-minute day), pause, a largest step per tick, fast-forwards and
   validated jumps, reports of what each move passed (game seconds, midnights, hours) for the weather and the scheduler,
   and a property table so it saves. Everything that needs game time reads it.
+* Weather (WeatherSystem.md) - The weather as continuous values (cloud coverage, type and density, rain, wetness, the
+  wind and its gusts, a ground fog, the temperature, a lightning flash) in the world's environment, moved over game time
+  by the climate the world names. Covers:
+  * Climate - The climate asset type (a standard type, JSON in climates/; source/ClimateDefinition.c the type): presets
+    (targets as numbers or ranges drawn per visit, durations, weighted links, month weights, start hours, transitions,
+    their own rates, gusts, lightning) and the settings (mode, seed, first preset, speed, rates, wetting and drying, the
+    clouds' ranges for rain and storms, the forecast's accuracy, the fixed state), read from a hostile definition into
+    one block of plain data; WeatherQuantity (the values presets target) and WeatherMode.
+  * WeatherSystem - Once a tick it moves the environment's weather values by the clock's game seconds (presets chosen by
+    weight, month and hour, values toward their targets at their rates, rain only from dense clouds, wetness rising and
+    drying) and by the real seconds of play (smooth gusts, lightning strikes with their flash and return strokes, a queue
+    of strikes for thunder), in four modes (simulated, fixed, scripted, off), with the story's API (presets, values,
+    lock, seed, speed, climate, a strike), a forecast that runs a copy ahead (blurred by the climate's accuracy, stable
+    across calls) and a property table that saves it.
 * World light culling (WorldLightCulling.md) - Reach-culls a list of point lights to the strongest few (up to WORLD_MAX_FORWARD_LIGHTS) overlapping an object's bounding sphere, ranked by influence, for the renderer's per-object forward shading.
 * UI framework (UIFramework.md) - The in-game UI, on any surface (the window or a texture in the world: the host passes
   the pointer, the keyboard and the viewport). A screen holds a tree of widgets with slot + generation ids, routes the

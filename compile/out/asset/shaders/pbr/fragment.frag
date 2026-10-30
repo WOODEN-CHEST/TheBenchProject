@@ -84,6 +84,10 @@ void main()
     }
     vec3 v = normalize(-fragPosition); // render space: the camera at the origin
 
+    // The weather's wetness: darker and glossier, most on surfaces facing up (a metal's albedo is its reflectance: it
+    // only turns glossier).
+    ApplyWetness(albedo, rough, surfaceNormal, WET_DEFAULT_POROSITY*(1.0 - metal));
+
     // Base reflectance: 0.04 for dielectrics, the albedo for metals.
     vec3 f0 = mix(vec3(0.04), albedo, metal);
 

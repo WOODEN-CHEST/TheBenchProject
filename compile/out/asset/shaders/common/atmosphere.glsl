@@ -429,14 +429,17 @@ vec3 atmosphereLightSource(float height, float lightCos, float phaseR, float pha
 // sky's stop at the ground or the top themselves), for a light of radiance `lightRadiance` (its light above the air,
 // coloured) whose zenith cosine at the viewer is `lightCosZenith` (`cosLightAngle`: the cosine between the ray and the
 // light), plus light pollution's
-// `lightPollution` (the radiance of the town's light in the air at the camera's foot; 0: none). Each point's light is
-// atmosphereLightSource's, the light's zenith there its own on the curved planet. The steps grow with the square of their
-// index (short near the viewer, where every ray meets the densest air; a level ray rises with the square of its length
-// as the planet curves away), and each step's light is integrated exactly over its own air and dimmed by the air before
-// it. Also gives the path's transmittance.
+// `lightPollution` (the radiance of the town's light in the air at the camera's foot; 0: none) and an even light
+// `ambientRadiance` around every point below the height `ambientTop` (the clouds' deck's, which lights the air below it
+// from all around; 0: none: the air scatters an even light toward the viewer at its scattering times the light's
+// radiance, whatever its phase; a step reaching past that height takes its share below it). Each
+// point's light is atmosphereLightSource's, the light's zenith there its own on the curved planet. The steps grow with
+// the square of their index (short near the viewer, where every ray meets the densest air; a level ray rises with the
+// square of its length as the planet curves away), and each step's light is integrated exactly over its own air and
+// dimmed by the air before it. Also gives the path's transmittance.
 vec3 atmosphereScatteredLight(float height, float cosZenith, float lightCosZenith, float cosLightAngle,
     float pathLength, int stepCount, vec3 lightRadiance, float multipleScattering, vec3 lightPollution,
-    out vec3 transmittance)
+    vec3 ambientRadiance, float ambientTop, out vec3 transmittance)
 {
     float radius = ATMOSPHERE_R_PLANET + height;
     float horizontal = sqrt(max(1.0 - cosZenith*cosZenith, 0.0));
@@ -444,6 +447,7 @@ vec3 atmosphereScatteredLight(float height, float cosZenith, float lightCosZenit
     float phaseM = atmosphereMiePhase(cosLightAngle);
     bool hasLight = any(greaterThan(lightRadiance, vec3(0.0)));
     bool hasPollution = any(greaterThan(lightPollution, vec3(0.0)));
+    bool hasAmbient = any(greaterThan(ambientRadiance, vec3(0.0)));
     float steps = float(stepCount);
     vec3 light = vec3(0.0);
     vec3 depth = vec3(0.0);
@@ -468,6 +472,17 @@ vec3 atmosphereScatteredLight(float height, float cosZenith, float lightCosZenit
         if (hasPollution)
         {
             source += (scatteringR + scatteringM)*lightPollution*atmosphereLightPollutionShare(h, t*horizontal);
+        }
+        if (hasAmbient)
+        {
+            // The step's share below the top, its height taken as linear through the step (smooth across directions).
+            float fromHeight = atmosphereHeightAt(height, cosZenith, pathLength*from*from);
+            float toHeight = atmosphereHeightAt(height, cosZenith, pathLength*to*to);
+            float low = min(fromHeight, toHeight);
+            float high = max(fromHeight, toHeight);
+            float below = (high > low) ? clamp((ambientTop - low)/(high - low), 0.0, 1.0)
+                : ((low < ambientTop) ? 1.0 : 0.0);
+            source += (scatteringR + scatteringM)*ambientRadiance*below;
         }
         vec3 stepDepth = extinction*stepLength;
         light += exp(-depth)*source*stepLength*atmosphereStepShare(stepDepth);

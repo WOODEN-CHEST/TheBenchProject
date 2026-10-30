@@ -644,20 +644,20 @@ table's order. The next free object wire id is 14.
 
 ## Environment
 
-`WorldEnvironment` is a struct with the date and time of day, sky, sun, night sky, moon, ambient, haze and effect
-settings, and the world's gravity (`gravity`, 9.81 m/s² straight down by default, in [0, 1000]; characters
+`WorldEnvironment` is a struct with the date and time of day, sky, sun, night sky, moon, ambient, haze, weather and
+effect settings, and the world's gravity (`gravity`, 9.81 m/s² straight down by default, in [0, 1000]; characters
 multiply it by their own `gravity_multiplier`).
 **Every field is one row of its property table** (`WorldEnvironment_GetPropertyTable`, in `source/WorldEnvironment.c`; module doc
 [PropertyDescriptors.md](PropertyDescriptors.md)): the key (the field name in snake_case, e.g. `light_pollution`), the
 GHDF wire id, the type, the default, the rules, the inspector text. `WorldEnvironment_SetDefaults`, `_Validate`,
 `_CopyTo` and `_Deconstruct` are thin wrappers over the table, and `WorldEnvironment_ReadJSON` / `_WriteJSON` are the
 JSON entry points for the world files. **To add a setting, add the field and one table row** with a new,
-never-used wire id (the next free one is 64; 2 and 3 are retired); nothing else needs writing. The field comments state
+never-used wire id (the next free one is 79; 2 and 3 are retired); nothing else needs writing. The field comments state
 each value's rule; validation enforces them (finite, `TimeOfDay`, `LightPollution`, `StarTwinkle`, `MoonPhase`,
 `NightVisionStrength` and `NightVisionBlueShift` in [0, 1], `SunSizeMultiplier`, `MoonSizeMultiplier` and `MoonCycleDays` > 0, every strength/intensity/density/brightness
->= 0, `Date` inside the calendar, the texture names valid asset names of at most 128 bytes, `MoonPhaseSource` one of
-its names) and names the first broken field by key and C name: `world_environment.light_pollution (LightPollution)
-must be finite and in [0, 1].` `SunAngle` and `MoonOrbitTilt` are `Angle`s: radians in memory and GHDF, degrees in
+>= 0, `Date` inside the calendar, the texture and climate names valid asset names of at most 128 bytes,
+`MoonPhaseSource` one of its names, the weather's values in their ranges below) and names the first broken field by
+key and C name: `world_environment.light_pollution (LightPollution) must be finite and in [0, 1].` `SunAngle` and `MoonOrbitTilt` are `Angle`s: radians in memory and GHDF, degrees in
 JSON.
 
 **Date and time of day are what the sky shows, not a clock.** `TimeOfDay` (a fraction of the day) and `Date` (a day
@@ -667,7 +667,7 @@ every tick; in a world file they are where the sky starts (the editor's preview 
 its clock from them). The environment table's wire ids 2 and 3 are retired (never reused), so GHDF that holds them
 still reads (the entries are skipped).
 
-**The environment owns its texture names** (`MilkyWayTexture`, `MoonTexture`): `WorldEnvironment_SetDefaults`
+**The environment owns its asset names** (`MilkyWayTexture`, `MoonTexture`, `Climate`): `WorldEnvironment_SetDefaults`
 constructs and allocates them (call it on a new environment only; to reset one, `Deconstruct` first) and pairs with
 `WorldEnvironment_Deconstruct`; copies go through `CopyTo` (never assignment: a copied pointer would be freed twice);
 a name is changed through the table (`Properties_Set`), which clones the new one and frees the old. `World` pairs
@@ -754,6 +754,33 @@ so the sun's colour is its colour above the air and the ambient is the sky's own
 | `ambient_skylight_intensity` | 14 | >= 0 | 1 | Multiplies the sky's light on surfaces: 1 the sky's own, 0 leaves shade lit only by the night's light and lamps. |
 | `night_light_color` | 61 | colour | (161, 178, 255) | The colour of the moonless night's own light on surfaces (starlight and the air's glow, raised for play as the moonlight is). |
 | `night_light_intensity` | 62 | >= 0 | 0.011 | How bright the moonless night's own light is (its linear colour times this, added to every surface's ambient): 0 gives a pitch-black moonless night outside the moon's and the town's light. |
+
+The weather's values (category "Weather"; [WeatherSystem.md](WeatherSystem.md)): what the weather is now. The weather
+system writes them every tick from the climate the environment names; in a world file they are the world's starting
+weather, and what the weather's off mode leaves as it is. The renderer shows them ([WorldRuntime.md](WorldRuntime.md),
+"Weather"). The defaults are no weather: clear, dry and still.
+
+| Key | Wire id | Rule | Default | Meaning |
+|---|---|---|---|---|
+| `cloud_coverage` | 64 | [0, 1] | 0 | How much of the sky has clouds. |
+| `cloud_type` | 65 | [0, 1] | 0 | 0 thin, flat layers; 0.5 cumulus; 1 towering storm clouds. |
+| `cloud_density` | 66 | [0, 1] | 0 | How thick the clouds are: rain clouds are dense and dark. |
+| `precipitation` | 67 | [0, 1] | 0 | Rain, 0 none to 1 a downpour. |
+| `wetness` | 68 | [0, 1] | 0 | How wet surfaces are: it follows the rain and dries afterwards. |
+| `wind_direction` | 69 | finite (an angle) | 0 | Where the wind blows toward: 0 toward +Z, 90 degrees toward +X (the direction (sin, 0, cos)). |
+| `wind_speed` | 70 | [0, 150] m/s | 0 | The mean wind (`WORLD_ENVIRONMENT_MAX_WIND_SPEED`). |
+| `wind_gust` | 71 | [0, 150] m/s | 0 | The current gust on top of it. |
+| `fog_density` | 72 | [0, 100] per metre | 0 | The weather's ground fog, added to the ground haze at its base (0.02: a morning mist). |
+| `fog_height` | 73 | [0.1, 100000] m | 20 | How quickly the weather's fog thins above the ground haze's base. |
+| `temperature` | 74 | [-273.15, 1000] degrees C | 15 | The air's temperature. |
+| `climate` | 75 | asset name, at most 128 bytes | `default` | The climate asset the weather follows (Climate.h). |
+| `lightning_flash` | 76 | [0, 1] | 0 | Runtime only, never saved: the current flash (the weather sets it). |
+| `lightning_direction` | 77 | finite vector | (0, 0, 1) | Runtime only: the level direction of the current strike from the viewer. |
+| `lightning_distance` | 78 | [0, 1e7] m | 1000 | Runtime only: how far away the current strike is. |
+
+The runtime rows are shown and reachable by scripts but not `Persistent`: files never carry them, and a read leaves the
+reader's own. `WorldEnvironment_GetDaylightFactorAt(environment, date, timeOfDay)` is the daylight factor at another
+time for this environment's sun (the weather's drying reads the sun ahead of the clock).
 
 The sun's and the moon's shadows ([WorldRuntime.md](WorldRuntime.md), "Sun and moon shadows"): `are_shadows_enabled`
 (default true) and `shadow_reach` (wire id 63, [0, 20000] m, default 4000: how far from the camera they reach, fading out

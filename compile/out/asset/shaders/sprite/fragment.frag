@@ -82,11 +82,20 @@ void main()
         float shadowAmount = SkyShadowAmount(fragShadowPosition, shadowFace, dot(shadowFace, toShadowLight));
         vec3 pointShadowNormal = FacingNormal(fragPointShadowNormal, pointShadowLightPos - fragPointShadowPosition);
 
+        // The weather's wetness on what lies on a surface or stands in the rain (cards, decals among them, and cutout
+        // billboards; a blended billboard is smoke or glass, an additive sprite light): darker and glossier by its facing,
+        // a billboard's as a thing standing upright (its quad turns with the camera).
+        float rough = SPRITE_ROUGHNESS;
+        if ((alphaMode != ALPHA_MODE_ADDITIVE) && (isCard || (alphaMode == ALPHA_MODE_CUTOUT)))
+        {
+            vec3 wetNormal = isCard ? n : vec3(0.0, 0.0, 1.0);
+            ApplyWetness(albedo, rough, wetNormal, WET_DEFAULT_POROSITY);
+        }
+
         SkyLightValues light = SkyLightAt(fragPosition);
-        vec3 direct = SkyLightWrapped(light, n, v, shadowAmount, lightWrap, albedo, SPRITE_F0, SPRITE_ROUGHNESS,
-            SPRITE_METALLIC);
+        vec3 direct = SkyLightWrapped(light, n, v, shadowAmount, lightWrap, albedo, SPRITE_F0, rough, SPRITE_METALLIC);
         vec3 pointTotal = PointLightsWrapped(n, v, fragPosition, fragPointShadowPosition, pointShadowNormal, lightWrap,
-            albedo, SPRITE_F0, SPRITE_ROUGHNESS, SPRITE_METALLIC);
+            albedo, SPRITE_F0, rough, SPRITE_METALLIC);
         // A card the pre-pass saw (a cutout card, a decal on its surface) takes its sky visibility; a billboard stands for
         // a thing seen from all round (the pre-pass saw its quad facing the camera) and a blended sprite is not in it:
         // they read what lies straight above them.

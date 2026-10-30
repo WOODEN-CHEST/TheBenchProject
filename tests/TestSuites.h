@@ -136,6 +136,18 @@ void GameClockTests_Run(TestRun* run);
  *  (WorldEnvironmentTests.c). */
 void WorldEnvironmentTests_Run(TestRun* run);
 
+/** @brief The climate asset: the shipped default climate, the defaults, every key, refused definitions and the
+ *  quantities' rules (ClimateTests.c). */
+void ClimateTests_Run(TestRun* run);
+
+/** @brief The weather system: determinism, ranges and rates, rain and wetness, presets by weight, month and hour, the
+ *  modes, locking, lightning, gusts, the forecast, saving and fast-forwards (WeatherSystemTests.c). */
+void WeatherSystemTests_Run(TestRun* run);
+
+/** @brief The weather's look on the renderer's side: the clouds' cover and deck, the flash, the wind and the fog's ground
+ *  haze (WorldWeatherLightTests.c). */
+void WorldWeatherLightTests_Run(TestRun* run);
+
 /** @brief The night sky's maths: the star catalogue, limiting magnitude, air mass, star colours and the galaxy's
  *  orientation (NightSkyTests.c; a private module of source/). */
 void NightSkyTests_Run(TestRun* run);

@@ -26,9 +26,9 @@
  * - The clock never leaves the calendar: it stops at the last instant of 9999-12-31.
  *
  * Every user of game time reads this one clock: the sky (whoever runs the game writes the clock's time of day and
- * date into the world's environment every tick), later the weather (the game seconds each tick advanced), the
- * scheduler and NPC schedules. The property table (GameClock_GetPropertyTable) describes the state and the settings,
- * so the clock saves with the game state and scripts and the inspector reach it by key.
+ * date into the world's environment every tick), the weather (WeatherSystem.h: the game seconds each tick advanced),
+ * later the scheduler and NPC schedules. The property table (GameClock_GetPropertyTable) describes the state and the
+ * settings, so the clock saves with the game state and scripts and the inspector reach it by key.
  *
  * A plain struct with no owned memory: construct it with GameClock_Construct, release it with GameClock_Deconstruct,
  * copy it through the table (Properties_CopyTo). Not thread-safe.

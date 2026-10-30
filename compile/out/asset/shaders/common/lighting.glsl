@@ -106,6 +106,9 @@ uniform float pointShadowBias;          // world-space depth bias to combat shad
 uniform mat4 hazeViewProjection;
 uniform float hazeMultiplier;
 
+// The weather's wetness of surfaces (0 dry .. 1 soaked; ApplyWetness).
+uniform float surfaceWetness;
+
 // The eye's night vision (shaders/common/night_vision.glsl): dim reflected light loses its colour as it does for the
 // eye; emitted light keeps it. The same values the sky pass gets.
 uniform float nightVisionFieldLuminance; // the scene luminance the sky's light gives (linear, the game's light units)
@@ -113,6 +116,28 @@ uniform float nightVisionHalfLuminance;  // night vision's calibration on the ga
 uniform float nightVisionSteepness;
 uniform float nightVisionStrength;       // 0 none (colourful nights) .. 1 the eye
 uniform vec3  nightVisionTint;           // the rods' grey, luminance 1 (the world's blue shift)
+
+
+// ---- Wet surfaces ----------------------------------------------------------------------------------------------
+// How much a soaked surface of porosity 1 darkens (water fills its pores: the light it scatters is trapped and absorbed
+// before it gets out), how much smoother any soaked surface turns (a film of water reflects like a polished surface),
+// and the porosity of surfaces that give none of their own (models): half way.
+const float WET_DARKENING = 0.7;
+const float WET_SMOOTHING = 0.5;
+const float WET_DEFAULT_POROSITY = 0.5;
+
+// Wets a surface by the weather's wetness: most where it faces up, half where it is upright, none where it faces down
+// (`normal`: its geometric normal, unit), darker by its porosity (0..1) and smoother. Leaves it as it is while dry.
+void ApplyWetness(inout vec3 albedo, inout float roughness, vec3 normal, float porosity)
+{
+    float wet = surfaceWetness*clamp(0.5 + 0.5*normal.y, 0.0, 1.0);
+    if (!(wet > 0.0))
+    {
+        return;
+    }
+    albedo *= 1.0 - WET_DARKENING*clamp(porosity, 0.0, 1.0)*wet;
+    roughness = max(roughness*(1.0 - WET_SMOOTHING*wet), 0.045);
+}
 
 
 // ---- The Cook-Torrance BRDF ------------------------------------------------------------------------------------

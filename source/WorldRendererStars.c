@@ -211,7 +211,8 @@ void WorldRendererStars_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     float Resolution[2] = { (float)frame->SceneWidth, (float)frame->SceneHeight };
     SetShaderValue(RayShader, self->_stars._locResolution, Resolution, SHADER_UNIFORM_VEC2);
     SetShaderValue(RayShader, self->_stars._locLimitingMagnitude, &frame->LimitingMagnitude, SHADER_UNIFORM_FLOAT);
-    float RadianceScale = STAR_RADIANCE_SCALE * fmaxf(Environment->StarBrightness, 0.0f);
+    // The weather's clouds hide their share of the stars.
+    float RadianceScale = STAR_RADIANCE_SCALE * fmaxf(Environment->StarBrightness, 0.0f) * frame->Weather.DirectShare;
     SetShaderValue(RayShader, self->_stars._locRadianceScale, &RadianceScale, SHADER_UNIFORM_FLOAT);
     float TwinkleStrength = ClampUnit(Environment->StarTwinkle);
     SetShaderValue(RayShader, self->_stars._locTwinkleStrength, &TwinkleStrength, SHADER_UNIFORM_FLOAT);

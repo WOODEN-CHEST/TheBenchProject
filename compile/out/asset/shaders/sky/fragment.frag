@@ -10,6 +10,11 @@
 // common/night_sky's skyglow). The table holds the far ground below the horizon (the haze in front of it
 // included), and the ground haze (common/haze) lies in front of the sky and the far ground as it lies in front of the
 // world's surfaces, so a misty horizon meets misty ground without a seam.
+// The weather's clouds (source/WorldWeatherLight.h), until clouds are drawn, are one even deck over the sky: above the
+// horizon it shows the deck's radiance (an overcast sky's: brightest at the zenith, a third of it at the horizon) through
+// the air in front of it, on top of the clear sky the clouds leave (the renderer dims the lights the tables are built
+// with, and the discs, the stars and the Milky Way, by the share they leave), and a lightning flash's glow, most toward
+// the strike.
 // Drawn behind the 3D geometry into the linear-HDR scene buffer; the tonemap post-pass maps it to display.
 // The per-pixel ray is reconstructed from the inverse view-projection so the sky lines up exactly with the 3D
 // camera. The renderer works in render space (the world's orientation with the camera at the origin), so that matrix
@@ -51,6 +56,12 @@ uniform float moonEarthshine;      // the dark side's glow as a share of that (a
 uniform bool hasMoonTexture;       // false: the disc is a flat grey
 uniform sampler2D moonTexture;     // sky_moon: the full moon's face, flat-lit (sRGB; alpha 0 outside the disc)
 
+uniform vec3 cloudZenithRadiance;  // the clouds' deck's radiance at the zenith, the share the clouds cover in (linear; 0:
+                                   // no clouds)
+uniform vec3 flashIrradiance;      // a lightning flash's light on a level surface (linear; 0: none)
+uniform vec3 flashDirection;       // unit direction toward the flash's glow (up toward the clouds over the strike)
+uniform float cloudHeight;         // the clouds' deck's height above the atmosphere's ground, metres
+
 uniform float nightVisionFieldLuminance; // the scene luminance the sky's light gives (linear, the game's light units)
 uniform float nightVisionHalfLuminance;  // night vision's calibration on the game's light scale (source/NightVision.h)
 uniform float nightVisionSteepness;
@@ -69,6 +80,47 @@ const float MOON_FLAT_ALBEDO = 0.7;
 // The sun's disc's radiance at sun_intensity 1 (a constant of its own, not the sun's light ATMOSPHERE_SUN_LIGHT). Far
 // dimmer than the real sun's, so that it keeps its colour on screen.
 const float SUN_DISC_RADIANCE = 22.0;
+// An overcast sky's zenith radiance per unit of its irradiance on a level surface (CIE: 9 / (7 pi)), and how its glow
+// gathers toward the flash: a broad lobe of this power around the flash's direction, this many times the rest.
+const float OVERCAST_ZENITH_PER_IRRADIANCE = 0.40926;
+const float FLASH_LOBE_POWER = 6.0;
+const float FLASH_LOBE_GAIN = 3.0;
+
+// The air's transmittance from the camera to the clouds' deck along a ray above the horizon: its transmittance to the
+// top over the transmittance to the top from where it meets the deck's height (1 with the camera at or above the deck).
+// The distance to that height in the form that does not cancel for rays going up: (rd^2 - r0^2) / (r0 mu + sqrt(...)),
+// with rd^2 - r0^2 carried as a difference of heights (common/atmosphere's rule).
+vec3 weatherDeckTransmittance(vec3 rayDir)
+{
+    float h0 = atmosphereViewHeight;
+    if (!(cloudHeight > h0))
+    {
+        return vec3(1.0);
+    }
+    float r0 = ATMOSPHERE_R_PLANET + h0;
+    float rd = ATMOSPHERE_R_PLANET + cloudHeight;
+    float mu = rayDir.y;
+    float lift = (cloudHeight - h0)*(2.0*ATMOSPHERE_R_PLANET + cloudHeight + h0);
+    float root = sqrt(max(r0*r0*mu*mu + lift, 0.0));
+    float toDeck = (r0*mu > 0.0) ? lift/(r0*mu + root) : root - r0*mu;
+    float muDeck = clamp((r0*mu + toDeck)/rd, -1.0, 1.0);
+    return atmosphereTransmittanceToTop(h0, mu)/max(atmosphereTransmittanceToTop(cloudHeight, muDeck), vec3(1e-6));
+}
+
+// The weather's sky toward a direction above the horizon: the clouds' deck (an overcast sky's radiance, (1 + 2 cos
+// zenith) / 3 of the zenith's) and a flash's glow, seen through the air's transmittance in front of them.
+vec3 weatherSky(vec3 rayDir, vec3 transmittance)
+{
+    float gradient = (1.0 + 2.0*max(rayDir.y, 0.0))/3.0;
+    vec3 deck = max(cloudZenithRadiance, vec3(0.0));
+    if (any(greaterThan(flashIrradiance, vec3(0.0))))
+    {
+        float toward = max(dot(rayDir, normalize(flashDirection)), 0.0);
+        float lobe = (1.0 + FLASH_LOBE_GAIN*pow(toward, FLASH_LOBE_POWER))/(1.0 + FLASH_LOBE_GAIN/(FLASH_LOBE_POWER + 1.0));
+        deck += flashIrradiance*OVERCAST_ZENITH_PER_IRRADIANCE*lobe;
+    }
+    return deck*gradient*transmittance;
+}
 
 // The Milky Way toward a world direction. The panorama is in galactic coordinates: the galactic centre in the middle,
 // longitude growing to the left (the view from inside the sky, as astronomical all-sky maps show it) and the north
@@ -169,6 +221,14 @@ void main()
         float belowFactor = smoothstep(0.0, -0.12, rayDir.y); // 0 above the horizon, 1 below
         sky *= mix(1.0, 0.5, belowFactor)*tint;
         milkyWayExtinction = vec3(nightSkyExtinction(nightSkyAirmass(rayDir.y)));
+    }
+
+    // The weather's clouds and a flash's glow over the sky above the horizon (the far ground below it is lit by them in
+    // the table already).
+    if (isBeyondAirShown && (any(greaterThan(cloudZenithRadiance, vec3(0.0)))
+        || any(greaterThan(flashIrradiance, vec3(0.0)))))
+    {
+        sky += weatherSky(rayDir, atmosphereTablesActive ? weatherDeckTransmittance(rayDir) : transmittance)*tint;
     }
 
     // Beyond the air, the moon covers what lies behind it: the sun disc, the Milky Way (and the stars, which the star

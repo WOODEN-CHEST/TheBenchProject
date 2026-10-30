@@ -1,0 +1,78 @@
+{
+    "name": "default",
+    "mode": "simulated",
+    "seed": "per_save",
+    "start": "clear",
+    "speed": 1.0,
+    "forecast_accuracy": 0.8,
+    "rates_per_hour": {
+        "cloud_coverage": 0.25, "cloud_type": 0.2, "cloud_density": 0.3, "precipitation": 0.6, "wind_direction": 30,
+        "wind_speed": 4, "fog_density": 0.01, "fog_height": 10, "temperature": 2
+    },
+    "wetting_per_hour": 1.5,
+    "drying_per_hour": 0.15,
+    "presets": [
+        {
+            "name": "clear",
+            "cloud_coverage": 0.1, "cloud_type": 0.3, "cloud_density": 0.3, "precipitation": 0, "wind_speed": [1, 4],
+            "fog_density": 0, "temperature": [10, 20],
+            "duration_hours": [3, 10],
+            "gusts": { "strength": 1.5, "per_minute": 2 },
+            "next": [ { "preset": "cloudy", "weight": 3 }, { "preset": "clear", "weight": 1 }, { "preset": "fog", "weight": 1 } ]
+        },
+        {
+            "name": "cloudy",
+            "cloud_coverage": 0.55, "cloud_type": 0.5, "cloud_density": 0.5, "precipitation": 0, "wind_speed": [3, 6],
+            "fog_density": 0, "temperature": [8, 16],
+            "duration_hours": [2, 6],
+            "gusts": { "strength": 3, "per_minute": 3 },
+            "next": [ { "preset": "overcast", "weight": 2 }, { "preset": "clear", "weight": 2 }, { "preset": "cloudy", "weight": 1 } ]
+        },
+        {
+            "name": "overcast",
+            "cloud_coverage": 0.9, "cloud_type": 0.25, "cloud_density": 0.7, "precipitation": 0, "wind_speed": [4, 8],
+            "fog_density": 0, "temperature": [6, 13],
+            "duration_hours": [2, 8],
+            "gusts": { "strength": 4, "per_minute": 3 },
+            "next": [ { "preset": "light_rain", "weight": 3 }, { "preset": "rain", "weight": 2 }, { "preset": "cloudy", "weight": 1 } ]
+        },
+        {
+            "name": "light_rain",
+            "cloud_coverage": 0.95, "cloud_type": 0.4, "cloud_density": 0.8, "precipitation": 0.3, "wind_speed": [3, 7],
+            "fog_density": 0, "temperature": [5, 12],
+            "duration_hours": [1, 4],
+            "gusts": { "strength": 3, "per_minute": 3 },
+            "next": [ { "preset": "rain", "weight": 1 }, { "preset": "cloudy", "weight": 2 }, { "preset": "overcast", "weight": 1 } ]
+        },
+        {
+            "name": "rain",
+            "cloud_coverage": 1.0, "cloud_type": 0.6, "cloud_density": 0.9, "precipitation": 0.7, "wind_speed": [5, 10],
+            "fog_density": 0, "temperature": [5, 11],
+            "duration_hours": [1, 4],
+            "gusts": { "strength": 5, "per_minute": 4 },
+            "next": [ { "preset": "storm", "weight": 1 }, { "preset": "light_rain", "weight": 2 }, { "preset": "overcast", "weight": 1 } ]
+        },
+        {
+            "name": "storm",
+            "cloud_coverage": 0.95, "cloud_type": 1.0, "cloud_density": 1.0, "precipitation": 0.9, "wind_speed": [9, 14],
+            "fog_density": 0, "temperature": [8, 16],
+            "transition_hours": 0.5,
+            "duration_hours": [0.3, 1.5],
+            "start_hours": [11, 23],
+            "month_weights": [0.2, 0.2, 0.4, 0.7, 1.2, 1.6, 1.8, 1.6, 1.0, 0.5, 0.3, 0.2],
+            "gusts": { "strength": 8, "per_minute": 4 },
+            "lightning": { "per_minute": 6, "min_distance": 300, "max_distance": 8000 },
+            "next": [ { "preset": "light_rain", "weight": 3 }, { "preset": "rain", "weight": 2 } ]
+        },
+        {
+            "name": "fog",
+            "fog_density": 0.02, "fog_height": 15, "cloud_coverage": 0.2, "cloud_type": 0.1, "cloud_density": 0.3,
+            "precipitation": 0, "wind_speed": [0, 1.5], "temperature": [3, 9],
+            "transition_hours": 0.75,
+            "duration_hours": [1, 4],
+            "start_hours": [3, 9],
+            "month_weights": [1, 1, 1.5, 1, 0.5, 0.3, 0.3, 0.5, 1.5, 2, 2, 1.5],
+            "next": [ { "preset": "clear", "weight": 2 }, { "preset": "cloudy", "weight": 1 } ]
+        }
+    ]
+}

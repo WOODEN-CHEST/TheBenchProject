@@ -20,7 +20,9 @@ component's value rows and the world sprite's rows come from the same macros (`s
 two tables share every key, default, rule and text: a way to keep one copy of a row in two tables. The same
 for characters: a character asset's settings (`character`) and the character component (`character_component`: the
 asset's name, then an override flag and a value per setting) share their rows (`source/CharacterInternal.h`;
-[Characters.md](Characters.md)). The weather (later) gets a table too.
+[Characters.md](Characters.md)). The weather system's saved state is one too (`weather_system`,
+[WeatherSystem.md](WeatherSystem.md)): its rows point into a nested struct and arrays (`_simulation.Targets[...]`), which
+`PROPERTY_MEMBER` takes as it takes any member designator.
 
 ## Declaring a table
 

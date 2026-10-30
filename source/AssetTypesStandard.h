@@ -62,6 +62,10 @@
  *  maps' pixels and settings). */
 #define ASSET_TYPE_NAME_TERRAIN_MATERIAL      ((const unsigned char*)u8"terrain_material")
 #define ASSET_TYPE_DIRECTORY_TERRAIN_MATERIAL ((const unsigned char*)u8"terrain_materials")
+/** @brief Standard climate type name / directory (Climate.h: how a world's weather behaves: its presets, their seasons,
+ *  links and rates). */
+#define ASSET_TYPE_NAME_CLIMATE      ((const unsigned char*)u8"climate")
+#define ASSET_TYPE_DIRECTORY_CLIMATE ((const unsigned char*)u8"climates")
 
 /** @brief Definition-file extension (without the dot) for every standard type: their definitions are JSON.
  *  AssetManager_ReadDefinitions uses it to skip non-definition resource files sharing the type directory. */
@@ -118,6 +122,9 @@ Error AnimationGraphDefinition_Construct(AssetManager* manager, const UserData* 
     const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);
 /** @brief Builds a terrain definition from a JSON blob (TerrainDefinition.c). See AssetDefinitionConstructor. */
 Error TerrainDefinition_Construct(AssetManager* manager, const UserData* userData,
+    const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);
+/** @brief Builds a climate definition from a JSON blob (ClimateDefinition.c). See AssetDefinitionConstructor. */
+Error ClimateDefinition_Construct(AssetManager* manager, const UserData* userData,
     const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);
 /** @brief Builds a terrain material definition from a JSON blob (TerrainMaterialDefinition.c). See
  *  AssetDefinitionConstructor. */

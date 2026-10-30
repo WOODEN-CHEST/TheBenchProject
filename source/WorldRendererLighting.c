@@ -83,6 +83,7 @@ static void CacheLitLocations(WorldRendererLitLocations* lit, Shader shader)
     lit->_locIsMoonLit = GetShaderLocation(shader, "isMoonLit");
     lit->_locAmbientTint = GetShaderLocation(shader, "ambientTint");
     lit->_locNightLight = GetShaderLocation(shader, "nightLight");
+    lit->_locSurfaceWetness = GetShaderLocation(shader, "surfaceWetness");
 
     lit->_locAmbientOcclusionMap = GetShaderLocation(shader, "ambientOcclusionMap");
     lit->_locAoMapActive = GetShaderLocation(shader, "aoMapActive");
@@ -284,8 +285,31 @@ void WorldRendererLighting_PrepareSkyLight(WorldRenderer* self, WorldRenderFrame
         .MoonDirection = frame->MoonDirection, .MoonPhase = frame->MoonPhase, .MoonIllumination = frame->MoonIllumination,
         .MoonIntensity = frame->MoonSkyIntensity
     };
-    WorldSkyLight_GetFrameLight(Atmosphere->_skyLight.Tables, &frame->AtmosphereMedium, Environment, &Lights,
-        frame->LightPollutionRadiance, (double)frame->AtmosphereViewHeight, &frame->SkyLight);
+    // The weather's clouds leave a share of the sun's and the moon's light above the air: everything they light (the
+    // surfaces, the air, the far ground) dims alike, and the clouds' deck sends down the light falling on its top (the
+    // clear sky's at the clouds' height: a whiter sun, less sky above) as diffuse light.
+    WorldWeatherLight* Weather = &frame->Weather;
+    if (WorldWeatherLight_HasClouds(Weather))
+    {
+        WorldSkyLightFrame CloudTop;
+        WorldSkyLight_GetFrameLight(Atmosphere->_skyLight.Tables, &frame->AtmosphereMedium, Environment, &Lights,
+            frame->LightPollutionRadiance, (double)WORLD_WEATHER_CLOUD_HEIGHT, &CloudTop);
+        Lights.SunIntensity *= Weather->DirectShare;
+        Lights.MoonIntensity *= Weather->DirectShare;
+        WorldSkyLight_GetFrameLight(Atmosphere->_skyLight.Tables, &frame->AtmosphereMedium, Environment, &Lights,
+            frame->LightPollutionRadiance, (double)frame->AtmosphereViewHeight, &frame->SkyLight);
+        WorldWeatherLight_AddDeck(Weather, &CloudTop, frame->SunDirection, frame->MoonDirection,
+            frame->AtmosphereMedium.GroundAlbedo, &frame->SkyLight);
+    }
+    else
+    {
+        WorldSkyLight_GetFrameLight(Atmosphere->_skyLight.Tables, &frame->AtmosphereMedium, Environment, &Lights,
+            frame->LightPollutionRadiance, (double)frame->AtmosphereViewHeight, &frame->SkyLight);
+        // No deck: only a flash's light in the air is set (the light stays the clear sky's, bit for bit).
+        WorldSkyLightFrame Clear = frame->SkyLight;
+        WorldWeatherLight_AddDeck(Weather, &Clear, frame->SunDirection, frame->MoonDirection,
+            frame->AtmosphereMedium.GroundAlbedo, &frame->SkyLight);
+    }
     const WorldSkyLightFrame* Light = &frame->SkyLight;
     frame->BaseSceneLuminance = WorldSkyLight_GetSceneLuminance(Light);
     // The light the eye is in: the sky's at the camera as its openness and the zones at it leave it, plus the zones' own
@@ -301,9 +325,9 @@ void WorldRendererLighting_PrepareSkyLight(WorldRenderer* self, WorldRenderFrame
     {
         frame->AirSunIntensity[Channel] = Light->SunAboveAir[Channel] / (float)WORLD_ATMOSPHERE_SUN_LIGHT;
         frame->AirMoonIntensity[Channel] = Light->MoonAboveAir[Channel] / (float)WORLD_ATMOSPHERE_SUN_LIGHT;
-        // fminf takes an absurd intensity's infinity to the most the disc holds.
+        // fminf takes an absurd intensity's infinity to the most the disc holds; the clouds hide their share of it.
         frame->SunDiscIntensity[Channel] = fminf(SunColor[Channel] * fmaxf(frame->SunIntensity, 0.0f)
-            * SUN_DISC_SCREEN_EXPOSURE / Exposure, (float)SUN_DISC_MAX_INTENSITY);
+            * SUN_DISC_SCREEN_EXPOSURE / Exposure, (float)SUN_DISC_MAX_INTENSITY) * Weather->DirectShare;
     }
     // The lit shaders take it by height from the volume's last row while the atmosphere pass writes it there.
     frame->IsSkyLightPerHeight = frame->AreAtmosphereTablesActive && WorldRendererAtmosphere_IsVolumeAvailable(self);
@@ -399,12 +423,23 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     SetShaderValue(shader, lit->_locSkyLightPerHeight, &PerHeight, SHADER_UNIFORM_INT);
     SetShaderValue(shader, lit->_locSunLight, Light->Sun, SHADER_UNIFORM_VEC3);
     SetShaderValue(shader, lit->_locMoonLight, Light->Moon, SHADER_UNIFORM_VEC3);
-    SetShaderValue(shader, lit->_locSkyIrradiance, Light->Sky, SHADER_UNIFORM_VEC3);
-    SetShaderValue(shader, lit->_locGroundIrradiance, Light->Ground, SHADER_UNIFORM_VEC3);
+    // A lightning flash lights surfaces with the sky, but the eye's anchor leaves it out (the C mirror's frame light).
+    float SkyIrradiance[3];
+    float GroundIrradiance[3];
+    const WorldWeatherLight* Weather = &frame->Weather;
+    for (int Channel = 0; Channel < 3; Channel++)
+    {
+        SkyIrradiance[Channel] = Light->Sky[Channel] + Weather->FlashIrradiance[Channel];
+        GroundIrradiance[Channel] = Light->Ground[Channel]
+            + frame->AtmosphereMedium.GroundAlbedo[Channel] * Weather->FlashIrradiance[Channel];
+    }
+    SetShaderValue(shader, lit->_locSkyIrradiance, SkyIrradiance, SHADER_UNIFORM_VEC3);
+    SetShaderValue(shader, lit->_locGroundIrradiance, GroundIrradiance, SHADER_UNIFORM_VEC3);
     int MoonLit = frame->IsMoonLit ? 1 : 0;
     SetShaderValue(shader, lit->_locIsMoonLit, &MoonLit, SHADER_UNIFORM_INT);
     SetShaderValue(shader, lit->_locAmbientTint, Light->AmbientTint, SHADER_UNIFORM_VEC3);
     SetShaderValue(shader, lit->_locNightLight, Light->Night, SHADER_UNIFORM_VEC3);
+    SetShaderValue(shader, lit->_locSurfaceWetness, &Weather->Wetness, SHADER_UNIFORM_FLOAT);
 
     // The haze in front of every surface: the volume the atmosphere pass built for the scene camera's screen
     // directions (read through the scene's view-projection, also by the crisp pass), the frame's haze and the ground
@@ -643,5 +678,14 @@ void WorldRendererLighting_LogStatus(const WorldRenderer* self)
         Status->IsExposureMetered ? "measured" : "the anchor", (double)Status->Exposure,
         Status->SkyLightTableBuildCount,
         Status->IsSkyLightTableBuilding ? "; a rebuild is running" : "");
+    Error_Deconstruct(&LogResult);
+    LogResult = Logger_LogInfoFormatted(self->_logger,
+        (const unsigned char*)u8"WorldRenderer: weather: the clouds hide %.3g of the sky (the sun and the moon %.3g of their "
+        u8"light; they pass %.3g of what falls on them), their deck's light %.4g %.4g %.4g on a level surface, a flash's "
+        u8"%.4g %.4g %.4g, wetness %.3g.",
+        (double)Status->CloudCover, (double)Status->DirectShare, (double)Status->CloudTransmission,
+        (double)Status->DeckIrradiance[0], (double)Status->DeckIrradiance[1], (double)Status->DeckIrradiance[2],
+        (double)Status->FlashIrradiance[0], (double)Status->FlashIrradiance[1], (double)Status->FlashIrradiance[2],
+        (double)Status->Wetness);
     Error_Deconstruct(&LogResult);
 }

@@ -23,7 +23,7 @@ typedef struct DataMapStruct DataMap;
  *        type, default, rules, flags), and generic functions driven by the table do the rest.
  *
  * A data type that holds settings or saved state (the world environment, world objects and their components, the game
- * clock, later the weather) declares a PropertyTable next to its struct: one PropertyDescriptor per field, written
+ * clock, the weather system) declares a PropertyTable next to its struct: one PropertyDescriptor per field, written
  * once. Everything else comes from the table, so a new property is one table row instead of six hand-written places:
  * - defaults: Properties_Construct (zero the struct, then write every default; owned strings are cloned) and
  *   Properties_Deconstruct (free the owned strings);

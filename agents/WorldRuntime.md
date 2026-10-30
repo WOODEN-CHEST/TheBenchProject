@@ -20,6 +20,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | WorldVisibility | `source/WorldVisibility.h`, `source/WorldVisibility.c` (private) | What each pass draws this frame (see "Visibility"): frustum planes and sphere tests, draw distances and their fade band, opacity, the dither's C mirror, and the per-pass lists built from the render cache. |
 | SpriteTransform | `source/SpriteTransform.h`, `source/SpriteTransform.c` (private) | A sprite quad's pure maths: its matrix for a viewer (billboard, axis billboard, fixed; the camera or a light), its world size, its bounds, and the back-to-front order of a transparent list (see "Sprites"). |
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
+| WorldWeatherLight | `source/WorldWeatherLight.h`, `source/WorldWeatherLight.c` (private) | The weather's look as pure maths (see "Weather"): the clouds' deck from the environment's weather values (their cover, the light they let through, their transmission), its light added to the sky's light at the camera, a lightning flash's light and direction, the wetness and the wind. |
 | WorldInterior | `source/WorldInterior.h`, `source/WorldInterior.c` (private) | Interior lighting as pure maths (see "Interior lighting"): ambient zones in render space, their weights, the draws' choice of zones and their composition, the haze inside them, the sky's occupancy volume (its map, slices and window) and the march through it, the camera's interior and the light the eye is in: the C mirror of `shaders/common/interior.glsl`. |
 | WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c`, `source/WorldTestCharacters.{h,c}` (private: walk mode and the test NPCs), `source/WorldTestAnimation.{h,c}` (private: the animation system and its keys), `source/WorldTestInstances.{h,c}` (private: the pebble field and the instancing A/B) | A concrete GameFrame: a WASD + mouse-look flycam over a test world, and walk mode (the player as a character) and test NPCs. |
 
@@ -447,7 +448,8 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    frustum from them (without a far plane when reversed), the
    sky
    (`WorldEnvironment_GetSkyLights`: the sun's and the moon's directions, daylight, the moon's phase and lit fraction,
-   the two lights' intensities above the air), the stars' rotation (`StarsToWorld`), the render
+   the two lights' intensities above the air; the weather's frame, `WorldWeatherLight_GetFrame`, see "Weather"), the
+   stars' rotation (`StarsToWorld`), the render
    clock (`TimeSeconds`), sizes, the camera's interior (`WorldRendererInterior_PrepareCamera`, see "Interior
    lighting": whether it runs, the camera's openness and the ambient zones at it, eased), the night sky values (`WorldRendererSky_PrepareFrame`: skyglow, the moonlit sky's
    strength and the moon's disc; after the sky's light, `WorldRendererSky_PrepareNightSky`: the limiting magnitude
@@ -456,7 +458,8 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    (`WorldRendererAtmosphere_PrepareFrame`: the air's coefficients, the height the sky is seen from, whether the
    tables draw the sky; the frame's haze, light pollution's light in the air, whether the volume hazes the frame),
    the sky's light (`WorldRendererLighting_PrepareSkyLight`, see "Sky's light on surfaces": the C mirror's tables
-   kept on the air, the light at the camera, the light the air is lit by, the sun's disc, the scene luminance, the light
+   kept on the air, the light at the camera (under the weather's clouds, with their deck's light: "Weather"), the light
+   the air is lit by, the sun's disc, the scene luminance, the light
    the eye is in (the sky's as the camera's interior leaves it, plus the rooms' own), night vision's field and
    calibration, and the shadow light chosen from the light through the air), every model's LOD and
    its cross-fade (`WorldRenderCache_UpdateLods`, see "LODs"), and every
@@ -489,7 +492,8 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    the outlines run; then the ambient pre-pass and its blur (the AO, the contact shadows and the sky's visibility per
    pixel, see "G-buffer, AO and outlines"), when any but the outlines run.
 6. The scene pass: clear, atmospheric sky (the sky-view table's glow, with the moonlit sky and light pollution's
-   light, and the far ground below the horizon; the ground haze in front of it all; the moon's disc, the Milky Way), the
+   light, and the far ground below the horizon; the weather's cloud deck and a lightning flash's glow above it; the
+   ground haze in front of it all; the moon's disc, the Milky Way), the
    stars (none behind the moon), debug grid, the camera's PBR models (each dithered by its fade, both LODs
    of a cross-fade with complementary dithers; the sun and the moon; per object: up to
    `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), the camera's
@@ -644,8 +648,8 @@ through the aerial-perspective volume built from them ("Haze"), every lit surfac
   (`WorldAtmosphere_UpdateTableRecord`, with `WorldAtmosphere_AreTablesStale`: not for `sun_glow` or
   `multiple_scattering`, which only the sky view and the irradiance table use; the irradiance table follows those too:
   `WorldAtmosphere_UpdateIrradianceRecord`). A rebuild costs 0.47 ms on a GTX 980 Ti, so whatever moves the
-  air every frame (weather, not built yet) should step it. A light far brighter than the sun saturates the sky view at its half
-  floats' largest value (65504) instead of turning infinite there; a haze too thick to see through gives no light, never
+  air every frame should step it (the weather does not move the air: its clouds dim the lights instead, see
+  "Weather"). A light far brighter than the sun saturates the sky view at its half floats' largest value (65504) instead of turning infinite there; a haze too thick to see through gives no light, never
   a NaN (each step's share of its own light is selected, not blended, near 0 depth).
 - **The camera's height**: the tables see the sky from the camera's height above the atmosphere's ground (world Y minus
   `horizon_ground_height`, default 0: sea level at world Y 0), at least 1 m and at most 99 km
@@ -727,8 +731,10 @@ blue, bright ones warm.
   `WorldAtmosphere_GetGroundHazeDepthCurved`: the ray's height a parabola around its lowest point, the depth a Gaussian
   there in closed form through the scaled complementary error function, within 0.01 % of the exact ray), because
   beyond its lowest point it climbs out of the mist, where the flat world's straight ray would sink into it. The discs,
-  the Milky Way and the stars (`hazeGroundTransmittance`, per star) are dimmed by it. Off by default (density 0); the
-  weather's `fog_density` and `fog_height` and the rain's mist will drive it (not built yet).
+  the Milky Way and the stars (`hazeGroundTransmittance`, per star) are dimmed by it. Off by default (density 0). The
+  weather's ground fog joins it in the same layer (`fog_density` added to the density at the base, the thickness the
+  mean of `ground_haze_thickness` and `fog_height` weighed by the two densities: either alone is exactly itself;
+  `WorldAtmosphere_GetHaze`); the rain's own mist is not built yet.
 - **The outlines** fade by the haze's transmittance per colour at the object's own multiplier: an outlined surface's
   G-buffer alpha holds its haze (`OUTLINE_HAZE_BASE` 0.76 at 0 to 1 at 1; above 1 counts as 1), and `world_postfx` reads
   the volume's transmittance and the ground haze's at the pixel ("G-buffer, AO and outlines").
@@ -807,8 +813,9 @@ radiances are calibrated on.
   frame (about 70 ms in the default haze); when the air changes they are rebuilt into the second set over frames (193
   steps of at most 0.75 ms: about 70 frames), the old set lighting the frames meanwhile, and swapped in when done; a change during a
   rebuild waits for the next one. `WorldRendererAtmosphere_UpdateSkyLightTables` takes about 1 ms of steps a frame: a
-  step runs while the time so far and the last step's fit in 1 ms, the first always. So weather (not built yet) can
-  move the air every frame. The GPU's light at the camera matches it within 0.4 % (2.5 % for the sun at the moment of sunset: the
+  step runs while the time so far and the last step's fit in 1 ms, the first always. So whatever moves the air (a
+  story's script) can move it every frame. The GPU's light at the camera matches it within 0.4 % (2.5 % for the sun at
+  the moment of sunset: the
   GPU's transmittance table against the exact transmittance). The moon's light counts while the moonlit sky shows
   (`WorldSkyLight_GetMoonGate`: the sun below about 3 degrees, the moon above about -6), for the surfaces and the air
   alike.
@@ -831,6 +838,75 @@ radiances are calibrated on.
 - **Cost** (GTX 980 Ti): the values row 0.004 ms with the haze on, 0.0125 ms alone; the lit terrain
   about 0.06 ms more (5 to 8 %); the irradiance table 0.235 ms when the air changes; the C mirror 2.3 microseconds a
   frame.
+
+**Weather** (the pure maths `source/WorldWeatherLight.{h,c}`, tested in `tests/WorldWeatherLightTests.c`; the values
+are the environment's "Weather" rows ([WorldData.md](WorldData.md)), which the weather system moves
+([WeatherSystem.md](WeatherSystem.md))). The weather's look is the sky's light under clouds on the one light scale: no
+factor of its own dims the sun or the shadows. Until clouds are drawn, the clouds are one even deck over the whole sky.
+- **The deck** (`WorldWeatherLight_GetFrame`, from `BuildSky`): a cloud's optical depth is 64 x `cloud_density`
+  (`WORLD_WEATHER_CLOUD_DEPTH_PER_DENSITY`: density 1 is a storm cloud's), so the share of the sky the clouds hide, the
+  cloud cover, is `cloud_coverage` x (1 - e^-depth), and the rest of the sun's and the moon's light comes through
+  (`DirectShare`, 1 - the cover). The covered share passes down, diffused, the light falling on the clouds' top times
+  their transmission (two-stream: 1 / (1 + 0.75 (1 - g) depth), their droplets' g 0.85: a thin deck passes most of
+  it, a storm's about an eighth). `cloud_type` does not change the look (it decides where rain and lightning are
+  possible).
+- **The light under it** (`WorldRendererLighting_PrepareSkyLight`): under clouds the C mirror's frame light is taken
+  for the clear sky at the clouds' height (what falls on the deck's top: a whiter sun than the ground's, less sky above)
+  and for the camera with the lights above the air times `DirectShare`, so the sun's and the moon's light on surfaces,
+  the sky's light from the air they light and the ground's bounce dim alike; `WorldWeatherLight_AddDeck` then adds the
+  deck's irradiance on a level surface (the deck top's sun and moon on a level surface and its sky's irradiance, times
+  the cover and the transmission) to the sky's irradiance, and the ground's albedo times it to the ground's bounce. The sun's part of it (from the sun's light and the sky's light from the sun) joins the daylight's
+  share (`SunSky`), so the eye and night vision read an overcast day as day. As the clouds thicken the light shifts
+  from the sun to the deck: shadows pale (the sun brings less of the light) and are gone under a full storm deck, and
+  the scene darkens. The scene luminance at noon in the test world: the clear sky 0.371; thin clouds (coverage 0.1,
+  density 0.3) 0.344; cloudy (0.55, 0.5) 0.205; overcast (0.9, 0.7) 0.086; rain (1, 0.9) 0.045; a storm (0.95, 1)
+  0.058. The start view's exposure, as the eye meters it, rises from 1.18 to 1.23, 1.73, 3.18, 5.54 and 4.75: the eye
+  opens 2.2 of the 3.0 stops the light falls, so a rainy noon reads dull, not dark.
+- **The air and the far ground**: the sky-view table and the volume are built with the dimmed lights, so the clear
+  sky's glow and the haze dim with the sun. In the sun's half the deck also lights the air below it from all around:
+  `atmosphereScatteredLight` takes an even `ambientRadiance` below a height (`cloudHeight`, the deck's: each point
+  scatters (sigma_R + sigma_M) x it toward the eye, whatever the phase; a march step reaching past the deck takes its
+  share below it, so the sky stays smooth across directions), the deck's mean radiance over its half of the sky (two
+  thirds of its zenith's) and the ground's bounce of it below (`cloudAmbientRadiance`; the ground haze's ambient takes
+  it too). The air above the deck takes none of it (lit too, it brightened the overcast sky 25 degrees up by a
+  twentieth; near the horizon a ray stays below the deck for all the way the eye sees). The far ground and the
+  volume's values row (the light on surfaces by height) take the deck's irradiance (`cloudSkyIrradiance`) on top of the
+  sky's. So far hills fade into a grey haze that meets the deck at the horizon.
+- **The sky** (`world_sky`): above the horizon it adds the deck on top of the clear sky the clouds leave, an overcast
+  sky's radiance (CIE: the zenith's 9 / (7 pi) of the deck's irradiance, `cloudZenithRadiance`, falling as (1 + 2 cos
+  zenith) / 3 to a third at the horizon), seen through the air below the clouds' height (`WORLD_WEATHER_CLOUD_HEIGHT`,
+  1500 m: the transmittance to the top from the camera over the one from where the ray meets that height, in the form
+  that does not cancel; the fallback's own transmittance while the tables are off). The sun's and the moon's discs, the
+  Milky Way and the stars are dimmed by `DirectShare`: an overcast night hides the stars.
+- **Lightning** (`lightning_flash`, `lightning_direction`, `lightning_distance`, runtime rows): a strike lights the
+  clouds over a wide area, so its light on a level surface falls off as 1 / distance: 0.1 at a kilometre
+  (`WORLD_WEATHER_FLASH_IRRADIANCE`), at most 0.5, the nearest counted 200 m, blue-white, times the flash (1 at the
+  strike, then decaying). It joins the sky's irradiance and the ground's bounce on surfaces (the fallback uniforms and the
+  values row), the far ground's and the air's light with the deck's, and the sky glows with it, most in a broad lobe
+  (power 6, three times the rest) toward the clouds over the strike (`FlashDirection`: the clouds' height over the
+  strike's distance). The C mirror's frame light leaves it out, so the eye's anchor and night vision's field do not
+  follow it, and the meter, easing over seconds, barely does: a flash of a third of a second lights the scene.
+- **Wetness** (`surfaceWetness`, `common/lighting`'s `ApplyWetness`): wet = `wetness` x clamp(0.5 + 0.5 n.y) by the
+  surface's own normal (most facing up, half upright, none facing down); the albedo x (1 - 0.7 x porosity x wet) (water
+  in the pores traps the light) and the roughness x (1 - 0.5 x wet), at least 0.045 (a film of water reflects like a
+  polished surface: wet slopes glint in the sun, wet ground mirrors lamps). Models take porosity 0.5 x (1 - metallic)
+  (`WET_DEFAULT_POROSITY`: a metal only turns glossier), terrain its materials' `porosity` blended as their other values
+  (not in the terrain's debug views), cards (decals among them: they lie on the wet surface) and cutout billboards 0.5,
+  a billboard as a thing standing upright (half wet, whatever the camera's pitch); blended billboards (smoke, glass) and
+  additive sprites (light) never. Dry, the shaders skip it. Every surface is wet alike, under roofs too.
+- **Fog** (`fog_density`, `fog_height`): the frame's haze (`WorldAtmosphere_GetHaze`) joins it with the world's ground
+  haze in one layer: the densities add up at the layer's base, and its thickness is the mean of the two weighed by their
+  densities, so either alone is exactly itself (see "Haze").
+- **Wind** (`WindDirection`: the level unit direction it blows toward, (sin, 0, cos) of `wind_direction`;
+  `WindSpeed`; `WindGust`) is in the frame for what sways in it; nothing reads it yet.
+- **Without weather** (no clouds, no flash, dry: the environment's defaults) the frame light is the clear sky's bit for
+  bit and every weather term is 0 or skipped, so the picture is the clear sky's.
+- **Status**: `WorldRendererStatus.CloudCover`, `DirectShare`, `CloudTransmission`, `DeckIrradiance`,
+  `FlashIrradiance`, `Wetness`, and a log line (a storm: `WorldRenderer: weather: the clouds hide 0.95 of the sky (the
+  sun and the moon 0.05 of their light; they pass 0.122 of what falls on them), their deck's light 0.1085 0.1031 0.1021
+  on a level surface, a flash's 0 0 0, wetness 1.`).
+- **Cost** (GTX 980 Ti, the far noon view): a storm's frame within the frame times' noise of a clear one's (5.37 to
+  5.58 ms against 5.37 to 5.42); the C side adds one more frame light (2.3 microseconds) under clouds.
 
 **Interior lighting** (the pure maths `source/WorldInterior.{h,c}`, tested in `tests/WorldInteriorTests.c`; the
 renderer's parts `source/WorldRendererSkyVisibility.c` and `source/WorldRendererInterior.c`; the lit shaders' part
@@ -1572,7 +1648,10 @@ triggers left out) for interior lighting (`WorldRenderer_SetCameraOpenness`).
 **Game time:** the clock starts from the world environment's date and time of day (noon, 2026-10-18) at time scale
 720 (a 2-minute day; the clock's own default is 72). Every `Update` advances it,
 logs a new day when it crosses midnight, and writes its time of day and date into the environment, so the sky shows
-the clock.
+the clock. Then the weather moves (`source/WorldTestWeather.{h,c}`, [WeatherSystem.md](WeatherSystem.md)): a weather
+system runs the climate the test world names (the default one) with the game seconds the clock moved and the tick's
+real seconds (0 while the clock is paused), so the clouds, the rain, the wetness and the fog follow the clock and its
+presets change as the hours pass.
 
 All input runs in `Update` at the fixed timestep and comes from `Services.Input` ([GameInput.md](GameInput.md)), after
 the UI test frame above had first refusal: movement through the actions (`move_*`, default WASD + SPACE/CTRL, `sprint`
@@ -1581,9 +1660,9 @@ mouse wheel (the flycam's speed, up faster and down slower, three notches to a d
 6 m/s at start; the sprint key still multiplies it by 3; each change is logged and the I key's camera line shows it;
 not while walking, and the UI takes it first while the pointer is over a widget) and the debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11, the
-digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/`, the keypad's digits, its `.`, `+` and `*` are taken already; the
-keypad's other operators are free. Leave F12 free: raylib's `EndDrawing`
-takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
+digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/`, the backslash, Insert, Home, End, Page Up, Page Down, the
+keypad's digits, its `.`, `+` and `*` are taken already; the keypad's other operators are free. Leave F12 free:
+raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
   06:00:00.`): P pause/resume the clock; 1–4 jump to dawn/noon/dusk/midnight of the clock's day (06:00, 12:00, 18:00,
@@ -1609,6 +1688,13 @@ takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png`
   test cube, 6 x 40 m at 300 m, 15 x 100 m at 1 km and 40 x 250 m at 3 km in eight directions, every ring a little
   turned, all seen to 20 km, around the terrain's object), keypad * the shadow levels' debug view; each logged, and the
   I key's status says both;
+- **the weather (see "Weather"; [WeatherSystem.md](WeatherSystem.md), "The test frame's weather"):** Insert moves into
+  the climate's next preset in the file's order (over a quarter of a weather hour), Home locks and unlocks the weather,
+  End steps its speed (x1, x10, x100 the climate's), Page Up strikes lightning now, Page Down steps the mode (simulated,
+  fixed, scripted, off: off gives the world file's weather back), the backslash logs a forecast of the next 24 game
+  hours; each logged, every strike too (its distance and direction), and the I key's status adds the weather's line
+  (the preset, its hours left, the values). At the 720x clock a storm lasts 1.5 to 7.5 real seconds: Home holds it,
+  Page Up shows its lightning at once;
 - **the renderer and the sky:** O post effects, B bloom, G sun shafts, keypad . contact shadows, C crisp overlay, V
   night vision (logged), K
   sprite lighting (off draws every sprite unlit; logged), L light gizmos, N cycle the
@@ -1657,9 +1743,10 @@ takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png`
   returns everything to within a double's step (1.5e-11 m at 100 km); the debug grid stays at the world's origin. I
   adds the camera's position, its distance from the world's origin and the far shift;
 - **the world file:** F5 saves the live world next to the test world, as `worlds/test.saved.world.json` and
-  `worlds/test.saved.world.ghdf` (atomically; each logged with its path, gitignored), for round-trip checks: saved at
-  noon with nothing changed (2, then F5) the JSON is the shipped file byte for byte; otherwise its diff against
-  `test.world.json` shows what changed in the game (the time of day once the clock ran, a slid desk, an opacity);
+  `worlds/test.saved.world.ghdf` (atomically; each logged with its path, gitignored), for round-trip checks: its diff
+  against `test.world.json` shows what changed in the game. Saved at noon right after the start (2, then F5), only what
+  the first ticks moved: the crates settling and the weather's values (the climate runs from the first tick); later the
+  time of day once the clock ran, a slid desk, an opacity;
 - **the characters:** F1 switches walk mode on and off: walking creates a `player` object (a runtime object, never
   saved) with a character component of the test human below the flycam, dropped to the ground, and the camera then
   sits at its eyes (`PlayerController`: WASD walk relative to the view, SHIFT runs, SPACE jumps (the `jump` action),

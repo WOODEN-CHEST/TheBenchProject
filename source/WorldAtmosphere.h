@@ -470,10 +470,13 @@ Vector2Double WorldAtmosphere_GetSkyViewUv(double viewHeight, Vector3Double dire
 
 /**
  * @brief The frame's haze from an environment's settings (AerialDistanceScale, FogStrength, HazeStartDistance, the ground
- *        haze's five, HorizonGroundHeight) and the player's fog strength (GameConfig.FogStrength).
+ *        haze's five, the weather's ground fog, HorizonGroundHeight) and the player's fog strength
+ *        (GameConfig.FogStrength).
  *
- * A value outside its rule (which validated environments never hold) is clamped to it, and a non-finite one is taken as
- * its default; the distance scale's product is clamped to WORLD_ATMOSPHERE_MAX_HAZE_SCALE, so every value is finite.
+ * The weather's fog (FogDensity, FogHeight) joins the ground haze in one layer: the densities add up at its base, and its
+ * thickness is the mean of the two weighed by their densities (either alone is exactly itself). A value outside its rule
+ * (which validated environments never hold) is clamped to it, and a non-finite one is taken as its default; the
+ * distance scale's product is clamped to WORLD_ATMOSPHERE_MAX_HAZE_SCALE, so every value is finite.
  * @param environment The environment; must not be NULL.
  * @param configFogStrength The player's fog strength (1 when there is no config).
  * @param outHaze [out] Receives the haze.

@@ -373,6 +373,15 @@ typedef struct WorldRendererStatusStruct
     float NightLight[3];
     float SceneLuminance;
     float Exposure;
+    /** @brief The weather as drawn: the share of the sky its clouds hide and what they leave of the sun and the moon, the
+     *  share of the light falling on them they pass down, their deck's light on a level surface (linear RGB), a lightning
+     *  flash's (linear RGB) and the surfaces' wetness. */
+    float CloudCover;
+    float DirectShare;
+    float CloudTransmission;
+    float DeckIrradiance[3];
+    float FlashIrradiance[3];
+    float Wetness;
     /** @brief The eye: the luminance it was adapted to (the view's log-average in the game's light units: the sky
      *  light's anchor before the first measurement), the real luminance that stands for (cd/m^2, on night vision's scale
      *  at the camera's mix of daylight and the night's lights), and whether a measurement of the picture set it. */

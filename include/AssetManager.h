@@ -112,6 +112,8 @@ typedef struct AnimationGraphStruct AnimationGraph;
 typedef struct TerrainAssetStruct TerrainAsset;
 /** @brief A terrain material asset (TerrainMaterial.h). */
 typedef struct TerrainMaterialStruct TerrainMaterial;
+/** @brief A climate asset (Climate.h). */
+typedef struct ClimateStruct Climate;
 /** @brief A texture asset's image as CPU pixels (GameTexture.h), filled by AssetManager_LoadTexturePixels. */
 typedef struct TexturePixelsStruct TexturePixels;
 
@@ -381,6 +383,9 @@ typedef struct StandardAssetTypesStruct
     /** @brief Terrain material type id: one material of a terrain's palette, its maps' pixels (built on texture assets'
      *  images) and its settings (TerrainMaterial.h). */
     AssetTypeID TerrainMaterial;
+    /** @brief Climate type id: how a world's weather behaves over game time: its presets, their seasons, links and rates
+     *  (Climate.h). */
+    AssetTypeID Climate;
 } StandardAssetTypes;
 
 
@@ -460,8 +465,9 @@ Error AssetManager_CreateAssetType(AssetManager* self, const AssetTypeInfo* info
 /**
  * @brief Registers all standard asset types and a shared JSON pool used to parse their definitions.
  *
- * Registers the fourteen standard types (sprite sheet, sprite animation, sound, font, shader, model, texture, world
- * model, world sprite, character, animation library, animation graph, terrain and terrain material), writing their ids into
+ * Registers the fifteen standard types (sprite sheet, sprite animation, sound, font, shader, model, texture, world
+ * model, world sprite, character, animation library, animation graph, terrain, terrain material and climate), writing
+ * their ids into
  * @p outTypes. Creates one JSONObjectPool and wires it into every standard type's
  * ConstructorUserData so all standard definition parsing recycles JSON compounds/arrays/strings instead of
  * reallocating. The caller OWNS @p *outDefinitionPool and must free it with JSONObjectPool_Deconstruct after (or
@@ -1050,6 +1056,12 @@ Error AssetManager_LoadTerrain(AssetManager* self, const unsigned char* name, As
  */
 Error AssetManager_LoadTerrainMaterial(AssetManager* self, const unsigned char* name, AssetUserID user,
     TerrainMaterial** outAsset);
+
+/**
+ * @brief Loads a climate by name (Climate.h): its presets and settings, plain data with no dependencies. See
+ *        AssetManager_LoadSpriteSheet for semantics.
+ */
+Error AssetManager_LoadClimate(AssetManager* self, const unsigned char* name, AssetUserID user, Climate** outAsset);
 
 /**
  * @brief Decodes the image file a texture asset's definition names into 8-bit RGBA pixels on the CPU, for a loader that

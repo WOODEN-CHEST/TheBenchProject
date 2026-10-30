@@ -62,6 +62,14 @@
 #define DEFAULT_GROUND_HAZE_GLOW 0.8f
 /** How far the sun's and the moon's shadows reach by default, in metres. */
 #define DEFAULT_SHADOW_REACH 4000.0f
+/** Default thickness of the weather's ground fog, in metres (the ground haze's default too). */
+#define DEFAULT_FOG_HEIGHT 20.0f
+/** Default temperature, in degrees Celsius: a mild day. */
+#define DEFAULT_TEMPERATURE 15.0f
+/** Default distance of a strike, in metres, before the weather sets one. */
+#define DEFAULT_LIGHTNING_DISTANCE 1000.0f
+/** The flags of a runtime value: shown and reachable by scripts, never saved. */
+#define PROPERTY_FLAGS_RUNTIME ((uint32_t)(PropertyFlags_Editable | PropertyFlags_Script))
 /** Default post-effect strength multiplier applied to bloom/sunshafts/shadows. */
 #define DEFAULT_EFFECT_STRENGTH 1.0f
 /** Default night vision strength: the eye's. */
@@ -117,6 +125,7 @@
 #define CATEGORY_MOON ((const unsigned char*)u8"Moon")
 #define CATEGORY_AMBIENT ((const unsigned char*)u8"Ambient light")
 #define CATEGORY_HAZE ((const unsigned char*)u8"Haze")
+#define CATEGORY_WEATHER ((const unsigned char*)u8"Weather")
 #define CATEGORY_EFFECTS ((const unsigned char*)u8"Effects")
 #define CATEGORY_PHYSICS ((const unsigned char*)u8"Physics")
 
@@ -536,6 +545,114 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .SinceVersion = 1U
     },
     {
+        .Key = u8"cloud_coverage", .WireId = 64U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, CloudCoverage), .Default.FloatValue = 0.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_WEATHER,
+        .DisplayName = u8"Cloud coverage", .Description = u8"How much of the sky has clouds: 0 none, 1 overcast.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_type", .WireId = 65U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, CloudType),
+        .Default.FloatValue = 0.0f, .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_WEATHER, .DisplayName = u8"Cloud type",
+        .Description = u8"What kind of clouds: 0 thin, flat layers, 0.5 cumulus, 1 towering storm clouds.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_density", .WireId = 66U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, CloudDensity),
+        .Default.FloatValue = 0.0f, .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_WEATHER, .DisplayName = u8"Cloud density",
+        .Description = u8"How thick the clouds are, 0 to 1: rain clouds are dense and dark.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"precipitation", .WireId = 67U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, Precipitation), .Default.FloatValue = 0.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_WEATHER,
+        .DisplayName = u8"Rain", .Description = u8"How hard it rains: 0 not at all, 1 a downpour.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"wetness", .WireId = 68U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, Wetness),
+        .Default.FloatValue = 0.0f, .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_WEATHER, .DisplayName = u8"Wetness",
+        .Description = u8"How wet surfaces are: 0 dry, 1 soaked. It follows the rain and dries afterwards.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"wind_direction", .WireId = 69U, .Type = PropertyType_Angle,
+        PROPERTY_MEMBER(WorldEnvironment, WindDirection), .Default.FloatValue = 0.0f, .Rules = PROPERTY_RULES_NONE,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_WEATHER, .DisplayName = u8"Wind direction",
+        .Description = u8"Where the wind blows toward, in degrees around the vertical: 0 toward +Z, 90 toward +X.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"wind_speed", .WireId = 70U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, WindSpeed),
+        .Default.FloatValue = 0.0f, .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_WIND_SPEED),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_WEATHER, .DisplayName = u8"Wind speed",
+        .Description = u8"The mean wind, in metres per second.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"wind_gust", .WireId = 71U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, WindGust),
+        .Default.FloatValue = 0.0f, .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_WIND_SPEED),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_WEATHER, .DisplayName = u8"Wind gust",
+        .Description = u8"The current gust on top of the mean wind, in metres per second.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"fog_density", .WireId = 72U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, FogDensity),
+        .Default.FloatValue = 0.0f, .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_GROUND_HAZE_DENSITY),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_WEATHER, .DisplayName = u8"Fog",
+        .Description = u8"The weather's ground fog: how much of the light it takes per metre at the ground haze's base, "
+            u8"on top of the ground haze (0.02 a morning mist that hides things beyond about 200 m).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"fog_height", .WireId = 73U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, FogHeight),
+        .Default.FloatValue = DEFAULT_FOG_HEIGHT,
+        .Rules = PROPERTY_RULES_BETWEEN(WORLD_ENVIRONMENT_MIN_GROUND_HAZE_THICKNESS,
+            WORLD_ENVIRONMENT_MAX_GROUND_HAZE_THICKNESS),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_WEATHER, .DisplayName = u8"Fog height",
+        .Description = u8"How quickly the weather's fog thins above the ground haze's base: by e (to about a third) every "
+            u8"this many metres.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"temperature", .WireId = 74U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, Temperature),
+        .Default.FloatValue = DEFAULT_TEMPERATURE,
+        .Rules = PROPERTY_RULES_BETWEEN(WORLD_ENVIRONMENT_MIN_TEMPERATURE, WORLD_ENVIRONMENT_MAX_TEMPERATURE),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_WEATHER, .DisplayName = u8"Temperature",
+        .Description = u8"The air's temperature, in degrees Celsius.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"climate", .WireId = 75U, .Type = PropertyType_AssetName, PROPERTY_MEMBER(WorldEnvironment, Climate),
+        .Default.StringValue = WORLD_ENVIRONMENT_DEFAULT_CLIMATE,
+        .Rules = PROPERTY_RULES_STRING(WORLD_ENVIRONMENT_CLIMATE_NAME_MAX_LENGTH, false), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_WEATHER, .DisplayName = u8"Climate",
+        .Description = u8"The climate this world's weather follows: its presets, their seasons and how the weather moves.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"lightning_flash", .WireId = 76U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, LightningFlash), .Default.FloatValue = 0.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_RUNTIME, .Category = CATEGORY_WEATHER,
+        .DisplayName = u8"Lightning flash",
+        .Description = u8"The current lightning flash, 0 none to 1 a strike's peak (the weather sets it; never saved).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"lightning_direction", .WireId = 77U, .Type = PropertyType_Vector3,
+        PROPERTY_MEMBER(WorldEnvironment, LightningDirection), .Default.Vector3Value = { 0.0f, 0.0f, 1.0f },
+        .Flags = PROPERTY_FLAGS_RUNTIME, .Category = CATEGORY_WEATHER, .DisplayName = u8"Lightning direction",
+        .Description = u8"The level direction of the current strike from the viewer (the weather sets it; never saved).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"lightning_distance", .WireId = 78U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, LightningDistance), .Default.FloatValue = DEFAULT_LIGHTNING_DISTANCE,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_DISTANCE), .Flags = PROPERTY_FLAGS_RUNTIME,
+        .Category = CATEGORY_WEATHER, .DisplayName = u8"Lightning distance",
+        .Description = u8"How far away the current strike is, in metres (the weather sets it; never saved).",
+        .SinceVersion = 1U
+    },
+    {
         .Key = u8"is_bloom_enabled", .WireId = 17U, .Type = PropertyType_Bool,
         PROPERTY_MEMBER(WorldEnvironment, IsBloomEnabled), .Default.BoolValue = true, .Flags = PROPERTY_FLAGS_SETTING,
         .Category = CATEGORY_EFFECTS, .DisplayName = u8"Bloom",
@@ -892,6 +1009,15 @@ float WorldEnvironment_GetDaylightFactor(const WorldEnvironment* self)
 {
     // Smoothstep from "set" to "rise": 0 below the horizon band, 1 above it, a smooth twilight in between.
     return WorldEnvironment_GetDaylightForElevation(WorldEnvironment_GetSunDirection(self).y);
+}
+
+float WorldEnvironment_GetDaylightFactorAt(const WorldEnvironment* self, int64_t date, float timeOfDay)
+{
+    // The environment at another time: a shallow copy that borrows its owned fields and is never deconstructed.
+    WorldEnvironment At = *self;
+    At.Date = date;
+    At.TimeOfDay = timeOfDay;
+    return WorldEnvironment_GetDaylightFactor(&At);
 }
 
 float WorldEnvironment_GetMoonPhase(const WorldEnvironment* self)

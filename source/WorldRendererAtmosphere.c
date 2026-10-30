@@ -41,10 +41,23 @@ typedef struct SkyViewLightStruct
     const float* LightPollution;
     /** The moonless night's own light on the far ground per unit of albedo (the sun's half only). */
     const float* GroundNightLight;
+    /** The weather's clouds (the sun's half only): their deck's light and a flash's on a level surface, and the light they
+     *  give the air from all around (linear). */
+    const float* CloudSkyIrradiance;
+    const float* CloudAmbientRadiance;
 } SkyViewLight;
 
 
 // Static functions.
+/* The weather's light on a level surface from the sky besides the clear sky's: the clouds' deck's and a flash's. */
+static void GetCloudSkyIrradiance(const WorldRenderFrame* frame, float outIrradiance[3])
+{
+    for (int Channel = 0; Channel < 3; Channel++)
+    {
+        outIrradiance[Channel] = frame->Weather.DeckIrradiance[Channel] + frame->Weather.FlashIrradiance[Channel];
+    }
+}
+
 /* Points a sampler uniform at a fixed texture unit, once at load (raylib's SetShaderValue ignores location -1). */
 static void AssignSamplerUnit(Shader shader, int location, WorldRendererTextureUnit unit)
 {
@@ -159,6 +172,10 @@ static void DrawSkyViewHalf(WorldRenderer* self, Shader builder, const SkyViewLi
     SetShaderValue(builder, State->_skyViewLocLightIntensity, light->LightIntensity, SHADER_UNIFORM_VEC3);
     SetShaderValue(builder, State->_skyViewLocLightPollution, light->LightPollution, SHADER_UNIFORM_VEC3);
     SetShaderValue(builder, State->_skyViewLocGroundNightLight, light->GroundNightLight, SHADER_UNIFORM_VEC3);
+    SetShaderValue(builder, State->_skyViewLocCloudSkyIrradiance, light->CloudSkyIrradiance, SHADER_UNIFORM_VEC3);
+    SetShaderValue(builder, State->_skyViewLocCloudAmbientRadiance, light->CloudAmbientRadiance, SHADER_UNIFORM_VEC3);
+    float CloudHeight = WORLD_WEATHER_CLOUD_HEIGHT;
+    SetShaderValue(builder, State->_skyViewLocCloudHeight, &CloudHeight, SHADER_UNIFORM_FLOAT);
     SetShaderValueTexture(builder, State->_skyViewLocations._locTransmittanceTable, State->_transmittance.texture);
     SetShaderValueTexture(builder, State->_skyViewLocations._locMultiscatterTable, State->_multiscatter.texture);
     SetShaderValueTexture(builder, State->_skyViewLocations._locIrradianceTable, State->_irradiance.texture);
@@ -189,11 +206,15 @@ static void BuildSkyView(WorldRenderer* self, const WorldRenderFrame* frame)
     BeginTable(State->_skyView);
     BeginShaderMode(Builder);
     const float None[3] = { 0.0f, 0.0f, 0.0f };
+    // The weather's clouds light the air and the far ground in the sun's half (their light holds the moon's too).
+    float CloudSkyIrradiance[3];
+    GetCloudSkyIrradiance(frame, CloudSkyIrradiance);
     SkyViewLight Sun =
     {
         .Half = WorldAtmosphereSkyViewHalf_Sun, .LightCosZenith = frame->SunDirection.y,
         .LightIntensity = frame->AirSunIntensity, .LightPollution = frame->LightPollutionRadiance,
-        .GroundNightLight = frame->SkyLight.Night
+        .GroundNightLight = frame->SkyLight.Night, .CloudSkyIrradiance = CloudSkyIrradiance,
+        .CloudAmbientRadiance = frame->Weather.AmbientRadiance
     };
     DrawSkyViewHalf(self, Builder, &Sun);
     if (frame->MoonSkyIntensity > 0.0f)
@@ -201,7 +222,8 @@ static void BuildSkyView(WorldRenderer* self, const WorldRenderFrame* frame)
         SkyViewLight Moon =
         {
             .Half = WorldAtmosphereSkyViewHalf_Moon, .LightCosZenith = frame->MoonDirection.y,
-            .LightIntensity = frame->AirMoonIntensity, .LightPollution = None, .GroundNightLight = None
+            .LightIntensity = frame->AirMoonIntensity, .LightPollution = None, .GroundNightLight = None,
+            .CloudSkyIrradiance = None, .CloudAmbientRadiance = None
         };
         DrawSkyViewHalf(self, Builder, &Moon);
     }
@@ -235,6 +257,13 @@ static void BuildVolume(WorldRenderer* self, const WorldRenderFrame* frame)
     float BaseHeight = frame->Haze.GroundHazeBase - frame->Haze.GroundHeight;
     SetShaderValue(Builder, State->_volumeLocGroundHazeBaseHeight, &BaseHeight, SHADER_UNIFORM_FLOAT);
     SetShaderValue(Builder, State->_volumeLocGroundAlbedo, frame->AtmosphereMedium.GroundAlbedo, SHADER_UNIFORM_VEC3);
+    // The weather: the clouds' deck's light (and a flash's) on surfaces at every height, and in the air from all around.
+    float CloudSkyIrradiance[3];
+    GetCloudSkyIrradiance(frame, CloudSkyIrradiance);
+    SetShaderValue(Builder, State->_volumeLocCloudSkyIrradiance, CloudSkyIrradiance, SHADER_UNIFORM_VEC3);
+    SetShaderValue(Builder, State->_volumeLocCloudAmbientRadiance, frame->Weather.AmbientRadiance, SHADER_UNIFORM_VEC3);
+    float CloudHeight = WORLD_WEATHER_CLOUD_HEIGHT;
+    SetShaderValue(Builder, State->_volumeLocCloudHeight, &CloudHeight, SHADER_UNIFORM_FLOAT);
 
     BeginTable(State->_volume);
     BeginShaderMode(Builder);
@@ -263,6 +292,9 @@ static void CacheVolumeLocations(WorldRendererAtmosphereState* state)
     state->_volumeLocSkyTint = GetShaderLocation(Volume, "skyTint");
     state->_volumeLocGroundHazeBaseHeight = GetShaderLocation(Volume, "groundHazeBaseHeight");
     state->_volumeLocGroundAlbedo = GetShaderLocation(Volume, "groundAlbedo");
+    state->_volumeLocCloudSkyIrradiance = GetShaderLocation(Volume, "cloudSkyIrradiance");
+    state->_volumeLocCloudAmbientRadiance = GetShaderLocation(Volume, "cloudAmbientRadiance");
+    state->_volumeLocCloudHeight = GetShaderLocation(Volume, "cloudHeight");
 }
 
 /* The sky-view builder's own uniform locations. */
@@ -280,6 +312,9 @@ static void CacheSkyViewLocations(WorldRendererAtmosphereState* state)
     state->_skyViewLocGroundAlbedo = GetShaderLocation(SkyView, "groundAlbedo");
     state->_skyViewLocAmbientTint = GetShaderLocation(SkyView, "ambientTint");
     state->_skyViewLocGroundNightLight = GetShaderLocation(SkyView, "groundNightLight");
+    state->_skyViewLocCloudSkyIrradiance = GetShaderLocation(SkyView, "cloudSkyIrradiance");
+    state->_skyViewLocCloudAmbientRadiance = GetShaderLocation(SkyView, "cloudAmbientRadiance");
+    state->_skyViewLocCloudHeight = GetShaderLocation(SkyView, "cloudHeight");
 }
 
 

@@ -1179,8 +1179,8 @@ name them. How the blend works is in `agents/Terrain.md`.
 | `triplanar` | `off`, `steep`, `always` (`steep`) | When the maps are laid from three sides instead of from above, so cliffs are not stretched: never, where the ground is steeper than `triplanar_slope` (blended in over 10 degrees), or everywhere. |
 | `triplanar_slope` | degrees, 0 to 90 (40) | With `steep`: where the three sides take over. |
 | `surface` | a namespaced key (`tbp:ground`; `grass` reads as `tbp:grass`) | What the ground is: footsteps, where scattering may place things, later systems (none built yet). |
-| `puddles` | 0 to 1 (0) | How much rain's puddles may form on it (asphalt 1, grass 0). Read by the weather's wetness (not built yet). |
-| `porosity` | 0 to 1 (0.5) | How much wetness darkens it. Read by the weather's wetness (not built yet). |
+| `puddles` | 0 to 1 (0) | How much rain's puddles may form on it (asphalt 1, grass 0). For the rain's puddles (not built yet). |
+| `porosity` | 0 to 1 (0.5) | How much the weather's wetness darkens it: a soaked surface of porosity 1 is 70 % darker, of 0 not at all (it still turns glossier). |
 
 * **Maps.** Each map's slot decides how it is read, whatever its texture's `color_space` says, and the texture's
   `texture_properties` do not apply: the arrays are mipmapped, filtered trilinearly (and anisotropically where the
@@ -1202,3 +1202,115 @@ only), are `terrain_materials/placeholder_terrain/` (`grass`, `dirt`, `rock`, `g
 `textures/placeholder_terrain/` (`<material>_albedo`, `_height`, `_normal`, `_roughness_ao`, each with its texture
 definition). To use your own: give each map a texture definition (as those), point the material at it and keep the sizes
 equal across the terrain's materials.
+
+
+## Climates.
+A climate is how a world's weather behaves over game time (`agents/WeatherSystem.md`): presets that are only targets for
+the weather's continuous values, how long each lasts and what may follow it, and how fast everything moves. A world
+names its climate in its environment (`climate`, default `default`; `references/world_structure.md`), and the weather
+system moves the environment's weather values by it. Definitions live under `climates/` and have no resource files and
+no dependencies.
+
+```
+{
+    "name": "default",
+    "mode": "simulated",                // [OPTIONAL] default "simulated"; or "fixed", "scripted", "off"
+    "seed": "per_save",                 // [OPTIONAL] default "per_save"; or a whole number >= 0
+    "start": "clear",                   // [OPTIONAL] default the first preset; or "random"
+    "speed": 1.0,                       // [OPTIONAL] default 1
+    "forecast_accuracy": 0.8,           // [OPTIONAL] default 1
+    "rates_per_hour": { "cloud_coverage": 0.25, "wind_direction": 30 },   // [OPTIONAL] the defaults below
+    "wetting_per_hour": 1.5,            // [OPTIONAL] default 1.5
+    "drying_per_hour": 0.15,            // [OPTIONAL] default 0.15
+    "rain_cloud_range": [0.6, 0.9],     // [OPTIONAL] default [0.6, 0.9]
+    "storm_cloud_range": [0.5, 0.9],    // [OPTIONAL] default [0.5, 0.9]
+    "fixed_preset": "storm",            // [OPTIONAL] for the fixed mode
+    "fixed_values": { "cloud_coverage": 0.8, "temperature": -2 },     // [OPTIONAL] for the fixed mode
+    "presets": [                        // 1 to 64 presets
+        {
+            "name": "clear",
+            "cloud_coverage": 0.1, "cloud_type": 0.3, "cloud_density": 0.3, "precipitation": 0,
+            "wind_speed": [1, 4], "fog_density": 0, "temperature": [10, 20],
+            "duration_hours": [3, 10],
+            "gusts": { "strength": 1.5, "per_minute": 2 },
+            "next": [ { "preset": "cloudy", "weight": 3 }, { "preset": "clear", "weight": 1 }, { "preset": "fog" } ]
+        },
+        {
+            "name": "storm",
+            "cloud_coverage": 0.95, "cloud_type": 1.0, "cloud_density": 1.0, "precipitation": 0.9,
+            "transition_hours": 0.5,
+            "duration_hours": [0.3, 1.5],
+            "start_hours": [11, 23],
+            "month_weights": [0.2, 0.2, 0.4, 0.7, 1.2, 1.6, 1.8, 1.6, 1.0, 0.5, 0.3, 0.2],
+            "rates_per_hour": { "precipitation": 1.2 },
+            "gusts": { "strength": 8, "per_minute": 4 },
+            "lightning": { "per_minute": 6, "per_hour": 0, "min_distance": 300, "max_distance": 8000 },
+            "next": [ { "preset": "light_rain", "weight": 3 }, { "preset": "rain", "weight": 2 } ]
+        }
+    ]
+}
+```
+
+**The weather's quantities.** A preset may set any of them as its target, `fixed_values` hold them, and `rates_per_hour`
+moves them (per game hour; an angle in degrees per hour):
+
+| Key | Range | Default rate per hour | Meaning |
+|---|---|---|---|
+| `cloud_coverage` | 0 to 1 | 0.25 | How much of the sky has clouds. |
+| `cloud_type` | 0 to 1 | 0.2 | 0 thin, flat layers; 0.5 cumulus; 1 towering storm clouds. |
+| `cloud_density` | 0 to 1 | 0.3 | How thick the clouds are: rain clouds are dense and dark. |
+| `precipitation` | 0 to 1 | 0.6 | Rain, 0 none to 1 a downpour. |
+| `wind_direction` | degrees (any) | 30 | Where the wind blows toward: 0 toward +Z, 90 toward +X. Moves the shorter way round. |
+| `wind_speed` | 0 to 150 m/s | 4 | The mean wind. |
+| `fog_density` | 0 to 100 per metre | 0.01 | A ground fog's density at the ground haze's base (0.02: a morning mist). |
+| `fog_height` | 0.1 to 100000 m | 10 | How quickly the fog thins upward: by e every this many metres. |
+| `temperature` | -273.15 to 1000 degrees C | 2 | The air's temperature. |
+
+Wetness and the gusts are not targets: wetness follows the rain, the gusts the preset's `gusts`.
+
+**The root's keys:**
+
+| Key | Value | Meaning |
+|---|---|---|
+| `mode` | `simulated`, `fixed`, `scripted`, `off` | How much of the weather runs: the simulation; one permanent state (`fixed_preset`, else `fixed_values`, else the preset it was in); only what the story's scripts set; or nothing (the world's values stay as authored). |
+| `seed` | `"per_save"` or a whole number | A number gives the same weather in every playthrough; `per_save` draws a new seed when a game starts (then saved with it). |
+| `start` | a preset's name or `"random"` | The first preset; `random` draws one by month weight among those whose start hours allow the hour. |
+| `speed` | above 0, at most 10000 | How fast everything changes, times the game clock. |
+| `forecast_accuracy` | 0 to 1 | 1: the forecast is what then happens. Less: some later presets are reported as one of their links, more of them the further ahead. |
+| `rates_per_hour` | quantities to rates (0 to 1000000) | How fast each quantity moves toward its target. |
+| `wetting_per_hour` | 0 to 1000000 | How fast surfaces get wet in a downpour (times the rain). |
+| `drying_per_hour` | 0 to 1000000 | How fast they dry without rain: at night in still air; up to three times faster in full sun, and once more for every 10 m/s of wind. |
+| `rain_cloud_range` | a number or `[min, max]` in 0 to 1 | The clouds' coverage x density below which no rain falls and above which any can: rain heads for no more than they allow. |
+| `storm_cloud_range` | a number or `[min, max]` in 0 to 1 | The clouds' type x density over which lightning becomes possible (its rate times a smooth step over this range). |
+| `fixed_preset` | a preset's name | What the fixed mode holds. |
+| `fixed_values` | quantities to numbers | What the fixed mode holds when it names no preset; quantities left out keep their values. |
+
+**A preset's keys** (only `name` is required):
+
+| Key | Value | Meaning |
+|---|---|---|
+| `name` | `[a-z][a-z0-9_.-]*`, at most 64 bytes, unique, not `random` | Its name: links, `start` and `fixed_preset` name it. |
+| any quantity | a number, or `[min, max]` drawn on every visit | Its target. Quantities it leaves out keep moving toward their previous targets (so a preset after a fog sets `fog_density` 0). |
+| `duration_hours` | a number or `[min, max]`, at least 0.01 (default `[2, 6]`) | How long it lasts, drawn on every visit (game hours times the speed). |
+| `next` | links: `{ "preset": name, "weight": above 0 (1) }` | What may follow, chosen by weight x the month's weight of each among those whose start hours allow the hour. None allowed: it stays for another visit. No links: it repeats. |
+| `month_weights` | exactly 12 numbers >= 0 | Multiplies the chance of choosing it in each month (January first): the seasons. 0 never in that month. |
+| `start_hours` | `[from, to]`: `from` in 0 to below 24, `to` in 0 to 24, never equal | It may only start in this window of the day; `to` below `from` wraps past midnight (`[22, 4]`). |
+| `transition_hours` | 0 or more | The move into it takes this long: every value it sets moves at the rate that brings it to its target then, so they all arrive together at the end (0: at once). Without it each value moves at its rate. |
+| `rates_per_hour` | quantities to rates | Its own rates while it is active. |
+| `gusts` | `{ "strength": m/s (0), "per_minute": above 0 (3) }` | The wind's gusts while it is active: each peaks between half the strength and all of it, so many a minute of real time. Without: no gusts. |
+| `lightning` | `{ "per_minute": >= 0 (0), "per_hour": >= 0 (0), "min_distance": m (300), "max_distance": m (8000) }` | Strikes per minute of real time and per game hour (both count), times how storm-like the clouds are; their distances, spread evenly over the area between (most are far). Without: none. |
+
+**Time.** Durations, rates, the wetting and the drying count game hours, so sleeping moves the weather. Gusts count real
+seconds (the wind moves things at its real speed), and so does `per_minute` lightning; `per_hour` lightning counts game
+hours.
+
+**Rules.** A definition that breaks one is refused when the definitions are read, with the path to the bad value
+(`Climate "default": presets[5] ("storm").next[1].preset: no preset is named "rian".`): every name a link, `start` or
+`fixed_preset` gives exists, weights are above 0, month weights are exactly twelve, hours lie in 0 to 24 and a window is
+not empty, ranges are in order, values lie in their quantity's range, `min_distance` is not past `max_distance`, and
+unknown keys are refused everywhere (`wetness` and `wind_gust` are no preset's keys).
+
+The shipped `climates/default.json` has seven presets: `clear`, `cloudy`, `overcast`, `light_rain`, `rain`, `storm` and
+`fog`. Their links give the sequence clear, cloudy, overcast, light rain or rain, storm, light rain, cloudy, clear; fog
+only starts between 03:00 and 09:00 and twice as often in autumn as in spring; storms only start between 11:00 and 23:00,
+most in summer, and strike about six times a minute.

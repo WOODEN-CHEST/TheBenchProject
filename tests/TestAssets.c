@@ -843,6 +843,11 @@ bool TestAssets_AddAnimationGraph(TestRun* run, TestAssetFixture* fixture, const
     return AddFromJSON(run, fixture, fixture->Types.AnimationGraph, json, "test animation graph");
 }
 
+bool TestAssets_AddClimate(TestRun* run, TestAssetFixture* fixture, const char* json)
+{
+    return AddFromJSON(run, fixture, fixture->Types.Climate, json, "test climate");
+}
+
 bool TestAssets_AddWorldSpriteOf(TestRun* run, TestAssetFixture* fixture, const char* name, const char* animationName)
 {
     char Json[256];

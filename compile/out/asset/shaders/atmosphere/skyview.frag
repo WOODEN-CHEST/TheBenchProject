@@ -14,7 +14,9 @@
 // pollution's and the night's own light too), tinted as the lit shaders tint the ambient. The haze in front of it
 // follows the frame's haze (the distance scale and the start), as the volume's does for everything else, its rays through the ground
 // (common/atmosphere) where the scale takes them past it. The sky's in-scatter is tinted by the sky's tint; the ground's
-// direct light is not.
+// direct light is not. Under the weather's clouds (source/WorldWeatherLight.h) the half's light comes in dimmed by them,
+// and in the sun's half the deck's light lights the air from all around and the far ground from above (the sky pass draws
+// the deck itself).
 
 uniform float lightCosZenith;      // the light's zenith cosine (its direction's y)
 uniform vec3 lightIntensity;       // its light above the air, colour in: ATMOSPHERE_SUN_LIGHT x this (the sun's, or the
@@ -30,6 +32,10 @@ uniform vec3 groundAlbedo;         // the far ground's albedo (sky_ground_albedo
 uniform vec3 ambientTint;          // the ambient's tint on the sky's light (ambient_skylight_color x intensity)
 uniform vec3 groundNightLight;     // the moonless night's own light on the far ground per unit of albedo (0 in the
                                    // moon's half)
+uniform vec3 cloudSkyIrradiance;   // the clouds' deck's diffuse light (and a flash's) on a level surface (linear; 0 in
+                                   // the moon's half)
+uniform vec3 cloudAmbientRadiance; // the even light they give the air from all around (linear; 0 in the moon's half)
+uniform float cloudHeight;         // the deck's height above the atmosphere's ground: the air below it takes that light
 
 out vec4 finalColor;
 
@@ -67,7 +73,8 @@ void main()
         : atmosphereDistanceToTop(atmosphereViewHeight, cosZenith);
     vec3 transmittance;
     vec3 sky = atmosphereScatteredLight(atmosphereViewHeight, cosZenith, lightCosZenith, cosLightAngle, pathLength,
-        SKY_VIEW_STEPS, lightRadiance, multipleScattering, lightPollutionRadiance, transmittance)*max(skyTint, vec3(0.0));
+        SKY_VIEW_STEPS, lightRadiance, multipleScattering, lightPollutionRadiance, max(cloudAmbientRadiance, vec3(0.0)),
+        cloudHeight, transmittance)*max(skyTint, vec3(0.0));
     if (isGround)
     {
         // The light's own zenith cosine over the ground point (WorldAtmosphere_GetLightCosAt), where it is lit like the
@@ -76,7 +83,8 @@ void main()
         float groundCos = clamp((radius*lightCosZenith + toGround*cosLightAngle)/ATMOSPHERE_R_PLANET, -1.0, 1.0);
         vec3 direct = lightRadiance*atmosphereLightTransmittance(0.0, groundCos)*max(groundCos, 0.0);
         vec3 skyLight = (atmosphereSkyIrradiance(0.0, groundCos)*lightRadiance
-            + atmosphereLightPollutionIrradiance(0.0)*lightPollutionRadiance)*max(skyTint, vec3(0.0));
+            + atmosphereLightPollutionIrradiance(0.0)*lightPollutionRadiance)*max(skyTint, vec3(0.0))
+            + max(cloudSkyIrradiance, vec3(0.0));
         vec3 ground = groundAlbedo*((direct + skyLight*max(ambientTint, vec3(0.0)))/PI
             + max(groundNightLight, vec3(0.0)));
         sky += transmittance*max(ground, vec3(0.0));

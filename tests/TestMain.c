@@ -49,6 +49,9 @@ int main(void)
     GameCalendarTests_Run(&Run);
     GameClockTests_Run(&Run);
     WorldEnvironmentTests_Run(&Run);
+    ClimateTests_Run(&Run);
+    WeatherSystemTests_Run(&Run);
+    WorldWeatherLightTests_Run(&Run);
     NightSkyTests_Run(&Run);
     NightVisionTests_Run(&Run);
     EyeAdaptationTests_Run(&Run);

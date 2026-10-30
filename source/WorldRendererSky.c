@@ -177,7 +177,8 @@ static void PrepareMoon(WorldRenderFrame* frame)
     {
         Disc->Opacity = 0.0f;
     }
-    Disc->Radiance = MOON_DISC_BASE_RADIANCE * fmaxf(Environment->MoonBrightness, 0.0f);
+    // The weather's clouds hide their share of it.
+    Disc->Radiance = MOON_DISC_BASE_RADIANCE * fmaxf(Environment->MoonBrightness, 0.0f) * frame->Weather.DirectShare;
     Disc->Earthshine = MOON_EARTHSHINE_SHARE * (1.0f - ClampUnit(frame->MoonIllumination));
 
     Vector3 Pole = { 0.0f, sinf(Environment->SunAngle), -cosf(Environment->SunAngle) };
@@ -231,6 +232,10 @@ void WorldRendererSky_LoadShader(WorldRenderer* self)
     self->_sky._locMoonSinRadius = GetShaderLocation(RayShader, "moonSinRadius");
     self->_sky._locMoonColor = GetShaderLocation(RayShader, "moonColor");
     self->_sky._locMoonDiscRadiance = GetShaderLocation(RayShader, "moonDiscRadiance");
+    self->_sky._locCloudZenithRadiance = GetShaderLocation(RayShader, "cloudZenithRadiance");
+    self->_sky._locFlashIrradiance = GetShaderLocation(RayShader, "flashIrradiance");
+    self->_sky._locFlashDirection = GetShaderLocation(RayShader, "flashDirection");
+    self->_sky._locCloudHeight = GetShaderLocation(RayShader, "cloudHeight");
     self->_sky._locMoonEarthshine = GetShaderLocation(RayShader, "moonEarthshine");
     self->_sky._locMoonOpacity = GetShaderLocation(RayShader, "moonOpacity");
     self->_sky._locMoonSkyIntensity = GetShaderLocation(RayShader, "moonSkyIntensity");
@@ -285,8 +290,9 @@ void WorldRendererSky_PrepareNightSky(WorldRenderFrame* frame)
     // The twilight behind the stars: the sky's light from the sun as its mean luminance, on the real scale.
     frame->LimitingMagnitude = NightSky_GetLimitingMagnitude(Environment->LightPollution, MoonlitSky,
         WorldSkyLight_GetTwilightLuminance(&frame->SkyLight));
+    // The weather's clouds hide their share of it.
     frame->MilkyWayRadiance = MILKY_WAY_BASE_RADIANCE * fmaxf(Environment->MilkyWayBrightness, 0.0f)
-        * NightSky_GetMilkyWayVisibility(frame->LimitingMagnitude);
+        * NightSky_GetMilkyWayVisibility(frame->LimitingMagnitude) * frame->Weather.DirectShare;
 }
 
 bool WorldRendererSky_IsMoonVisible(const WorldRenderFrame* frame)
@@ -330,6 +336,15 @@ void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     SetShaderValue(RayShader, self->_sky._locNightVisionSteepness, &frame->NightVision.Steepness, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_sky._locNightVisionStrength, &frame->NightVisionStrength, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_sky._locNightVisionTint, frame->NightVisionTint, SHADER_UNIFORM_VEC3);
+
+    // The weather: the clouds' deck over the sky and a lightning flash's glow.
+    const WorldWeatherLight* Weather = &frame->Weather;
+    SetShaderValue(RayShader, self->_sky._locCloudZenithRadiance, Weather->ZenithRadiance, SHADER_UNIFORM_VEC3);
+    SetShaderValue(RayShader, self->_sky._locFlashIrradiance, Weather->FlashIrradiance, SHADER_UNIFORM_VEC3);
+    float FlashDirection[3] = { Weather->FlashDirection.x, Weather->FlashDirection.y, Weather->FlashDirection.z };
+    SetShaderValue(RayShader, self->_sky._locFlashDirection, FlashDirection, SHADER_UNIFORM_VEC3);
+    float CloudHeight = WORLD_WEATHER_CLOUD_HEIGHT;
+    SetShaderValue(RayShader, self->_sky._locCloudHeight, &CloudHeight, SHADER_UNIFORM_FLOAT);
 
     // The moon: its direction (the moonlit sky needs it even without the disc), the moonlit sky's light (0 skips its
     // half), and the disc (an opacity of 0 draws none).

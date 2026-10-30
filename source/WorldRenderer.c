@@ -222,6 +222,8 @@ static void BuildSky(WorldRenderFrame* frame)
     frame->SunIntensity = Lights.SunIntensity;
     frame->MoonIntensity = Lights.MoonIntensity;
     frame->StarsToWorld = WorldEnvironment_GetStarsToWorld(frame->Environment);
+    // The weather: what its clouds leave of the sky's lights, a flash, the wetness and the wind.
+    WorldWeatherLight_GetFrame(frame->Environment, &frame->Weather);
 }
 
 /* Fills the frame's world, camera and sky fields and the scene matrices in render space (WorldRenderSpace_BuildView):
@@ -572,6 +574,13 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Memory_Copy(Light->Night, Status->NightLight, sizeof(Status->NightLight));
     Status->SceneLuminance = frame->BaseSceneLuminance;
     Status->Exposure = frame->Exposure;
+    const WorldWeatherLight* Weather = &frame->Weather;
+    Status->CloudCover = Weather->CloudCover;
+    Status->DirectShare = Weather->DirectShare;
+    Status->CloudTransmission = Weather->CloudTransmission;
+    Memory_Copy(Weather->DeckIrradiance, Status->DeckIrradiance, sizeof(Status->DeckIrradiance));
+    Memory_Copy(Weather->FlashIrradiance, Status->FlashIrradiance, sizeof(Status->FlashIrradiance));
+    Status->Wetness = Weather->Wetness;
     Status->Features[WorldRendererFeature_ExposureMetering] = StateOf(WorldRendererExposure_IsAvailable(self),
         frame->IsExposureMetered);
     Status->Features[WorldRendererFeature_ReversedDepth] = StateOf(self->_depth._isReversed, frame->IsDepthReversed);

@@ -128,10 +128,11 @@ typedef struct TerrainMaterialSettingsStruct
     /** @brief What the ground is, a namespaced key in its full form (owned; default TERRAIN_MATERIAL_DEFAULT_SURFACE;
      *  "ground" in a definition reads as "tbp:ground"): footsteps, the scattering's limits, later systems. */
     unsigned char* Surface;
-    /** @brief How much rain's puddles may form on it, 0 to 1 (default 0; asphalt 1, grass 0). Read by the weather's
-     *  wetness (not built yet). */
+    /** @brief How much rain's puddles may form on it, 0 to 1 (default 0; asphalt 1, grass 0). For the rain's puddles
+     *  (not built yet). */
     float Puddles;
-    /** @brief How much wetness darkens it, 0 to 1 (default 0.5). Read by the weather's wetness (not built yet). */
+    /** @brief How much the weather's wetness darkens it, 0 to 1 (default 0.5): a soaked surface of porosity 1 is 70 %
+     *  darker (the lit shaders' ApplyWetness). */
     float Porosity;
 } TerrainMaterialSettings;
 

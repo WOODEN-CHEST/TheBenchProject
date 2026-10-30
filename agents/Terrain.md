@@ -295,7 +295,9 @@ placed again when the object moves. Characters stand and walk on it as on any me
   is rigid; its fragment stage blends the materials ("The blend" above) and lights them as `world_pbr` lights a
   dielectric (the sun and the moon with the shadow levels' shadow, the cube-shadow light, up to 8 forward lights per chunk by
   its sphere, the ambient with the map's and the screen's AO, the night vision and the haze in front of it at the
-  chunk's own haze multiplier), dithered by the chunk's fade, before the sprites (decals lie on it). Without the
+  chunk's own haze multiplier), wetted by the weather (the blended `porosity` of its materials darkens it, and it turns
+  glossier: `ApplyWetness` in `common/lighting`; the debug views stay dry), dithered by the chunk's fade, before the
+  sprites (decals lie on it). Without the
   shader the chunks draw unlit and solid through raylib's default shader. The G-buffer (`world_normal`, the outline
   flag in effect), the shadow levels (`world_depth`, back faces: a hill's far side shades what lies behind it) and the
   cube shadow (`world_cube_depth`) draw the chunks with the shared shaders (the depth passes through

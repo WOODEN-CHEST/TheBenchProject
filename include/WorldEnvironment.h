@@ -36,7 +36,12 @@
  * multipliers so a world can dial an effect down to 0 or boost it; the renderer multiplies them with the game
  * config's own multipliers.
  *
- * OWNERSHIP. The environment owns its texture names (MilkyWayTexture, MoonTexture): construct it with
+ * THE WEATHER'S VALUES (cloud coverage, type and density, precipitation, wetness, the wind, the ground fog, the
+ * temperature) are what the weather is now: the weather system (WeatherSystem.h) writes them every tick from the climate
+ * the environment names (Climate.h), and in a world file they are the world's starting weather (and what the weather's
+ * off mode leaves). The lightning's three values are runtime only, never saved.
+ *
+ * OWNERSHIP. The environment owns its asset names (MilkyWayTexture, MoonTexture, Climate): construct it with
  * WorldEnvironment_SetDefaults (which allocates them), copy it with WorldEnvironment_CopyTo, never by assignment (a
  * copied pointer would be freed twice), and release it with WorldEnvironment_Deconstruct.
  *
@@ -94,6 +99,16 @@
  *  daylight factor's twilight ramp (WorldEnvironment_GetDaylightForElevation). */
 #define WORLD_ENVIRONMENT_DAYLIGHT_SET_ELEVATION (-0.12f)
 #define WORLD_ENVIRONMENT_DAYLIGHT_RISE_ELEVATION 0.10f
+/** @brief The fastest wind (WindSpeed, WindGust) a world may give, in metres per second (a bound for hostile content:
+ *  beyond any storm's). */
+#define WORLD_ENVIRONMENT_MAX_WIND_SPEED 150.0
+/** @brief The coldest and the hottest Temperature a world may give, in degrees Celsius. */
+#define WORLD_ENVIRONMENT_MIN_TEMPERATURE (-273.15)
+#define WORLD_ENVIRONMENT_MAX_TEMPERATURE 1000.0
+/** @brief The most bytes the climate's name (Climate) may have, without the terminator. */
+#define WORLD_ENVIRONMENT_CLIMATE_NAME_MAX_LENGTH ((size_t)128)
+/** @brief The climate a world uses unless it names another (Climate's default). */
+#define WORLD_ENVIRONMENT_DEFAULT_CLIMATE ((const unsigned char*)u8"default")
 
 
 // Types.
@@ -173,7 +188,7 @@ typedef struct WorldShadowLightChoiceStruct
  * @brief The environment/graphics settings of a single world.
  *
  * Populate with WorldEnvironment_SetDefaults, then adjust individual fields. Copy with WorldEnvironment_CopyTo.
- * Release with WorldEnvironment_Deconstruct (it frees the texture names).
+ * Release with WorldEnvironment_Deconstruct (it frees the asset names).
  */
 typedef struct WorldEnvironmentStruct
 {
@@ -340,6 +355,50 @@ typedef struct WorldEnvironmentStruct
      *  camera's height above it. Finite and within +-WORLD_ENVIRONMENT_MAX_DISTANCE. */
     float HorizonGroundHeight;
 
+    // ---- Weather: what it is now (the weather system writes these; a world file's are its starting weather) ----
+    /** @brief How much of the sky has clouds, 0 none (the default) .. 1 overcast. Finite and in [0, 1]. */
+    float CloudCoverage;
+    /** @brief What kind of clouds: 0 thin, flat layers (the default), 0.5 cumulus, 1 towering storm clouds. Finite and
+     *  in [0, 1]. */
+    float CloudType;
+    /** @brief How thick the clouds are (their optical thickness), 0 (the default) .. 1: rain clouds are dense and dark.
+     *  Finite and in [0, 1]. */
+    float CloudDensity;
+    /** @brief Rain, 0 none (the default) .. 1 a downpour. Finite and in [0, 1]. */
+    float Precipitation;
+    /** @brief How wet surfaces are, 0 dry (the default) .. 1 soaked: it follows the rain and dries afterwards. Finite and
+     *  in [0, 1]. */
+    float Wetness;
+    /** @brief Where the wind blows toward, in radians (degrees in JSON) around the vertical: 0 toward +Z, a quarter turn
+     *  toward +X (the direction (sin, 0, cos)). Finite. */
+    float WindDirection;
+    /** @brief The mean wind, metres per second (default 0). Finite and in [0, WORLD_ENVIRONMENT_MAX_WIND_SPEED]. */
+    float WindSpeed;
+    /** @brief The current gust on top of the mean wind, metres per second (default 0). Finite and in
+     *  [0, WORLD_ENVIRONMENT_MAX_WIND_SPEED]. */
+    float WindGust;
+    /** @brief The weather's ground fog: how much light it takes per metre at the ground haze's base (default 0), added to
+     *  the ground haze (GroundHazeDensity). Finite and in [0, WORLD_ENVIRONMENT_MAX_GROUND_HAZE_DENSITY]. */
+    float FogDensity;
+    /** @brief How quickly the weather's ground fog thins above the ground haze's base: by e every this many metres
+     *  (default 20). Finite and in [WORLD_ENVIRONMENT_MIN_GROUND_HAZE_THICKNESS,
+     *  WORLD_ENVIRONMENT_MAX_GROUND_HAZE_THICKNESS]. */
+    float FogHeight;
+    /** @brief The air's temperature, degrees Celsius (default 15). Finite and in [WORLD_ENVIRONMENT_MIN_TEMPERATURE,
+     *  WORLD_ENVIRONMENT_MAX_TEMPERATURE]. */
+    float Temperature;
+    /** @brief Name of the climate asset this world's weather follows (default "default"; Climate.h). Owned. A valid asset
+     *  name of at most WORLD_ENVIRONMENT_CLIMATE_NAME_MAX_LENGTH bytes; never NULL. */
+    unsigned char* Climate;
+    /** @brief RUNTIME ONLY (never saved): the current lightning flash, 0 none .. 1 a strike's peak, decaying over a
+     *  fraction of a real second. Finite and in [0, 1]. */
+    float LightningFlash;
+    /** @brief RUNTIME ONLY: the direction of the current strike from the viewer, level (unit, Y 0). Finite. */
+    Vector3 LightningDirection;
+    /** @brief RUNTIME ONLY: how far away the current strike is, metres. Finite and in
+     *  [0, WORLD_ENVIRONMENT_MAX_DISTANCE]. */
+    float LightningDistance;
+
     // ---- Post-effect world multipliers (combined with the game config multipliers) ----
     /** @brief When false, this world suppresses bloom regardless of the config. */
     bool IsBloomEnabled;
@@ -397,7 +456,7 @@ const PropertyTable* WorldEnvironment_GetPropertyTable(void);
  * @brief Constructs an environment with its built-in defaults (a clear daytime sky, gentle effects): the table's
  *        Properties_Construct.
  *
- * Allocates the texture names. Call it on a new environment only and pair it with WorldEnvironment_Deconstruct; to
+ * Allocates the asset names. Call it on a new environment only and pair it with WorldEnvironment_Deconstruct; to
  * reset one, deconstruct it first (calling this again would leak the names it holds).
  * @param self The environment to populate. May be NULL, in which case the call does nothing.
  */
@@ -430,7 +489,7 @@ Error WorldEnvironment_Validate(const WorldEnvironment* self);
 Error WorldEnvironment_CopyTo(const WorldEnvironment* self, WorldEnvironment* destination);
 
 /**
- * @brief Releases what an environment owns, its texture names (the table's Properties_Deconstruct; they become NULL).
+ * @brief Releases what an environment owns, its asset names (the table's Properties_Deconstruct; they become NULL).
  *
  * Safe to call on any constructed environment, also more than once, and on NULL.
  * @param self The environment to release, or NULL.
@@ -620,6 +679,17 @@ float WorldEnvironment_GetDaylightForElevation(float sunElevation);
  * @returns The daylight factor in [0, 1].
  */
 float WorldEnvironment_GetDaylightFactor(const WorldEnvironment* self);
+
+/**
+ * @brief Returns how much daylight there is at another date and time of day, for this environment's sun (its angle and
+ *        seasons): WorldEnvironment_GetDaylightFactor as if Date and TimeOfDay were these (the weather's drying, and its
+ *        forecast, read the sun ahead of the clock).
+ * @param self The environment; must not be NULL.
+ * @param date The day number (GameCalendar.h).
+ * @param timeOfDay The time of day, a fraction in [0, 1] (0 midnight).
+ * @returns The daylight factor in [0, 1].
+ */
+float WorldEnvironment_GetDaylightFactorAt(const WorldEnvironment* self, int64_t date, float timeOfDay);
 
 /**
  * @brief Computes the sky/background color for the current time of day (a day-night gradient, tinted).

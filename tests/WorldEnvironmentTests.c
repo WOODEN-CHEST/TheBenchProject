@@ -3,6 +3,8 @@
 #include "GameCalendar.h"
 #include "GameClock.h"
 #include "PropertyDescriptor.h"
+#include "wr/WRGHDF.h"
+#include "wr/WRJSON.h"
 #include "raylib/raymath.h"
 #include <math.h>
 #include <stdlib.h>
@@ -981,6 +983,133 @@ static void SeasonsChangeTheDayLength(TestRun* run)
     WorldEnvironment_Deconstruct(&Environment);
 }
 
+static void WeatherStartsCalmAndIsValidated(TestRun* run)
+{
+    WorldEnvironment Environment;
+    WorldEnvironment_SetDefaults(&Environment);
+    // No weather until a climate's weather runs: clear, dry and still, a mild day, the default climate named.
+    TEST_CHECK(run, (Environment.CloudCoverage == 0.0f) && (Environment.CloudType == 0.0f)
+        && (Environment.CloudDensity == 0.0f) && (Environment.Precipitation == 0.0f) && (Environment.Wetness == 0.0f));
+    TEST_CHECK(run, (Environment.WindDirection == 0.0f) && (Environment.WindSpeed == 0.0f) && (Environment.WindGust == 0.0f));
+    TEST_CHECK(run, (Environment.FogDensity == 0.0f) && (Environment.FogHeight == 20.0f)
+        && (Environment.Temperature == 15.0f));
+    TEST_CHECK(run, (Environment.Climate != NULL) && (strcmp((const char*)Environment.Climate, "default") == 0));
+    TEST_CHECK(run, (Environment.LightningFlash == 0.0f) && (Environment.LightningDirection.z == 1.0f)
+        && (Environment.LightningDistance == 1000.0f));
+
+    Environment.CloudCoverage = 1.5f;
+    CheckRejected(run, &Environment, "cloud_coverage");
+    ResetEnvironment(&Environment);
+    Environment.Wetness = -0.1f;
+    CheckRejected(run, &Environment, "wetness");
+    ResetEnvironment(&Environment);
+    Environment.WindSpeed = 151.0f;
+    CheckRejected(run, &Environment, "wind_speed");
+    ResetEnvironment(&Environment);
+    Environment.Temperature = NAN;
+    CheckRejected(run, &Environment, "temperature");
+    ResetEnvironment(&Environment);
+    Environment.FogHeight = 0.0f;
+    CheckRejected(run, &Environment, "fog_height");
+    ResetEnvironment(&Environment);
+    Environment.LightningFlash = 2.0f;
+    CheckRejected(run, &Environment, "lightning_flash");
+    ResetEnvironment(&Environment);
+    PropertyValue BadName = PropertyValue_FromAssetName((const unsigned char*)u8"No Such Name");
+    TEST_CHECK_ERROR(run, Properties_Set(WorldEnvironment_GetPropertyTable(), &Environment,
+        (const unsigned char*)u8"climate", &BadName), ErrorCode_ArgumentOutOfRange);
+    WorldEnvironment_Deconstruct(&Environment);
+}
+
+static void LightningValuesAreNeverSaved(TestRun* run)
+{
+    const PropertyTable* Table = WorldEnvironment_GetPropertyTable();
+    WorldEnvironment Source;
+    WorldEnvironment Target;
+    WorldEnvironment_SetDefaults(&Source);
+    WorldEnvironment_SetDefaults(&Target);
+    Source.LightningFlash = 0.5f;
+    Source.LightningDirection = (Vector3){ 1.0f, 0.0f, 0.0f };
+    Source.LightningDistance = 2500.0f;
+    Source.CloudCoverage = 0.25f;
+    Target.LightningFlash = 0.75f;
+    Target.LightningDistance = 300.0f;
+    JSONObjectPool* Pool = NULL;
+    GHDFObjectPool* BinaryPool = NULL;
+    JSONCompound* Text = NULL;
+    GHDFCompound* Binary = NULL;
+    PropertyWriteOptions Everything = { .AreDefaultsWritten = true };
+    if (TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)) && TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&BinaryPool))
+        && TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Text))
+        && TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(BinaryPool, &Binary)))
+    {
+        TEST_CHECK_SUCCESS(run, Properties_WriteJSON(Table, &Source, Pool, Text, &Everything));
+        TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(Table, &Source, BinaryPool, Binary, &Everything));
+        static const unsigned char* const RuntimeKeys[] =
+            { u8"lightning_flash", u8"lightning_direction", u8"lightning_distance" };
+        for (size_t Index = 0U; Index < 3U; Index++)
+        {
+            JSONObjectValue Value;
+            bool IsFound = true;
+            TEST_CHECK_SUCCESS(run, JSONCompound_GetOptional(Text, RuntimeKeys[Index], &Value, &IsFound));
+            TEST_CHECK(run, !IsFound);
+            GHDFObjectValue Entry;
+            bool IsEntryFound = true;
+            TEST_CHECK_SUCCESS(run, GHDFCompound_GetOptional(Binary, (uint16_t)(76U + Index), &Entry, &IsEntryFound));
+            TEST_CHECK(run, !IsEntryFound);
+        }
+        // A read keeps the reader's own runtime values and takes the weather.
+        TEST_CHECK_SUCCESS(run, Properties_ReadJSON(Table, Text, &Target, NULL));
+        TEST_CHECK(run, (Target.LightningFlash == 0.75f) && (Target.LightningDistance == 300.0f));
+        TEST_CHECK(run, Target.CloudCoverage == 0.25f);
+    }
+    if (Text != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Text, true));
+    }
+    if (Binary != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(BinaryPool, Binary, true));
+    }
+    if (Pool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    }
+    if (BinaryPool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(BinaryPool));
+    }
+    WorldEnvironment_Deconstruct(&Source);
+    WorldEnvironment_Deconstruct(&Target);
+}
+
+static void DaylightAtAnotherTimeIsTheSuns(TestRun* run)
+{
+    WorldEnvironment Environment;
+    WorldEnvironment_SetDefaults(&Environment);
+    bool AreEqual = true;
+    for (int Seasons = 0; Seasons < 2; Seasons++)
+    {
+        Environment.AreSeasonsEnabled = Seasons == 1;
+        for (int Day = 0; Day < 365; Day += 30)
+        {
+            for (int Minute = 0; Minute < MINUTES_PER_DAY; Minute += 7)
+            {
+                int64_t Date = GAME_CLOCK_DEFAULT_DAY_NUMBER + Day;
+                float TimeOfDay = (float)Minute / (float)MINUTES_PER_DAY;
+                // The environment's own date and time are another season's and hour: only the ones given count.
+                Environment.Date = Date + 182;
+                Environment.TimeOfDay = fmodf(TimeOfDay + 0.5f, 1.0f);
+                float At = WorldEnvironment_GetDaylightFactorAt(&Environment, Date, TimeOfDay);
+                Environment.Date = Date;
+                Environment.TimeOfDay = TimeOfDay;
+                AreEqual = AreEqual && (At == WorldEnvironment_GetDaylightFactor(&Environment));
+            }
+        }
+    }
+    TEST_CHECK(run, AreEqual);
+    WorldEnvironment_Deconstruct(&Environment);
+}
 
 // Public functions.
 void WorldEnvironmentTests_Run(TestRun* run)
@@ -1001,6 +1130,9 @@ void WorldEnvironmentTests_Run(TestRun* run)
         { "shadow_light_follows_the_brighter_light", ShadowLightFollowsTheBrighterLight },
         { "seasons_change_the_day_length", SeasonsChangeTheDayLength },
         { "light_ramps_follow_the_elevation", LightRampsFollowTheElevation },
+        { "weather_starts_calm_and_is_validated", WeatherStartsCalmAndIsValidated },
+        { "lightning_values_are_never_saved", LightningValuesAreNeverSaved },
+        { "daylight_at_another_time_is_the_suns", DaylightAtAnotherTimeIsTheSuns },
     };
     TestRun_RunSuite(run, "WorldEnvironment", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }
