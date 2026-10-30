@@ -1769,9 +1769,9 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
         LogClock(Frame, "a new day");
     }
     ApplyClockToEnvironment(Frame);
-    // The weather moves with the game time the clock moved, its gusts and lightning with the real time of play.
-    WorldTestWeather_Update(&Frame->_testWeather, &Frame->_clock, Crossings.GameSeconds,
-        Frame->_clock.IsPaused ? 0.0 : time.PassedTime);
+    // The weather moves with the game time the clock moved, its gusts and lightning with the real time of play: a held
+    // clock holds the presets, the values and the wetness, while a flash still goes out (as the characters still move).
+    WorldTestWeather_Update(&Frame->_testWeather, &Frame->_clock, Crossings.GameSeconds, time.PassedTime);
 
     // The tick's order (agents/WorldData.md): the NPCs' brains set their inputs (the scripts' slot), the drivers move
     // things (the desk, the door, the pushing wall, then the characters, so what moved this tick carries them), the

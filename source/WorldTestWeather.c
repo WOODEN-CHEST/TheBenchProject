@@ -9,8 +9,6 @@
 
 
 // Macros.
-/** How long Insert's move into the next preset takes, in weather hours. */
-#define NEXT_PRESET_TRANSITION_HOURS 0.25f
 /** The speed steps End cycles through, times the climate's own speed. */
 #define SPEED_STEP_COUNT 3
 /** The forecast the backslash logs: how far ahead and in what steps, game hours. */
@@ -64,7 +62,8 @@ static double GetHeadingDegrees(Vector3 direction)
     return (Degrees < 0.0) ? Degrees + 360.0 : Degrees;
 }
 
-/* Insert: the climate's next preset in its file's order. */
+/* Insert: the climate's next preset in its file's order, its values at once: a held clock moves no value, and the key
+ * shows the preset either way. */
 static void MoveToNextPreset(WorldTestWeather* self)
 {
     const Climate* Running = WeatherSystem_GetClimate(&self->_system);
@@ -73,10 +72,22 @@ static void MoveToNextPreset(WorldTestWeather* self)
         Log(self, "weather: no climate runs.");
         return;
     }
-    uint16_t Next = (uint16_t)((WeatherSystem_GetSimulation(&self->_system)->Preset + 1U)
-        % Climate_GetPresetCount(Running));
-    (void)Check(self, WeatherSystem_SetPreset(&self->_system, Climate_GetPreset(Running, Next)->Name,
-        NEXT_PRESET_TRANSITION_HOURS), "the next preset");
+    const WeatherSimulation* Simulation = WeatherSystem_GetSimulation(&self->_system);
+    if (Simulation->Mode == WeatherMode_Off)
+    {
+        Log(self, "weather: off, the world file's weather stays (Page Down steps the mode).");
+        return;
+    }
+    const ClimatePreset* Next = Climate_GetPreset(Running,
+        (uint16_t)((Simulation->Preset + 1U) % Climate_GetPresetCount(Running)));
+    if (!Check(self, WeatherSystem_SetPreset(&self->_system, Next->Name, 0.0f), "the next preset"))
+    {
+        return;
+    }
+    float Targets[WeatherQuantity_Count];
+    Memory_Copy(Simulation->Targets, Targets, sizeof(Targets));
+    (void)Check(self, WeatherSystem_SetValuesNow(&self->_system, World_GetEnvironment(self->_world), Next->TargetMask,
+        Targets), "the preset's values");
 }
 
 /* End: the next speed step. */

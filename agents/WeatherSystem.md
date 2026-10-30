@@ -138,12 +138,15 @@ The weather's values themselves are the environment's, saved with the world.
 ## The test frame's weather (`source/WorldTestWeather.{h,c}`)
 
 The world test frame runs the climate its test world names (the default climate) on its clock: after the clock moves
-each tick, with the clock's game seconds and the tick's real seconds (0 while the clock is paused). Its keys (the F
-keys are all taken): **Insert** moves into the climate's next preset in the file's order (over a quarter of a weather
-hour), **Home** locks and unlocks, **End** steps the speed (x1, x10, x100 the climate's), **Page Up** strikes now,
-**Page Down** steps the mode (simulated, fixed, scripted, off; off gives the world file's weather back), and the
-**backslash** logs a forecast of the next 24 game hours (a `*` marks a preset the forecast gets wrong). Every strike is
-logged with its distance and direction, and the I key's status adds the weather's line.
+each tick, with the clock's game seconds and the tick's real seconds. A held clock (P, and the number keys' jumps)
+holds the presets, the values and the wetness; the gusts, the lightning and a flash's fading run on in real time, as the
+frame's characters do. Its keys (the F keys are all taken): **Insert** moves into the climate's next preset in the
+file's order with its values at once (`WeatherSystem_SetValuesNow`), so it shows while the clock is held too (the
+wetness follows the game time only), **Home** locks and unlocks, **End** steps the speed (x1, x10, x100 the
+climate's), **Page Up** strikes now, **Page Down** steps the mode (simulated, fixed, scripted, off; off gives the world
+file's weather back; Insert does nothing then), and the **backslash** logs a forecast of the next 24 game hours (a `*`
+marks a preset the forecast gets wrong). Every strike is logged with its distance and direction, and the I key's status
+adds the weather's line.
 
 ## Known limits
 

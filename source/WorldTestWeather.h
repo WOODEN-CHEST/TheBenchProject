@@ -13,7 +13,8 @@
  * tick.
  *
  * Keys (raw debug keys, read in Update after the UI had first refusal): Insert moves into the climate's next preset in
- * its file's order (over a quarter of a weather hour), Home locks and unlocks the weather, End steps its speed (x1, x10,
+ * its file's order with its values at once (so it shows while the clock is held), Home locks and unlocks the weather,
+ * End steps its speed (x1, x10,
  * x100 the climate's own), Page Up strikes lightning now, Page Down steps the mode (simulated, fixed, scripted, off;
  * off gives the world file's weather back) and the backslash logs a forecast of the next 24 game hours. Each is logged,
  * and so is every strike (its distance and direction).
@@ -45,7 +46,7 @@ void WorldTestWeather_Construct(WorldTestWeather* self, World* world, AssetManag
 /** Releases the weather (its climate). */
 void WorldTestWeather_Deconstruct(WorldTestWeather* self);
 
-/** The tick's weather: moves it by the clock's game seconds and the real seconds of play (0 while the clock is paused),
+/** The tick's weather: moves it by the clock's game seconds (0 while the clock is held) and the real seconds of play,
  *  then logs and clears the strikes it queued. */
 void WorldTestWeather_Update(WorldTestWeather* self, const GameClock* clock, double gameSeconds, double realSeconds);
 

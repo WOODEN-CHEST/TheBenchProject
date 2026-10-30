@@ -1650,8 +1650,8 @@ triggers left out) for interior lighting (`WorldRenderer_SetCameraOpenness`).
 logs a new day when it crosses midnight, and writes its time of day and date into the environment, so the sky shows
 the clock. Then the weather moves (`source/WorldTestWeather.{h,c}`, [WeatherSystem.md](WeatherSystem.md)): a weather
 system runs the climate the test world names (the default one) with the game seconds the clock moved and the tick's
-real seconds (0 while the clock is paused), so the clouds, the rain, the wetness and the fog follow the clock and its
-presets change as the hours pass.
+real seconds, so the clouds, the rain, the wetness and the fog follow the clock and its presets change as the hours
+pass. A held clock holds them; the gusts, the lightning and a flash's fading run on in real time.
 
 All input runs in `Update` at the fixed timestep and comes from `Services.Input` ([GameInput.md](GameInput.md)), after
 the UI test frame above had first refusal: movement through the actions (`move_*`, default WASD + SPACE/CTRL, `sprint`
@@ -1689,7 +1689,8 @@ raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writi
   turned, all seen to 20 km, around the terrain's object), keypad * the shadow levels' debug view; each logged, and the
   I key's status says both;
 - **the weather (see "Weather"; [WeatherSystem.md](WeatherSystem.md), "The test frame's weather"):** Insert moves into
-  the climate's next preset in the file's order (over a quarter of a weather hour), Home locks and unlocks the weather,
+  the climate's next preset in the file's order with its values at once (while the clock is held too: P and the
+  number keys hold the rest of the weather, the wetness with it), Home locks and unlocks the weather,
   End steps its speed (x1, x10, x100 the climate's), Page Up strikes lightning now, Page Down steps the mode (simulated,
   fixed, scripted, off: off gives the world file's weather back), the backslash logs a forecast of the next 24 game
   hours; each logged, every strike too (its distance and direction), and the I key's status adds the weather's line
