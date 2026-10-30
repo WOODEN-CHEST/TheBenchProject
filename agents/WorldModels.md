@@ -280,6 +280,12 @@ and have the sockets `hand_r` and `hand_l` (in the palm, turned so a held cup st
 the floor 0.55 m in front of it, where a sitter's feet go) and `test_cup` (its `grip` on its side, its `reach` 0.52 m
 in front, facing it) both collide by `"bounds"`; `test_door` has an `opener` socket.
 
+An asset made in Blender: `trash_can_lined` (`world_models/trash_cans/`), a slatted steel bin with a black liner, its
+four LODs the models `world.trash_can_lined.lod0` to `lod3` (`models/world/trash_can_lined/`: each .glb brings its own
+base colour, normal and metallic-roughness maps, 256 down to 32 pixels, packed as glTF materials are: GameAssets.md),
+switching at 10, 35 and 90 m and seen 300 m, colliding as a 30 kg cylinder standing on its origin. The test world places
+one, pushable, in the start view.
+
 ## Known limits
 
 - **Surfaces** are not built yet: the `surfaces` key is refused as unknown.

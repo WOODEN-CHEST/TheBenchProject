@@ -63,7 +63,9 @@ Current module list:
   wrappers for the standard font, model, shader, sound and texture types, with their ownership rules, accessors and
   pitfalls; a skinned model carries its GameSkeleton (Animation.md). GameModel.h also holds GameMaterialFactors
   (source/GameModel.c): the PBR factors a material override sets,
-  shared by the model type's material_overrides and world model variants (one parser, one apply). GameFont (source/GameFont.c) adds sorted glyph lookup with the '?' fallback; fonts load at a
+  shared by the model type's material_overrides and world model variants (one parser, one apply). A glTF model's
+  occlusion, roughness and metallic maps, which raylib's importer leaves apart, are packed into the one map the PBR
+  shader reads (the private source/ModelOrmMap.{h,c}, pure: tested headless); its first material is slot 1. GameFont (source/GameFont.c) adds sorted glyph lookup with the '?' fallback; fonts load at a
   definition-chosen size and codepoint set (source/FontCodepoints.c, private) and warn once about glyphs their file
   lacks. Shader stages may `#include "common/..."` shared GLSL from shaders/common/, expanded with #line directives so
   compiler errors name the right file (source/ShaderSource.c, private); a shader definition's `defines` are

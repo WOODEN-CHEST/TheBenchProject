@@ -1,7 +1,7 @@
 {
     "format_version": 2,
     "name": "test",
-    "next_object_id": 65,
+    "next_object_id": 66,
     "environment": {},
     "objects": [
         {
@@ -3233,6 +3233,20 @@
                     "world_model": "test_card",
                     "overrides_has_two_sided_shadows": true,
                     "has_two_sided_shadows": true
+                }
+            }
+        },
+        {
+            "id": 65,
+            "name": "trash_can",
+            "position": [0.3, 0.05, -2.7],
+            "mobility": "movable",
+            "components": {
+                "model": {
+                    "world_model": "trash_can_lined"
+                },
+                "collider": {
+                    "is_pushable": true
                 }
             }
         }

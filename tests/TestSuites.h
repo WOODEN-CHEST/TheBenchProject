@@ -38,6 +38,11 @@ void ShaderSourceTests_Run(TestRun* run);
  *  and the shipped placeholder (TextureTests.c). */
 void TextureTests_Run(TestRun* run);
 
+/** @brief The packed occlusion/roughness/metallic map a glTF model's materials get: each map's red in its channel, a
+ *  missing map as 255, the size and the resampling, the maps it refuses (ModelOrmMapTests.c; a private module of
+ *  source/). */
+void ModelOrmMapTests_Run(TestRun* run);
+
 /** @brief The collision narrowphase: affine maths and poses, supports under any transform, GJK distances, EPA
  *  penetrations, contact manifolds and their feature ids, rays against every shape, linear and rotating casts (the
  *  fast thin cases that would tunnel with steps), convex hulls and their reduction, meshes with their active edges and

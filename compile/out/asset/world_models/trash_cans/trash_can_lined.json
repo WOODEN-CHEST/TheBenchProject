@@ -29,6 +29,7 @@
                 "shapes": [
                     {
                         "type": "cylinder",
+                        "center": [0, 0.465, 0],
                         "radius": 0.4,
                         "half_height": 0.465
                     }

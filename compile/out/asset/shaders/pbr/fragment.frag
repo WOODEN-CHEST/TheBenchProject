@@ -37,7 +37,9 @@ out vec4 finalColor;
 // a cotangent frame from the screen-space derivatives of the world position and UV (Christian Schuler's
 // method). Robust for any mesh (OBJ meshes carry no tangents), at the cost of a per-fragment derivative frame.
 // worldPos + uv are the fragment's world position and texture coordinate; n is the interpolated world normal;
-// mapN is the sampled normal already remapped to [-1,1].
+// mapN is the sampled normal already remapped to [-1,1], in OpenGL's convention (green toward the image's top: what
+// glTF requires and Blender bakes, as the terrain's maps). The frame's b grows with v, and v grows toward the image's
+// bottom (raylib keeps glTF's texture coordinates and flips OBJ's to match), so the map's green goes along -b.
 vec3 PerturbNormal(vec3 n, vec3 worldPos, vec2 uv, vec3 mapN)
 {
     vec3 dp1 = dFdx(worldPos);
@@ -51,7 +53,7 @@ vec3 PerturbNormal(vec3 n, vec3 worldPos, vec2 uv, vec3 mapN)
     vec3 b = dp2perp*duv1.y + dp1perp*duv2.y;
 
     float invMax = inversesqrt(max(dot(t, t), dot(b, b)));
-    mat3 tbn = mat3(t*invMax, b*invMax, n);
+    mat3 tbn = mat3(t*invMax, -b*invMax, n);
     return normalize(tbn*mapN);
 }
 

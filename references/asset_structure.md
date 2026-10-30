@@ -444,14 +444,19 @@ with it; one that replaces a vertex stage should replace the twin's too.
         {
             "slot": 0,                   // material index within the model (REQUIRED, 0 to 2147483647). A slot
                                          // past the model's materials is skipped. Addressing a material by
-                                         // name is not implemented yet; use the index.
+                                         // name is not implemented yet; use the index. In a glTF file (gltf /
+                                         // glb) the file's FIRST material is slot 1: slot 0 is a default material
+                                         // the importer adds, which none of the file's meshes use. In an OBJ
+                                         // file the first material is slot 0.
 
             // --- PBR texture maps (all [OPTIONAL]; each a texture FILE location, resolved against the models dir) ---
             "albedo": asset location,    // base colour (sRGB)
-            "normal": asset location,    // tangent-space normal map (the shader derives a TBN per-fragment, so
-                                         // the mesh needs no tangents)
+            "normal": asset location,    // tangent-space normal map in OpenGL's convention: green toward the
+                                         // image's top, as Blender bakes them and glTF requires (the shader
+                                         // derives a TBN per-fragment, so the mesh needs no tangents)
             "mra": asset location,       // packed ORM map: R=occlusion, G=roughness, B=metallic. MULTIPLIES the
                                          // metallic/roughness/occlusion factors below (glTF metal-rough style).
+                                         // Replaces the map a glTF file's own maps are packed into.
             "emissive": asset location,  // sRGB emissive colour map; MULTIPLIES emissive_color*emissive_intensity
 
             // --- PBR scalar factors (all [OPTIONAL]; world model variants read them with the same parser) ---
@@ -462,8 +467,9 @@ with it; one that replaces a vertex stage should replace the twin's too.
             "emissive_intensity": number,// >= 0: emissive multiplier (default 0; defaults to 1 when an emissive
                                          // map is present, so the map is visible without extra keys)
 
-            "texture_properties": texture properties  // [OPTIONAL] filtering, wrap and mipmaps, applied to all
-                                         // this slot's maps (mipmaps keep distant textured models calm)
+            "texture_properties": texture properties  // [OPTIONAL] filtering, wrap and mipmaps, applied to the
+                                         // maps this override loads (mipmaps keep distant textured models
+                                         // calm); the model file's own maps keep point filtering and no mipmaps
         }
     ],
 
@@ -477,6 +483,19 @@ with it; one that replaces a vertex stage should replace the twin's too.
     "rig": "none"                        // [OPTIONAL, GLTF only] not read: a file with a skin is skinned (below)
 }
 ```
+
+**glTF materials.** A glTF (`gltf`, `glb`) file brings its own maps: the base colour texture and factor, the normal
+texture, and the metallicRoughness and occlusion textures, which are packed into one map as the shader reads it (red
+the occlusion texture's red, green the roughness, blue the metallic; a missing one counts as 1, so its factor applies
+alone; a different size is resampled to the metallicRoughness texture's), and the emissive texture. What the game does
+not read from the file: the metallic and roughness factors of a material without a metallicRoughness texture (it
+shades with roughness 0.5 and metallic 0: give it a `material_overrides` entry), the emissive factor without an
+emissive texture, the occlusion strength, the samplers (the file's textures are point-filtered without mipmaps), any
+texture of a material without a `pbrMetallicRoughness` block, and the material extensions. An emissive texture shows
+only with an override's `emissive_intensity` (the importer leaves it 0). Remember that the file's first material is
+slot 1. The maps must be 8-bit images of at most 8192 pixels a side: PNG inside a .glb (the game reads no JPEG, so set
+Blender's exporter to PNG), or png, bmp, gif or qoi files beside a .gltf; the metallicRoughness and occlusion textures
+can be one image.
 
 **Skinned models.** A glTF (`gltf`, `glb`) file with a skin loads its skeleton and each vertex's bone
 indices and weights (at most four bones a vertex) with it: such a model bends with the pose of the object it is placed
@@ -677,7 +696,10 @@ and `test_humanoid_short` (the placeholder humanoid; they play the `test_humanoi
 its `seat` socket on the floor 0.55 m in front), `test_cup` (collision `bounds`, its `grip` on its side and its
 `reach` 0.52 m in front of it, facing it), and `test_tree` and `test_pebble`, the placeholders for instanced drawing
 (`asset_source/scripts/placeholder_instances.py`): a conifer of three LODs seen 250 m, which the test world's grove
-draws, and a pebble of two seen 45 m, which the test frame's pebble field draws (it keeps no sky out).
+draws, and a pebble of two seen 45 m, which the test frame's pebble field draws (it keeps no sky out). The test world
+also places `trash_can_lined` (`world_models/trash_cans/`), a bin made in Blender: four LODs from .glb files with their
+own maps, switching at 10, 35 and 90 m and seen 300 m, colliding as one cylinder standing on its origin (its `center`
+half its height up: a shape is placed by its centre).
 
 
 ## World sprites.

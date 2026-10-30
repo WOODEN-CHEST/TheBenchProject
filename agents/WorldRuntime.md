@@ -526,8 +526,10 @@ tonemapped (ACES + gamma, `world_tonemap`) only in the final blit, after the pix
 (one `DirectionalLight` function; their light through the air at the fragment's height), the sky's own
 light as the ambient (the sky's irradiance from above, the ground's bounce from below, the moonless night's own
 light; see "Sky's light on surfaces"), forward point lights, per-material metallic/roughness/occlusion/emissive factors and
-optional albedo / normal / packed ORM (in the METALNESS slot) / emissive maps from the model definition's
-`material_overrides`, derivative-based normal mapping, and the haze in front of every surface (the aerial
+optional albedo / normal / packed ORM (in the METALNESS slot) / emissive maps from the model file (a glTF file's
+occlusion, roughness and metallic maps packed when it loads: [GameAssets.md](GameAssets.md)) or the model definition's
+`material_overrides`, derivative-based normal mapping (OpenGL's convention: green toward the image's top), and the
+haze in front of every surface (the aerial
 perspective and ground haze, see "Haze": `ApplyAerialPerspective`). The lighting
 itself (the frame's uniforms, the BRDF, the sky's lights with the shadow levels' shadow, point lights with the cube shadow,
 the AO, the night vision and the haze) lives in
@@ -1466,9 +1468,10 @@ The renderer keeps receiving features, so:
 
   The wetness and puddle masks (rain and wetness) will need units in the lit programs too: 13 is free, and 7, 8, 12,
   14 and 15 are taken; beyond 13, a frame texture for the model programs takes a unit below 12 that no material map the models
-  use binds (the PBR materials use maps 0, 1, 2 and 5: albedo, the packed ORM, normal, emission; raylib's glTF import
-  also fills 3 (roughness) and 4 (occlusion) and its OBJ import 6 (height) when the file has those maps, so 10 and 11
-  are the safe ones there), and the terrain program keeps 9–11 for its arrays (units 0–6 are free in it). Beyond that,
+  use binds (the PBR materials use maps 0, 1, 2 and 5: albedo, the packed ORM, normal, emission; raylib's importers
+  also fill 3 (roughness) and 4 (occlusion) in some formats (a glTF file's are packed into 1 and emptied when the model
+  loads) and its OBJ import 6 (height) when the file has those maps, so 10 and 11 are the safe ones there), and the
+  terrain program keeps 9–11 for its arrays (units 0–6 are free in it). Beyond that,
   units 16 and up exist on the hardware this runs on (32 a stage on the GTX 980 Ti and Mesa) but need a check of
   `GL_MAX_TEXTURE_IMAGE_UNITS` and a fallback. A sampler type different from what a unit's
   other users bind is safe only through a different target (2D, cube, 2D array); keep each new unit's users in this
@@ -1600,9 +1603,10 @@ world models: two cubes behind the centre row, `variant_cube_left` (red) and `va
 and the lamp are placement overrides (`overrides_omit_pixelation`, `overrides_shadow_distance`). Its LODs: a row of six
 `lod_test` spheres (`lod_test_1` to `_6`, ids 25 to 30) along the left edge of the ground, at x = 8 from z = -6 to 9,
 switching at 13 and 16 m, and beside it `lod_test_forced` (id 31, LOD 2 forced) and `lod_test_own_distances` (id 32, its
-own switch distances 3 and 6 m). Its collision ([WorldCollision.md](WorldCollision.md)): 43 colliders (the slab,
-the cubes, the desk's parts, the LOD spheres' hulls, the PBR cube's mesh, the cup's and the tree trunk's cylinders, the
-sign's plane, the test room's walls and roof), a `door` (id 33, the `test_door` world model with a `closed` and an `open` set; movable, a
+own switch distances 3 and 6 m). Its collision ([WorldCollision.md](WorldCollision.md)): 44 colliders (the slab,
+the cubes, the desk's parts, the LOD spheres' hulls, the PBR cube's mesh, the cup's, the tree trunk's and the trash
+can's cylinders, the sign's plane, the test room's walls and roof), a `door` (id 33, the `test_door` world model with
+a `closed` and an `open` set; movable, a
 kinematic mover that stops when blocked) on the right of the start view, and a `desk_trigger_zone` (id 34, an own box,
 a trigger) at the end of the desk's slide; the desk is movable. Its moving and pushing content (boxes, the `test` world model's `bounds`, every
 crate pushable and movable): a `pusher_wall` (id 35, kinematic) behind a row of five crates `row_crate_1` to `_5` (ids 36 to 40) on
@@ -1620,6 +1624,9 @@ Its two-sided shadows: two `test_card`s (a one-sided 1 m square facing up, `mode
 to 1.4 m and floating 1.6 m above the ground right of the test room, `card_one_sided` (id 63) and `card_two_sided` (id 64,
 `overrides_has_two_sided_shadows`): the shadow levels hold the faces turned away from the light, so in daylight the first
 casts nothing (it has no face turned away) and the second a square shadow.
+An asset made in Blender: a `trash_can` (id 65, the `trash_can_lined` world model: a slatted steel bin with a black
+liner, four LODs from .glb files with their own maps, [WorldModels.md](WorldModels.md)) stands in the start view at
+(0.3, 0.05, -2.7), in front of the crates; it is movable and pushable (30 kg).
 Edit the file and restart to change the test world.
 The frame owns a `WorldCollision` too, created after the world, and a `WorldCharacters` (the character
 system, [Characters.md](Characters.md)) created after that, with its test characters (the private

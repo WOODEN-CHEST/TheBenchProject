@@ -1,10 +1,4 @@
 {
     "name": "world.trash_can_lined.lod1",
-    "location": "world/trash_can_lined/lod1",
-    "material_overrides": [
-        {
-            "slot": 0,
-            "metallic": 1.0
-        }
-    ]
+    "location": "world/trash_can_lined/lod1"
 }

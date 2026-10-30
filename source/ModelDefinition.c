@@ -2,6 +2,7 @@
 #include "AssetTypesStandard.h"
 #include "AssetDefinitionCommon.h"
 #include "GameModel.h"
+#include "ModelOrmMap.h"
 #include "raylib/raymath.h"
 #include "raylib/rlgl.h"
 #include "wr/WRMemory.h"
@@ -9,18 +10,24 @@
 #include "wr/WRJSON.h"
 
 /*
- * Static-model loader: loads meshes + materials, bakes an optional import transform into the model's
- * transform matrix, seeds sensible PBR scalar defaults, and applies optional material overrides (rebinding a
- * slot's albedo / normal / ORM (occlusion-roughness-metallic) / emissive textures and its tint + metallic /
- * roughness / emissive scalar factors). A model with bones also gets its skeleton (GameSkeleton.h); the clips it
- * plays are animation library assets of their own. Material addressing by name is out of scope for now (slots are
- * addressed by index).
+ * Static-model loader: loads meshes + materials, packs a glTF file's occlusion, roughness and metallic maps into the
+ * one map the PBR shader reads, bakes an optional import transform into the model's transform matrix, seeds sensible
+ * PBR scalar defaults, and applies optional material overrides (rebinding a slot's albedo / normal / ORM
+ * (occlusion-roughness-metallic) / emissive textures and its tint + metallic / roughness / emissive scalar factors). A
+ * model with bones also gets its skeleton (GameSkeleton.h); the clips it plays are animation library assets of their
+ * own. Material addressing by name is out of scope for now (slots are addressed by index).
+ *
+ * GLTF MATERIALS. raylib's importer puts the file's material i in slot i + 1 (slot 0 is its default material, which no
+ * mesh of the file uses). It splits a metallicRoughness texture into a grey roughness texture (ROUGHNESS) and a grey
+ * metallic texture (METALNESS) and keeps the occlusion texture apart (OCCLUSION), while the PBR shader reads one packed
+ * map from the METALNESS slot (red occlusion, green roughness, blue metallic). So the loader reads the three back and
+ * packs them (ModelOrmMap.h) before the overrides apply: an "mra" override still replaces the packed map.
  *
  * TEXTURE OWNERSHIP. raylib's UnloadModel only unloads the meshes and frees each material's map array; it
  * never unloads textures or shaders. The loaded asset therefore lists the GPU texture ids it owns: every
- * texture the importer loaded (OBJ/MTL: up to 4 per material, glTF: up to 6) and every override texture,
- * skipping raylib's default texture and duplicates. Importer textures an override replaced are unloaded as
- * soon as the overrides are applied. Unloading the asset, and every failed load, unloads the listed textures
+ * texture the importer loaded (OBJ/MTL: up to 4 per material, glTF: up to 6), every packed map and every override
+ * texture, skipping raylib's default texture and duplicates. Importer textures a packed map or an override replaced are
+ * unloaded as soon as the overrides are applied. Unloading the asset, and every failed load, unloads the listed textures
  * and then calls UnloadModel. UnloadMaterial is never used: it unloads each material's textures on their own
  * (a texture shared by two materials would be unloaded twice) and a material shader the asset never owns.
  */
@@ -41,6 +48,10 @@
 #define MODEL_ASSET_KIND ((const unsigned char*)u8"model")
 /** What a material override map points at, for parse-time messages. */
 #define MODEL_TEXTURE_KIND ((const unsigned char*)u8"material texture")
+/** Room for a model's name made printable in load messages (AssetJSON_CopyPrintable), its NUL included. */
+#define MODEL_PRINTABLE_NAME_CAPACITY ((size_t)129)
+/** The maps a packed occlusion/roughness/metallic map is built from. */
+#define MODEL_ORM_SOURCE_COUNT ((size_t)3)
 
 
 // Types.
@@ -75,6 +86,15 @@ typedef struct ModelLoadedStruct
     GameModel Model;                // Asset points here; meshes + material map arrays freed by UnloadModel
     GenericBuffer* OwnedTextureIds; // borrowed from the manager pool (unsigned int elements); textures to unload
 } ModelLoaded;
+
+
+// Fields.
+/** The material maps a packed map is built from, in ModelOrmSources' order, and their names for messages. */
+static const int ModelOrmSourceMaps[MODEL_ORM_SOURCE_COUNT] =
+{
+    MATERIAL_MAP_OCCLUSION, MATERIAL_MAP_ROUGHNESS, MATERIAL_MAP_METALNESS
+};
+static const char* const ModelOrmSourceNames[MODEL_ORM_SOURCE_COUNT] = { "occlusion", "roughness", "metallic" };
 
 
 // Static functions.
@@ -401,6 +421,118 @@ static Error LoadMaterialTexture(AssetManager* manager, AssetTypeID type, const 
     return Error_CreateSuccess();
 }
 
+/* Whether a material map holds a texture of its own: not none, and not raylib's default texture. */
+static bool HasOwnTexture(const MaterialMap* map)
+{
+    return (map->texture.id != 0U) && (map->texture.id != rlGetTextureIdDefault());
+}
+
+/* Reads a material map's texture back from the GPU into @p outImage (raylib memory: UnloadImage), or leaves it zeroed
+ * when the map has no texture of its own. */
+static Error ReadMapImage(const MaterialMap* map, const char* name, Image* outImage)
+{
+    Memory_Zero(outImage, sizeof(*outImage));
+    if (!HasOwnTexture(map))
+    {
+        return Error_CreateSuccess();
+    }
+    *outImage = LoadImageFromTexture(map->texture);
+    if (outImage->data == NULL)
+    {
+        return Error_Construct4(ErrorCode_InvalidAssetData, "The %s map could not be read back (pixel format %d).",
+            name, map->texture.format);
+    }
+    return Error_CreateSuccess();
+}
+
+/* Packs one material's occlusion, roughness and metallic textures into one texture in its METALNESS slot, where the PBR
+ * shader reads the packed map, and takes the three off the material. The new texture is listed as owned at once; the
+ * three stay listed until PruneUnreferencedTextures unloads them (no material references them any more). A material
+ * with none of the three is left as it is. */
+static Error PackMaterialOrmMap(Material* material, GenericBuffer* ownedTextureIds)
+{
+    MaterialMap* Maps = material->maps;
+    bool HasAnySource = false;
+    for (size_t Index = 0U; Index < MODEL_ORM_SOURCE_COUNT; Index++)
+    {
+        HasAnySource = HasAnySource || HasOwnTexture(&Maps[ModelOrmSourceMaps[Index]]);
+    }
+    if (!HasAnySource)
+    {
+        return Error_CreateSuccess();
+    }
+
+    Image Images[MODEL_ORM_SOURCE_COUNT];
+    Memory_Zero(Images, sizeof(Images));
+    Error Result = Error_CreateSuccess();
+    for (size_t Index = 0U; (Index < MODEL_ORM_SOURCE_COUNT) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        Result = ReadMapImage(&Maps[ModelOrmSourceMaps[Index]], ModelOrmSourceNames[Index], &Images[Index]);
+    }
+    Image Packed;
+    Memory_Zero(&Packed, sizeof(Packed));
+    if (Result.Code == ErrorCode_Success)
+    {
+        ModelOrmSources Sources =
+        {
+            .Occlusion = (Images[0].data != NULL) ? &Images[0] : NULL,
+            .Roughness = (Images[1].data != NULL) ? &Images[1] : NULL,
+            .Metallic = (Images[2].data != NULL) ? &Images[2] : NULL,
+        };
+        Result = ModelOrmMap_Build(&Sources, &Packed);
+    }
+    for (size_t Index = 0U; Index < MODEL_ORM_SOURCE_COUNT; Index++)
+    {
+        UnloadImage(Images[Index]);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+
+    Texture2D PackedTexture = LoadTextureFromImage(Packed);
+    UnloadImage(Packed);
+    if (PackedTexture.id == 0U)
+    {
+        return Error_Construct2(ErrorCode_InvalidAssetData, "The packed map could not be uploaded.");
+    }
+    Error TrackResult = AddOwnedTextureId(ownedTextureIds, PackedTexture.id);
+    if (TrackResult.Code != ErrorCode_Success)
+    {
+        UnloadTexture(PackedTexture);
+        return TrackResult;
+    }
+    Maps[MATERIAL_MAP_METALNESS].texture = PackedTexture;
+    Maps[MATERIAL_MAP_ROUGHNESS].texture = (Texture2D){ 0 };
+    Maps[MATERIAL_MAP_OCCLUSION].texture = (Texture2D){ 0 };
+    return Error_CreateSuccess();
+}
+
+/* Gives every material of a glTF file that has an occlusion, roughness or metallic map the packed map the PBR shader
+ * reads (raylib's importer leaves the three apart: ModelOrmMap.h). */
+static Error PackGltfOrmMaps(Model* model, const unsigned char* modelName, GenericBuffer* ownedTextureIds)
+{
+    for (int MaterialIndex = 0; MaterialIndex < model->materialCount; MaterialIndex++)
+    {
+        if (model->materials[MaterialIndex].maps == NULL)
+        {
+            continue;
+        }
+        Error Result = PackMaterialOrmMap(&model->materials[MaterialIndex], ownedTextureIds);
+        if (Result.Code != ErrorCode_Success)
+        {
+            char PrintableName[MODEL_PRINTABLE_NAME_CAPACITY];
+            AssetJSON_CopyPrintable(modelName, PrintableName, sizeof(PrintableName));
+            Error Wrapped = Error_Construct4(Result.Code,
+                "Model \"%s\", material %d: its packed occlusion/roughness/metallic map could not be built: %s",
+                PrintableName, MaterialIndex, (Result.Message != NULL) ? (const char*)Result.Message : "an error.");
+            Error_Deconstruct(&Result);
+            return Wrapped;
+        }
+    }
+    return Error_CreateSuccess();
+}
+
 /* Seeds a loaded material with sensible PBR scalar defaults: only degenerate (<= 0) roughness / occlusion
  * factors are replaced (so an importer that authored them keeps them; a bare OBJ, which leaves them 0, gets a
  * usable 0.5 roughness / 1.0 occlusion). Metallic 0 is a valid dielectric default and is left as loaded. */
@@ -462,8 +594,9 @@ static BoundingBox ComputeLocalBounds(Model model)
     return GetModelBoundingBox(MeshSpaceModel);
 }
 
-/* Resolves the model file (narrowed to "format" when the definition has one) and loads it with raylib. */
-static Error LoadModelFile(const ModelDefinition* definition, AssetManager* manager, Model* outModel)
+/* Resolves the model file (narrowed to "format" when the definition has one) and loads it with raylib; @p outIsGltf
+ * tells whether raylib read it with its glTF importer (it picks the importer by the file's extension, as here). */
+static Error LoadModelFile(const ModelDefinition* definition, AssetManager* manager, Model* outModel, bool* outIsGltf)
 {
     const unsigned char* FormatExtension = definition->Format;
     AssetExtensionFilter Extensions = AssetFormat_SelectFilter(&ASSET_EXTENSIONS_MODEL, &FormatExtension);
@@ -473,7 +606,9 @@ static Error LoadModelFile(const ModelDefinition* definition, AssetManager* mana
         definition->Format, &PathHandle);
     if (PathResult.Code != ErrorCode_Success) { return PathResult; }
 
-    *outModel = LoadModel((const char*)AssetResourcePath_Get(PathHandle));
+    const char* Path = (const char*)AssetResourcePath_Get(PathHandle);
+    *outIsGltf = IsFileExtension(Path, ".gltf;.glb");
+    *outModel = LoadModel(Path);
     Error ReleaseResult = AssetManager_ReleaseResourcePath(manager, PathHandle);
     Error_Deconstruct(&ReleaseResult);
     return Error_CreateSuccess();
@@ -524,7 +659,8 @@ static Error ModelDefinition_LoadAsset(void* self, AssetManager* manager, AssetU
 
     Model RayModel;
     Memory_Zero(&RayModel, sizeof(RayModel));
-    Error Result = LoadModelFile(Definition, manager, &RayModel);
+    bool IsGltf = false;
+    Error Result = LoadModelFile(Definition, manager, &RayModel, &IsGltf);
     if (Result.Code != ErrorCode_Success)
     {
         Error ReturnResult = AssetManager_ReturnGenericBuffer(manager, OwnedTextureIds);
@@ -539,6 +675,10 @@ static Error ModelDefinition_LoadAsset(void* self, AssetManager* manager, AssetU
     {
         Result = Error_Construct3(ErrorCode_InvalidAssetData, u8"Failed to load model \"%s\".", Definition->Base.Name);
     }
+    if ((Result.Code == ErrorCode_Success) && IsGltf)
+    {
+        Result = PackGltfOrmMaps(&RayModel, Definition->Base.Name, OwnedTextureIds);
+    }
     if (Result.Code == ErrorCode_Success)
     {
         Result = ApplyDefinitionToModel(Definition, manager, &RayModel, OwnedTextureIds);
@@ -551,13 +691,13 @@ static Error ModelDefinition_LoadAsset(void* self, AssetManager* manager, AssetU
         return Result;
     }
 
-    // Importer textures replaced by an override are referenced by no material any more.
+    // Importer textures replaced by a packed map or an override are referenced by no material any more.
     PruneUnreferencedTextures(&RayModel, OwnedTextureIds);
 
     // A skinned model's skeleton (none without bones). A broken skeleton fails the model, as a broken mesh would.
     GameSkeleton* Skeleton = NULL;
     char Description[160];
-    char PrintableName[129];
+    char PrintableName[MODEL_PRINTABLE_NAME_CAPACITY];
     AssetJSON_CopyPrintable(Definition->Base.Name, PrintableName, sizeof(PrintableName));
     snprintf(Description, sizeof(Description), "Model \"%s\"", PrintableName);
     Result = GameSkeleton_Create(&RayModel, (const unsigned char*)Description, AssetManager_GetLogger(manager),

@@ -63,15 +63,18 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
   `transform` is local, writing through those pointers changes the shared asset.
 - Loading (`ModelDefinition.c`): `LoadModel` on the resolved file (`obj` `gltf` `glb` `iqm` `vox` `m3d`); a result with no
   meshes fails the load. Then:
+  - a glTF file's occlusion, roughness and metallic maps are packed into the one map the PBR shader reads ("glTF
+    materials" below);
   - the definition's `transform` (scale, `rotation_euler` in degrees, translation) is baked into `model.transform`;
   - every material gets PBR defaults where the importer left a value at or below 0: roughness 0.5, occlusion 1.0;
-  - `material_overrides` apply by material **index** (`slot`, 0 to `INT32_MAX`); a slot beyond the model's material
-    count is skipped silently. Override maps go to `albedo` -> `MATERIAL_MAP_ALBEDO`, `normal` ->
-    `MATERIAL_MAP_NORMAL`, `mra` (packed occlusion/roughness/metallic) -> `MATERIAL_MAP_METALNESS`, `emissive` ->
-    `MATERIAL_MAP_EMISSION`, loaded from the models directory with the texture extensions. Scalars: `tint`, `metallic`
-    and `roughness` (in [0, 1]), `emissive_color`, `emissive_intensity` (>= 0). The slot's `texture_properties`
-    (filtering, wrap, mipmaps; `TextureProperties_Apply`) apply to each of its maps, so distant textured models can use
-    mipmaps and shimmer less.
+  - `material_overrides` apply by material **index** (`slot`, 0 to `INT32_MAX`; a glTF file's first material is slot
+    1, below); a slot beyond the model's material count is skipped silently. Override maps go to `albedo` ->
+    `MATERIAL_MAP_ALBEDO`, `normal` -> `MATERIAL_MAP_NORMAL`, `mra` (packed occlusion/roughness/metallic) ->
+    `MATERIAL_MAP_METALNESS` (replacing a packed map), `emissive` -> `MATERIAL_MAP_EMISSION`, loaded from the models
+    directory with the texture extensions. Scalars: `tint`, `metallic` and `roughness` (in [0, 1]), `emissive_color`,
+    `emissive_intensity` (>= 0). The slot's `texture_properties` (filtering, wrap, mipmaps; `TextureProperties_Apply`)
+    apply to each map the override loads, so distant textured models can use mipmaps and shimmer less; the maps the
+    model file brings keep raylib's defaults (point filtering, repeat, no mipmaps), the packed map too.
   - **The factors are shared with world model variants** ([WorldModels.md](WorldModels.md)): the slot and the
     scalars are read by `AssetJSON_ReadMaterialSlot` and `AssetJSON_ReadMaterialFactors`
     (`source/AssetDefinitionCommon.{h,c}`) into a `GameMaterialFactors` (`GameModel.h`: each factor with its own
@@ -80,17 +83,41 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
     emissive map but no emissive colour or intensity shows the map at white x 1. The shared parser enforces the
     ranges the reference gives (metallic and roughness in [0, 1], a non-negative intensity, finite numbers that fit a
     float).
+- **glTF materials:** raylib's importer puts the file's material i in slot i + 1 (slot 0 is its default material, which
+  none of the file's meshes use; an OBJ file's first material is slot 0). It splits a metallicRoughness texture into a
+  grey roughness texture (its green, `MATERIAL_MAP_ROUGHNESS`) and a grey metallic one (its blue,
+  `MATERIAL_MAP_METALNESS`) and keeps the occlusion texture apart (`MATERIAL_MAP_OCCLUSION`, ambient occlusion in red),
+  while the PBR shader reads one packed map from the METALNESS slot. So the loader reads the three back from the GPU
+  (`LoadImageFromTexture`) and puts one RGBA texture in `MATERIAL_MAP_METALNESS`: red the occlusion's red, green the
+  roughness, blue the metallic, a missing map 255 (its factor applies alone); the roughness map's size, else the
+  metallic map's, else the occlusion map's, the others resampled. The roughness and occlusion slots are emptied and the
+  three textures unloaded. The importer's metallic and roughness factors stay the material's scalars, which the shader
+  multiplies by the packed channels. The packing is the private `source/ModelOrmMap.{h,c}` (pure, tested headless in
+  `tests/ModelOrmMapTests.c`): it reads 8-bit grey, grey with alpha, RGB and RGBA maps of at most
+  `MODEL_ORM_MAP_MAX_SIDE` (8192) a side, and a map it cannot read fails the model, naming the material.
+- **glTF data raylib drops:** it reads a material's metallic and roughness factors only with a metallicRoughness texture
+  and its emissive factor only with an emissive texture (an untextured material shades with roughness 0.5 and metallic
+  0, whatever the file says: the placeholder props' and figures' authored roughness 0.8 to 0.9 among them); it leaves
+  the emission intensity 0, so a glTF emissive texture shows nothing until an override sets `emissive_intensity`; it
+  skips every texture of a material without a `pbrMetallicRoughness` block (Blender writes one for a Principled BSDF);
+  it ignores the occlusion strength, the samplers (filtering, wrap) and the material extensions (emission strength,
+  transmission, ...). Reading them needs the glTF data itself (cgltf, as the animation and terrain readers do): an open
+  question for the owner.
 - **Ownership:** the asset owns the meshes, the materials and their map arrays, and every texture its materials
-  referenced at load (the importer's textures plus the overrides; raylib's default texture is skipped). Importer
-  textures that an override replaced are unloaded during the load. On unload each tracked texture id is unloaded
+  referenced at load (the importer's textures, the packed maps and the overrides; raylib's default texture is
+  skipped). Importer textures that a packed map or an override replaced are unloaded during the load. On unload each
+  tracked texture id is unloaded
   (`rlUnloadTexture`), then `UnloadModel` runs. The asset never owns a material's **shader** and never calls
   `UnloadMaterial`, which would also unload the material's shader, and a texture shared by two materials twice.
 - **Read-only:** never write into the materials (shader, tint, maps). The WorldRenderer draws each mesh with a
   `Material` built on the stack (the asset's maps copied, its own pass shader, the tint applied to the copy).
 - **Local bounds:** `GameModel_GetLocalBounds` returns the mesh-space bounding box (before the import transform),
   computed once at load, so users never walk the vertices themselves.
-- **Imported textured models shade wrong:** glTF's metallic texture and OBJ's `map_Ks` land in the METALNESS slot,
-  which the PBR shader reads as packed ORM (red = occlusion). Normalising imported materials is deferred.
+- **OBJ specular maps shade wrong:** OBJ's `map_Ks` lands in the METALNESS slot, which the PBR shader reads as the
+  packed map (red = occlusion). Not handled; give an OBJ an `mra` override instead.
+- **Normal maps** (the file's or an override's) are tangent-space in OpenGL's convention, green toward the image's top
+  (what Blender bakes and glTF requires); the shader builds the tangent frame from derivatives, so meshes need no
+  tangents.
 - **Skinned models ([Animation.md](Animation.md)):** a model whose file has a skin gets its `GameSkeleton` when it
   loads (`GameModel_GetSkeleton`, NULL for a rigid model): bones in evaluation order, bind and inverse bind matrices,
   rest poses, which meshes the GPU skins (bone indices and weights uploaded, raylib built with `SUPPORT_GPU_SKINNING`:
