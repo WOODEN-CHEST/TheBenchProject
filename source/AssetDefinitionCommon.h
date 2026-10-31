@@ -156,6 +156,24 @@ Error AssetJSON_ReadTextureProperties(JSONCompound* compound, const unsigned cha
     TextureProperties* outProps);
 
 /**
+ * @brief Reads an optional texture_properties compound like AssetJSON_ReadTextureProperties, but every key the compound
+ *        leaves out (or the whole compound, when absent) takes its value from @p defaults.
+ *
+ * One rule ties the defaults together: when the compound leaves "filtering" out, sets "mipmaps" to false and the
+ * default filtering is trilinear (which needs mipmaps), the filtering is bilinear. A compound that names "trilinear"
+ * without mipmaps is still rejected.
+ * @param compound The compound to read from.
+ * @param key The texture-properties key.
+ * @param areMipmapsSupported Whether the caller can give its textures mipmaps (see AssetJSON_ReadTextureProperties).
+ * @param defaults The values of the keys left out; must not be NULL, and valid (trilinear only with mipmaps).
+ * @param outProps [out] Receives the properties. Must not be NULL; may be @p defaults.
+ * @param outIsPresent [out] Whether the key was there; may be NULL.
+ * @returns As AssetJSON_ReadTextureProperties.
+ */
+Error AssetJSON_ReadTexturePropertiesWithDefaults(JSONCompound* compound, const unsigned char* key,
+    bool areMipmapsSupported, const TextureProperties* defaults, TextureProperties* outProps, bool* outIsPresent);
+
+/**
  * @brief Applies texture properties to a texture that was just loaded: generates its mipmaps when they are enabled
  *        and the file brought none, then sets its filter and wrap mode.
  *

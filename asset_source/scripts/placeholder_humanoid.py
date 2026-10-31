@@ -56,6 +56,16 @@ ARRAY_BUFFER = 34962
 ELEMENT_ARRAY_BUFFER = 34963
 
 
+# Colours are picked as they look (sRGB, 0 to 1); glTF's baseColorFactor is linear, so they are written raised to the
+# game's gamma (its renderer encodes and decodes material colours with it).
+SRGB_GAMMA = 2.2
+
+
+def base_color_factor(color):
+    """A colour picked as it looks (sRGB) as glTF's linear baseColorFactor, opaque."""
+    return [round(channel ** SRGB_GAMMA, 6) for channel in color] + [1.0]
+
+
 # The skeleton: name, parent, joint position in model space (the tall figure's rest pose, which is its bind pose).
 BONES = [
     ("hips", None, (0.0, 0.95, 0.0)),
@@ -783,7 +793,7 @@ def add_mesh(writer, document, scale, dropped_boxes, torso_rings, joint_first_no
         primitives.append({"attributes": attributes, "indices": writer.add_indices(primitive.indices),
                            "material": material_index})
     document["materials"] = [
-        {"name": name, "pbrMetallicRoughness": {"baseColorFactor": [color[0], color[1], color[2], 1.0],
+        {"name": name, "pbrMetallicRoughness": {"baseColorFactor": base_color_factor(color),
                                                 "metallicFactor": 0.0, "roughnessFactor": 0.85}}
         for name, color in MATERIALS
     ]
@@ -900,7 +910,7 @@ def write_prop(path, materials, boxes):
     document = {"scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"name": "prop", "mesh": 0}],
                 "meshes": [{"name": "prop", "primitives": primitives}],
                 "materials": [{"name": name, "pbrMetallicRoughness": {
-                    "baseColorFactor": [color[0], color[1], color[2], 1.0], "metallicFactor": 0.0,
+                    "baseColorFactor": base_color_factor(color), "metallicFactor": 0.0,
                     "roughnessFactor": 0.8}} for name, color in materials]}
     writer.write(path, document)
 

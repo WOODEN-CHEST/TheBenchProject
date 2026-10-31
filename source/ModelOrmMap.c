@@ -75,8 +75,15 @@ static Error CopyRed(const Image* map, int width, int height, Image* outRed)
 }
 
 
+/* The occlusion byte @p strength of the map's @p value leaves: 255 - strength x (255 - value), to the nearest byte. */
+static unsigned char WeakenOcclusion(unsigned char value, float strength)
+{
+    return (unsigned char)(255.5f - (strength * (255.0f - (float)value)));
+}
+
+
 // Public functions.
-Error ModelOrmMap_Build(const ModelOrmSources* sources, Image* outImage)
+Error ModelOrmMap_Build(const ModelOrmSources* sources, float occlusionStrength, Image* outImage)
 {
     Memory_Zero(outImage, sizeof(*outImage));
     const Image* const Maps[MODEL_ORM_MAP_CHANNEL_COUNT] = { sources->Occlusion, sources->Roughness, sources->Metallic };
@@ -86,6 +93,10 @@ Error ModelOrmMap_Build(const ModelOrmSources* sources, Image* outImage)
     if (SizeSource == NULL)
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "There is no map to pack.");
+    }
+    if (!((occlusionStrength >= 0.0f) && (occlusionStrength <= 1.0f)))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "The occlusion strength must be in [0, 1].");
     }
     for (size_t Channel = 0U; Channel < MODEL_ORM_MAP_CHANNEL_COUNT; Channel++)
     {
@@ -120,9 +131,11 @@ Error ModelOrmMap_Build(const ModelOrmSources* sources, Image* outImage)
             return CopyResult;
         }
         const unsigned char* Values = Red.data;
+        bool IsWeakened = (Channel == 0U) && (occlusionStrength < 1.0f);
         for (size_t Texel = 0U; Texel < TexelCount; Texel++)
         {
-            Texels[(Texel * MODEL_ORM_MAP_TEXEL_SIZE) + Channel] = Values[Texel];
+            Texels[(Texel * MODEL_ORM_MAP_TEXEL_SIZE) + Channel] = IsWeakened
+                ? WeakenOcclusion(Values[Texel], occlusionStrength) : Values[Texel];
         }
         UnloadImage(Red);
     }

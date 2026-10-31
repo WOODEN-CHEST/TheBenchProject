@@ -28,7 +28,8 @@ falls in, as the mesh is built), turned about Y, a third of them stretched upwar
 transparent (each copy fades on its own). The world file is written as Python's json writes it: load the test world and
 save it with F5 (worlds/test.saved.world.json), then copy that over worlds/test.world.json for the game's own form.
 
-Conventions: metres, +Y up, the models stand on their origin. Colours are materials' baseColorFactor (no textures).
+Conventions: metres, +Y up, the models stand on their origin. Colours are the materials' baseColorFactor (no
+textures), picked as they look and written in linear light, as glTF defines it.
 
 Placeholder art for checking the code, not game art: replace it with the owner's trees and stones.
 """
@@ -57,6 +58,17 @@ FLOAT = 5126
 UNSIGNED_SHORT = 5123
 ARRAY_BUFFER = 34962
 ELEMENT_ARRAY_BUFFER = 34963
+
+
+# Colours are picked as they look (sRGB, 0 to 1); glTF's baseColorFactor is linear, so they are written raised to the
+# game's gamma (its renderer encodes and decodes material colours with it).
+SRGB_GAMMA = 2.2
+
+
+def base_color_factor(color):
+    """A colour picked as it looks (sRGB) as glTF's linear baseColorFactor, opaque."""
+    return [round(channel ** SRGB_GAMMA, 6) for channel in color] + [1.0]
+
 
 # The materials.
 BARK = ("bark", (0.33, 0.22, 0.13))
@@ -248,7 +260,7 @@ def write_glb(path, mesh):
     document = {"scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"name": "placeholder", "mesh": 0}],
                 "meshes": [{"name": "placeholder", "primitives": primitives}],
                 "materials": [{"name": name, "pbrMetallicRoughness": {
-                    "baseColorFactor": [color[0], color[1], color[2], 1.0], "metallicFactor": 0.0,
+                    "baseColorFactor": base_color_factor(color), "metallicFactor": 0.0,
                     "roughnessFactor": 0.9}} for name, color in mesh.materials]}
     writer.write(path, document)
     print("  %d triangles" % triangle_count)

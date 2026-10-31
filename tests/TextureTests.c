@@ -34,6 +34,34 @@ static Error ReadProperties(TestAssetFixture* fixture, const char* json, bool ar
     return Result;
 }
 
+/* Parses @p json and reads its "texture_properties" with AssetJSON_ReadTexturePropertiesWithDefaults (mipmaps
+ * supported). */
+static Error ReadPropertiesWithDefaults(TestAssetFixture* fixture, const char* json, const TextureProperties* defaults,
+    TextureProperties* outProperties, bool* outIsPresent)
+{
+    GenericBuffer Bytes;
+    GenericBuffer_AllocateVariable(&Bytes, 0U, sizeof(unsigned char));
+    GenericBuffer_AppendString(&Bytes, (const unsigned char*)json);
+    JSONObjectValue Root;
+    JSONCompound* RootCompound = NULL;
+    Error Result = AssetJSON_DeserializeRoot(fixture->Pool, &Bytes, (const unsigned char*)u8"test", &Root, &RootCompound);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AssetJSON_ReadTexturePropertiesWithDefaults(RootCompound, (const unsigned char*)u8"texture_properties",
+            true, defaults, outProperties, outIsPresent);
+    }
+    Error ReturnResult = JSONObjectPool_ReturnValue(fixture->Pool, &Root);
+    Error_Deconstruct(&ReturnResult);
+    Memory_Free(Bytes._data);
+    return Result;
+}
+
+static bool ArePropertiesEqual(const TextureProperties* properties, int filter, int wrap, bool areMipmapsEnabled)
+{
+    return (properties->Filter == filter) && (properties->Wrap == wrap)
+        && (properties->AreMipmapsEnabled == areMipmapsEnabled);
+}
+
 /* Builds (and destroys) a definition of @p type from @p json without registering it. */
 static Error BuildDefinition(TestAssetFixture* fixture, AssetTypeID type, const char* json)
 {
@@ -145,6 +173,98 @@ static void TexturePropertiesRejectBadValues(TestRun* run)
     TestAssetFixture_Deconstruct(run, &Fixture);
 }
 
+static void TexturePropertiesTakeTheCallersDefaultsForLeftOutKeys(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    if (!TestAssetFixture_Construct(run, &Fixture))
+    {
+        return;
+    }
+    // The model maps' defaults: smooth at every distance.
+    const TextureProperties Smooth = { .Filter = TEXTURE_FILTER_TRILINEAR, .Wrap = TEXTURE_WRAP_REPEAT,
+        .AreMipmapsEnabled = true };
+    TextureProperties Properties;
+    bool IsPresent = true;
+    if (TEST_CHECK_SUCCESS(run, ReadPropertiesWithDefaults(&Fixture, "{}", &Smooth, &Properties, &IsPresent)))
+    {
+        TEST_CHECK(run, !IsPresent && ArePropertiesEqual(&Properties, TEXTURE_FILTER_TRILINEAR, TEXTURE_WRAP_REPEAT, true));
+    }
+    if (TEST_CHECK_SUCCESS(run, ReadPropertiesWithDefaults(&Fixture, "{\"texture_properties\": {}}", &Smooth,
+        &Properties, &IsPresent)))
+    {
+        TEST_CHECK(run, IsPresent && ArePropertiesEqual(&Properties, TEXTURE_FILTER_TRILINEAR, TEXTURE_WRAP_REPEAT, true));
+    }
+    // One key given, the others the defaults'.
+    if (TEST_CHECK_SUCCESS(run, ReadPropertiesWithDefaults(&Fixture, "{\"texture_properties\": {\"filtering\": "
+        "\"point\"}}", &Smooth, &Properties, NULL)))
+    {
+        TEST_CHECK(run, ArePropertiesEqual(&Properties, TEXTURE_FILTER_POINT, TEXTURE_WRAP_REPEAT, true));
+    }
+    if (TEST_CHECK_SUCCESS(run, ReadPropertiesWithDefaults(&Fixture, "{\"texture_properties\": {\"wrap\": \"clamp\"}}",
+        &Smooth, &Properties, NULL)))
+    {
+        TEST_CHECK(run, ArePropertiesEqual(&Properties, TEXTURE_FILTER_TRILINEAR, TEXTURE_WRAP_CLAMP, true));
+    }
+    // Mipmaps turned off: a default of trilinear (which needs them) becomes bilinear; trilinear written out is refused.
+    if (TEST_CHECK_SUCCESS(run, ReadPropertiesWithDefaults(&Fixture, "{\"texture_properties\": {\"mipmaps\": false}}",
+        &Smooth, &Properties, NULL)))
+    {
+        TEST_CHECK(run, ArePropertiesEqual(&Properties, TEXTURE_FILTER_BILINEAR, TEXTURE_WRAP_REPEAT, false));
+    }
+    TEST_CHECK_ERROR(run, ReadPropertiesWithDefaults(&Fixture, "{\"texture_properties\": {\"filtering\": \"trilinear\", "
+        "\"mipmaps\": false}}", &Smooth, &Properties, NULL), ErrorCode_InvalidAssetDefinition);
+    // Other defaults are kept as they are; the defaults may be the output itself (an override over its model's).
+    const TextureProperties Crisp = { .Filter = TEXTURE_FILTER_POINT, .Wrap = TEXTURE_WRAP_CLAMP, .AreMipmapsEnabled = false };
+    if (TEST_CHECK_SUCCESS(run, ReadPropertiesWithDefaults(&Fixture, "{\"texture_properties\": {\"mipmaps\": true}}",
+        &Crisp, &Properties, NULL)))
+    {
+        TEST_CHECK(run, ArePropertiesEqual(&Properties, TEXTURE_FILTER_POINT, TEXTURE_WRAP_CLAMP, true));
+    }
+    Properties = Smooth;
+    if (TEST_CHECK_SUCCESS(run, ReadPropertiesWithDefaults(&Fixture, "{\"texture_properties\": {\"wrap\": "
+        "\"mirror_repeat\"}}", &Properties, &Properties, NULL)))
+    {
+        TEST_CHECK(run, ArePropertiesEqual(&Properties, TEXTURE_FILTER_TRILINEAR, TEXTURE_WRAP_MIRROR_REPEAT, true));
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+static void ModelDefinitionsReadTheirTextureProperties(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    if (!TestAssetFixture_Construct(run, &Fixture))
+    {
+        return;
+    }
+    // A model's own texture_properties, and an override's over them (its keys left out are the model's).
+    const char* const Good[] =
+    {
+        "{\"name\": \"m\", \"location\": \"m\", \"texture_properties\": {\"filtering\": \"bilinear\"}}",
+        "{\"name\": \"m\", \"location\": \"m\", \"texture_properties\": {\"mipmaps\": false}}",
+        "{\"name\": \"m\", \"location\": \"m\", \"texture_properties\": {\"mipmaps\": false}, \"material_overrides\": "
+            "[{\"slot\": 1, \"texture_properties\": {\"wrap\": \"clamp\"}}]}",
+        "{\"name\": \"m\", \"location\": \"m\", \"material_overrides\": [{\"slot\": 1, \"texture_properties\": "
+            "{\"filtering\": \"point\"}}]}"
+    };
+    for (size_t Index = 0U; Index < (sizeof(Good) / sizeof(Good[0])); Index++)
+    {
+        TEST_CHECK_SUCCESS(run, BuildDefinition(&Fixture, Fixture.Types.Model, Good[Index]));
+    }
+    // Trilinear without mipmaps, at the root or in an override that turns the model's mipmaps off.
+    const char* const Bad[] =
+    {
+        "{\"name\": \"m\", \"location\": \"m\", \"texture_properties\": {\"filtering\": \"trilinear\", \"mipmaps\": false}}",
+        "{\"name\": \"m\", \"location\": \"m\", \"texture_properties\": \"smooth\"}",
+        "{\"name\": \"m\", \"location\": \"m\", \"material_overrides\": [{\"slot\": 1, \"texture_properties\": "
+            "{\"filtering\": \"trilinear\", \"mipmaps\": false}}]}"
+    };
+    for (size_t Index = 0U; Index < (sizeof(Bad) / sizeof(Bad[0])); Index++)
+    {
+        TEST_CHECK_ERROR(run, BuildDefinition(&Fixture, Fixture.Types.Model, Bad[Index]), ErrorCode_InvalidAssetDefinition);
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
 static void TextureIsAStandardType(TestRun* run)
 {
     TestAssetFixture Fixture;
@@ -234,9 +354,12 @@ static void SpriteSheetsAndFontsRejectTrilinear(TestRun* run)
         TEST_CHECK_SUCCESS(run, BuildDefinition(&Fixture, Fixture.Types.Model, "{\"name\": \"m\", \"location\": \"m/m\", "
             "\"material_overrides\": [{\"slot\": 0, \"texture_properties\": {\"filtering\": \"trilinear\", "
             "\"wrap\": \"clamp\", \"mipmaps\": true}}]}"));
+        // Model maps have mipmaps unless they turn them off, so trilinear alone is fine there.
+        TEST_CHECK_SUCCESS(run, BuildDefinition(&Fixture, Fixture.Types.Model, "{\"name\": \"m\", \"location\": \"m/m\", "
+            "\"material_overrides\": [{\"slot\": 0, \"texture_properties\": {\"filtering\": \"trilinear\"}}]}"));
         TEST_CHECK_ERROR(run, BuildDefinition(&Fixture, Fixture.Types.Model, "{\"name\": \"m\", \"location\": \"m/m\", "
-            "\"material_overrides\": [{\"slot\": 0, \"texture_properties\": {\"filtering\": \"trilinear\"}}]}"),
-            ErrorCode_InvalidAssetDefinition);
+            "\"material_overrides\": [{\"slot\": 0, \"texture_properties\": {\"filtering\": \"trilinear\", "
+            "\"mipmaps\": false}}]}"), ErrorCode_InvalidAssetDefinition);
     }
     TestAssetFixture_Deconstruct(run, &Fixture);
 }
@@ -351,6 +474,9 @@ void TextureTests_Run(TestRun* run)
         { "texture_properties_have_todays_defaults", TexturePropertiesHaveTodaysDefaults },
         { "texture_properties_read_every_value", TexturePropertiesReadEveryValue },
         { "texture_properties_reject_bad_values", TexturePropertiesRejectBadValues },
+        { "texture_properties_take_the_callers_defaults_for_left_out_keys",
+            TexturePropertiesTakeTheCallersDefaultsForLeftOutKeys },
+        { "model_definitions_read_their_texture_properties", ModelDefinitionsReadTheirTextureProperties },
         { "texture_is_a_standard_type", TextureIsAStandardType },
         { "texture_definitions_validate_their_keys", TextureDefinitionsValidateTheirKeys },
         { "texture_names_are_validated", TextureNamesAreValidated },

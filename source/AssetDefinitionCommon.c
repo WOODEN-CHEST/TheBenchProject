@@ -342,9 +342,19 @@ Error AssetJSON_ReadOptionalOwnedString(JSONCompound* compound, const unsigned c
 Error AssetJSON_ReadTextureProperties(JSONCompound* compound, const unsigned char* key, bool areMipmapsSupported,
     TextureProperties* outProps)
 {
-    outProps->Filter = TEXTURE_FILTER_BILINEAR;
-    outProps->Wrap = TEXTURE_WRAP_REPEAT;
-    outProps->AreMipmapsEnabled = false;
+    TextureProperties Defaults = { .Filter = TEXTURE_FILTER_BILINEAR, .Wrap = TEXTURE_WRAP_REPEAT,
+        .AreMipmapsEnabled = false };
+    return AssetJSON_ReadTexturePropertiesWithDefaults(compound, key, areMipmapsSupported, &Defaults, outProps, NULL);
+}
+
+Error AssetJSON_ReadTexturePropertiesWithDefaults(JSONCompound* compound, const unsigned char* key,
+    bool areMipmapsSupported, const TextureProperties* defaults, TextureProperties* outProps, bool* outIsPresent)
+{
+    *outProps = *defaults;
+    if (outIsPresent != NULL)
+    {
+        *outIsPresent = false;
+    }
 
     JSONObjectValue Value;
     bool Found = false;
@@ -355,16 +365,31 @@ Error AssetJSON_ReadTextureProperties(JSONCompound* compound, const unsigned cha
         return Error_Construct3(ErrorCode_InvalidAssetDefinition, u8"\"%s\" must be a JSON object.", key);
     }
     if (!Found) { return Error_CreateSuccess(); }
+    if (outIsPresent != NULL)
+    {
+        *outIsPresent = true;
+    }
     JSONCompound* Properties = Value.Value.Compound;
 
+    int Filter = -1;
     Error Result = ReadTexturePropertyName(Properties, u8"filtering", TextureFilterNames, ARRAY_LENGTH(TextureFilterNames),
-        u8"\"point\", \"bilinear\" or \"trilinear\"", &outProps->Filter);
+        u8"\"point\", \"bilinear\" or \"trilinear\"", &Filter);
     if (Result.Code != ErrorCode_Success) { return Result; }
     Result = ReadTexturePropertyName(Properties, u8"wrap", TextureWrapNames, ARRAY_LENGTH(TextureWrapNames),
         u8"\"repeat\", \"clamp\", \"mirror_repeat\" or \"mirror_clamp\"", &outProps->Wrap);
     if (Result.Code != ErrorCode_Success) { return Result; }
-    Result = AssetJSON_ReadOptionalBoolean(Properties, u8"mipmaps", false, &outProps->AreMipmapsEnabled);
+    Result = AssetJSON_ReadOptionalBoolean(Properties, u8"mipmaps", defaults->AreMipmapsEnabled,
+        &outProps->AreMipmapsEnabled);
     if (Result.Code != ErrorCode_Success) { return Result; }
+    if (Filter >= 0)
+    {
+        outProps->Filter = Filter;
+    }
+    else if ((outProps->Filter == TEXTURE_FILTER_TRILINEAR) && !outProps->AreMipmapsEnabled)
+    {
+        // A default of trilinear filtering follows the mipmaps the compound turned off.
+        outProps->Filter = TEXTURE_FILTER_BILINEAR;
+    }
 
     if (outProps->Filter != TEXTURE_FILTER_TRILINEAR)
     {

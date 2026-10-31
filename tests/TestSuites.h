@@ -39,9 +39,14 @@ void ShaderSourceTests_Run(TestRun* run);
 void TextureTests_Run(TestRun* run);
 
 /** @brief The packed occlusion/roughness/metallic map a glTF model's materials get: each map's red in its channel, a
- *  missing map as 255, the size and the resampling, the maps it refuses (ModelOrmMapTests.c; a private module of
- *  source/). */
+ *  missing map as 255, the size and the resampling, the occlusion strength, the maps it refuses (ModelOrmMapTests.c; a
+ *  private module of source/). */
 void ModelOrmMapTests_Run(TestRun* run);
+
+/** @brief A glTF model's material values the game reads itself: glTF's defaults, every factor, the emission strength
+ *  extension, the occlusion strength, textures raylib skips, values out of range and files that are not glTF 2.0, and
+ *  colours encoded as the renderer decodes them (ModelGltfMaterialsTests.c; a private module of source/). */
+void ModelGltfMaterialsTests_Run(TestRun* run);
 
 /** @brief The collision narrowphase: affine maths and poses, supports under any transform, GJK distances, EPA
  *  penetrations, contact manifolds and their feature ids, rays against every shape, linear and rotating casts (the

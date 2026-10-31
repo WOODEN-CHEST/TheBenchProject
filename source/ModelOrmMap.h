@@ -44,13 +44,17 @@ typedef struct ModelOrmSourcesStruct
  * @brief Packs up to three maps into one image: red the occlusion, green the roughness, blue the metallic, alpha 255.
  *
  * The image is the roughness map's size, else the metallic map's, else the occlusion map's; a map of another size is
- * resampled to it (raylib's ImageResize, on the map's values as they are). Allocates the image and, for each map, a
- * grey copy of its red channel while it is packed.
+ * resampled to it (raylib's ImageResize, on the map's values as they are). The occlusion is weakened by
+ * @p occlusionStrength as glTF defines it: 1 + strength x (occlusion - 1), rounded to the nearest byte. Allocates the
+ * image and, for each map, a grey copy of its red channel while it is packed.
  * @param sources The maps; at least one must be given.
+ * @param occlusionStrength How much of the occlusion map applies (glTF's occlusion strength), in [0, 1]: 1 takes it as
+ *        it is, 0 leaves red 255.
  * @param outImage [out] The packed image: PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, one mip level, in raylib's memory (free it
  *                 with UnloadImage). Zeroed on failure.
- * @returns Success; ErrorCode_IllegalArgument when every map is NULL; ErrorCode_InvalidAssetData for a map without
- *          pixels, in another pixel format, or wider or taller than MODEL_ORM_MAP_MAX_SIDE (the message names the map);
- *          ErrorCode_BufferTooLarge when a grey copy could not be allocated.
+ * @returns Success; ErrorCode_IllegalArgument when every map is NULL or the strength is not in [0, 1];
+ *          ErrorCode_InvalidAssetData for a map without pixels, in another pixel format, or wider or taller than
+ *          MODEL_ORM_MAP_MAX_SIDE (the message names the map); ErrorCode_BufferTooLarge when a grey copy could not be
+ *          allocated.
  */
-Error ModelOrmMap_Build(const ModelOrmSources* sources, Image* outImage);
+Error ModelOrmMap_Build(const ModelOrmSources* sources, float occlusionStrength, Image* outImage);

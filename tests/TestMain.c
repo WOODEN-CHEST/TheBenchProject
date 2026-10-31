@@ -25,6 +25,7 @@ int main(void)
     ShaderSourceTests_Run(&Run);
     TextureTests_Run(&Run);
     ModelOrmMapTests_Run(&Run);
+    ModelGltfMaterialsTests_Run(&Run);
     CollisionGeometryTests_Run(&Run);
     TerrainMeshTests_Run(&Run);
     TerrainGltfTests_Run(&Run);

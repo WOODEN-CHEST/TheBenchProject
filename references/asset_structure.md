@@ -218,6 +218,10 @@ Not every asset applies every key. Standalone textures and model material maps a
 sprite animation frames and fonts apply only `filtering`, and they reject `trilinear` (they never have mipmaps);
 `wrap` and `mipmaps` are still checked there but have no effect. A bad value of any key rejects the definition.
 
+Model maps have defaults of their own (see "Models"): `trilinear`, `repeat` and mipmaps on, because models are seen at
+every distance; a model's `texture_properties` leave out what keeps them, and a key an override leaves out takes the
+model's. Turning `mipmaps` off without naming a filtering gives `bilinear` (trilinear needs mipmaps).
+
 
 ### Format.
 Models, fonts and sounds accept an optional `"format"` string: a file extension WITHOUT the dot (e.g. `"glb"`),
@@ -440,6 +444,11 @@ with it; one that replaces a vertex stage should replace the twin's too.
         "translation": vector3
     },
 
+    "texture_properties": texture properties, // [OPTIONAL] filtering, wrap and mipmaps of the maps the model file
+                                         // brings (and of the overrides' maps, for the keys they leave out).
+                                         // Default: trilinear, repeat, mipmaps on (smooth and calm at every
+                                         // distance)
+
     "material_overrides": [              // [OPTIONAL] rebind material slots to game-managed assets
         {
             "slot": 0,                   // material index within the model (REQUIRED, 0 to 2147483647). A slot
@@ -467,9 +476,8 @@ with it; one that replaces a vertex stage should replace the twin's too.
             "emissive_intensity": number,// >= 0: emissive multiplier (default 0; defaults to 1 when an emissive
                                          // map is present, so the map is visible without extra keys)
 
-            "texture_properties": texture properties  // [OPTIONAL] filtering, wrap and mipmaps, applied to the
-                                         // maps this override loads (mipmaps keep distant textured models
-                                         // calm); the model file's own maps keep point filtering and no mipmaps
+            "texture_properties": texture properties  // [OPTIONAL] filtering, wrap and mipmaps of the maps this
+                                         // override loads; a key left out takes the model's texture_properties
         }
     ],
 
@@ -484,18 +492,24 @@ with it; one that replaces a vertex stage should replace the twin's too.
 }
 ```
 
-**glTF materials.** A glTF (`gltf`, `glb`) file brings its own maps: the base colour texture and factor, the normal
-texture, and the metallicRoughness and occlusion textures, which are packed into one map as the shader reads it (red
-the occlusion texture's red, green the roughness, blue the metallic; a missing one counts as 1, so its factor applies
-alone; a different size is resampled to the metallicRoughness texture's), and the emissive texture. What the game does
-not read from the file: the metallic and roughness factors of a material without a metallicRoughness texture (it
-shades with roughness 0.5 and metallic 0: give it a `material_overrides` entry), the emissive factor without an
-emissive texture, the occlusion strength, the samplers (the file's textures are point-filtered without mipmaps), any
-texture of a material without a `pbrMetallicRoughness` block, and the material extensions. An emissive texture shows
-only with an override's `emissive_intensity` (the importer leaves it 0). Remember that the file's first material is
-slot 1. The maps must be 8-bit images of at most 8192 pixels a side: PNG inside a .glb (the game reads no JPEG, so set
-Blender's exporter to PNG), or png, bmp, gif or qoi files beside a .gltf; the metallicRoughness and occlusion textures
-can be one image.
+**glTF materials.** A glTF (`gltf`, `glb`) file brings its own materials, read as glTF defines them: the base colour
+texture and factor, the metallic and roughness factors, the normal texture, the metallicRoughness and occlusion
+textures, which are packed into one map as the shader reads it (red the occlusion texture's red weakened by its
+`strength`, green the roughness, blue the metallic; a missing one counts as 1, so its factor applies alone; a different
+size is resampled to the metallicRoughness texture's), and the emissive texture, factor and strength
+(`KHR_materials_emissive_strength`, which Blender writes for an emission strength above 1). Colour factors are linear,
+as glTF defines them and Blender writes them. The file is checked as untrusted before anything reads it; a value outside
+glTF's range (a factor or strength outside 0 to 1) rejects the model, naming the material. What the game does not read
+from the file: the samplers (the model's `texture_properties` decide), the normal map's `scale`, the alpha mode,
+`doubleSided`, `KHR_texture_transform` and the other material extensions, and the textures of a material without a
+`pbrMetallicRoughness` block (a warning names the material; Blender writes the block for every Principled BSDF).
+Remember that the file's first material is slot 1. The maps must be 8-bit images of at most 8192 pixels a side: PNG
+inside a .glb (the game reads no JPEG, so set Blender's exporter to PNG), or png, bmp, gif or qoi files beside a .gltf;
+the metallicRoughness and occlusion textures can be one image. A file and its buffer files hold at most 256 MiB.
+
+**One draw per material.** Each material slot of a Blender object becomes its own mesh in the file (the exporter
+splits by slot, even when two slots hold the same material), and the renderer draws each mesh on its own in every pass.
+An object whose textures are baked into one material should be exported with one slot.
 
 **Skinned models.** A glTF (`gltf`, `glb`) file with a skin loads its skeleton and each vertex's bone
 indices and weights (at most four bones a vertex) with it: such a model bends with the pose of the object it is placed

@@ -1,6 +1,7 @@
 #include "TestSuites.h"
 #include "ModelOrmMap.h"
 #include "wr/WRMemory.h"
+#include <math.h>
 #include <string.h>
 
 
@@ -78,7 +79,7 @@ static void EachMapLandsInItsChannel(TestRun* run)
     Image Metallic = MakeImage(4, 2, PIXELFORMAT_UNCOMPRESSED_GRAYSCALE, MetallicBytes);
     ModelOrmSources Sources = { .Occlusion = &Occlusion, .Roughness = &Roughness, .Metallic = &Metallic };
     Image Packed;
-    if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&Sources, &Packed)) && TEST_CHECK(run, IsPackedImage(&Packed, 4, 2)))
+    if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&Sources, 1.0f, &Packed)) && TEST_CHECK(run, IsPackedImage(&Packed, 4, 2)))
     {
         bool IsEveryPixelRight = true;
         for (int Y = 0; Y < 2; Y++)
@@ -116,7 +117,7 @@ static void OnlyTheRedOfEachMapIsRead(TestRun* run)
         Image Occlusion = MakeImage(2, 1, Formats[Index], Bytes[Index]);
         ModelOrmSources Sources = { .Occlusion = &Occlusion, .Roughness = NULL, .Metallic = NULL };
         Image Packed;
-        if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&Sources, &Packed)) && TEST_CHECK(run, IsPackedImage(&Packed, 2, 1)))
+        if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&Sources, 1.0f, &Packed)) && TEST_CHECK(run, IsPackedImage(&Packed, 2, 1)))
         {
             TEST_CHECK(run, (GetChannel(&Packed, 0, 0, 0) == 77U) && (GetChannel(&Packed, 1, 0, 0) == 78U));
         }
@@ -131,7 +132,7 @@ static void AMissingMapReads255(TestRun* run)
     Image Metallic = MakeUniformGrey(2, 2, 90U);
     ModelOrmSources MetallicOnly = { .Occlusion = NULL, .Roughness = NULL, .Metallic = &Metallic };
     Image Packed;
-    if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&MetallicOnly, &Packed)) && TEST_CHECK(run, IsPackedImage(&Packed, 2, 2)))
+    if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&MetallicOnly, 1.0f, &Packed)) && TEST_CHECK(run, IsPackedImage(&Packed, 2, 2)))
     {
         TEST_CHECK(run, IsChannelUniform(&Packed, 0, 255U) && IsChannelUniform(&Packed, 1, 255U)
             && IsChannelUniform(&Packed, 2, 90U) && IsChannelUniform(&Packed, 3, 255U));
@@ -141,7 +142,7 @@ static void AMissingMapReads255(TestRun* run)
     // The occlusion alone: the image is its size, green and blue 255.
     Image Occlusion = MakeUniformGrey(3, 5, 40U);
     ModelOrmSources OcclusionOnly = { .Occlusion = &Occlusion, .Roughness = NULL, .Metallic = NULL };
-    if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&OcclusionOnly, &Packed)) && TEST_CHECK(run, IsPackedImage(&Packed, 3, 5)))
+    if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&OcclusionOnly, 1.0f, &Packed)) && TEST_CHECK(run, IsPackedImage(&Packed, 3, 5)))
     {
         TEST_CHECK(run, IsChannelUniform(&Packed, 0, 40U) && IsChannelUniform(&Packed, 1, 255U)
             && IsChannelUniform(&Packed, 2, 255U) && IsChannelUniform(&Packed, 3, 255U));
@@ -159,7 +160,7 @@ static void TheSizeIsTheRoughnessMapsThenTheMetallicMaps(TestRun* run)
     Image Metallic = MakeUniformGrey(2, 1, 90U);
     ModelOrmSources All = { .Occlusion = &Occlusion, .Roughness = &Roughness, .Metallic = &Metallic };
     Image Packed;
-    if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&All, &Packed)) && TEST_CHECK(run, IsPackedImage(&Packed, 4, 2)))
+    if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&All, 1.0f, &Packed)) && TEST_CHECK(run, IsPackedImage(&Packed, 4, 2)))
     {
         TEST_CHECK(run, IsChannelUniform(&Packed, 0, 77U) && IsChannelUniform(&Packed, 1, 60U)
             && IsChannelUniform(&Packed, 2, 90U));
@@ -168,7 +169,7 @@ static void TheSizeIsTheRoughnessMapsThenTheMetallicMaps(TestRun* run)
 
     // Without a roughness map, the metallic map's size.
     ModelOrmSources NoRoughness = { .Occlusion = &Occlusion, .Roughness = NULL, .Metallic = &Metallic };
-    if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&NoRoughness, &Packed)) && TEST_CHECK(run, IsPackedImage(&Packed, 2, 1)))
+    if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&NoRoughness, 1.0f, &Packed)) && TEST_CHECK(run, IsPackedImage(&Packed, 2, 1)))
     {
         TEST_CHECK(run, IsChannelUniform(&Packed, 0, 77U) && IsChannelUniform(&Packed, 1, 255U)
             && IsChannelUniform(&Packed, 2, 90U));
@@ -190,7 +191,7 @@ static void AResampledMapKeepsItsGradient(TestRun* run)
     Image Metallic = MakeImage(2, 1, PIXELFORMAT_UNCOMPRESSED_GRAYSCALE, Short);
     ModelOrmSources All = { .Occlusion = &Occlusion, .Roughness = &Roughness, .Metallic = &Metallic };
     Image Packed;
-    if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&All, &Packed)) && TEST_CHECK(run, IsPackedImage(&Packed, 4, 1)))
+    if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&All, 1.0f, &Packed)) && TEST_CHECK(run, IsPackedImage(&Packed, 4, 1)))
     {
         bool IsRising = true;
         for (int X = 1; X < 4; X++)
@@ -209,11 +210,49 @@ static void AResampledMapKeepsItsGradient(TestRun* run)
     UnloadImage(Metallic);
 }
 
+static void TheOcclusionStrengthWeakensOnlyTheOcclusion(TestRun* run)
+{
+    // glTF's 1 + strength x (occlusion - 1), to the nearest byte (a half rounds up); green and blue as they were.
+    static const unsigned char Values[4] = { 0, 55, 155, 255 };
+    static const float Strengths[3] = { 1.0f, 0.5f, 0.0f };
+    static const unsigned char Expected[3][4] = { { 0, 55, 155, 255 }, { 128, 155, 205, 255 }, { 255, 255, 255, 255 } };
+    Image Occlusion = MakeImage(4, 1, PIXELFORMAT_UNCOMPRESSED_GRAYSCALE, Values);
+    Image Roughness = MakeImage(4, 1, PIXELFORMAT_UNCOMPRESSED_GRAYSCALE, Values);
+    ModelOrmSources Sources = { .Occlusion = &Occlusion, .Roughness = &Roughness, .Metallic = NULL };
+    for (size_t Case = 0U; Case < 3U; Case++)
+    {
+        Image Packed;
+        if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&Sources, Strengths[Case], &Packed))
+            && TEST_CHECK(run, IsPackedImage(&Packed, 4, 1)))
+        {
+            bool IsRight = true;
+            for (int X = 0; X < 4; X++)
+            {
+                IsRight = IsRight && (GetChannel(&Packed, X, 0, 0) == Expected[Case][X])
+                    && (GetChannel(&Packed, X, 0, 1) == Values[X]) && (GetChannel(&Packed, X, 0, 2) == 255U);
+            }
+            TEST_CHECK(run, IsRight);
+        }
+        UnloadImage(Packed);
+    }
+
+    // A strength outside [0, 1] is refused.
+    static const float Bad[3] = { -0.01f, 1.01f, NAN };
+    for (size_t Case = 0U; Case < 3U; Case++)
+    {
+        Image Packed;
+        TEST_CHECK_ERROR(run, ModelOrmMap_Build(&Sources, Bad[Case], &Packed), ErrorCode_IllegalArgument);
+        TEST_CHECK(run, Packed.data == NULL);
+    }
+    UnloadImage(Occlusion);
+    UnloadImage(Roughness);
+}
+
 static void MapsItCannotReadAreRefused(TestRun* run)
 {
     Image Packed;
     ModelOrmSources None = { .Occlusion = NULL, .Roughness = NULL, .Metallic = NULL };
-    TEST_CHECK_ERROR(run, ModelOrmMap_Build(&None, &Packed), ErrorCode_IllegalArgument);
+    TEST_CHECK_ERROR(run, ModelOrmMap_Build(&None, 1.0f, &Packed), ErrorCode_IllegalArgument);
     TEST_CHECK(run, Packed.data == NULL);
 
     // No pixels, a float format, a compressed one, a side past the limit (checked before a pixel is read).
@@ -225,21 +264,21 @@ static void MapsItCannotReadAreRefused(TestRun* run)
     Image Huge = { .data = Bytes, .width = MODEL_ORM_MAP_MAX_SIDE + 1, .height = 1, .mipmaps = 1,
         .format = PIXELFORMAT_UNCOMPRESSED_GRAYSCALE };
     ModelOrmSources EmptyRoughness = { .Occlusion = NULL, .Roughness = &Empty, .Metallic = NULL };
-    CheckRefused(run, ModelOrmMap_Build(&EmptyRoughness, &Packed), ErrorCode_InvalidAssetData, "roughness map has no");
+    CheckRefused(run, ModelOrmMap_Build(&EmptyRoughness, 1.0f, &Packed), ErrorCode_InvalidAssetData, "roughness map has no");
     ModelOrmSources FloatOcclusion = { .Occlusion = &Float, .Roughness = NULL, .Metallic = NULL };
-    CheckRefused(run, ModelOrmMap_Build(&FloatOcclusion, &Packed), ErrorCode_InvalidAssetData,
+    CheckRefused(run, ModelOrmMap_Build(&FloatOcclusion, 1.0f, &Packed), ErrorCode_InvalidAssetData,
         "occlusion map's pixel format");
     ModelOrmSources CompressedMetallic = { .Occlusion = NULL, .Roughness = NULL, .Metallic = &Compressed };
-    CheckRefused(run, ModelOrmMap_Build(&CompressedMetallic, &Packed), ErrorCode_InvalidAssetData,
+    CheckRefused(run, ModelOrmMap_Build(&CompressedMetallic, 1.0f, &Packed), ErrorCode_InvalidAssetData,
         "metallic map's pixel format");
     ModelOrmSources HugeOcclusion = { .Occlusion = &Huge, .Roughness = NULL, .Metallic = NULL };
-    CheckRefused(run, ModelOrmMap_Build(&HugeOcclusion, &Packed), ErrorCode_InvalidAssetData, "8193x1");
+    CheckRefused(run, ModelOrmMap_Build(&HugeOcclusion, 1.0f, &Packed), ErrorCode_InvalidAssetData, "8193x1");
     TEST_CHECK(run, Packed.data == NULL);
 
     // A bad map fails the whole image, even beside good ones.
     Image Roughness = MakeUniformGrey(2, 2, 60U);
     ModelOrmSources Mixed = { .Occlusion = &Float, .Roughness = &Roughness, .Metallic = NULL };
-    TEST_CHECK_ERROR(run, ModelOrmMap_Build(&Mixed, &Packed), ErrorCode_InvalidAssetData);
+    TEST_CHECK_ERROR(run, ModelOrmMap_Build(&Mixed, 1.0f, &Packed), ErrorCode_InvalidAssetData);
     TEST_CHECK(run, Packed.data == NULL);
     UnloadImage(Roughness);
 
@@ -249,7 +288,7 @@ static void MapsItCannotReadAreRefused(TestRun* run)
     Image Widest = { .data = WidestBytes, .width = MODEL_ORM_MAP_MAX_SIDE, .height = 1, .mipmaps = 1,
         .format = PIXELFORMAT_UNCOMPRESSED_GRAYSCALE };
     ModelOrmSources WidestMetallic = { .Occlusion = NULL, .Roughness = NULL, .Metallic = &Widest };
-    if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&WidestMetallic, &Packed))
+    if (TEST_CHECK_SUCCESS(run, ModelOrmMap_Build(&WidestMetallic, 1.0f, &Packed))
         && TEST_CHECK(run, IsPackedImage(&Packed, MODEL_ORM_MAP_MAX_SIDE, 1)))
     {
         TEST_CHECK(run, IsChannelUniform(&Packed, 2, 33U) && IsChannelUniform(&Packed, 0, 255U));
@@ -269,6 +308,7 @@ void ModelOrmMapTests_Run(TestRun* run)
         { "a_missing_map_reads_255", AMissingMapReads255 },
         { "the_size_is_the_roughness_maps_then_the_metallic_maps", TheSizeIsTheRoughnessMapsThenTheMetallicMaps },
         { "a_resampled_map_keeps_its_gradient", AResampledMapKeepsItsGradient },
+        { "the_occlusion_strength_weakens_only_the_occlusion", TheOcclusionStrengthWeakensOnlyTheOcclusion },
         { "maps_it_cannot_read_are_refused", MapsItCannotReadAreRefused },
     };
     TestRun_RunSuite(run, "ModelOrmMap", Cases, sizeof(Cases) / sizeof(Cases[0]));

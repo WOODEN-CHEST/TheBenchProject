@@ -61,20 +61,20 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
   returns the raylib `Model` **by value**, but its
   `meshes`, `materials`, `meshMaterial` and each material's `maps` still point into the asset: changing the copy's
   `transform` is local, writing through those pointers changes the shared asset.
-- Loading (`ModelDefinition.c`): `LoadModel` on the resolved file (`obj` `gltf` `glb` `iqm` `vox` `m3d`); a result with no
-  meshes fails the load. Then:
-  - a glTF file's occlusion, roughness and metallic maps are packed into the one map the PBR shader reads ("glTF
-    materials" below);
+- Loading (`ModelDefinition.c`): a glTF file is read and checked first ("glTF materials" below), then `LoadModel` runs
+  on the resolved file (`obj` `gltf` `glb` `iqm` `vox` `m3d`); a result with no meshes fails the load. Then:
+  - a glTF file's occlusion, roughness and metallic maps are packed into the one map the PBR shader reads;
   - the definition's `transform` (scale, `rotation_euler` in degrees, translation) is baked into `model.transform`;
-  - every material gets PBR defaults where the importer left a value at or below 0: roughness 0.5, occlusion 1.0;
+  - every material gets PBR defaults where the importer left a value at or below 0: roughness 0.5, occlusion 1.0; a glTF
+    file's own values then replace them;
+  - the definition's `texture_properties` apply to every map the model file brings and to the packed maps ("Texture
+    properties" below);
   - `material_overrides` apply by material **index** (`slot`, 0 to `INT32_MAX`; a glTF file's first material is slot
     1, below); a slot beyond the model's material count is skipped silently. Override maps go to `albedo` ->
     `MATERIAL_MAP_ALBEDO`, `normal` -> `MATERIAL_MAP_NORMAL`, `mra` (packed occlusion/roughness/metallic) ->
     `MATERIAL_MAP_METALNESS` (replacing a packed map), `emissive` -> `MATERIAL_MAP_EMISSION`, loaded from the models
-    directory with the texture extensions. Scalars: `tint`, `metallic` and `roughness` (in [0, 1]), `emissive_color`,
-    `emissive_intensity` (>= 0). The slot's `texture_properties` (filtering, wrap, mipmaps; `TextureProperties_Apply`)
-    apply to each map the override loads, so distant textured models can use mipmaps and shimmer less; the maps the
-    model file brings keep raylib's defaults (point filtering, repeat, no mipmaps), the packed map too.
+    directory with the texture extensions, each with the override's `texture_properties`. Scalars: `tint`, `metallic`
+    and `roughness` (in [0, 1]), `emissive_color`, `emissive_intensity` (>= 0).
   - **The factors are shared with world model variants** ([WorldModels.md](WorldModels.md)): the slot and the
     scalars are read by `AssetJSON_ReadMaterialSlot` and `AssetJSON_ReadMaterialFactors`
     (`source/AssetDefinitionCommon.{h,c}`) into a `GameMaterialFactors` (`GameModel.h`: each factor with its own
@@ -83,26 +83,38 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
     emissive map but no emissive colour or intensity shows the map at white x 1. The shared parser enforces the
     ranges the reference gives (metallic and roughness in [0, 1], a non-negative intensity, finite numbers that fit a
     float).
-- **glTF materials:** raylib's importer puts the file's material i in slot i + 1 (slot 0 is its default material, which
-  none of the file's meshes use; an OBJ file's first material is slot 0). It splits a metallicRoughness texture into a
-  grey roughness texture (its green, `MATERIAL_MAP_ROUGHNESS`) and a grey metallic one (its blue,
-  `MATERIAL_MAP_METALNESS`) and keeps the occlusion texture apart (`MATERIAL_MAP_OCCLUSION`, ambient occlusion in red),
-  while the PBR shader reads one packed map from the METALNESS slot. So the loader reads the three back from the GPU
-  (`LoadImageFromTexture`) and puts one RGBA texture in `MATERIAL_MAP_METALNESS`: red the occlusion's red, green the
-  roughness, blue the metallic, a missing map 255 (its factor applies alone); the roughness map's size, else the
-  metallic map's, else the occlusion map's, the others resampled. The roughness and occlusion slots are emptied and the
-  three textures unloaded. The importer's metallic and roughness factors stay the material's scalars, which the shader
-  multiplies by the packed channels. The packing is the private `source/ModelOrmMap.{h,c}` (pure, tested headless in
-  `tests/ModelOrmMapTests.c`): it reads 8-bit grey, grey with alpha, RGB and RGBA maps of at most
-  `MODEL_ORM_MAP_MAX_SIDE` (8192) a side, and a map it cannot read fails the model, naming the material.
-- **glTF data raylib drops:** it reads a material's metallic and roughness factors only with a metallicRoughness texture
-  and its emissive factor only with an emissive texture (an untextured material shades with roughness 0.5 and metallic
-  0, whatever the file says: the placeholder props' and figures' authored roughness 0.8 to 0.9 among them); it leaves
-  the emission intensity 0, so a glTF emissive texture shows nothing until an override sets `emissive_intensity`; it
-  skips every texture of a material without a `pbrMetallicRoughness` block (Blender writes one for a Principled BSDF);
-  it ignores the occlusion strength, the samplers (filtering, wrap) and the material extensions (emission strength,
-  transmission, ...). Reading them needs the glTF data itself (cgltf, as the animation and terrain readers do): an open
-  question for the owner.
+- **glTF materials:** the loader reads the file's materials itself before raylib loads it: the private
+  `source/ModelGltfMaterials.{h,c}` (pure, tested headless in `tests/ModelGltfMaterialsTests.c`) parses it with cgltf
+  after `source/GltfChecks.h` checked it as hostile, so raylib's importer, which trusts every number, only reads files
+  that passed (at most `MODEL_GLTF_MAX_FILE_BYTES`, 256 MiB, with its buffer files); a value outside glTF's range (a
+  factor or strength outside [0, 1], an emission strength below 0 or infinite) fails the model, naming the material.
+  raylib's importer puts the file's material i in slot i + 1 (slot 0 is its default material, which none of the file's
+  meshes use; an OBJ file's first material is slot 0); the loader checks the counts match. raylib splits a
+  metallicRoughness texture into a grey roughness texture (its green, `MATERIAL_MAP_ROUGHNESS`) and a grey metallic one
+  (its blue, `MATERIAL_MAP_METALNESS`) and keeps the occlusion texture apart (`MATERIAL_MAP_OCCLUSION`, ambient
+  occlusion in red), while the PBR shader reads one packed map from the METALNESS slot. So the loader reads the three
+  back from the GPU (`LoadImageFromTexture`) and puts one RGBA texture in `MATERIAL_MAP_METALNESS`: red the occlusion's
+  red weakened by the file's occlusion strength (glTF's 1 + strength x (occlusion - 1)), green the roughness, blue the
+  metallic, a missing map 255 (its factor applies alone); the roughness map's size, else the metallic map's, else the
+  occlusion map's, the others resampled. The roughness and occlusion slots are emptied and the three textures unloaded.
+  The packing is the private `source/ModelOrmMap.{h,c}` (pure, tested headless in `tests/ModelOrmMapTests.c`): it reads
+  8-bit grey, grey with alpha, RGB and RGBA maps of at most `MODEL_ORM_MAP_MAX_SIDE` (8192) a side, and a map it cannot
+  read fails the model, naming the material. Then each material gets the file's values, which raylib reads only with
+  some textures or not at all: the base colour, metallic, roughness and emissive factors, and the emission's strength
+  (`KHR_materials_emissive_strength`, else 1) as `MATERIAL_MAP_EMISSION`'s intensity. glTF's colour factors are linear
+  while the game's material colours are sRGB-encoded (the renderer raises them to 2.2), so they are encoded with
+  `ModelGltfMaterials_ToColor` (raylib copies them unconverted, which renders a Blender colour too dark).
+- **What is still not read from a glTF file:** the samplers (the definition's `texture_properties` decide), the normal
+  map's scale, the alpha mode and cutoff (the PBR shader has no alpha mode yet), `doubleSided` (models draw one-sided;
+  a world model's `has_two_sided_shadows` covers shadows), `KHR_texture_transform` and the other material extensions,
+  and the textures of a material without a `pbrMetallicRoughness` block: raylib loads none of them, and the loader logs
+  a warning naming the material (Blender writes the block for a Principled BSDF).
+- **Texture properties:** a model definition's `texture_properties` (filtering, wrap, mipmaps; applied with
+  `TextureProperties_Apply`) default to the model maps' own defaults, trilinear filtering over generated mipmaps and
+  repeat, and apply to every map the model file brings and to the packed maps; an override's `texture_properties` apply
+  to the maps it loads, each key it leaves out taking the model's (`AssetJSON_ReadTexturePropertiesWithDefaults`).
+  Mipmaps keep textures seen small or at a grazing angle from shimmering; with `"mipmaps": false` and no filtering of
+  its own, a model's maps are bilinear.
 - **Ownership:** the asset owns the meshes, the materials and their map arrays, and every texture its materials
   referenced at load (the importer's textures, the packed maps and the overrides; raylib's default texture is
   skipped). Importer textures that a packed map or an override replaced are unloaded during the load. On unload each
