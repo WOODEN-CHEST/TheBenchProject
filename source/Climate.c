@@ -7,6 +7,7 @@
 #include "AssetManager.h"
 #include "GameJSON.h"
 #include "WorldEnvironment.h"
+#include "NamespacedKey.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
 
@@ -431,7 +432,7 @@ static Error ReadPresetNames(const ClimateReader* reader, JSONArray* presets)
         }
         char Printable[NAME_PRINT_CAPACITY];
         AssetJSON_CopyPrintable(Name, Printable, sizeof(Printable));
-        if (!AssetManager_IsValidAssetName(Name))
+        if (!NamespacedKey_IsValidLocalName(Name))
         {
             return Fail(reader, ErrorCode_InvalidAssetDefinition, NameWhere,
                 "\"%s\" is not a valid name ([a-z][a-z0-9_.-]*).", Printable);

@@ -397,7 +397,7 @@ Error WorldCharacterComponent_SetCharacter(WorldCharacterComponent* self, const 
     {
         return CheckResult;
     }
-    unsigned char* Clone = WorldInternal_CloneString(character);
+    unsigned char* Clone = WorldInternal_CloneAssetName(character);
     Memory_Free(self->_character);
     self->_character = Clone;
     WorldInternal_ComponentAfterSet(self, &CharacterProperties[CHARACTER_PROPERTY_NAME]);

@@ -342,7 +342,7 @@ static void AMissingCollisionModelFailsTheWorldModel(TestRun* run)
         && TEST_CHECK_SUCCESS(run, AssetManager_GetNewUserID(Fixture.Manager, &User)))
     {
         WorldModel* Loaded = NULL;
-        const char* const Fragments[] = { "World model \"shop\": collision set \"walls\", shape 0:", "no_such_model",
+        const char* const Fragments[] = { "World model \"tbp:shop\": collision set \"walls\", shape 0:", "no_such_model",
             NULL };
         TestText_CheckErrorMessage(run, AssetManager_LoadWorldModel(Fixture.Manager, (const unsigned char*)u8"shop",
             User, &Loaded), ErrorCode_InvalidOperation, Fragments);

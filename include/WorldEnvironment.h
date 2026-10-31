@@ -73,7 +73,7 @@
  *  the light, so a longer one would cost the nearest level its depth precision (about 2.5 mm here, against its 8 mm
  *  bias at the default 2048-texel maps; finer maps keep a floor of two of the depth's steps). */
 #define WORLD_ENVIRONMENT_MAX_SHADOW_REACH 20000.0
-/** @brief The most bytes a texture name (MilkyWayTexture, MoonTexture) may have, without the terminator. */
+/** @brief The most bytes a texture name (MilkyWayTexture, MoonTexture) may have in full, without the terminator. */
 #define WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH ((size_t)128)
 /** @brief The haze's scale height's limits (HazeHeight), in metres: below 10 m it would fall between the rows of the
  *  renderer's atmosphere tables, and 100 km is the top of the atmosphere. */
@@ -105,10 +105,10 @@
 /** @brief The coldest and the hottest Temperature a world may give, in degrees Celsius. */
 #define WORLD_ENVIRONMENT_MIN_TEMPERATURE (-273.15)
 #define WORLD_ENVIRONMENT_MAX_TEMPERATURE 1000.0
-/** @brief The most bytes the climate's name (Climate) may have, without the terminator. */
+/** @brief The most bytes the climate's name (Climate) may have in full, without the terminator. */
 #define WORLD_ENVIRONMENT_CLIMATE_NAME_MAX_LENGTH ((size_t)128)
-/** @brief The climate a world uses unless it names another (Climate's default). */
-#define WORLD_ENVIRONMENT_DEFAULT_CLIMATE ((const unsigned char*)u8"default")
+/** @brief The climate a world uses unless it names another (Climate's default), in full. */
+#define WORLD_ENVIRONMENT_DEFAULT_CLIMATE ((const unsigned char*)u8"tbp:default")
 
 
 // Types.
@@ -261,9 +261,9 @@ typedef struct WorldEnvironmentStruct
     float StarTwinkle;
     /** @brief Brightness multiplier for the Milky Way (1 = natural). Finite and >= 0. */
     float MilkyWayBrightness;
-    /** @brief Name of the texture asset the Milky Way is drawn from (default "sky_milky_way"; a resource pack can
+    /** @brief Name of the texture asset the Milky Way is drawn from (default "tbp:sky_milky_way"; a resource pack can
      *  override that asset, a world can name another). Owned. A valid asset name of at most
-     *  WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH bytes; never NULL. */
+     *  WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH bytes, kept in full; never NULL. */
     unsigned char* MilkyWayTexture;
     /** @brief Light pollution from nearby towns, 0 (a dark site) to 1 (a city centre). It hides faint stars (at 1 only
      *  the brightest few remain), washes out the Milky Way, adds a glow near the horizon at night and brightens the
@@ -301,8 +301,8 @@ typedef struct WorldEnvironmentStruct
     float MoonIntensity;
     /** @brief Colour of the moonlight and the disc; blue-white gives the night look. Alpha ignored. */
     Color MoonColor;
-    /** @brief Name of the texture asset the moon's face is drawn from (default "sky_moon"). Owned. A valid asset name
-     *  of at most WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH bytes; never NULL. */
+    /** @brief Name of the texture asset the moon's face is drawn from (default "tbp:sky_moon"). Owned. A valid asset
+     *  name of at most WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH bytes, kept in full; never NULL. */
     unsigned char* MoonTexture;
 
     // ---- Ambient / skylight ----
@@ -387,8 +387,8 @@ typedef struct WorldEnvironmentStruct
     /** @brief The air's temperature, degrees Celsius (default 15). Finite and in [WORLD_ENVIRONMENT_MIN_TEMPERATURE,
      *  WORLD_ENVIRONMENT_MAX_TEMPERATURE]. */
     float Temperature;
-    /** @brief Name of the climate asset this world's weather follows (default "default"; Climate.h). Owned. A valid asset
-     *  name of at most WORLD_ENVIRONMENT_CLIMATE_NAME_MAX_LENGTH bytes; never NULL. */
+    /** @brief Name of the climate asset this world's weather follows (default "tbp:default"; Climate.h). Owned. A valid
+     *  asset name of at most WORLD_ENVIRONMENT_CLIMATE_NAME_MAX_LENGTH bytes, kept in full; never NULL. */
     unsigned char* Climate;
     /** @brief RUNTIME ONLY (never saved): the current lightning flash, 0 none .. 1 a strike's peak, decaying over a
      *  fraction of a real second. Finite and in [0, 1]. */

@@ -277,32 +277,32 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
     static const RefusedDefinition Cases[] =
     {
         { "{\"name\": \"s\"}", ErrorCode_InvalidAssetDefinition,
-            "World sprite \"s\": the definition needs a \"sprite_animation\"" },
+            "World sprite \"tbp:s\": the definition needs a \"sprite_animation\"" },
         { "{\"name\": \"s\", \"sprite_animation\": 7}", ErrorCode_InvalidAssetDefinition,
             "sprite_animation must be a string" },
         { "{\"name\": \"s\", \"sprite_animation\": \"Tree\"}", ErrorCode_InvalidAssetDefinition,
             "sprite_animation \"Tree\" is not a valid asset name" },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"pixels_per_metre\": 32}",
-            ErrorCode_InvalidAssetDefinition, "Unknown key \"pixels_per_metre\" in world sprite \"s\"; the keys allowed "
+            ErrorCode_InvalidAssetDefinition, "Unknown key \"pixels_per_metre\" in world sprite \"tbp:s\"; the keys allowed "
                 "there are: name, sprite_animation, render, orientation, pivot, pixels_per_unit" },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"has_outline\": false}",
-            ErrorCode_InvalidAssetDefinition, "Unknown key \"has_outline\" in world sprite \"s\";" },
+            ErrorCode_InvalidAssetDefinition, "Unknown key \"has_outline\" in world sprite \"tbp:s\";" },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"\\u001b[31m\": 1}", ErrorCode_InvalidAssetDefinition,
             "Unknown key \"?[31m\"" },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"render\": 4}", ErrorCode_InvalidAssetDefinition,
-            "World sprite \"s\": render must be a JSON object." },
+            "World sprite \"tbp:s\": render must be a JSON object." },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"render\": {\"outline\": true}}",
-            ErrorCode_InvalidAssetDefinition, "Unknown key \"outline\" in world sprite \"s\", render; the keys allowed "
+            ErrorCode_InvalidAssetDefinition, "Unknown key \"outline\" in world sprite \"tbp:s\", render; the keys allowed "
                 "there are: has_outline, omit_pixelation, casts_shadows, has_shadow_distance, shadow_distance, "
                 "is_shadow_distance_fixed, is_shadow_only, haze." },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"render\": {\"haze\": -1}}", ErrorCode_InvalidJSON,
             "world_sprite_render.haze (Haze) must be finite and in [0, 1000]." },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"render\": {\"pivot\": [0, 0]}}",
-            ErrorCode_InvalidAssetDefinition, "Unknown key \"pivot\" in world sprite \"s\", render;" },
+            ErrorCode_InvalidAssetDefinition, "Unknown key \"pivot\" in world sprite \"tbp:s\", render;" },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"render\": {\"has_outline\": \"yes\"}}",
-            ErrorCode_InvalidJSON, "World sprite \"s\": world_sprite_render.has_outline: " },
+            ErrorCode_InvalidJSON, "World sprite \"tbp:s\": world_sprite_render.has_outline: " },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"pixels_per_unit\": 0}", ErrorCode_InvalidJSON,
-            "World sprite \"s\": world_sprite.pixels_per_unit (PixelsPerUnit) must be finite and > 0." },
+            "World sprite \"tbp:s\": world_sprite.pixels_per_unit (PixelsPerUnit) must be finite and > 0." },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"pixels_per_unit\": -2}", ErrorCode_InvalidJSON,
             "world_sprite.pixels_per_unit (PixelsPerUnit) must be finite and > 0." },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"alpha_cutoff\": 1.5}", ErrorCode_InvalidJSON,
@@ -316,7 +316,7 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"draw_distance\": 0}", ErrorCode_InvalidJSON,
             "world_sprite.draw_distance (DrawDistance) must be finite and > 0." },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"draw_distance\": \"far\"}", ErrorCode_InvalidJSON,
-            "World sprite \"s\": world_sprite.draw_distance: " },
+            "World sprite \"tbp:s\": world_sprite.draw_distance: " },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"draw_distance\": 1e40}", ErrorCode_InvalidJSON,
             "world_sprite.draw_distance: The number does not fit a float." },
         { "{\"name\": \"s\", \"sprite_animation\": \"t\", \"orientation\": \"upright\"}", ErrorCode_InvalidJSON,
@@ -586,7 +586,7 @@ static void AMissingAnimationFailsTheLoad(TestRun* run)
         WorldSprite* Loaded = NULL;
         const char* const Fragments[] =
         {
-            "World sprite \"broken\": sprite animation \"nowhere\": No definition named \"nowhere\"", NULL
+            "World sprite \"tbp:broken\": sprite animation \"tbp:nowhere\": No definition named \"tbp:nowhere\"", NULL
         };
         TestText_CheckErrorMessage(run, AssetManager_LoadWorldSprite(Fixture.Manager, (const unsigned char*)u8"broken",
             User, &Loaded), ErrorCode_InvalidOperation, Fragments);

@@ -142,7 +142,7 @@ The world keeps the links (`source/WorldHierarchy.c`); the persisted value is th
   the socket's frame as it is now. Each pose step marks the parent's socket children dirty
   (`WorldInternal_MarkSocketChildrenChanged`). A socket the parent's pose lacks (no animator, no pose yet, another
   name) is the parent's own space. `World_TryGetSocketWorldMatrix(world, id, socket, &matrix)` reads a socket's world
-  matrix in double. The row is `parent_socket` (wire id 13, an asset name of at most
+  matrix in double. The row is `parent_socket` (wire id 13, a local name, `LocalName`, of at most
   `WORLD_OBJECT_SOCKET_NAME_MAX_LENGTH` = 64 bytes, saved with the object); the next free wire id of the object table is
   14. In the collision step a pushable on a socket is its holder's (carried, not pushed out of the hand).
 - **The `parent` row** (wire id 12, an `ObjectId`) is `ReadOnly` for `Properties_Set`: scripts and the editor go
@@ -675,7 +675,7 @@ them.
 
 The night sky settings: `StarSeed` (which stars), `StarDensity` (1 = an Earth-like sky of about 9000 stars, the
 default; 0 none; at most 20000 stars), `StarBrightness`, `StarTwinkle` (0..1, default 0.25), `MilkyWayBrightness`
-(default 1), `MilkyWayTexture` (default `sky_milky_way`), `LightPollution` (0 = a dark site .. 1 = a city centre,
+(default 1), `MilkyWayTexture` (default `tbp:sky_milky_way`), `LightPollution` (0 = a dark site .. 1 = a city centre,
 default 0.35, a small town) and `LightPollutionColor` (sodium orange by default).
 
 The moon settings (story creators get as many settings as possible):
@@ -692,7 +692,7 @@ The moon settings (story creators get as many settings as possible):
 | `moon_brightness` | >= 0 | 1 | Multiplies the disc's brightness in the sky. |
 | `moon_intensity` | >= 0 | 0.04 | The full moon's light above the air relative to the sun's (`WORLD_ENVIRONMENT_DEFAULT_MOON_INTENSITY`). The phase scales it, it fades out by day, the air dims it toward the horizon, and the moonlit sky is lit by all of it. |
 | `moon_color` | colour | (200, 214, 255) | The moonlight's colour above the air (the air reddens it low over the horizon) and the disc's. Real moonlight is the sun's light, a little warmer; the blue of the night is the eye's (night vision). Open: the owner decides whether the default stays this blue or becomes white (255, 255, 255). |
-| `moon_texture` | asset name | `sky_moon` | The moon's face. |
+| `moon_texture` | asset name | `tbp:sky_moon` | The moon's face. |
 
 And `are_seasons_enabled` (default false): the sun's declination follows the date (23.44 degrees x the sine of its
 place in the year, 0 at the March equinox; a uniform year, so the September equinox falls about two days early), so
@@ -773,7 +773,7 @@ weather, and what the weather's off mode leaves as it is. The renderer shows the
 | `fog_density` | 72 | [0, 100] per metre | 0 | The weather's ground fog, added to the ground haze at its base (0.02: a morning mist). |
 | `fog_height` | 73 | [0.1, 100000] m | 20 | How quickly the weather's fog thins above the ground haze's base. |
 | `temperature` | 74 | [-273.15, 1000] degrees C | 15 | The air's temperature. |
-| `climate` | 75 | asset name, at most 128 bytes | `default` | The climate asset the weather follows (Climate.h). |
+| `climate` | 75 | asset name, at most 128 bytes in full | `tbp:default` | The climate asset the weather follows (Climate.h). |
 | `lightning_flash` | 76 | [0, 1] | 0 | Runtime only, never saved: the current flash (the weather sets it). |
 | `lightning_direction` | 77 | finite vector | (0, 0, 1) | Runtime only: the level direction of the current strike from the viewer. |
 | `lightning_distance` | 78 | [0, 1e7] m | 1000 | Runtime only: how far away the current strike is. |

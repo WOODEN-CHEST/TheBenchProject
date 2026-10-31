@@ -125,6 +125,31 @@ Error NamespacedKey_Parse(const unsigned char* text, size_t byteCount, const uns
     GenericBuffer* outKey);
 
 /**
+ * @brief Describes what is wrong with a key as people write it (see NamespacedKey_Parse), for messages.
+ *
+ * Checks the same rules as NamespacedKey_Parse without building anything: the parts' characters, uppercase letters,
+ * empty parts, and the length of the full key (with @p defaultNamespace when the text has no namespace).
+ * @param text The key's bytes; need not be NUL-terminated. May be NULL only when @p byteCount is 0.
+ * @param byteCount The number of bytes.
+ * @param defaultNamespace The namespace of a key written without one; NULL means NAMESPACED_KEY_DEFAULT_NAMESPACE.
+ * @returns NULL when the text is a valid key as written; otherwise a static description such as "uppercase letters are
+ *          not allowed (keys are lowercase)".
+ */
+const char* NamespacedKey_DescribeProblem(const unsigned char* text, size_t byteCount,
+    const unsigned char* defaultNamespace);
+
+/**
+ * @brief Reports whether text is a valid local name: `[a-z][a-z0-9_.-]*`, a lowercase letter first.
+ *
+ * A local name is unique only inside one asset or object and is never namespaced: an animation clip, a socket, a
+ * material variant, a climate preset, a state of an animation graph, a translation key. Asset names are namespaced
+ * keys instead (AssetManager_IsValidAssetName). Callers apply their own length limits.
+ * @param name The NUL-terminated text; NULL is not a name.
+ * @returns true if @p name is a valid local name.
+ */
+bool NamespacedKey_IsValidLocalName(const unsigned char* name);
+
+/**
  * @brief Returns the length of a full key's namespace: the index of its colon.
  * @param key A valid full key.
  * @returns The namespace's byte count; 0 for NULL or a text without a colon.

@@ -606,7 +606,7 @@ moon's disc, the Milky Way, drawn as
 a full-screen pass before the geometry (it writes no depth). Each pixel's ray comes from the inverse of the frame's view-projection,
 so the sky lines up with the 3D camera; in render space that matrix is a rotation and a projection, so the ray is exact
 at any distance from the world's origin (see "Render space"). Falls back to a CPU gradient clear. Its textures are the ones the world's
-environment names (`MilkyWayTexture`, default `sky_milky_way`; `MoonTexture`, default `sky_moon`): each sky texture
+environment names (`MilkyWayTexture`, default `tbp:sky_milky_way`; `MoonTexture`, default `tbp:sky_moon`): each sky texture
 slot holds its texture under its own asset user, loads it when the environment names it (at `PrepareWorld` or the
 first render after a change) and releases it when the environment names another; a name that fails is logged once
 and not retried until the name changes (`WorldRendererSky_SyncTextures`).
@@ -1055,7 +1055,7 @@ the passes share is `shaders/common/night_sky.glsl`.
   magnitudes per air mass; by the transmittance table relative to the zenith's, which reddens them too, while
   the atmosphere's tables run); below it nothing is drawn. Stars twinkle by `StarTwinkle` x noise, more near the horizon,
   on `WorldRenderFrame.TimeSeconds` (the renderer's own clock, wrapped hourly).
-- **Milky Way.** The texture the world names (`MilkyWayTexture`, default `sky_milky_way`: sRGB, trilinear with
+- **Milky Way.** The texture the world names (`MilkyWayTexture`, default `tbp:sky_milky_way`: sRGB, trilinear with
   mipmaps), sampled once per pixel in galactic coordinates: `NightSky_GetCelestialToGalactic` places the galaxy as on
   Earth (plane 62.9 degrees to the equator, centre at declination -29) in the star frame, which the date turns (above).
   The panorama's longitude grows to the left, as in astronomical all-sky maps. Explicit mip level from the pixel's angular size
@@ -1091,7 +1091,7 @@ the passes share is `shaders/common/night_sky.glsl`.
   x `MoonSizeMultiplier` (at most 45 degrees), its axes toward the sky's pole (the face turns as it crosses the sky),
   shaded as a sphere lit by the sun with Lommel-Seeliger (normalized to 1 at full moon, which looks flat as the real one
   does; the terminator and the crescent face the sun), plus earthshine on the dark side (`MOON_EARTHSHINE_SHARE` x
-  (1 - illumination)). The face is the texture the world names (`MoonTexture`, default `sky_moon`, point-filtered for
+  (1 - illumination)). The face is the texture the world names (`MoonTexture`, default `tbp:sky_moon`, point-filtered for
   crisp pixel art; a flat grey without it), tinted by `MoonColor`, at `MOON_DISC_BASE_RADIANCE` (the "MOON DISC KNOB") x
   `MoonBrightness`. The disc covers what lies behind it (the sun disc, the Milky Way, the stars) and is dimmed by the
   view ray's transmittance (the transmittance table; the direct march's out parameter while the tables are

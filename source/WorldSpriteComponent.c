@@ -594,7 +594,7 @@ Error WorldSpriteComponent_SetWorldSprite(WorldSpriteComponent* self, const unsi
         return CheckResult;
     }
 
-    unsigned char* Clone = WorldInternal_CloneString(worldSprite);
+    unsigned char* Clone = WorldInternal_CloneAssetName(worldSprite);
     Memory_Free(self->_worldSprite);
     self->_worldSprite = Clone;
     return FinishSet(self, SpriteProperty_WorldSprite);

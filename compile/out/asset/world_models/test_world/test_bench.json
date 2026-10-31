@@ -1,7 +1,7 @@
 {
-    "name": "test_bench",
+    "name": "tbp:test_bench",
     "lods": [
-        { "model": "test_bench", "max_distance": 120 }
+        { "model": "tbp:test_bench", "max_distance": 120 }
     ],
     "collision": "bounds",
     "sockets": {

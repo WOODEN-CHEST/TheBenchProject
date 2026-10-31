@@ -106,7 +106,7 @@ static Error RejectUnknownKeys(const ParseContext* context, JSONCompound* compou
     return AssetJSON_RejectUnknownKeys(compound, Keys, KeyCount, Where);
 }
 
-/* "sprite_animation": the required name of the sprite animation to play. */
+/* "sprite_animation": the required name of the sprite animation to play (kept in full: "glow" is "tbp:glow"). */
 static Error ReadSpriteAnimation(const ParseContext* context, JSONCompound* root)
 {
     unsigned char** Name = &context->Definition->SpriteAnimation;
@@ -121,11 +121,12 @@ static Error ReadSpriteAnimation(const ParseContext* context, JSONCompound* root
     {
         return Fail(context, "the definition needs a \"sprite_animation\": the name of the sprite animation to play.");
     }
-    if (!AssetManager_IsValidAssetName(*Name))
+    const char* Problem = AssetJSON_MakeFullAssetName(Name);
+    if (Problem != NULL)
     {
         char Printable[NAME_PRINT_CAPACITY];
         AssetJSON_CopyPrintable(*Name, Printable, sizeof(Printable));
-        return Fail(context, "sprite_animation \"%s\" is not a valid asset name ([a-z][a-z0-9_.-]*).", Printable);
+        return Fail(context, "sprite_animation \"%s\" is not a valid asset name: %s.", Printable, Problem);
     }
     return Error_CreateSuccess();
 }

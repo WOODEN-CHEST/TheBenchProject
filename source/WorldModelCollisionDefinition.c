@@ -240,7 +240,8 @@ static Error ReadEnumName(const ParseContext* context, JSONCompound* compound, c
     return Result;
 }
 
-/* An optional name ([a-z][a-z0-9_.-]*, at most COLLISION_NAME_MAX_LENGTH bytes) or asset name, owned. */
+/* An optional name ([a-z][a-z0-9_.-]*, at most COLLISION_NAME_MAX_LENGTH bytes), or an asset name (an owned copy of
+ * its full name, "box" is "tbp:box"). */
 static Error ReadName(const ParseContext* context, JSONCompound* compound, const unsigned char* key, const char* path,
     bool isAssetName, bool isRequired, unsigned char** outName)
 {
@@ -255,10 +256,15 @@ static Error ReadName(const ParseContext* context, JSONCompound* compound, const
     {
         return isRequired ? Fail(context, "%s needs a \"%s\".", path, (const char*)key) : Error_CreateSuccess();
     }
-    bool IsValid = isAssetName ? AssetManager_IsValidAssetName(*outName) : CollisionShape_IsValidName(*outName);
-    if (!IsValid)
+    char Name[NAME_PRINT_CAPACITY];
+    if (isAssetName)
     {
-        char Name[NAME_PRINT_CAPACITY];
+        const char* Problem = AssetJSON_MakeFullAssetName(outName);
+        return (Problem == NULL) ? Error_CreateSuccess() : Fail(context, "%s.%s \"%s\" is not a valid asset name: %s.",
+            path, (const char*)key, Printable(*outName, Name, sizeof(Name)), Problem);
+    }
+    if (!CollisionShape_IsValidName(*outName))
+    {
         return Fail(context, "%s.%s \"%s\" is not a valid name ([a-z][a-z0-9_.-]*, at most %u bytes).", path,
             (const char*)key, Printable(*outName, Name, sizeof(Name)), (unsigned)COLLISION_NAME_MAX_LENGTH);
     }

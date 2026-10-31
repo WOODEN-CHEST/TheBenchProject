@@ -1,4 +1,4 @@
 {
-    "name": "world_luminance",
+    "name": "tbp:world_luminance",
     "fragment_location": "luminance/fragment"
 }

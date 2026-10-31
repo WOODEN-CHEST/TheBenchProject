@@ -686,7 +686,7 @@ static void ComponentRevisionsAdvanceOnEveryChange(TestRun* run)
         TEST_CHECK_ERROR(run, WorldLightComponent_SetRange(Light, -1.0f), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, WorldLightComponent_SetIntensity(Light, NAN), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK(run, WorldComponent_GetRevision(&ModelComponent->Base) == Revision);
-        TEST_CHECK(run, strcmp((const char*)WorldModelComponent_GetWorldModel(ModelComponent), "crate") == 0);
+        TEST_CHECK(run, strcmp((const char*)WorldModelComponent_GetWorldModel(ModelComponent), "tbp:crate") == 0);
 
         Revision = WorldComponent_GetRevision(&Light->Base);
         TEST_CHECK_SUCCESS(run, WorldLightComponent_SetRange(Light, 6.0f));
@@ -872,7 +872,7 @@ static void WorldWithoutAssetsLeavesSpritesEmpty(TestRun* run)
     {
         TEST_CHECK(run, !SpriteAnimationInstance_HasSource(WorldSpriteComponent_GetAnimationInstance(Sprite)));
         TEST_CHECK(run, WorldSpriteComponent_GetBoundWorldSprite(Sprite) == NULL);
-        TEST_CHECK(run, strcmp((const char*)WorldSpriteComponent_GetWorldSprite(Sprite), "walk") == 0);
+        TEST_CHECK(run, strcmp((const char*)WorldSpriteComponent_GetWorldSprite(Sprite), "tbp:walk") == 0);
     }
     TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
@@ -952,8 +952,8 @@ static void MissingWorldSpriteIsLoggedOnceAndLeavesTheSpriteEmpty(TestRun* run)
     }
     TestAssetFixture_Deconstruct(run, &Fixture);
     TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
-    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "shows nothing: world sprite \"missing\"") == 1U);
-    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "shows nothing: world sprite \"broken\"") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "shows nothing: world sprite \"tbp:missing\"") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "shows nothing: world sprite \"tbp:broken\"") == 1U);
     Memory_Free(Directory._data);
 }
 

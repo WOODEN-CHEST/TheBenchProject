@@ -160,6 +160,46 @@ static void NamespaceAndPathAccessors(TestRun* run)
     TEST_CHECK(run, !NamespacedKey_IsNamespaceValid((const unsigned char*)u8"", 0U));
 }
 
+/* What is wrong with a key as written, without building it: the parse's own rules, the default namespace counted. */
+static void ProblemsAreDescribedWithoutParsing(TestRun* run)
+{
+    const char* const Valid[] = { "a:b", "lamp", "town:street/lamp", "0:0" };
+    for (size_t Index = 0; Index < (sizeof(Valid) / sizeof(Valid[0])); Index++)
+    {
+        TEST_CHECK(run, NamespacedKey_DescribeProblem((const unsigned char*)Valid[Index], strlen(Valid[Index]), NULL)
+            == NULL);
+    }
+    TEST_CHECK(run, strstr(NamespacedKey_DescribeProblem((const unsigned char*)u8"Lamp", 4U, NULL), "uppercase") != NULL);
+    TEST_CHECK(run, strstr(NamespacedKey_DescribeProblem((const unsigned char*)u8"a:b:c", 5U, NULL), "path") != NULL);
+    TEST_CHECK(run, strstr(NamespacedKey_DescribeProblem((const unsigned char*)u8":b", 2U, NULL), "namespace") != NULL);
+    TEST_CHECK(run, strstr(NamespacedKey_DescribeProblem(NULL, 0U, NULL), "empty") != NULL);
+    // Without a namespace, the default one counts towards the 128 bytes.
+    char Path[NAMESPACED_KEY_MAX_LENGTH];
+    memset(Path, 'p', sizeof(Path));
+    size_t Fitting = NAMESPACED_KEY_MAX_LENGTH - strlen((const char*)NAMESPACED_KEY_DEFAULT_NAMESPACE) - 1U;
+    TEST_CHECK(run, NamespacedKey_DescribeProblem((const unsigned char*)Path, Fitting, NULL) == NULL);
+    TEST_CHECK(run, strstr(NamespacedKey_DescribeProblem((const unsigned char*)Path, Fitting + 1U, NULL), "128 bytes")
+        != NULL);
+    TEST_CHECK(run, NamespacedKey_DescribeProblem((const unsigned char*)Path, Fitting + 1U, (const unsigned char*)u8"a")
+        == NULL);
+}
+
+/* Local names (a clip, a socket, a variant) are never namespaced: a lowercase letter, then [a-z0-9_.-]. */
+static void LocalNamesHaveNoNamespace(TestRun* run)
+{
+    const char* const Valid[] = { "walk", "hand_r", "dark.wood-2", "a" };
+    for (size_t Index = 0; Index < (sizeof(Valid) / sizeof(Valid[0])); Index++)
+    {
+        TEST_CHECK(run, NamespacedKey_IsValidLocalName((const unsigned char*)Valid[Index]));
+    }
+    const char* const Invalid[] = { "", "tbp:walk", "2walk", "Walk", "hand/r", "a b", "_a", "caf\xC3\xA9" };
+    for (size_t Index = 0; Index < (sizeof(Invalid) / sizeof(Invalid[0])); Index++)
+    {
+        TEST_CHECK(run, !NamespacedKey_IsValidLocalName((const unsigned char*)Invalid[Index]));
+    }
+    TEST_CHECK(run, !NamespacedKey_IsValidLocalName(NULL));
+}
+
 
 // Static functions: the registry.
 static void InterningGivesOneIdPerText(TestRun* run)
@@ -384,6 +424,8 @@ void NamespacedKeyTests_Run(TestRun* run)
         { "the_default_namespace_is_applied", TheDefaultNamespaceIsApplied },
         { "parse_appends_to_one_growing_string", ParseAppendsToOneGrowingString },
         { "namespace_and_path_accessors", NamespaceAndPathAccessors },
+        { "problems_are_described_without_parsing", ProblemsAreDescribedWithoutParsing },
+        { "local_names_have_no_namespace", LocalNamesHaveNoNamespace },
         { "interning_gives_one_id_per_text", InterningGivesOneIdPerText },
         { "many_keys_keep_their_ids_and_text", ManyKeysKeepTheirIdsAndText },
         { "prefix_search_lists_keys_in_order", PrefixSearchListsKeysInOrder },

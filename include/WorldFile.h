@@ -54,10 +54,11 @@ typedef struct LoggerStruct Logger;
 
 
 // Macros.
-/** @brief The world file format this game writes and the newest it reads (2; format 1's files are read too, their
- *  tables' data upgraded by the tables' migrations). Raise it only for changes older games cannot read by skipping what
- *  they do not know (a renamed key, a value read another way). */
-#define WORLD_FILE_FORMAT_VERSION ((uint32_t)2)
+/** @brief The world file format this game writes and the newest it reads (3: asset names written in full, "tbp:desk",
+ *  which a format-2 game cannot read; formats 1 and 2 are read too, their short names as tbp's and format 1's tables'
+ *  data upgraded by the tables' migrations). Raise it only for changes older games cannot read by skipping what they
+ *  do not know (a renamed key, a value read another way). */
+#define WORLD_FILE_FORMAT_VERSION ((uint32_t)3)
 /** @brief The most objects a world file may hold. */
 #define WORLD_FILE_MAX_OBJECT_COUNT ((size_t)100000)
 /** @brief The most bytes a world file may have (64 MiB), checked before anything is parsed. */
@@ -135,8 +136,9 @@ typedef struct WorldFileReadOptionsStruct
     /** @brief The world's logger, which also hears the reader's warnings (unknown names, a raised next id); may be
      *  NULL. */
     Logger* Logger;
-    /** @brief The namespace JSON keys written without one get (the story's or pack's id); NULL means
-     *  NAMESPACED_KEY_DEFAULT_NAMESPACE. GHDF always holds full keys. */
+    /** @brief The namespace that tags and data keys written without one get in JSON (the story's or pack's id); NULL
+     *  means NAMESPACED_KEY_DEFAULT_NAMESPACE. GHDF always holds full keys. Asset names written without a namespace
+     *  (in JSON, and in GHDF saves of formats 1 and 2) are NAMESPACED_KEY_DEFAULT_NAMESPACE's whatever this says. */
     const unsigned char* DefaultNamespace;
     /** @brief The most memory the file's parsed tree may take, as the JSON and GHDF readers estimate it while they
      *  parse: WORLD_FILE_MAX_TREE_BYTES from WorldFileReadOptions_Create. Lower it for files from strangers when the

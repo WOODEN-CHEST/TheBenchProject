@@ -1,5 +1,5 @@
 {
-    "name": "test_humanoid_motions",
+    "name": "tbp:test_humanoid_motions",
     "location": "placeholder_humanoid/motions",
     "clips": [
         { "name": "idle", "is_looped": true },

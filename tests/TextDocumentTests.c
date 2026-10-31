@@ -197,7 +197,7 @@ static void FontsBindOnceAndFallBack(TestRun* run)
 
         TEST_CHECK_ERROR(run, TextDocument_SetDefaultFontName(&Fixture.Document, (const unsigned char*)u8"Bad Name"),
             ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK(run, strcmp((const char*)TextDocument_GetDefaultFontName(&Fixture.Document), "mono") == 0);
+        TEST_CHECK(run, strcmp((const char*)TextDocument_GetDefaultFontName(&Fixture.Document), "tbp:mono") == 0);
     }
     if (Fixture.IsReady)
     {

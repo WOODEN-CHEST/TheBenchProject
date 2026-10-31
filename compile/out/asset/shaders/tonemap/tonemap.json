@@ -1,4 +1,4 @@
 {
-    "name": "world_tonemap",
+    "name": "tbp:world_tonemap",
     "fragment_location": "tonemap/fragment"
 }

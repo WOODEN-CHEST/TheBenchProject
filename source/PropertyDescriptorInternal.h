@@ -67,8 +67,9 @@ PropertyData PropertyInternal_ReadField(const PropertyDescriptor* descriptor, co
 /** Writes a field of @p instance. A string field takes the pointer as it is: ownership is the caller's business. */
 void PropertyInternal_WriteField(const PropertyDescriptor* descriptor, void* instance, const PropertyData* data);
 
-/** Hands an owned value (a string, a map or a float list, or NULL) to an owned field, releasing the field's previous
- *  value. */
+/** Hands an owned value (a string, a map, a list, or NULL) to an owned field, releasing the field's previous value. An
+ *  asset name, or a list of them, is stored in full: a valid name written without its namespace is replaced by its full
+ *  form and the value given freed (adopting the pointer the field holds changes nothing). */
 void PropertyInternal_AdoptOwned(const PropertyDescriptor* descriptor, void* instance, void* owned);
 
 /** Reports whether two values of @p type are equal (floats by value, strings by bytes, a RenderColor without its tint's

@@ -1,5 +1,5 @@
 {
-    "name": "placeholder_terrain_gravel_height",
+    "name": "tbp:placeholder_terrain_gravel_height",
     "location": "placeholder_terrain/gravel_height",
     "color_space": "linear"
 }

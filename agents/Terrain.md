@@ -106,8 +106,11 @@ accessor it reads stored in the file: one without a buffer view would be zeros o
 for), the second reads. Each position goes through its node's world transform in double (glTF's T x R x S, the parents'
 after) and is rounded once onto the grid; normals go through the inverse transpose, and a mirroring node turns its
 triangles' winding back. A primitive's material is its slot: the blend slot (`blend` by default, or no material) is the
-painted weights, `hole` makes holes, a palette material's name makes face materials, anything else is refused (so no
-palette material may be named `hole` or as the blend slot). The weights and densities come from the mapped attributes
+painted weights and `hole` makes holes, both matched exactly and first; any other slot is read as an asset name and
+must name a palette material, which its faces take (`dirt` is `tbp:dirt`, so Blender materials keep short names for the
+base game's materials, and another namespace's is named in full, `mymod:mud`); anything else is refused. So that a
+reserved slot never hides a material, no palette material may be what `hole` or the blend slot would name
+(`tbp:hole`). The weights and densities come from the mapped attributes
 (floats clamped to 0..1, or normalized bytes or shorts; scalar, RGB or RGBA). Then vertices at one grid position (with
 imported normals, at one normal too) are welded: their weights and densities are averaged where they differ (a seam in
 the file: Blender splits a vertex wherever a face corner's attribute differs), triangles left with two corners at one
@@ -127,7 +130,7 @@ inside the palette, densities inside the channels, a `.glb` of at most 256 MiB (
 The thirteenth standard asset type ([AssetManager.md](AssetManager.md)): JSON definitions in `terrains/`, loaded with
 `AssetManager_LoadTerrain`. `source` picks the mesh's origin explicitly: `model` (a `.glb` imported when it loads, with
 the `weights` and `densities` mappings, `normals` and `blend_slot`) or `data` (the binary form). `materials` (1 to 16
-names) is the palette, `density_channels` (up to 8) the channels, `chunk_size` the cells, and `render` and `collision`
+asset names, kept in full like the keys that pick them: the weights' channels and the rules' materials) is the palette, `density_channels` (up to 8) the channels, `chunk_size` the cells, and `render` and `collision`
 the defaults of its placements (`TerrainSettings`: outline, casts shadows, its shadow distance (`render.has_shadow_distance`
 and `render.shadow_distance`, by default none: it casts as far as its chunks are drawn; `shadow_distance` alone turns its
 flag on) and whether the player's shadow scale leaves it as it is (`render.is_shadow_distance_fixed`, default false), the

@@ -1,5 +1,5 @@
 {
-    "name": "world_sprite",
+    "name": "tbp:world_sprite",
     "vertex_location": "sprite/vertex",
     "fragment_location": "sprite/fragment"
 }

@@ -56,7 +56,7 @@
 
 
 // Macros.
-/** @brief The most bytes a world model's asset name may have (without the terminator). */
+/** @brief The most bytes a world model's asset name may have in full (namespace included, without the terminator). */
 #define WORLD_MODEL_COMPONENT_NAME_MAX_LENGTH ((size_t)128)
 
 
@@ -224,7 +224,7 @@ static inline WorldComponent* WorldModelComponent_AsComponent(WorldModelComponen
 /**
  * @brief Returns the borrowed asset name of the world model (may be NULL); valid until it changes.
  * @param self The model component; must not be NULL.
- * @returns The NUL-terminated UTF-8 asset name, or NULL.
+ * @returns The NUL-terminated asset name, in full ("tbp:desk"), or NULL.
  */
 static inline const unsigned char* WorldModelComponent_GetWorldModel(const WorldModelComponent* self)
 {
@@ -235,7 +235,7 @@ static inline const unsigned char* WorldModelComponent_GetWorldModel(const World
  * @brief Sets the world model to draw (a clone of @p worldModel; NULL draws nothing). The renderer resolves the new
  *        world model at its next frame; the object keeps its id, tags, data and children.
  * @param self The model component; must not be NULL.
- * @param worldModel Borrowed asset name, or NULL.
+ * @param worldModel Borrowed asset name as written ("desk" is kept as "tbp:desk"), or NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if @p worldModel is not
  *          a valid asset name of at most WORLD_MODEL_COMPONENT_NAME_MAX_LENGTH bytes (nothing changes then).
  */

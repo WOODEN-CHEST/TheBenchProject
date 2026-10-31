@@ -1,5 +1,5 @@
 {
-    "name": "test_neon",
+    "name": "tbp:test_neon",
     "frames": [
         {
             "source": "texture",

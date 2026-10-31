@@ -1,5 +1,5 @@
 {
-    "name": "test_sprite",
+    "name": "tbp:test_sprite",
     "frames": [
         {
             "source": "texture",

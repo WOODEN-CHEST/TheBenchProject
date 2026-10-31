@@ -9,6 +9,7 @@
 #include "AssetManager.h"
 #include "DataMap.h"
 #include "Logger.h"
+#include "NamespacedKey.h"
 #include "PropertyDescriptor.h"
 #include "World.h"
 #include "WorldComponent.h"
@@ -194,6 +195,25 @@ static inline unsigned char* WorldInternal_CloneString(const unsigned char* sour
     unsigned char* Copy = Memory_Allocate(Length + 1);
     Memory_Copy(source, Copy, Length + 1);
     return Copy;
+}
+
+/**
+ * Clones an asset name into an owned buffer in its full form ("desk" becomes "tbp:desk"), or gives NULL for NULL: the
+ * components keep their asset names in full. A name that is not valid is cloned as it is (callers check names first).
+ * Free the result with Memory_Free.
+ */
+static inline unsigned char* WorldInternal_CloneAssetName(const unsigned char* name)
+{
+    if (!AssetManager_IsValidAssetName(name))
+    {
+        return WorldInternal_CloneString(name);
+    }
+    unsigned char Storage[NAMESPACED_KEY_BUFFER_SIZE];
+    GenericBuffer FullName;
+    GenericBuffer_CreateConstant(&FullName, Storage, sizeof(Storage), sizeof(unsigned char), 0U);
+    Error ParseResult = AssetManager_ParseAssetName(name, &FullName);
+    Error_Deconstruct(&ParseResult); // the name is valid and the buffer holds any key
+    return WorldInternal_CloneString(Storage);
 }
 
 /** Byte equality of two NUL-terminated strings; two NULLs are equal, NULL and a string are not. */

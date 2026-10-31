@@ -1,5 +1,5 @@
 {
-    "name": "test_tire_mark",
+    "name": "tbp:test_tire_mark",
     "frames": [
         {
             "source": "texture",

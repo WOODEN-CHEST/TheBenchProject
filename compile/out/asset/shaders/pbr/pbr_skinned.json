@@ -1,5 +1,5 @@
 {
-    "name": "world_pbr_skinned",
+    "name": "tbp:world_pbr_skinned",
     "vertex_location": "pbr/skinned",
     "fragment_location": "pbr/fragment"
 }

@@ -20,10 +20,12 @@ structures" section first; this document only adds the **render color** shape an
   UTF-8 or contains a NUL character (`\u0000`), an unknown `type` or a missing required key rejects the whole tree. The
   error message names the key and the component's place as a JSON pointer, for example
   `Text component at "/children/1/children/0": "size": must be a decimal within [0, 100].`
-* **Names** (`font`, `animation`, `key`) follow the asset-name grammar `[a-z][a-z0-9_.-]*`: lowercase ASCII letters,
-  digits, `_`, `.` and `-`, starting with a letter. `font` and `animation` are the names the assets are registered
-  under (see `asset_structure.md`); fonts and animations are bound when the text is shown, and a name that cannot be
-  loaded is logged once and falls back (a font to the default font, an animation to drawing nothing).
+* **Names.** `font` and `animation` are asset names, the names the assets are registered under (see
+  `asset_structure.md`, "Asset names are namespaced keys"): `namespace:path`, lowercase; one written without its
+  namespace (`noto_sans`) is `tbp`'s, and the game writes them in full (`tbp:noto_sans`). Fonts and animations are bound
+  when the text is shown, and a name that cannot be loaded is logged once and falls back (a font to the default font,
+  an animation to drawing nothing). A translate component's `key` follows `[a-z][a-z0-9_.-]*`: lowercase ASCII
+  letters, digits, `_`, `.` and `-`, starting with a letter, and no namespace.
 
 
 ## A component value
@@ -182,7 +184,7 @@ A line mixing text and an inline sprite, written with the array shorthand:
 ```
 [
     "You found ",
-    { "type": "sprite", "animation": "coin_spin", "size": [0.1, 0.1] },
+    { "type": "sprite", "animation": "tbp:coin_spin", "size": [0.1, 0.1] },
     { "type": "string", "text": " x3", "color": { "tint": "#ffd700", "brightness": 0.9 } }
 ]
 ```

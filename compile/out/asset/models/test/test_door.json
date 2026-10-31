@@ -1,5 +1,5 @@
 {
-    "name": "test_door",
+    "name": "tbp:test_door",
     "location": "test/test_model",
     "transform": { "scale": [2.0, 4.0, 0.2], "translation": [0.5, 1.0, 0.0] }
 }

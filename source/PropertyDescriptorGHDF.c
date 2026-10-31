@@ -403,6 +403,7 @@ static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const Proper
             return PutRenderColor(pool, compound, Id, data->RenderColorValue);
         case PropertyType_String:
         case PropertyType_AssetName:
+        case PropertyType_LocalName:
             // GHDF has no null: a NULL string is left out, which reads back as its NULL default.
             return (data->StringValue != NULL) ? GameGHDF_PutString(pool, compound, Id, data->StringValue) : Error_CreateSuccess();
         case PropertyType_Enum:
@@ -899,6 +900,7 @@ static Error ParseEntry(GHDFCompound* compound, const PropertyDescriptor* descri
             return GetRenderColor(compound, Id, &outData->RenderColorValue, outFound);
         case PropertyType_String:
         case PropertyType_AssetName:
+        case PropertyType_LocalName:
             return Error_Construct2(ErrorCode_InvalidState, "Strings are read separately.");
         case PropertyType_Enum:
             Result = GetScalar(compound, Id, GHDFValueType_EncodedInteger, &Entry, outFound);

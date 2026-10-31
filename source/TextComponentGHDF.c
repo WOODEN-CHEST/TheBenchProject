@@ -201,7 +201,8 @@ static Error Reader_ReadField(void* self, const TextCodecNode* node, const TextC
     switch (field->Kind)
     {
         case TextCodecValueKind_Text:
-        case TextCodecValueKind_Name:
+        case TextCodecValueKind_AssetName:
+        case TextCodecValueKind_LocalName:
             return ReadStringEntry(Compound, field->GhdfId, &outValue->Text, outFound);
         case TextCodecValueKind_Decimal:
             return ReadFloatEntry(Compound, field->GhdfId, &outValue->Decimal, outFound);
@@ -408,7 +409,8 @@ static Error Writer_WriteField(void* self, TextCodecNode* node, const TextCodecF
     switch (field->Kind)
     {
         case TextCodecValueKind_Text:
-        case TextCodecValueKind_Name:
+        case TextCodecValueKind_AssetName:
+        case TextCodecValueKind_LocalName:
             return SetStringEntry(Writer, Compound, field->GhdfId, value->Text);
         case TextCodecValueKind_Decimal:
             return SetEntry(Compound, field->GhdfId, GHDFObjectValue_CreateFloat(value->Decimal));

@@ -162,7 +162,7 @@ static inline const unsigned char* TextDocument_GetDefaultFontName(const TextDoc
 }
 
 /**
- * @brief Sets the font asset name used by components without one (copied).
+ * @brief Sets the font asset name used by components without one (copied in full: "mono" is kept as "tbp:mono").
  * @param self The document; must not be NULL.
  * @param fontName A font asset name, or NULL for raylib's built-in font.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if @p fontName is not

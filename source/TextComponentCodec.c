@@ -2,6 +2,7 @@
 #include <math.h>
 #include "TextComponentCodec.h"
 #include "AssetManager.h"
+#include "NamespacedKey.h"
 #include "wr/WRString.h"
 #include "wr/WRMemory.h"
 
@@ -36,7 +37,7 @@
 
 /* The styling fields every string-bearing component (string and translate) shares; listed once here. */
 #define TEXT_CODEC_STRING_STYLE_FIELDS \
-    { TextCodecFieldId_Font, TextCodecValueKind_Name, NULL, u8"font", u8"font", TEXT_CODEC_GHDF_FONT, false, 0.0f, 0.0f }, \
+    { TextCodecFieldId_Font, TextCodecValueKind_AssetName, NULL, u8"font", u8"font", TEXT_CODEC_GHDF_FONT, false, 0.0f, 0.0f }, \
     { TextCodecFieldId_Color, TextCodecValueKind_RenderColor, NULL, u8"color", u8"color", TEXT_CODEC_GHDF_COLOR, false, \
         0.0f, 0.0f }, \
     { TextCodecFieldId_Size, TextCodecValueKind_Decimal, NULL, u8"size", u8"size", TEXT_CODEC_GHDF_SIZE, false, 0.0f, \
@@ -97,7 +98,7 @@ static const TextCodecField StringFields[] =
 /* The key comes first: a translate component is created with it before the other fields are applied. */
 static const TextCodecField TranslateFields[] =
 {
-    { TextCodecFieldId_Key, TextCodecValueKind_Name, NULL, u8"key", u8"key", TEXT_CODEC_GHDF_KEY, true, 0.0f, 0.0f },
+    { TextCodecFieldId_Key, TextCodecValueKind_LocalName, NULL, u8"key", u8"key", TEXT_CODEC_GHDF_KEY, true, 0.0f, 0.0f },
     { TextCodecFieldId_Fallback, TextCodecValueKind_Text, NULL, u8"fallback", u8"fallback", TEXT_CODEC_GHDF_TEXT, false,
         0.0f, 0.0f },
     TEXT_CODEC_STRING_STYLE_FIELDS
@@ -105,7 +106,7 @@ static const TextCodecField TranslateFields[] =
 
 static const TextCodecField SpriteFields[] =
 {
-    { TextCodecFieldId_Animation, TextCodecValueKind_Name, NULL, u8"animation", u8"animation", TEXT_CODEC_GHDF_ANIMATION,
+    { TextCodecFieldId_Animation, TextCodecValueKind_AssetName, NULL, u8"animation", u8"animation", TEXT_CODEC_GHDF_ANIMATION,
         false, 0.0f, 0.0f },
     { TextCodecFieldId_SpriteColor, TextCodecValueKind_RenderColor, NULL, u8"color", u8"color", TEXT_CODEC_GHDF_SPRITE_COLOR,
         false, 0.0f, 0.0f },
@@ -501,8 +502,15 @@ static Error ValidateFieldValue(DecodeContext* context, const TextCodecField* fi
                 return MakeNodeError(context, field, u8"must be valid UTF-8.");
             }
             return Error_CreateSuccess();
-        case TextCodecValueKind_Name:
+        case TextCodecValueKind_AssetName:
             if (!AssetManager_IsValidAssetName(value->Text))
+            {
+                return MakeNodeError(context, field,
+                    u8"must be an asset name: a namespaced key (namespace:path), the namespace optional.");
+            }
+            return Error_CreateSuccess();
+        case TextCodecValueKind_LocalName:
+            if (!NamespacedKey_IsValidLocalName(value->Text))
             {
                 return MakeNodeError(context, field, u8"must be a name matching [a-z][a-z0-9_.-]*.");
             }

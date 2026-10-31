@@ -3,6 +3,7 @@
 #include "TextComponent.h"
 #include "TextComponentInternal.h"
 #include "AssetManager.h"
+#include "NamespacedKey.h"
 #include "wr/WRString.h"
 
 
@@ -181,6 +182,30 @@ static bool IsWithinBuffer(const GenericBuffer* buffer, const unsigned char* poi
 // Replaces the string held in *slot with a copy of value; NULL or "" releases the buffer. The copy is built in a fresh
 // buffer when value points into the current one (a suffix of the old string), and capacity is reserved before the old
 // string is cleared, so a failure always keeps the old value.
+/* An asset name as written in full ("noto_sans" is "tbp:noto_sans"): @p name itself when it is full already or NULL,
+ * else its full form written to @p storage (NAMESPACED_KEY_BUFFER_SIZE bytes). Returns what is wrong with a name that
+ * is not an asset name (*outName is then NULL), else NULL. */
+static const char* ToFullAssetName(const unsigned char* name, unsigned char* storage, const unsigned char** outName)
+{
+    *outName = NULL;
+    if ((name == NULL) || NamespacedKey_IsValid(name))
+    {
+        *outName = name;
+        return NULL;
+    }
+    const char* Problem = AssetManager_DescribeAssetNameProblem(name);
+    if (Problem != NULL)
+    {
+        return Problem;
+    }
+    GenericBuffer FullName;
+    GenericBuffer_CreateConstant(&FullName, storage, NAMESPACED_KEY_BUFFER_SIZE, sizeof(unsigned char), 0U);
+    Error ParseResult = AssetManager_ParseAssetName(name, &FullName);
+    Error_Deconstruct(&ParseResult); // the name is valid and the buffer holds any key
+    *outName = storage;
+    return NULL;
+}
+
 static Error AssignOwnedString(TextComponent* owner, GenericBuffer** slot, const unsigned char* value)
 {
     GenericBuffer* Current = *slot;
@@ -560,13 +585,16 @@ Error StringComponent_SetFontName(StringComponent* self, const unsigned char* fo
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "StringComponent_SetFontName: self must not be NULL.");
     }
-    if ((fontName != NULL) && !AssetManager_IsValidAssetName(fontName))
+    unsigned char Storage[NAMESPACED_KEY_BUFFER_SIZE];
+    const unsigned char* FullName = NULL;
+    const char* Problem = ToFullAssetName(fontName, Storage, &FullName);
+    if (Problem != NULL)
     {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
-            "StringComponent_SetFontName: the font name must be an asset name ([a-z][a-z0-9_.-]*).");
+        return Error_Construct4(ErrorCode_ArgumentOutOfRange,
+            "StringComponent_SetFontName: the font name must be an asset name: %s.", Problem);
     }
 
-    Error Result = AssignOwnedString(&self->Base, &self->_fontName, fontName);
+    Error Result = AssignOwnedString(&self->Base, &self->_fontName, FullName);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
@@ -736,13 +764,16 @@ Error SpriteComponent_SetAnimationName(SpriteComponent* self, const unsigned cha
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "SpriteComponent_SetAnimationName: self must not be NULL.");
     }
-    if ((animationName != NULL) && !AssetManager_IsValidAssetName(animationName))
+    unsigned char Storage[NAMESPACED_KEY_BUFFER_SIZE];
+    const unsigned char* FullName = NULL;
+    const char* Problem = ToFullAssetName(animationName, Storage, &FullName);
+    if (Problem != NULL)
     {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
-            "SpriteComponent_SetAnimationName: the animation name must be an asset name ([a-z][a-z0-9_.-]*).");
+        return Error_Construct4(ErrorCode_ArgumentOutOfRange,
+            "SpriteComponent_SetAnimationName: the animation name must be an asset name: %s.", Problem);
     }
 
-    Error Result = AssignOwnedString(&self->Base, &self->_animationName, animationName);
+    Error Result = AssignOwnedString(&self->Base, &self->_animationName, FullName);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
@@ -821,6 +852,6 @@ Error TranslateComponent_SetFallback(TranslateComponent* self, const unsigned ch
 // Public functions: validation.
 bool TextComponent_IsValidTranslationKey(const unsigned char* key)
 {
-    // Keys follow the asset-name grammar on purpose: both will be namespaced per story pack the same way.
-    return AssetManager_IsValidAssetName(key);
+    // Local names: whether translation keys take namespaces is decided with the string tables, which are not built yet.
+    return NamespacedKey_IsValidLocalName(key);
 }

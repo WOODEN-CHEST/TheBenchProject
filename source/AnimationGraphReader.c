@@ -7,6 +7,7 @@
 #include "AssetDefinitionCommon.h"
 #include "AssetManager.h"
 #include "GameJSON.h"
+#include "NamespacedKey.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
 
@@ -296,7 +297,7 @@ static Error ToOwnedString(const Builder* builder, const JSONObjectValue* value,
 /* Whether a text is a name of the graph's kind ([a-z][a-z0-9_.-]*, at most @p maxLength bytes). */
 static bool IsValidName(const unsigned char* text, size_t maxLength)
 {
-    return AssetManager_IsValidAssetName(text) && (StringUTF8_GetByteLength(text) <= maxLength);
+    return NamespacedKey_IsValidLocalName(text) && (StringUTF8_GetByteLength(text) <= maxLength);
 }
 
 /* A value as a name of the graph's kind, appended to the strings: its offset. */

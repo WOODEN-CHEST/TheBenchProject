@@ -1,4 +1,4 @@
 {
-    "name": "world_postfx",
+    "name": "tbp:world_postfx",
     "fragment_location": "postfx/fragment"
 }

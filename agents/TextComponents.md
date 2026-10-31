@@ -45,7 +45,10 @@ Defaults and valid ranges are macros in `TextComponent.h` (`STRING_COMPONENT_DEF
 `STRING_COMPONENT_SHADOW_OFFSET_LIMIT`, `STRING_COMPONENT_SPACING_MIN/MAX`). Every setter validates
 (`ErrorCode_ArgumentOutOfRange`, `ErrorCode_InvalidTextEncoding` for text that is not UTF-8), and the codec enforces the
 same ranges, so whatever a setter accepts survives a round trip. Render colors need brightness and opacity in [0, 1].
-Font names, animation names and translation keys follow the asset-name grammar `[a-z][a-z0-9_.-]*`.
+Font names and animation names are asset names (namespaced keys): the setters accept them as written and keep them in
+full (`noto_sans` becomes `tbp:noto_sans`), so the codec writes them in full and the document binds one spelling.
+Translation keys are local names, `[a-z][a-z0-9_.-]*` (`TextComponent_IsValidTranslationKey`); whether they take
+namespaces is decided with the string tables, which are not built yet.
 
 ## The strict tree
 

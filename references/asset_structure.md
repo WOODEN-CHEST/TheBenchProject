@@ -2,23 +2,38 @@
 
 All asset definitions have a root compound { } which has the property "name", its value is a string which
 describes the asset's name to access it by.
-The name must match `[a-z][a-z0-9_.-]*`: at least 1 character, starting with a lowercase letter a-z, followed only
-by a-z, 0-9, '_', '.' and '-'. Uppercase letters, spaces, '/', and any non-ASCII character make the name invalid.
-The asset manager checks this for every definition (whatever its type, and also for definitions built in code);
-a definition with an invalid name is rejected.
+
+### Asset names are namespaced keys.
+An asset name is `namespace:path`, so two packs' assets never collide: `mymod:desk` and `tbp:desk` are two assets.
+* The namespace is `[a-z0-9_.-]+` and the path `[a-z0-9_./-]+`: lowercase ASCII letters, digits, `_`, `.` and `-`
+  (and `/` in the path). The whole name, colon included, is at most 128 bytes. Uppercase letters, spaces, a second
+  colon and every other character make the name invalid, so a name has exactly one spelling.
+* A name written without a namespace (`desk`) is the default namespace's, `tbp` (The Bench Project): `desk` and
+  `tbp:desk` are one asset. This holds wherever a name is read: a definition's own `name`, every key below that names
+  another asset, world files, text components and a terrain's material slots.
+* **Files write names in full** (`"name": "tbp:desk"`, `"model": "tbp:desk_lod0"`), so a file moved into another pack
+  keeps its meaning; the game's files and every example below do. The game keeps, compares, logs and writes names in
+  full.
+* Names local to one asset are not asset names and take no namespace: a world model's variants and sockets, an
+  animation library's clips, an animation graph's states and parameters, a climate's presets, collision sets and
+  shapes, a sprite sheet's images. Their own rules are given where they appear.
+
+The asset manager checks every definition's name (whatever its type, and also for definitions built in code); a
+definition with an invalid name is rejected.
 
 No two asset definitions OF THE SAME TYPE may have the same name. Each one must be unique. Names can
-be shared across different asset types, however. How a repeated name is handled:
+be shared across different asset types, however. How a repeated name is handled (names compared in full):
 * Two definitions of the same type and name inside the SAME search root are an error. The definition read first
   stays registered, the other one is skipped, and the error names both files. (Which file is read first depends
-  on directory order, so fix the duplicate rather than relying on it.)
+  on directory order, so fix the duplicate rather than relying on it.) `desk` and `tbp:desk` in one root are such a
+  duplicate.
 * The same type and name in DIFFERENT search roots is the override mechanism: the higher-priority root (lower
   index) wins and the other definition is ignored without an error. Resource packs and mods use this.
 
 For example.
 ```
 {
-    "name": "main_background"
+    "name": "tbp:main_background"
     ... // Other stuff afterwards.
 }
 ```
@@ -285,20 +300,24 @@ from either a spritesheet, be standalone textures, or mixed (different frames us
 
 The source of a frame can be specified to either be a texture, in which case this animation owns the
 texture asset, or it can be a spritesheet image, then this asset depends on that spritesheet asset.
+A texture frame has a `location` (a file path) and optional `texture_properties`; a sprite-sheet frame names its
+sheet with `sprite_sheet` (an asset name; `location` there is refused) and the image in it with `name`.
 
 
 Sprite animation:
 ```
 {
+    "name": "tbp:door_opening",
     "frames": [ // The frames of the animation.
         {
-            "source": "spritesheet" or "texture",
-
-            "location": asset location, // The location of the texture OR spritesheet. A texture location must be a file path.
-
-            "name": spritesheet image name // The name of the spritehseet image (as discussed earlier) IF the source is a spritehseet, otherwise not present.
-
-            "texture_properties": texture properties // [OPTIONAL] Present if source is a texture
+            "source": "texture",
+            "location": asset location,              // the frame's image file (a file path, never a reference)
+            "texture_properties": texture properties // [OPTIONAL]
+        },
+        {
+            "source": "spritesheet",
+            "sprite_sheet": "tbp:doors",             // the sprite sheet asset's name
+            "name": "door_open"                      // the image of that sheet the frame shows
         }
     ],
 
@@ -366,7 +385,7 @@ pixel fonts with one-pixel strokes. raylib's built-in font uses the default.
 
 ```
 {
-    "name": "world_pbr",
+    "name": "tbp:world_pbr",
     "vertex_location": asset location,   // [OPTIONAL] the vertex-stage source; omit to use Raylib's default
     "fragment_location": asset location, // [OPTIONAL] the fragment-stage source; omit to use Raylib's default
     "defines": [ string, ... ]           // [OPTIONAL] names #defined in both stages; none by default
@@ -386,7 +405,7 @@ a name is a GLSL identifier (a letter or `_`, then letters, digits or `_`) that 
 (GLSL reserves both). Anything else fails the definition. The instanced twins use it:
 ```
 {
-    "name": "world_depth_instanced",
+    "name": "tbp:world_depth_instanced",
     "vertex_location": "depth/instanced",
     "fragment_location": "depth/fragment",
     "defines": ["WORLD_INSTANCED"]
@@ -435,7 +454,7 @@ with it; one that replaces a vertex stage should replace the twin's too.
 
 ```
 {
-    "name": "player_character",
+    "name": "tbp:player_character",
     "location": asset location,          // the model file (obj / gltf / glb / iqm / vox / m3d)
 
     "transform": {                       // [OPTIONAL] baked import transform applied at load
@@ -530,7 +549,7 @@ definitions.) Definitions and images live under `textures/`.
 
 ```
 {
-    "name": "sky_milky_way",
+    "name": "tbp:sky_milky_way",
     "location": asset location,              // the image file (png / bmp / gif / qoi / dds); must be a file path
     "texture_properties": texture properties, // [OPTIONAL] filtering, wrap and mipmaps; see "Texture properties"
     "color_space": "srgb" or "linear"        // [OPTIONAL] Defaults to srgb.
@@ -546,7 +565,7 @@ definitions.) Definitions and images live under `textures/`.
 Example (the Milky Way placeholder, `textures/sky/milky_way.json`):
 ```
 {
-    "name": "sky_milky_way",
+    "name": "tbp:sky_milky_way",
     "location": "sky/placeholder_milky_way",
     "texture_properties": { "filtering": "trilinear", "wrap": "repeat", "mipmaps": true },
     "color_space": "srgb"
@@ -557,7 +576,7 @@ The moon's face (`textures/sky/moon.json`) is pixel art seen at about its own si
 mip levels:
 ```
 {
-    "name": "sky_moon",
+    "name": "tbp:sky_moon",
     "location": "sky/placeholder_moon",
     "texture_properties": { "filtering": "point", "wrap": "clamp", "mipmaps": false },
     "color_space": "srgb"
@@ -581,11 +600,11 @@ default setting of this file for that one placement: an explicit override flag n
 
 ```
 {
-    "name": "office_desk",
+    "name": "tbp:office_desk",
     "lods": [                                      // 1 to 8 LODs, the finest first
-        { "model": "office_desk_lod0", "max_distance": 15 },
-        { "model": "office_desk_lod1", "max_distance": 40 },
-        { "model": "office_desk_lod2", "max_distance": 90 }
+        { "model": "tbp:office_desk_lod0", "max_distance": 15 },
+        { "model": "tbp:office_desk_lod1", "max_distance": 40 },
+        { "model": "tbp:office_desk_lod2", "max_distance": 90 }
     ],
     "draw_distance": 120,                          // [OPTIONAL] metres; default: the last LOD's max_distance
     "is_draw_distance_fixed": false,               // [OPTIONAL] default false
@@ -599,12 +618,12 @@ default setting of this file for that one placement: an explicit override flag n
     "variants": [                                  // [OPTIONAL] at most 64
         {
             "name": "dark_wood",
-            "material_overrides": [ { "slot": 0, "albedo": "office_desk_dark_albedo", "tint": "#d0c0b0" } ]
+            "material_overrides": [ { "slot": 0, "albedo": "tbp:office_desk_dark_albedo", "tint": "#d0c0b0" } ]
         }
     ],
     "bounds": { "center": [0, 0.4, 0], "radius": 1.1 }, // [OPTIONAL] default: LOD 0's (a posed object's: its pose's)
-    "animation_libraries": [ "human_motions" ],    // [OPTIONAL] at most 16
-    "animation_graph": "human",                    // [OPTIONAL]
+    "animation_libraries": [ "tbp:human_motions" ], // [OPTIONAL] at most 16
+    "animation_graph": "tbp:human",                // [OPTIONAL]
     "sockets": {                                   // [OPTIONAL] at most 32
         "hand_r": { "bone": "hand_r", "position": [0.03, -0.07, 0], "rotation": [100, 0, 0] },
         "eyes": { "bone": "head", "position": [0, 0.1, 0.1] },
@@ -660,7 +679,7 @@ trigger flag and the mass (`references/world_structure.md`, the collider block).
             { "type": "sphere", "name": "handle", "center": [0.9, 1, 0.09], "radius": 0.04 } ] },
         { "name": "open", "shapes": [
             { "type": "box", "center": [0, 1, 0.5], "rotation": [0, 90, 0], "half_extents": [0.5, 1, 0.05] } ] },
-        { "name": "walls", "shapes": [ { "type": "mesh", "model": "shop_collision", "is_two_sided": false } ] }
+        { "name": "walls", "shapes": [ { "type": "mesh", "model": "tbp:shop_collision", "is_two_sided": false } ] }
     ]
 }
 ```
@@ -729,8 +748,8 @@ every setting of this file for that one placement: an explicit override flag nex
 
 ```
 {
-    "name": "street_tree",
-    "sprite_animation": "street_tree",       // the sprite animation to play
+    "name": "tbp:street_tree",
+    "sprite_animation": "tbp:street_tree",   // the sprite animation to play
     "orientation": "axis_billboard",         // [OPTIONAL] default "billboard"
     "pivot": [0.5, 0.0],                     // [OPTIONAL] default [0.5, 0.5]
     "pixels_per_unit": 32,                   // [OPTIONAL] default 32
@@ -794,7 +813,7 @@ its object (a world model, posed by its animator: `agents/Animation.md`) or chil
 
 ```
 {
-    "name": "human",
+    "name": "tbp:human",
     "radius": 0.3,                      // [OPTIONAL] default 0.3: the upright capsule's radius, metres
     "height": 1.75,                     // [OPTIONAL] default 1.75: its whole height, caps included (>= 2 x radius)
     "eye_height": 1.62,                 // [OPTIONAL] default 1.62: the eyes above the feet
@@ -905,7 +924,7 @@ play on a model, retargeted to its bone lengths, is in `agents/Animation.md`.
 
 ```
 {
-    "name": "human_motions",
+    "name": "tbp:human_motions",
     "location": "humans/motions",                  // the glTF file (gltf / glb)
     "format": "glb",                               // [OPTIONAL] see "Format"
     "clips": [                                     // [OPTIONAL] at most 256, each name and each source once
@@ -954,7 +973,7 @@ graph names clips, not libraries: they come from the animator's libraries. How a
 
 ```
 {
-    "name": "human",
+    "name": "tbp:human",
     "fade_seconds": 0.2,                           // [OPTIONAL] the default cross-fade, 0 to 60 s; default 0.2
     "parameters": {                                // [OPTIONAL] at most 64 custom parameters, 32 of them triggers
         "mood": { "type": "float", "default": 0, "min": -1, "max": 1 },
@@ -1051,12 +1070,12 @@ under `terrains/`, next to their `.glb` or their binary file; a world places one
 
 ```
 {
-    "name": "placeholder_terrain",
+    "name": "tbp:placeholder_terrain",
     "source": "model",                                   // "model" (a .glb imported when it loads) or "data"
     "model": "test_world/placeholder_terrain",           // source model: the glTF file (glb / gltf)
-    "materials": [ "grass", "dirt", "rock" ],            // the palette, 1 to 16 terrain material names
+    "materials": [ "tbp:grass", "tbp:dirt", "tbp:rock" ], // the palette, 1 to 16 terrain material names
     "density_channels": [ "trees" ],                     // [OPTIONAL] at most 8
-    "weights": [ { "attribute": "COLOR_0", "r": "grass", "g": "dirt", "b": "rock" } ],
+    "weights": [ { "attribute": "COLOR_0", "r": "tbp:grass", "g": "tbp:dirt", "b": "tbp:rock" } ],
     "densities": [ { "attribute": "_DENSITY_0", "r": "trees" } ],
     "normals": "smooth",                                 // [OPTIONAL] "smooth" or "imported"
     "blend_slot": "blend",                               // [OPTIONAL] the slot of the painted faces
@@ -1065,9 +1084,9 @@ under `terrains/`, next to their `.glb` or their binary file; a world places one
         "is_shadow_distance_fixed": false, "draw_distance": 4000.0, "is_draw_distance_fixed": true },
     "collision": { "is_enabled": true, "layer": "world" }, // [OPTIONAL] each key optional
     "rules": [                                           // [OPTIONAL] at most 8, applied in order
-        { "material": "rock", "slope": { "min": 35.0, "blend": 8.0 }, "only_on": [ "grass", "dirt" ] },
-        { "material": "dirt", "height": { "max": -4.5, "blend": 2.5 },
-            "noise": { "scale": 2.5, "strength": 0.6, "seed": 11 }, "only_on": [ "grass" ] }
+        { "material": "tbp:rock", "slope": { "min": 35.0, "blend": 8.0 }, "only_on": [ "tbp:grass", "tbp:dirt" ] },
+        { "material": "tbp:dirt", "height": { "max": -4.5, "blend": 2.5 },
+            "noise": { "scale": 2.5, "strength": 0.6, "seed": 11 }, "only_on": [ "tbp:grass" ] }
     ]
 }
 ```
@@ -1077,12 +1096,12 @@ under `terrains/`, next to their `.glb` or their binary file; a world places one
 | `source` | `model` or `data`, required | Where the mesh comes from: a glTF file imported when the terrain loads (`model`), or the terrain's binary form (`data`), which the in-game editor will write. |
 | `model` | asset location; `source: model` only | The `.glb` (or `.gltf` with its buffers beside it). `format` (`glb`, `gltf`) narrows it as for models. |
 | `data` | asset location; `source: data` only | The binary form, a `.ghdf` file (`TerrainMesh_SaveGHDF`). |
-| `materials` | 1 to 16 asset names, each once; with `source: model` none named `hole` or as the blend slot (`blend` unless `blend_slot` says) | The palette: `terrain_material` assets (see "Terrain materials"), loaded with the terrain as its dependencies. Each vertex weighs them, and a face slot may name one. Their maps of one kind must share one size (a texture array holds one): a mismatch fails the terrain's load, naming both materials and sizes. |
+| `materials` | 1 to 16 asset names, each once; with `source: model` none that the slot `hole` or the blend slot (`blend` unless `blend_slot` says) would name (`tbp:hole`, `tbp:blend`) | The palette: `terrain_material` assets (see "Terrain materials"), loaded with the terrain as its dependencies. Each vertex weighs them, and a face slot may name one. Their maps of one kind must share one size (a texture array holds one): a mismatch fails the terrain's load, naming both materials and sizes. |
 | `density_channels` | at most 8 names (`[a-z][a-z0-9_]*`), each once | Vegetation and other densities per vertex, for the scattering (not built yet). |
 | `weights` | at most one mapping per palette material | Which attribute of the file feeds which palette material: `{ "attribute": "<name in the file>", "r": "<material>", "g": ..., "b": ..., "a": ... }`, any channels left out unused. Each material is fed by one channel at most. Without mappings every weight is 0, and the terrain shows its first material. |
 | `densities` | at most one mapping per density channel | The same for the density channels. |
 | `normals` | `smooth` (default) or `imported`; `source: model` only | `smooth`: computed by the game over the whole welded mesh (no seams between chunks). `imported`: the file's own normals, so hard edges modelled in Blender stay hard (vertices at one position with different normals stay apart). |
-| `blend_slot` | a material slot's name (default `blend`); `source: model` only | The slot whose faces use the painted weights. It may not be `hole` or a palette material's name. |
+| `blend_slot` | a material slot's name (default `blend`); `source: model` only | The slot whose faces use the painted weights, matched exactly. It may not be `hole` or name a palette material (`dirt` names `tbp:dirt`). |
 | `chunk_size` | metres, 8 to 256 (default 32) | The side of the chunks' square cells in the terrain's X and Z. |
 | `render.has_outline` | boolean (true) | Whether the renderer outlines it. |
 | `render.casts_shadows` | boolean (true) | Off: it casts no shadow; it still receives them. |
@@ -1120,10 +1139,11 @@ of its weight to the rule's material, so the weights keep adding up to one. Face
 (they take their material outright). Unknown keys are refused in a rule and in each of its blocks.
 
 **Material slots** decide each face (`source: model`): a primitive's material is its slot, and its name says what its
-faces are. `blend` (or the `blend_slot`; also a primitive without a material) uses the painted weights; `hole` makes
-holes (not drawn, no collision: cave mouths, basements); a palette material's name gives its faces that material
-outright, with a hard edge along their border (a path, a ploughed field). Any other slot name is refused with the name in
-the message.
+faces are. `blend` (or the `blend_slot`; also a primitive without a material) uses the painted weights and `hole` makes
+holes (not drawn, no collision: cave mouths, basements); these two are matched exactly, first. Any other slot is read as
+an asset name and gives its faces that palette material outright, with a hard edge along their border (a path, a
+ploughed field): a Blender material named `dirt` is `tbp:dirt`, and another namespace's material is named in full
+(`mymod:mud`). A slot that names no palette material is refused with the name in the message.
 
 **Weights and densities** are read from colour or custom attributes: a scalar, RGB or RGBA of floats (clamped to 0..1)
 or of normalized unsigned bytes or shorts. Weights need not add up to 1: the material mix divides by their sum. Every
@@ -1183,11 +1203,11 @@ name them. How the blend works is in `agents/Terrain.md`.
 
 ```
 {
-    "name": "grass",
-    "albedo": "placeholder_terrain_grass_albedo",              // a texture asset: the colour (sRGB)
-    "height": "placeholder_terrain_grass_height",              // [OPTIONAL] a texture asset: the surface's height
-    "normal": "placeholder_terrain_grass_normal",              // [OPTIONAL] a texture asset: a tangent-space normal map
-    "roughness_ao": "placeholder_terrain_grass_roughness_ao",  // [OPTIONAL] a texture asset: roughness (red), AO (green)
+    "name": "tbp:grass",
+    "albedo": "tbp:placeholder_terrain_grass_albedo",          // a texture asset: the colour (sRGB)
+    "height": "tbp:placeholder_terrain_grass_height",          // [OPTIONAL] a texture asset: the surface's height
+    "normal": "tbp:placeholder_terrain_grass_normal",          // [OPTIONAL] a texture asset: a tangent-space normal map
+    "roughness_ao": "tbp:placeholder_terrain_grass_roughness_ao", // [OPTIONAL] a texture asset: roughness (red), AO (green)
     "tile_size": 2.0,              // [OPTIONAL]
     "albedo_tint": "#ffffff",      // [OPTIONAL]
     "roughness": 0.9,              // [OPTIONAL]
@@ -1249,7 +1269,7 @@ no dependencies.
 
 ```
 {
-    "name": "default",
+    "name": "tbp:default",
     "mode": "simulated",                // [OPTIONAL] default "simulated"; or "fixed", "scripted", "off"
     "seed": "per_save",                 // [OPTIONAL] default "per_save"; or a whole number >= 0
     "start": "clear",                   // [OPTIONAL] default the first preset; or "random"

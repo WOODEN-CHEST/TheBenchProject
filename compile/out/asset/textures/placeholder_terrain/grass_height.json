@@ -1,5 +1,5 @@
 {
-    "name": "placeholder_terrain_grass_height",
+    "name": "tbp:placeholder_terrain_grass_height",
     "location": "placeholder_terrain/grass_height",
     "color_space": "linear"
 }

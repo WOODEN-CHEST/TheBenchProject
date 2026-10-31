@@ -1,5 +1,5 @@
 {
-    "format_version": 2,
+    "format_version": 3,
     "name": "test",
     "next_object_id": 66,
     "environment": {},
@@ -10,7 +10,7 @@
             "position": [0.0, 1.2, 0.0],
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {}
             }
@@ -21,7 +21,7 @@
             "scale": [40.0, 0.2, 40.0],
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {
                     "overrides_layer": true,
@@ -35,7 +35,7 @@
             "position": [3.0, 1.2, 0.0],
             "components": {
                 "model": {
-                    "world_model": "test",
+                    "world_model": "tbp:test",
                     "overrides_omit_pixelation": true,
                     "omit_pixelation": true
                 },
@@ -71,7 +71,7 @@
             "position": [-3.0, 1.5, 0.0],
             "components": {
                 "sprite": {
-                    "world_sprite": "test_sprite"
+                    "world_sprite": "tbp:test_sprite"
                 }
             }
         },
@@ -82,7 +82,7 @@
             "rotation": [-90.0, 25.0, 0.0],
             "components": {
                 "sprite": {
-                    "world_sprite": "test_tire_mark"
+                    "world_sprite": "tbp:test_tire_mark"
                 }
             }
         },
@@ -92,7 +92,7 @@
             "position": [-6.0, 0.05, 4.0],
             "components": {
                 "sprite": {
-                    "world_sprite": "test_tree"
+                    "world_sprite": "tbp:test_tree"
                 },
                 "collider": {
                     "uses_own_shape": true,
@@ -110,7 +110,7 @@
             "rotation": [0.0, 200.0, 0.0],
             "components": {
                 "sprite": {
-                    "world_sprite": "test_sign"
+                    "world_sprite": "tbp:test_sign"
                 },
                 "collider": {
                     "uses_own_shape": true,
@@ -129,7 +129,7 @@
             "scale": [2.0, 2.0, 2.0],
             "components": {
                 "sprite": {
-                    "world_sprite": "test_smoke"
+                    "world_sprite": "tbp:test_smoke"
                 }
             }
         },
@@ -140,7 +140,7 @@
             "scale": [2.0, 2.0, 2.0],
             "components": {
                 "sprite": {
-                    "world_sprite": "test_glow"
+                    "world_sprite": "tbp:test_glow"
                 }
             }
         },
@@ -151,7 +151,7 @@
             "rotation": [0.0, 180.0, 0.0],
             "components": {
                 "sprite": {
-                    "world_sprite": "test_neon"
+                    "world_sprite": "tbp:test_neon"
                 }
             }
         },
@@ -162,7 +162,7 @@
             "scale": [2.0, 2.0, 2.0],
             "components": {
                 "model": {
-                    "world_model": "pbr_demo",
+                    "world_model": "tbp:pbr_demo",
                     "overrides_shadow_distance": true,
                     "shadow_distance": 16.0
                 },
@@ -176,7 +176,7 @@
             "scale": [2.0, 2.0, 2.0],
             "components": {
                 "model": {
-                    "world_model": "pbr_metal"
+                    "world_model": "tbp:pbr_metal"
                 },
                 "collider": {}
             }
@@ -196,7 +196,7 @@
             "scale": [3.2, 0.12, 1.6],
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {}
             }
@@ -209,7 +209,7 @@
             "scale": [0.12, 1.44, 1.5],
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {}
             }
@@ -222,7 +222,7 @@
             "scale": [0.12, 1.44, 1.5],
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {}
             }
@@ -235,7 +235,7 @@
             "scale": [0.18, 0.24, 0.18],
             "components": {
                 "model": {
-                    "world_model": "pbr_metal",
+                    "world_model": "tbp:pbr_metal",
                     "overrides_shadow_distance": true,
                     "shadow_distance": 16.0
                 },
@@ -255,7 +255,7 @@
             "scale": [0.1, 0.8, 0.1],
             "components": {
                 "model": {
-                    "world_model": "test",
+                    "world_model": "tbp:test",
                     "overrides_shadow_distance": true,
                     "shadow_distance": 16.0
                 },
@@ -285,7 +285,7 @@
             },
             "components": {
                 "model": {
-                    "world_model": "test_cup",
+                    "world_model": "tbp:test_cup",
                     "overrides_shadow_distance": true,
                     "shadow_distance": 16.0
                 },
@@ -298,7 +298,7 @@
             "position": [1.0, 0.3, 2.5],
             "components": {
                 "model": {
-                    "world_model": "painted_cube",
+                    "world_model": "tbp:painted_cube",
                     "uses_variant": true,
                     "variant": "red"
                 },
@@ -311,7 +311,7 @@
             "position": [-1.0, 0.3, 2.5],
             "components": {
                 "model": {
-                    "world_model": "painted_cube",
+                    "world_model": "tbp:painted_cube",
                     "uses_variant": true,
                     "variant": "blue"
                 },
@@ -324,7 +324,7 @@
             "position": [-3.5, 0.05, 6.5],
             "components": {
                 "sprite": {
-                    "world_sprite": "test_tree",
+                    "world_sprite": "tbp:test_tree",
                     "overrides_flip_x": true,
                     "flip_x": true
                 }
@@ -336,7 +336,7 @@
             "position": [8.0, 0.55, -6.0],
             "components": {
                 "model": {
-                    "world_model": "lod_test"
+                    "world_model": "tbp:lod_test"
                 },
                 "collider": {}
             }
@@ -347,7 +347,7 @@
             "position": [8.0, 0.55, -3.0],
             "components": {
                 "model": {
-                    "world_model": "lod_test"
+                    "world_model": "tbp:lod_test"
                 },
                 "collider": {}
             }
@@ -358,7 +358,7 @@
             "position": [8.0, 0.55, 0.0],
             "components": {
                 "model": {
-                    "world_model": "lod_test"
+                    "world_model": "tbp:lod_test"
                 },
                 "collider": {}
             }
@@ -369,7 +369,7 @@
             "position": [8.0, 0.55, 3.0],
             "components": {
                 "model": {
-                    "world_model": "lod_test"
+                    "world_model": "tbp:lod_test"
                 },
                 "collider": {}
             }
@@ -380,7 +380,7 @@
             "position": [8.0, 0.55, 6.0],
             "components": {
                 "model": {
-                    "world_model": "lod_test"
+                    "world_model": "tbp:lod_test"
                 },
                 "collider": {}
             }
@@ -391,7 +391,7 @@
             "position": [8.0, 0.55, 9.0],
             "components": {
                 "model": {
-                    "world_model": "lod_test"
+                    "world_model": "tbp:lod_test"
                 },
                 "collider": {}
             }
@@ -402,7 +402,7 @@
             "position": [9.3, 0.55, 0.0],
             "components": {
                 "model": {
-                    "world_model": "lod_test",
+                    "world_model": "tbp:lod_test",
                     "is_lod_forced": true,
                     "forced_lod": 2
                 },
@@ -415,7 +415,7 @@
             "position": [9.3, 0.55, 3.0],
             "components": {
                 "model": {
-                    "world_model": "lod_test",
+                    "world_model": "tbp:lod_test",
                     "overrides_lod_distances": true,
                     "lod_distances": [3.0, 6.0, 60.0]
                 },
@@ -432,7 +432,7 @@
             },
             "components": {
                 "model": {
-                    "world_model": "test_door"
+                    "world_model": "tbp:test_door"
                 },
                 "collider": {}
             }
@@ -460,7 +460,7 @@
             "mobility": "movable",
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {}
             }
@@ -473,7 +473,7 @@
             "mobility": "movable",
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {
                     "is_pushable": true
@@ -488,7 +488,7 @@
             "mobility": "movable",
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {
                     "is_pushable": true
@@ -503,7 +503,7 @@
             "mobility": "movable",
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {
                     "is_pushable": true
@@ -518,7 +518,7 @@
             "mobility": "movable",
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {
                     "is_pushable": true
@@ -533,7 +533,7 @@
             "mobility": "movable",
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {
                     "is_pushable": true
@@ -547,7 +547,7 @@
             "scale": [0.4, 2.0, 2.4],
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {}
             }
@@ -560,7 +560,7 @@
             "mobility": "movable",
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {
                     "is_pushable": true
@@ -574,7 +574,7 @@
             "scale": [0.2, 2.0, 1.6],
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {}
             }
@@ -586,7 +586,7 @@
             "scale": [2.8, 2.0, 0.4],
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {}
             }
@@ -598,7 +598,7 @@
             "rotation": [0.0, 180.0, 0.0],
             "components": {
                 "model": {
-                    "world_model": "test_humanoid"
+                    "world_model": "tbp:test_humanoid"
                 },
                 "animator": {
                     "plays_clip": true,
@@ -614,7 +614,7 @@
             "rotation": [0.0, 180.0, 0.0],
             "components": {
                 "model": {
-                    "world_model": "test_humanoid"
+                    "world_model": "tbp:test_humanoid"
                 },
                 "animator": {
                     "plays_clip": true,
@@ -630,7 +630,7 @@
             "rotation": [0.0, 180.0, 0.0],
             "components": {
                 "model": {
-                    "world_model": "test_humanoid_short"
+                    "world_model": "tbp:test_humanoid_short"
                 },
                 "animator": {
                     "plays_clip": true,
@@ -647,7 +647,7 @@
             "rotation": [0.0, 180.0, 0.0],
             "components": {
                 "model": {
-                    "world_model": "test_humanoid"
+                    "world_model": "tbp:test_humanoid"
                 },
                 "animator": {
                     "plays_clip": true,
@@ -666,7 +666,7 @@
             },
             "components": {
                 "model": {
-                    "world_model": "test_bench"
+                    "world_model": "tbp:test_bench"
                 },
                 "collider": {}
             }
@@ -676,7 +676,7 @@
             "name": "terrain",
             "components": {
                 "terrain": {
-                    "terrain": "placeholder_terrain",
+                    "terrain": "tbp:placeholder_terrain",
                     "overrides_draw_distance": true,
                     "draw_distance": 100000.0
                 }
@@ -687,7 +687,7 @@
             "name": "grove",
             "components": {
                 "model_instances": {
-                    "world_model": "test_tree",
+                    "world_model": "tbp:test_tree",
                     "instances": [
                         {
                             "position": [-2.259, 1.774, 142.541],
@@ -3117,7 +3117,7 @@
             "scale": [8.0, 5.2, 0.4],
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {}
             }
@@ -3130,7 +3130,7 @@
             "scale": [0.4, 5.2, 7.2],
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {}
             }
@@ -3143,7 +3143,7 @@
             "scale": [0.4, 5.2, 7.2],
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {}
             }
@@ -3156,7 +3156,7 @@
             "scale": [4.2, 5.2, 0.4],
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {}
             }
@@ -3169,7 +3169,7 @@
             "scale": [1.8, 5.2, 0.4],
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {}
             }
@@ -3182,7 +3182,7 @@
             "scale": [2.0, 1.0, 0.4],
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {}
             }
@@ -3195,7 +3195,7 @@
             "scale": [8.4, 0.4, 7.6],
             "components": {
                 "model": {
-                    "world_model": "test"
+                    "world_model": "tbp:test"
                 },
                 "collider": {}
             }
@@ -3219,7 +3219,7 @@
             "scale": [1.4, 1.4, 1.4],
             "components": {
                 "model": {
-                    "world_model": "test_card"
+                    "world_model": "tbp:test_card"
                 }
             }
         },
@@ -3230,7 +3230,7 @@
             "scale": [1.4, 1.4, 1.4],
             "components": {
                 "model": {
-                    "world_model": "test_card",
+                    "world_model": "tbp:test_card",
                     "overrides_has_two_sided_shadows": true,
                     "has_two_sided_shadows": true
                 }
@@ -3243,7 +3243,7 @@
             "mobility": "movable",
             "components": {
                 "model": {
-                    "world_model": "trash_can_lined"
+                    "world_model": "tbp:trash_can_lined"
                 },
                 "collider": {
                     "is_pushable": true

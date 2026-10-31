@@ -4,6 +4,7 @@
 #include "TestText.h"
 #include "TestWorld.h"
 #include "CollisionLayer.h"
+#include "NamespacedKey.h"
 #include "TerrainAsset.h"
 #include "World.h"
 #include "WorldFile.h"
@@ -224,7 +225,7 @@ static void AMinimalDefinitionGetsTheDefaults(TestRun* run)
         TEST_CHECK(run, (TerrainMesh_GetChunkSize(Terrain) == TERRAIN_DEFAULT_CHUNK_SIZE)
             && (TerrainMesh_GetNormalMode(Terrain) == TerrainNormalMode_Smooth));
         TEST_CHECK(run, (TerrainAsset_GetMaterialCount(Loaded) == 1U) && (TerrainMesh_GetMaterialCount(Terrain) == 1U)
-            && AreNamesEqual(TerrainAsset_GetMaterialName(Loaded, 0U), "grass")
+            && AreNamesEqual(TerrainAsset_GetMaterialName(Loaded, 0U), "tbp:grass")
             && (TerrainAsset_GetMaterialName(Loaded, 1U) == NULL));
         TEST_CHECK(run, (TerrainAsset_GetDensityChannelCount(Loaded) == 0U)
             && (TerrainAsset_GetDensityChannelName(Loaded, 0U) == NULL));
@@ -354,7 +355,7 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
         TEST_CHECK(run, (TerrainMesh_GetChunkSize(Terrain) == 16.0f)
             && (TerrainMesh_GetNormalMode(Terrain) == TerrainNormalMode_Imported));
         TEST_CHECK(run, (TerrainAsset_GetMaterialCount(Loaded) == 3U)
-            && AreNamesEqual(TerrainAsset_GetMaterialName(Loaded, 2U), "rock")
+            && AreNamesEqual(TerrainAsset_GetMaterialName(Loaded, 2U), "tbp:rock")
             && (TerrainAsset_GetDensityChannelCount(Loaded) == 2U)
             && AreNamesEqual(TerrainAsset_GetDensityChannelName(Loaded, 0U), "trees")
             && AreNamesEqual(TerrainAsset_GetDensityChannelName(Loaded, 1U), "flowers"));
@@ -394,7 +395,7 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
     {
         // The source and its location.
         { "{\"name\": \"t\", \"model\": \"t\", \"materials\": [\"g\"]}", ErrorCode_InvalidAssetDefinition,
-            "Terrain \"t\": \"source\" must be \"model\" (a .glb imported when it loads) or \"data\"" },
+            "Terrain \"tbp:t\": \"source\" must be \"model\" (a .glb imported when it loads) or \"data\"" },
         { "{\"name\": \"t\", \"source\": \"mesh\", \"model\": \"t\", \"materials\": [\"g\"]}",
             ErrorCode_InvalidAssetDefinition, "\"source\" must be \"model\"" },
         { "{\"name\": \"t\", \"source\": 3, \"model\": \"t\", \"materials\": [\"g\"]}",
@@ -412,7 +413,7 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
         { MODEL_HEAD "\"format\": \"obj\", \"materials\": [\"g\"]}", ErrorCode_InvalidAssetDefinition,
             "Unsupported terrain format \"obj\"" },
         { MODEL_HEAD "\"materials\": [\"g\"], \"size\": 3}", ErrorCode_InvalidAssetDefinition,
-            "Unknown key \"size\" in terrain \"t\";" },
+            "Unknown key \"size\" in terrain \"tbp:t\";" },
         // The palette and the channels.
         { MODEL_HEAD "\"weights\": []}", ErrorCode_InvalidAssetDefinition,
             "\"materials\" must name 1 to 16 terrain materials: the palette" },
@@ -423,9 +424,9 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
             "\"materials\" holds 17 names; at most 16 are allowed." },
         { MODEL_HEAD "\"materials\": [3]}", ErrorCode_InvalidAssetDefinition, "materials[0] must be a string." },
         { MODEL_HEAD "\"materials\": [\"g\", \"Grass\"]}", ErrorCode_InvalidAssetDefinition,
-            "materials[1] is \"Grass\"; names are asset names" },
+            "materials[1] is \"Grass\", which is not a valid asset name: uppercase letters" },
         { MODEL_HEAD "\"materials\": [\"g\", \"h\", \"g\"]}", ErrorCode_InvalidAssetDefinition,
-            "materials[0] and materials[2] are both \"g\"." },
+            "materials[0] and materials[2] are both \"tbp:g\"." },
         { MODEL_HEAD "\"materials\": [\"g\"], \"density_channels\": [\"Trees\"]}", ErrorCode_InvalidAssetDefinition,
             "density_channels[0] is \"Trees\"; names are [a-z][a-z0-9_]*" },
         { MODEL_HEAD "\"materials\": [\"g\"], \"density_channels\": [\"tree.s\"]}", ErrorCode_InvalidAssetDefinition,
@@ -443,7 +444,7 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
         { MODEL_HEAD "\"materials\": [\"g\"], \"weights\": [7]}", ErrorCode_InvalidAssetDefinition,
             "weights[0] must be a JSON object." },
         { MODEL_HEAD "\"materials\": [\"g\"], \"weights\": [{\"attribute\": \"COLOR_0\", \"r\": \"g\", \"x\": 1}]}",
-            ErrorCode_InvalidAssetDefinition, "Unknown key \"x\" in terrain \"t\", weights[0];" },
+            ErrorCode_InvalidAssetDefinition, "Unknown key \"x\" in terrain \"tbp:t\", weights[0];" },
         { MODEL_HEAD "\"materials\": [\"g\"], \"weights\": [{\"r\": \"g\"}]}", ErrorCode_InvalidAssetDefinition,
             "weights[0] needs an \"attribute\": the name of a colour or custom attribute of the file" },
         { MODEL_HEAD "\"materials\": [\"g\"], \"weights\": [{\"attribute\": \"\", \"r\": \"g\"}]}",
@@ -472,20 +473,20 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
         { MODEL_HEAD "\"materials\": [\"g\"], \"normals\": 1}", ErrorCode_InvalidAssetDefinition,
             "\"normals\" must be \"smooth\" or \"imported\"." },
         { MODEL_HEAD "\"materials\": [\"g\"], \"blend_slot\": \"hole\"}", ErrorCode_InvalidAssetDefinition,
-            "\"blend_slot\" must be 1 to 128 bytes of UTF-8, and neither \"hole\" nor a palette material." },
+            "\"blend_slot\" must be 1 to 128 bytes of UTF-8, and neither \"hole\" nor a palette material's name" },
         { MODEL_HEAD "\"materials\": [\"g\"], \"blend_slot\": \"g\"}", ErrorCode_InvalidAssetDefinition,
             "\"blend_slot\" must be 1 to 128 bytes" },
         { MODEL_HEAD "\"materials\": [\"g\"], \"blend_slot\": \"\"}", ErrorCode_InvalidAssetDefinition,
             "\"blend_slot\" must be 1 to 128 bytes" },
         { MODEL_HEAD "\"materials\": [\"g\"], \"blend_slot\": false}", ErrorCode_InvalidAssetDefinition,
             "\"blend_slot\" must be a material slot's name." },
-        // A palette material named as a slot the import reads first could never be a face's.
+        // A palette material that a slot the import reads first would name is refused as a likely mistake.
         { MODEL_HEAD "\"materials\": [\"g\", \"hole\"]}", ErrorCode_InvalidAssetDefinition,
-            "materials[1] is \"hole\", the name of the material slot that makes holes: a face could never take that "
-            "material. Rename the material." },
+            "materials[1] is \"tbp:hole\": the material slot \"hole\" makes holes, so give the material another "
+            "name." },
         { MODEL_HEAD "\"materials\": [\"blend\", \"g\"]}", ErrorCode_InvalidAssetDefinition,
-            "materials[0] is \"blend\", the name of the material slot that uses the painted weights: a face could never "
-            "take that material. Rename the material or set another \"blend_slot\"." },
+            "materials[0] is \"tbp:blend\": the material slot \"blend\" uses the painted weights, so give the "
+            "material another name or set another \"blend_slot\"." },
         // The chunk size.
         { MODEL_HEAD "\"materials\": [\"g\"], \"chunk_size\": 4}", ErrorCode_InvalidAssetDefinition,
             "\"chunk_size\" is 4; it must be 8 to 256 metres." },
@@ -497,7 +498,7 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
         { MODEL_HEAD "\"materials\": [\"g\"], \"render\": []}", ErrorCode_InvalidAssetDefinition,
             "\"render\" must be a JSON object." },
         { MODEL_HEAD "\"materials\": [\"g\"], \"render\": {\"lod\": 1}}", ErrorCode_InvalidAssetDefinition,
-            "Unknown key \"lod\" in terrain \"t\", render;" },
+            "Unknown key \"lod\" in terrain \"tbp:t\", render;" },
         { MODEL_HEAD "\"materials\": [\"g\"], \"render\": {\"has_outline\": \"yes\"}}",
             ErrorCode_InvalidAssetDefinition, "render.has_outline must be true or false." },
         { MODEL_HEAD "\"materials\": [\"g\"], \"render\": {\"shadow_tier\": \"middle\"}}",
@@ -522,7 +523,7 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
         { MODEL_HEAD "\"materials\": [\"g\"], \"collision\": 1}", ErrorCode_InvalidAssetDefinition,
             "\"collision\" must be a JSON object." },
         { MODEL_HEAD "\"materials\": [\"g\"], \"collision\": {\"mask\": []}}", ErrorCode_InvalidAssetDefinition,
-            "Unknown key \"mask\" in terrain \"t\", collision;" },
+            "Unknown key \"mask\" in terrain \"tbp:t\", collision;" },
         { MODEL_HEAD "\"materials\": [\"g\"], \"collision\": {\"is_enabled\": 1}}", ErrorCode_InvalidAssetDefinition,
             "collision.is_enabled must be true or false." },
         { MODEL_HEAD "\"materials\": [\"g\"], \"collision\": {\"layer\": \"sky\"}}", ErrorCode_InvalidAssetDefinition,
@@ -668,7 +669,7 @@ static void TheRulesAreReadInOrder(TestRun* run)
         TEST_CHECK(run, (Rules[2].Material == 0U) && Rules[2].Noise.IsEnabled && (Rules[2].Noise.Scale == 4.0f)
             && (Rules[2].Noise.Strength == 1.0f) && (Rules[2].Noise.Seed == 0U) && Rules[2].Slope.IsEnabled
             && !Rules[2].Slope.HasMinimum && (Rules[2].Slope.Maximum == 180.0f) && (Rules[2].Slope.Blend == 90.0f));
-        TEST_CHECK(run, AreNamesEqual(TerrainAsset_GetName(Loaded), "ruled"));
+        TEST_CHECK(run, AreNamesEqual(TerrainAsset_GetName(Loaded), "tbp:ruled"));
     }
     if (Saved != NULL)
     {
@@ -711,9 +712,9 @@ static void ThePalettesMaterialsAreItsDependencies(TestRun* run)
             &Dirt));
         TEST_CHECK(run, (TerrainAsset_GetMaterial(Loaded, 0U) != NULL) && (TerrainAsset_GetMaterial(Loaded, 1U) == Dirt)
             && (TerrainAsset_GetMaterial(Loaded, 2U) == NULL)
-            && AreNamesEqual(TerrainMaterial_GetSettings(Dirt)->Albedo, "dirt_albedo"));
+            && AreNamesEqual(TerrainMaterial_GetSettings(Dirt)->Albedo, "tbp:dirt_albedo"));
         TerrainAsset* Stony = NULL;
-        const char* const Fragments[] = { "Terrain \"stony\": its material \"stone\" (materials[1]) could not be loaded: ",
+        const char* const Fragments[] = { "Terrain \"tbp:stony\": its material \"tbp:stone\" (materials[1]) could not be loaded: ",
             NULL };
         TestText_CheckErrorMessage(run, AssetManager_LoadTerrain(Pack.Manager, (const unsigned char*)u8"stony", Pack.User,
             &Stony), ErrorCode_InvalidOperation, Fragments);
@@ -774,12 +775,12 @@ static void MaterialMapsOfOneKindShareOneSize(TestRun* run)
     if (IsReady)
     {
         TerrainAsset* Refused = NULL;
-        const char* const AlbedoFragments[] = { "Terrain \"odd_albedo\": its materials' albedo maps must share one size "
-            "(a texture array holds one): \"small\" has 4 x 4 pixels, \"large\" 8 x 8.", NULL };
+        const char* const AlbedoFragments[] = { "Terrain \"tbp:odd_albedo\": its materials' albedo maps must share one size "
+            "(a texture array holds one): \"tbp:small\" has 4 x 4 pixels, \"tbp:large\" 8 x 8.", NULL };
         TestText_CheckErrorMessage(run, AssetManager_LoadTerrain(Pack.Manager, (const unsigned char*)u8"odd_albedo",
             Pack.User, &Refused), ErrorCode_InvalidAssetData, AlbedoFragments);
-        const char* const NormalFragments[] = { "Terrain \"odd_normal\": its materials' normal maps must share one size "
-            "(a texture array holds one): \"bumpy\" has 2 x 2 pixels, \"bumpier\" 4 x 4.", NULL };
+        const char* const NormalFragments[] = { "Terrain \"tbp:odd_normal\": its materials' normal maps must share one size "
+            "(a texture array holds one): \"tbp:bumpy\" has 2 x 2 pixels, \"tbp:bumpier\" 4 x 4.", NULL };
         TestText_CheckErrorMessage(run, AssetManager_LoadTerrain(Pack.Manager, (const unsigned char*)u8"odd_normal",
             Pack.User, &Refused), ErrorCode_InvalidAssetData, NormalFragments);
         TEST_CHECK(run, Refused == NULL);
@@ -836,10 +837,10 @@ static void TheBinaryFormLoadsTheSavedMesh(TestRun* run)
     {
         TEST_CHECK(run, TestTerrain_AreMeshesEqual(run, Saved, TerrainAsset_GetMesh(Loaded)));
         TEST_CHECK(run, (TerrainAsset_GetMaterialCount(Loaded) == 2U)
-            && AreNamesEqual(TerrainAsset_GetMaterialName(Loaded, 1U), "dirt")
+            && AreNamesEqual(TerrainAsset_GetMaterialName(Loaded, 1U), "tbp:dirt")
             && AreNamesEqual(TerrainAsset_GetDensityChannelName(Loaded, 0U), "trees"));
         TerrainAsset* Short = NULL;
-        const char* const Fragments[] = { "Terrain \"short\": its data holds 2 materials and 1 density channels; the "
+        const char* const Fragments[] = { "Terrain \"tbp:short\": its data holds 2 materials and 1 density channels; the "
             "definition names 1 and 1.", NULL };
         TestText_CheckErrorMessage(run, AssetManager_LoadTerrain(Pack.Manager, (const unsigned char*)u8"short",
             Pack.User, &Short), ErrorCode_InvalidAssetData, Fragments);
@@ -882,10 +883,10 @@ static void ABrokenFileFailsTheLoadWithTheTerrainsName(TestRun* run)
         && WriteBytes(run, &Pack.Root, "terrains/unmapped.glb", &Glb) && OpenPack(run, &Pack))
     {
         TerrainAsset* Loaded = NULL;
-        const char* const JunkFragments[] = { "Terrain \"junk\"", NULL };
+        const char* const JunkFragments[] = { "Terrain \"tbp:junk\"", NULL };
         TestText_CheckErrorMessage(run, AssetManager_LoadTerrain(Pack.Manager, (const unsigned char*)u8"junk", Pack.User,
             &Loaded), ErrorCode_InvalidAssetData, JunkFragments);
-        const char* const UnmappedFragments[] = { "Terrain \"unmapped\"", "COLOR_3", NULL };
+        const char* const UnmappedFragments[] = { "Terrain \"tbp:unmapped\"", "COLOR_3", NULL };
         TestText_CheckErrorMessage(run, AssetManager_LoadTerrain(Pack.Manager, (const unsigned char*)u8"unmapped",
             Pack.User, &Loaded), ErrorCode_InvalidAssetData, UnmappedFragments);
         TEST_CHECK_ERROR(run, AssetManager_LoadTerrain(Pack.Manager, (const unsigned char*)u8"missing", Pack.User,
@@ -1023,7 +1024,7 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetHaze(Placement, 0.25f));
         TEST_CHECK(run, WorldComponent_GetRevision(Component) == (Revision + 13U));
         TEST_CHECK(run, WorldTerrainComponent_GetHaze(Placement) == 0.25f);
-        TEST_CHECK(run, AreNamesEqual(WorldTerrainComponent_GetTerrain(Placement), "town")
+        TEST_CHECK(run, AreNamesEqual(WorldTerrainComponent_GetTerrain(Placement), "tbp:town")
             && !WorldTerrainComponent_HasOutline(Placement) && !WorldTerrainComponent_CastsShadows(Placement)
             && (WorldTerrainComponent_GetShadowDistance(Placement) == 700.0f)
             && (WorldTerrainComponent_GetShadowDistanceMultiplier(Placement) == 2.0f)
@@ -1053,17 +1054,22 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
             ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, WorldTerrainComponent_SetHaze(Placement, -1.0f), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK_ERROR(run, WorldTerrainComponent_SetHaze(Placement, NAN), ErrorCode_ArgumentOutOfRange);
+        // A name is at most WORLD_TERRAIN_COMPONENT_NAME_MAX_LENGTH bytes in full: written without its namespace, the
+        // default namespace and its colon count.
+        size_t Namespace = strlen((const char*)NAMESPACED_KEY_DEFAULT_NAMESPACE) + 1U;
         char LongName[WORLD_TERRAIN_COMPONENT_NAME_MAX_LENGTH + 2U];
         Memory_Set(LongName, 't', WORLD_TERRAIN_COMPONENT_NAME_MAX_LENGTH + 1U);
-        LongName[WORLD_TERRAIN_COMPONENT_NAME_MAX_LENGTH + 1U] = '\0';
+        LongName[WORLD_TERRAIN_COMPONENT_NAME_MAX_LENGTH - Namespace + 1U] = '\0';
         TEST_CHECK_ERROR(run, WorldTerrainComponent_SetTerrain(Placement, (const unsigned char*)LongName),
             ErrorCode_ArgumentOutOfRange);
         TEST_CHECK(run, (WorldComponent_GetRevision(Component) == Revision)
-            && AreNamesEqual(WorldTerrainComponent_GetTerrain(Placement), "town")
+            && AreNamesEqual(WorldTerrainComponent_GetTerrain(Placement), "tbp:town")
             && (WorldTerrainComponent_GetDrawDistance(Placement) == 1500.0f)
             && (WorldTerrainComponent_GetCollisionLayer(Placement) == CollisionLayer_Prop));
-        LongName[WORLD_TERRAIN_COMPONENT_NAME_MAX_LENGTH] = '\0';
+        LongName[WORLD_TERRAIN_COMPONENT_NAME_MAX_LENGTH - Namespace] = '\0';
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetTerrain(Placement, (const unsigned char*)LongName));
+        TEST_CHECK(run, strlen((const char*)WorldTerrainComponent_GetTerrain(Placement))
+            == WORLD_TERRAIN_COMPONENT_NAME_MAX_LENGTH);
         TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetTerrain(Placement, NULL));
         TEST_CHECK(run, WorldTerrainComponent_GetTerrain(Placement) == NULL);
 
@@ -1207,7 +1213,7 @@ static void ATerrainObjectIsReadFromAWorldFile(TestRun* run)
         if (TEST_CHECK(run, World_TryGetComponent(&Loaded, 4U, WorldComponentType_Terrain, &Component)))
         {
             WorldTerrainComponent* Placement = WorldTerrainComponent_FromComponent(Component);
-            TEST_CHECK(run, AreNamesEqual(WorldTerrainComponent_GetTerrain(Placement), "town")
+            TEST_CHECK(run, AreNamesEqual(WorldTerrainComponent_GetTerrain(Placement), "tbp:town")
                 && WorldTerrainComponent_IsOverridden(Placement, WorldTerrainSetting_DrawDistance)
                 && (WorldTerrainComponent_GetDrawDistance(Placement) == 1200.0f)
                 && (WorldTerrainComponent_GetDrawDistanceMultiplier(Placement) == 1.5f)
@@ -1283,7 +1289,7 @@ static void TheShippedTerrainLoads(TestRun* run)
         }
         TEST_CHECK(run, !HasPaintedRock);
         // Its materials loaded as its dependencies, every map 256 x 256 (one size per kind), and its two rules.
-        static const char* const Names[4] = { "grass", "dirt", "rock", "gravel" };
+        static const char* const Names[4] = { "tbp:grass", "tbp:dirt", "tbp:rock", "tbp:gravel" };
         for (uint32_t Index = 0U; Index < 4U; Index++)
         {
             const TerrainMaterial* Palette = TerrainAsset_GetMaterial(Loaded, Index);

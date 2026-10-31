@@ -2273,8 +2273,8 @@ static void EnvironmentJSONRoundTrip(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldEnvironment_ReadJSON(&Restored, Value.Value.Compound, NULL));
         TEST_CHECK(run, (Restored.MoonPhaseSource == WorldMoonPhaseSource_Fixed) && (Restored.MoonPhase == 0.5f));
         TEST_CHECK(run, fabsf(Restored.MoonOrbitTilt - (float)(5.0 * TEST_PI / 180.0)) < 1e-6f);
-        TEST_CHECK(run, AreStringsEqual(Restored.MoonTexture, u8"stories.harvest_moon") && Restored.AreSeasonsEnabled);
-        TEST_CHECK(run, AreStringsEqual(Restored.MilkyWayTexture, u8"sky_milky_way")); // absent: the default
+        TEST_CHECK(run, AreStringsEqual(Restored.MoonTexture, u8"tbp:stories.harvest_moon") && Restored.AreSeasonsEnabled);
+        TEST_CHECK(run, AreStringsEqual(Restored.MilkyWayTexture, u8"tbp:sky_milky_way")); // absent: the default
         TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
     }
     if (TestText_ParseJSON(run, Pool, "{\"moon_phase_source\": \"always\"}", &Value))
@@ -2290,7 +2290,7 @@ static void EnvironmentJSONRoundTrip(TestRun* run)
         const char* const Fragments[] = { "world_environment.moon_texture (MoonTexture) must be an asset name", NULL };
         TestText_CheckErrorMessage(run, WorldEnvironment_ReadJSON(&Restored, Value.Value.Compound, NULL),
             ErrorCode_InvalidJSON, Fragments);
-        TEST_CHECK(run, AreStringsEqual(Restored.MoonTexture, u8"stories.harvest_moon"));
+        TEST_CHECK(run, AreStringsEqual(Restored.MoonTexture, u8"tbp:stories.harvest_moon"));
         TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
     }
     // The air's settings as a creator writes them: an absent key keeps its default.
@@ -2358,7 +2358,7 @@ static void EnvironmentGHDFRoundTrip(TestRun* run)
         TEST_CHECK(run, GHDFCompound_GetEntryCount(Compound) == 73U);
         TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(Table, Compound, &Restored, NULL));
         TEST_CHECK(run, Properties_Equals(Table, &Source, &Restored));
-        TEST_CHECK(run, (Restored.MoonTexture != Source.MoonTexture) && AreStringsEqual(Restored.MoonTexture, u8"pack.red_moon"));
+        TEST_CHECK(run, (Restored.MoonTexture != Source.MoonTexture) && AreStringsEqual(Restored.MoonTexture, u8"tbp:pack.red_moon"));
         TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Compound, true));
     }
     WorldEnvironment_Deconstruct(&Source);
@@ -2403,6 +2403,69 @@ static Error ReadNameListFromText(TestRun* run, JSONObjectPool* pool, const char
     return Result;
 }
 
+/* An asset name row is read and set as written and kept, compared and written in full ("lamp" is "tbp:lamp"), from JSON
+ * and from GHDF (saves made before names had namespaces hold short ones); a local name row keeps a name as written and
+ * refuses a namespace. */
+static void AssetNamesAreKeptInFull(TestRun* run)
+{
+    TestRecord Record;
+    JSONObjectPool* Pool = NULL;
+    GHDFObjectPool* BinaryPool = NULL;
+    if (!TEST_CHECK_SUCCESS(run, Properties_Construct(&RecordTable, &Record))
+        || !TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)) || !TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&BinaryPool)))
+    {
+        return;
+    }
+    TEST_CHECK_SUCCESS(run, Properties_Set(&RecordTable, &Record, u8"model",
+        &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"desk" }));
+    TEST_CHECK(run, (Record.Model != NULL) && (strcmp((const char*)Record.Model, "tbp:desk") == 0));
+    TEST_CHECK_SUCCESS(run, Properties_Set(&RecordTable, &Record, u8"model",
+        &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"mymod:desk" }));
+    TEST_CHECK(run, strcmp((const char*)Record.Model, "mymod:desk") == 0);
+    TEST_CHECK_ERROR(run, Properties_Set(&RecordTable, &Record, u8"model",
+        &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"Desk" }), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK(run, strcmp((const char*)Record.Model, "mymod:desk") == 0);
+
+    // JSON: read as written, written in full.
+    JSONObjectValue Value;
+    if (TestText_ParseJSON(run, Pool, "{\"model\": \"lamp\"}", &Value))
+    {
+        TEST_CHECK_SUCCESS(run, Properties_ReadJSON(&RecordTable, Value.Value.Compound, &Record, NULL));
+        TEST_CHECK(run, strcmp((const char*)Record.Model, "tbp:lamp") == 0);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+    }
+    JSONCompound* Written = NULL;
+    if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Written)))
+    {
+        TEST_CHECK_SUCCESS(run, Properties_WriteJSON(&RecordTable, &Record, Pool, Written, NULL));
+        JSONObjectValue WrittenName;
+        TEST_CHECK(run, TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Written, u8"model", JSONValueType_String,
+            &WrittenName)) && (WrittenName.Value.String != NULL)
+            && (WrittenName.Value.String->_count == strlen("tbp:lamp"))
+            && (memcmp(WrittenName.Value.String->_data, "tbp:lamp", strlen("tbp:lamp")) == 0));
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Written, true));
+    }
+
+    // GHDF: a short name under the row's wire id reads in full.
+    GHDFCompound* Compound = NULL;
+    GenericBuffer* Text = NULL;
+    if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(BinaryPool, &Compound))
+        && TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowString(BinaryPool, &Text)))
+    {
+        GenericBuffer_AppendString(Text, (const unsigned char*)u8"old_save_model");
+        GenericBuffer_NullTerminate(Text);
+        GHDFObjectValue Entry = GHDFObjectValue_CreateString(Text);
+        TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Compound, 13U, GHDF_CreateRegularType(GHDFValueType_String),
+            &Entry));
+        TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&RecordTable, Compound, &Record, NULL));
+        TEST_CHECK(run, strcmp((const char*)Record.Model, "tbp:old_save_model") == 0);
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(BinaryPool, Compound, true));
+    }
+    Properties_Deconstruct(&RecordTable, &Record);
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(BinaryPool));
+}
+
 /* Puts a String array of @p count copies of @p name under the list's wire id. */
 static void PutNameArray(TestRun* run, GHDFObjectPool* pool, GHDFCompound* compound, const char* name, size_t count)
 {
@@ -2441,6 +2504,11 @@ static void AssetNameListsGoThroughTheTables(TestRun* run)
     {
         return;
     }
+    // The tables keep names in full: what they hold is this list.
+    const unsigned char* FullNames[] = { (const unsigned char*)u8"tbp:human_basic",
+        (const unsigned char*)u8"tbp:human.office" };
+    PropertyAssetNameList* FullList = NULL;
+    TEST_CHECK_SUCCESS(run, PropertyAssetNameList_Create(FullNames, 2U, &FullList));
     PropertyAssetNameList* Copy = PropertyAssetNameList_Clone(List);
     TEST_CHECK(run, (Copy != List) && PropertyAssetNameList_Equals(Copy, List) && (PropertyAssetNameList_GetCount(Copy) == 2U)
         && (strcmp((const char*)PropertyAssetNameList_GetName(Copy, 1U), "human.office") == 0));
@@ -2455,18 +2523,20 @@ static void AssetNameListsGoThroughTheTables(TestRun* run)
         && TEST_CHECK_SUCCESS(run, Properties_Construct(&NameListTable, &Other))
         && TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)) && TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&BinaryPool)))
     {
-        // Set copies; the rules check every name; a deep copy has its own list.
+        // Set copies the names in full; the rules check every name (its namespace counts towards the limit); a deep
+        // copy has its own list.
         PropertyValue Value = PropertyValue_FromAssetNameList(List);
         TEST_CHECK_SUCCESS(run, Properties_Set(&NameListTable, &Record, u8"libraries", &Value));
         TEST_CHECK(run, (Record.Libraries != NULL) && (Record.Libraries != List)
-            && PropertyAssetNameList_Equals(Record.Libraries, List));
+            && PropertyAssetNameList_Equals(Record.Libraries, FullList));
         const unsigned char* Bad[] = { (const unsigned char*)u8"Human" };
         const unsigned char* TooLong[] = { (const unsigned char*)u8"a_name_of_seventeen" };
+        const unsigned char* TooLongInFull[] = { (const unsigned char*)u8"thirteen_byte" };
         const unsigned char* Four[] = { (const unsigned char*)u8"a", (const unsigned char*)u8"b",
             (const unsigned char*)u8"c", (const unsigned char*)u8"d" };
-        const unsigned char* const* Refused[] = { Bad, TooLong, Four };
-        const size_t RefusedCounts[] = { 1U, 1U, 4U };
-        for (size_t Index = 0U; Index < 3U; Index++)
+        const unsigned char* const* Refused[] = { Bad, TooLong, TooLongInFull, Four };
+        const size_t RefusedCounts[] = { 1U, 1U, 1U, 4U };
+        for (size_t Index = 0U; Index < 4U; Index++)
         {
             PropertyAssetNameList* Wrong = NULL;
             if (TEST_CHECK_SUCCESS(run, PropertyAssetNameList_Create(Refused[Index], RefusedCounts[Index], &Wrong)))
@@ -2477,7 +2547,7 @@ static void AssetNameListsGoThroughTheTables(TestRun* run)
                 PropertyAssetNameList_Destroy(Wrong);
             }
         }
-        TEST_CHECK(run, PropertyAssetNameList_Equals(Record.Libraries, List));
+        TEST_CHECK(run, PropertyAssetNameList_Equals(Record.Libraries, FullList));
         TEST_CHECK_SUCCESS(run, Properties_CopyTo(&NameListTable, &Record, &Other));
         TEST_CHECK(run, (Other.Libraries != Record.Libraries) && Properties_Equals(&NameListTable, &Record, &Other));
 
@@ -2495,14 +2565,14 @@ static void AssetNameListsGoThroughTheTables(TestRun* run)
                     && (Element.Type == JSONValueType_String));
             }
             TEST_CHECK_SUCCESS(run, Properties_ReadJSON(&NameListTable, Compound, &Other, NULL));
-            TEST_CHECK(run, PropertyAssetNameList_Equals(Other.Libraries, List));
+            TEST_CHECK(run, PropertyAssetNameList_Equals(Other.Libraries, FullList));
             TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Compound, true));
         }
         TEST_CHECK_SUCCESS(run, ReadNameListFromText(run, Pool, "{\"libraries\": []}", &Other));
         TEST_CHECK(run, Other.Libraries == NULL);
         TEST_CHECK_SUCCESS(run, ReadNameListFromText(run, Pool, "{\"libraries\": [\"dog_basic\"]}", &Other));
         TEST_CHECK(run, (PropertyAssetNameList_GetCount(Other.Libraries) == 1U)
-            && (strcmp((const char*)PropertyAssetNameList_GetName(Other.Libraries, 0U), "dog_basic") == 0));
+            && (strcmp((const char*)PropertyAssetNameList_GetName(Other.Libraries, 0U), "tbp:dog_basic") == 0));
         static const char* const RefusedTexts[] =
         {
             "{\"libraries\": \"dog_basic\"}", "{\"libraries\": [1]}", "{\"libraries\": [\"Dog\"]}",
@@ -2557,6 +2627,7 @@ static void AssetNameListsGoThroughTheTables(TestRun* run)
     }
     PropertyAssetNameList_Destroy(Copy);
     PropertyAssetNameList_Destroy(List);
+    PropertyAssetNameList_Destroy(FullList);
 }
 
 static void AssetNameListRowsAreChecked(TestRun* run)
@@ -3056,6 +3127,7 @@ void PropertyDescriptorTests_Run(TestRun* run)
         { "copies_are_deep", CopiesAreDeep },
         { "get_and_set_by_key", GetAndSetByKey },
         { "float_lists_go_through_the_tables", FloatListsGoThroughTheTables },
+        { "asset_names_are_kept_in_full", AssetNamesAreKeptInFull },
         { "asset_name_lists_go_through_the_tables", AssetNameListsGoThroughTheTables },
         { "asset_name_list_rows_are_checked", AssetNameListRowsAreChecked },
         { "instance_lists_go_through_the_tables", InstanceListsGoThroughTheTables },

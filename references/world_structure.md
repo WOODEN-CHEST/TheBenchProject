@@ -19,7 +19,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 
 ```json
 {
-    "format_version": 2,
+    "format_version": 3,
     "name": "test",
     "next_object_id": 22,
     "environment": {
@@ -57,7 +57,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
             "position": [0.45, 0.84, 0.15],
             "components": {
                 "model": {
-                    "world_model": "pbr_metal",
+                    "world_model": "tbp:pbr_metal",
                     "overrides_shadow_distance": true,
                     "shadow_distance": 16.0
                 },
@@ -77,7 +77,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 
 | Key | Value | |
 |---|---|---|
-| `format_version` | integer, required | The format the file is written in: 2. Format 1 is still read (its placements' `shadow_tier`, "Versions" below); a newer version is refused ("newer than this game reads"). |
+| `format_version` | integer, required | The format the file is written in: 3. Formats 1 and 2 are still read (their short asset names, format 1's placements' `shadow_tier`: "Versions" below); a newer version is refused ("newer than this game reads"). |
 | `name` | string or `null` | The world's name: at most 256 bytes of UTF-8. |
 | `next_object_id` | integer | The id the world hands to its next new object, so ids of removed objects are not reused; 18446744073709551615 once every id was handed out (no id is that large). When it is not above every object id it is raised to one that is, with a warning; without it, one above the largest id. |
 | `environment` | object | The environment's settings by key (the `world_environment` table; `agents/WorldData.md`, "Environment", lists them with their rules). Absent keys keep their defaults. The air's settings are among them: `haze_height`, `haze_albedo`, `sun_glow`, `air_density`, `ozone` and `multiple_scattering` (with `sky_turbidity` and `sky_ground_albedo`), e.g. `{"haze_height": 300, "sun_glow": 0.9, "ozone": 0}`. The haze's settings: `aerial_distance_scale` (every haze distance that many times longer; 5 for a bigger, hazier town), `haze_start_distance`, the ground haze's `ground_haze_density` (0.02 a morning mist), `ground_haze_base`, `ground_haze_thickness` (15 for that mist), `ground_haze_albedo` and `ground_haze_glow`, and `horizon_ground_height` (the far ground's height); `fog_strength` multiplies the haze (1 the real air, 0 clear air) and `fog_color` is not used, e.g. `{"ground_haze_density": 0.02, "ground_haze_thickness": 15}`. One light scale lights the sky and the surfaces: `sun_color` is the sun's colour above the air (default white: the air reddens it), `moon_intensity` the full moon's light above the air (default 0.04), `ambient_skylight_color` and `ambient_skylight_intensity` tint and scale the sky's own light on surfaces (white and 1: the sky's own), and `night_light_color` and `night_light_intensity` set the moonless night's own light, e.g. `{"night_light_intensity": 0}` for a pitch-black moonless night. The sun's and the moon's shadows: `are_shadows_enabled` and `shadow_reach` (metres from the camera, 0 to 20000, default 4000; 0 none), e.g. `{"shadow_reach": 1500}` for a small walled town. The weather: `climate` names the climate asset its weather follows (default `default`; `agents/WeatherSystem.md`), and `cloud_coverage`, `cloud_type`, `cloud_density`, `precipitation`, `wetness`, `wind_direction` (degrees), `wind_speed`, `wind_gust`, `fog_density`, `fog_height` and `temperature` are the world's starting weather (what the weather's off mode leaves as it is), e.g. `{"climate": "tropics", "cloud_coverage": 0.6, "cloud_density": 0.5}`; the lightning's values are runtime only and never written. |
@@ -139,7 +139,7 @@ distance in effect. Both are plain settings, not overrides. The LODs:
 
 ```
 "model": {
-    "world_model": "office_desk",
+    "world_model": "tbp:office_desk",
     "uses_variant": true,
     "variant": "dark_wood",
     "overrides_draw_distance": true,
@@ -168,7 +168,7 @@ on every axis as one number, and puts each copy on lines of its own. Two copies 
 (object 52), the second stretched upward and half transparent:
 ```
 "model_instances": {
-    "world_model": "test_tree",
+    "world_model": "tbp:test_tree",
     "instances": [
         {
             "position": [-2.259, 1.774, 142.541],
@@ -225,7 +225,7 @@ overrides.
 
 ```
 "sprite": {
-    "world_sprite": "test_tree",
+    "world_sprite": "tbp:test_tree",
     "overrides_flip_x": true,
     "flip_x": true
 }
@@ -298,7 +298,7 @@ that collider's shape, layer, mask, mass and motion keys in step with the charac
 A placed NPC that is a dog that walks slower than dogs do:
 ```
 "character": {
-    "character": "dog",
+    "character": "tbp:dog",
     "overrides_walk_speed": true,
     "walk_speed": 0.8
 }
@@ -361,12 +361,12 @@ The test world's terrain (object 51) without its draw distance override, and a c
 half as far:
 ```
 "terrain": {
-    "terrain": "placeholder_terrain"
+    "terrain": "tbp:placeholder_terrain"
 }
 ```
 ```
 "terrain": {
-    "terrain": "placeholder_terrain",
+    "terrain": "tbp:placeholder_terrain",
     "overrides_casts_shadows": true,
     "casts_shadows": false,
     "draw_distance_multiplier": 0.5
@@ -410,7 +410,9 @@ ceiling):
 - Enums: the entry's name (`"near"`, `"axis_billboard"`).
 - Sets of an enum's entries: an array of names in the enum's order (`["world", "prop"]`, `[]` for none).
 - Dates: `"yyyy-mm-dd"`, a real day of the calendar (years 1 to 9999).
-- Asset names: `[a-z][a-z0-9_.-]*`, at most 128 bytes.
+- Asset names: namespaced keys, `namespace:path` (`agents/NamespacedKey.md`'s rules, at most 128 bytes in full). A name
+  written without its namespace (`desk`) is `tbp`'s; the game keeps and writes names in full (`tbp:desk`), so a world
+  file means the same in every pack.
 
 ### Tags and data
 
@@ -517,12 +519,13 @@ Downloaded worlds use the same code, so loading treats every file as hostile:
   warning per name for the whole file, so a world from a newer game version still loads without the parts it does
   not know. GHDF entry ids a table retired are skipped silently.
 - **Versions:** the format version is raised only for changes an older game cannot read by skipping what it does not
-  know (a renamed key, a value read another way); new keys and new component types keep it. Format 2 holds the `model`,
-  `model_instances` and `terrain` blocks at their version 2 and every other table at its version 1; format 1 held every
-  table at its version 1. A table at an older version than its own is migrated before it is read, in JSON and GHDF
+  know (a renamed key, a value read another way); new keys and new component types keep it. Format 3 writes asset names
+  in full (`tbp:desk`, which format 2's games refuse); formats 3 and 2 hold the `model`, `model_instances` and `terrain`
+  blocks at their version 2 and every other table at its version 1; format 1 held every table at its version 1. Formats
+  1 and 2 wrote asset names without a namespace, read as `tbp`'s. A table at an older version than its own is migrated before it is read, in JSON and GHDF
   alike: format 1's `model`, `model_instances` and `terrain` blocks held a shadow tier (`overrides_shadow_tier` and
   `shadow_tier`, GHDF entries 10 and 4 in the model blocks, 4 and 5 in the terrain block; those ids are retired): `near` is
   read as a `shadow_distance` of 16 (overridden when `overrides_shadow_tier` was on, kept when it was off), `both` as
   nothing, and `far` is dropped with a warning; a tier that is not one of the three is refused. Written again, such a
-  world is format 2. A change of a row's meaning (a key or wire id that comes to name something else) raises the
+  world is format 3. A change of a row's meaning (a key or wire id that comes to name something else) raises the
   table's version with its migrations and the format version.

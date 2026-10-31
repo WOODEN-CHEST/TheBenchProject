@@ -48,7 +48,7 @@
 /** @brief The shadow distance a terrain's own starts at, in metres (unused until has_shadow_distance or a placement's
  *  override is on: by default a terrain casts as far as its chunks are drawn). */
 #define TERRAIN_DEFAULT_SHADOW_DISTANCE TERRAIN_DEFAULT_DRAW_DISTANCE
-/** @brief The most bytes a palette material's or density channel's name may have. */
+/** @brief The most bytes a palette material's name (in full) or a density channel's name may have. */
 #define TERRAIN_NAME_MAX_LENGTH ((size_t)128)
 /** @brief The material slot name a definition's faces use for the painted weights unless it says otherwise. */
 #define TERRAIN_DEFAULT_BLEND_SLOT ((const unsigned char*)u8"blend")

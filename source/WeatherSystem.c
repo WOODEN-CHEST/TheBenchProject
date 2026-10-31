@@ -113,7 +113,7 @@ static const PropertyDescriptor WeatherProperties[] =
         .Description = u8"The climate the weather runs (none before it started).", .SinceVersion = 1U
     },
     {
-        .Key = u8"preset", .WireId = 2U, .Type = PropertyType_AssetName, PROPERTY_MEMBER(WeatherSystem, _presetName),
+        .Key = u8"preset", .WireId = 2U, .Type = PropertyType_LocalName, PROPERTY_MEMBER(WeatherSystem, _presetName),
         .Default.StringValue = NULL, .Rules = PROPERTY_RULES_STRING(CLIMATE_PRESET_NAME_MAX_LENGTH, true),
         .Flags = WEATHER_FLAGS_STATE, .Category = CATEGORY_STATE, .DisplayName = u8"Preset",
         .Description = u8"The active preset.", .SinceVersion = 1U

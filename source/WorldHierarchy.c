@@ -20,6 +20,7 @@
 #include "WorldTransform.h"
 #include "GameMath.h"
 #include "Logger.h"
+#include "NamespacedKey.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
 
@@ -483,7 +484,7 @@ static Error SetParent(World* self, uint64_t childId, uint64_t parentId, const u
         return Error_Construct4(ErrorCode_IllegalArgument, "%s: childId must not be 0.", caller);
     }
     if ((socket != NULL) && ((StringUTF8_GetByteLength(socket) > WORLD_OBJECT_SOCKET_NAME_MAX_LENGTH)
-        || !AssetManager_IsValidAssetName(socket)))
+        || !NamespacedKey_IsValidLocalName(socket)))
     {
         return Error_Construct4(ErrorCode_ArgumentOutOfRange, "%s: a socket's name is [a-z][a-z0-9_.-]*, at most %zu "
             "bytes.", caller, WORLD_OBJECT_SOCKET_NAME_MAX_LENGTH);

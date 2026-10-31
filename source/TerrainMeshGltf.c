@@ -6,6 +6,7 @@
 #include "TerrainMeshInternal.h"
 #include "GltfChecks.h"
 #include "Logger.h"
+#include "NamespacedKey.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
 #include "wr/WRVectorMath.h"
@@ -136,6 +137,28 @@ static bool AreNamesEqual(const unsigned char* a, const char* b)
     }
     size_t Length = StringUTF8_GetByteLength(a);
     return (Length == strlen(b)) && Memory_IsEqual(a, b, Length);
+}
+
+/* The full form of an asset name as written ("dirt" is "tbp:dirt") into @p storage (NAMESPACED_KEY_BUFFER_SIZE bytes);
+ * false when it is not one. */
+static bool ToFullName(const unsigned char* name, size_t byteCount, unsigned char* storage)
+{
+    GenericBuffer FullName;
+    GenericBuffer_CreateConstant(&FullName, storage, NAMESPACED_KEY_BUFFER_SIZE, sizeof(unsigned char), 0U);
+    Error Result = NamespacedKey_Parse(name, byteCount, NULL, &FullName);
+    bool IsName = Result.Code == ErrorCode_Success;
+    Error_Deconstruct(&Result);
+    return IsName;
+}
+
+/* Whether a material slot's name names a palette material, both read as asset names. */
+static bool IsSlotOf(const unsigned char* materialName, const char* slotName)
+{
+    unsigned char FullMaterial[NAMESPACED_KEY_BUFFER_SIZE];
+    unsigned char FullSlot[NAMESPACED_KEY_BUFFER_SIZE];
+    return ToFullName(materialName, StringUTF8_GetByteLength(materialName), FullMaterial)
+        && ToFullName((const unsigned char*)slotName, strlen(slotName), FullSlot)
+        && AreNamesEqual(FullMaterial, (const char*)FullSlot);
 }
 
 
@@ -319,7 +342,7 @@ static Error GetSlot(const Import* import, const cgltf_primitive* primitive, con
     }
     for (uint32_t Entry = 0U; Entry < import->Options->MaterialCount; Entry++)
     {
-        if (AreNamesEqual(import->Options->MaterialNames[Entry], Name))
+        if (IsSlotOf(import->Options->MaterialNames[Entry], Name))
         {
             *outKind = SlotKind_Material;
             *outMaterial = (uint8_t)Entry;

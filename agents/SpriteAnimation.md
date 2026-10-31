@@ -124,8 +124,9 @@ source rectangle, so divide `_areaInTexture` by the texture's width and height (
   loaded with `LoadTexture` (texture extensions, see [AssetManager.md](AssetManager.md)) with
   `texture_properties.filtering` applied (default bilinear). Its area is the whole texture, and the loaded asset owns
   the texture.
-- A `"source": "spritesheet"` frame uses its location's value as the **sprite sheet asset name**, and `"name"` picks
-  the image in that sheet. The sheet (the type named `sprite_sheet`) is loaded as a dependency under the animation's
+- A `"source": "spritesheet"` frame names its sheet with `"sprite_sheet"`, an **asset name** read as written and kept
+  in full (`doors` is `tbp:doors`), and `"name"` picks the image in that sheet; a `"location"` there is refused, naming
+  `sprite_sheet`. The sheet (the type named `sprite_sheet`) is loaded as a dependency under the animation's
   dependency user, so it stays loaded exactly as long as the animation. The frame copies the sheet's atlas `Texture2D`
   handle and the image's area ([SpriteSheet.md](SpriteSheet.md)).
 - fps and frame step are checked by `SpriteAnimation_Construct2` at load time: a negative fps or an out-of-range step

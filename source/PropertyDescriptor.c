@@ -5,6 +5,7 @@
 #include "AssetManager.h"
 #include "DataMap.h"
 #include "GameCalendar.h"
+#include "NamespacedKey.h"
 #include "wr/WRMath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
@@ -21,8 +22,10 @@
 #define PROPERTY_ENUM_UINT16_MAX 65535
 /** The largest entry value of an enum set: its bit index in the 32-bit mask. */
 #define PROPERTY_ENUM_SET_MAX_VALUE 31
-/** The asset name grammar, for messages (see AssetManager_IsValidAssetName). */
-#define PROPERTY_ASSET_NAME_GRAMMAR "[a-z][a-z0-9_.-]*"
+/** The asset name rule, for messages (see AssetManager_IsValidAssetName). */
+#define PROPERTY_ASSET_NAME_GRAMMAR "namespace:path, the namespace optional"
+/** The local name grammar, for messages (see NamespacedKey_IsValidLocalName). */
+#define PROPERTY_LOCAL_NAME_GRAMMAR "[a-z][a-z0-9_.-]*"
 
 
 // Static functions: helpers.
@@ -113,6 +116,7 @@ static size_t GetStorageSize(PropertyType type)
             return sizeof(RenderColor);
         case PropertyType_String:
         case PropertyType_AssetName:
+        case PropertyType_LocalName:
             return sizeof(unsigned char*);
         case PropertyType_DataMap:
             return sizeof(DataMap*);
@@ -343,17 +347,34 @@ static Error CheckInteger(const PropertyTable* table, const PropertyDescriptor* 
     return MakeRuleError(table, descriptor, Text);
 }
 
+/* Whether @p name is a valid asset name written without its namespace. */
+static bool NeedsNamespace(const unsigned char* name)
+{
+    return AssetManager_IsValidAssetName(name) && !NamespacedKey_IsValid(name);
+}
+
+/* The bytes an asset name takes as it is stored: in full, with the default namespace it gets when written without
+ * one. */
+static size_t GetStoredAssetNameLength(const unsigned char* name)
+{
+    size_t Length = StringUTF8_GetByteLength(name);
+    return NeedsNamespace(name) ? (Length + StringUTF8_GetByteLength(NAMESPACED_KEY_DEFAULT_NAMESPACE) + 1U) : Length;
+}
+
 static Error CheckString(const PropertyTable* table, const PropertyDescriptor* descriptor, const unsigned char* text)
 {
     if (text == NULL)
     {
         return descriptor->Rules.IsNullAllowed ? Error_CreateSuccess() : MakeRuleError(table, descriptor, "not be null");
     }
-    size_t ByteCount = StringUTF8_GetByteLength(text);
+    // An asset name is stored in full, so its limit counts the namespace it gets.
+    bool IsAssetName = descriptor->Type == PropertyType_AssetName;
+    size_t ByteCount = IsAssetName ? GetStoredAssetNameLength(text) : StringUTF8_GetByteLength(text);
     if (ByteCount > descriptor->Rules.MaxLength)
     {
         char Text[PROPERTY_RULE_TEXT_SIZE];
-        snprintf(Text, sizeof(Text), "be at most %" PRIu64 " bytes long", (uint64_t)descriptor->Rules.MaxLength);
+        snprintf(Text, sizeof(Text), "be at most %" PRIu64 " bytes long%s", (uint64_t)descriptor->Rules.MaxLength,
+            IsAssetName ? " with its namespace" : "");
         return MakeRuleError(table, descriptor, Text);
     }
     if (!StringUTF8_IsEncodingValid(text))
@@ -362,7 +383,11 @@ static Error CheckString(const PropertyTable* table, const PropertyDescriptor* d
     }
     if ((descriptor->Type == PropertyType_AssetName) && !AssetManager_IsValidAssetName(text))
     {
-        return MakeRuleError(table, descriptor, "be an asset name matching " PROPERTY_ASSET_NAME_GRAMMAR);
+        return MakeRuleError(table, descriptor, "be an asset name (" PROPERTY_ASSET_NAME_GRAMMAR ")");
+    }
+    if ((descriptor->Type == PropertyType_LocalName) && !NamespacedKey_IsValidLocalName(text))
+    {
+        return MakeRuleError(table, descriptor, "be a local name matching " PROPERTY_LOCAL_NAME_GRAMMAR);
     }
     return Error_CreateSuccess();
 }
@@ -468,10 +493,10 @@ static Error CheckAssetNameList(const PropertyTable* table, const PropertyDescri
     for (size_t Index = 0; Index < Count; Index++)
     {
         const unsigned char* Name = PropertyAssetNameList_GetName(list, Index);
-        if ((StringUTF8_GetByteLength(Name) > descriptor->Rules.MaxLength) || !AssetManager_IsValidAssetName(Name))
+        if ((GetStoredAssetNameLength(Name) > descriptor->Rules.MaxLength) || !AssetManager_IsValidAssetName(Name))
         {
-            snprintf(Text, sizeof(Text), "have every name an asset name matching " PROPERTY_ASSET_NAME_GRAMMAR
-                " of at most %" PRIu64 " bytes", (uint64_t)descriptor->Rules.MaxLength);
+            snprintf(Text, sizeof(Text), "have every name an asset name (" PROPERTY_ASSET_NAME_GRAMMAR
+                ") of at most %" PRIu64 " bytes with its namespace", (uint64_t)descriptor->Rules.MaxLength);
             return MakeRuleError(table, descriptor, Text);
         }
     }
@@ -850,7 +875,7 @@ static Error CheckDescriptorPair(const PropertyTable* table, const PropertyDescr
 // Internal functions (PropertyDescriptorInternal.h).
 bool PropertyInternal_IsStringType(PropertyType type)
 {
-    return (type == PropertyType_String) || (type == PropertyType_AssetName);
+    return (type == PropertyType_String) || (type == PropertyType_AssetName) || (type == PropertyType_LocalName);
 }
 
 bool PropertyInternal_IsOwnedType(PropertyType type)
@@ -907,9 +932,85 @@ void PropertyInternal_WriteField(const PropertyDescriptor* descriptor, void* ins
     Memory_Copy(data, Field, descriptor->Size);
 }
 
+/* An owned copy of a valid asset name's full form ("desk" is "tbp:desk"). */
+static unsigned char* CopyFullAssetName(const unsigned char* name)
+{
+    unsigned char Storage[NAMESPACED_KEY_BUFFER_SIZE];
+    GenericBuffer FullName;
+    GenericBuffer_CreateConstant(&FullName, Storage, sizeof(Storage), sizeof(unsigned char), 0U);
+    Error ParseResult = AssetManager_ParseAssetName(name, &FullName);
+    Error_Deconstruct(&ParseResult); // the name is valid and the buffer holds any key
+    unsigned char* Copy = Memory_Allocate(FullName._count);
+    Memory_Copy(Storage, Copy, FullName._count);
+    return Copy;
+}
+
+/* A list with every name that needs its namespace in its full form, or @p list itself when none does (the list given
+ * is destroyed when it is replaced). */
+static PropertyAssetNameList* MakeFullAssetNameList(PropertyAssetNameList* list)
+{
+    size_t Count = PropertyAssetNameList_GetCount(list);
+    bool IsFull = true;
+    for (size_t Index = 0U; (Index < Count) && IsFull; Index++)
+    {
+        IsFull = !NeedsNamespace(PropertyAssetNameList_GetName(list, Index));
+    }
+    if (IsFull)
+    {
+        return list;
+    }
+
+    const unsigned char* Names[PROPERTY_ASSET_NAME_LIST_MAX_COUNT];
+    unsigned char* Copies[PROPERTY_ASSET_NAME_LIST_MAX_COUNT];
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        const unsigned char* Name = PropertyAssetNameList_GetName(list, Index);
+        Copies[Index] = NeedsNamespace(Name) ? CopyFullAssetName(Name) : NULL;
+        Names[Index] = (Copies[Index] != NULL) ? Copies[Index] : Name;
+    }
+    PropertyAssetNameList* Full = NULL;
+    Error CreateResult = PropertyAssetNameList_Create(Names, Count, &Full);
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        Memory_Free(Copies[Index]);
+    }
+    if (CreateResult.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&CreateResult); // the names fit any list: the list given stays
+        return list;
+    }
+    PropertyAssetNameList_Destroy(list);
+    return Full;
+}
+
+/* Stored asset names are full: a valid name written without its namespace is replaced by its full form (the value
+ * given is freed); an invalid one stays for the validation to refuse. */
+static void* MakeFullAssetNames(PropertyType type, void* owned)
+{
+    if (owned == NULL)
+    {
+        return NULL;
+    }
+    if ((type == PropertyType_AssetName) && NeedsNamespace(owned))
+    {
+        unsigned char* Full = CopyFullAssetName(owned);
+        Memory_Free(owned);
+        return Full;
+    }
+    if (type == PropertyType_AssetNameList)
+    {
+        return MakeFullAssetNameList(owned);
+    }
+    return owned;
+}
+
 void PropertyInternal_AdoptOwned(const PropertyDescriptor* descriptor, void* instance, void* owned)
 {
     void* Previous = ReadOwnedPointer(descriptor, instance);
+    if (owned != Previous)
+    {
+        owned = MakeFullAssetNames(descriptor->Type, owned);
+    }
     Memory_Copy(&owned, (unsigned char*)instance + descriptor->Offset, sizeof(owned));
     if ((Previous == NULL) || (Previous == owned))
     {
@@ -976,6 +1077,7 @@ bool PropertyInternal_AreDataEqual(PropertyType type, const PropertyData* a, con
                 && (a->RenderColorValue.Opacity == b->RenderColorValue.Opacity);
         case PropertyType_String:
         case PropertyType_AssetName:
+        case PropertyType_LocalName:
             return AreStringsEqual(a->StringValue, b->StringValue);
         case PropertyType_Enum:
             return a->EnumValue == b->EnumValue;
@@ -1091,6 +1193,7 @@ Error PropertyInternal_CheckData(const PropertyTable* table, const PropertyDescr
         }
         case PropertyType_String:
         case PropertyType_AssetName:
+        case PropertyType_LocalName:
             return CheckString(table, descriptor, data->StringValue);
         case PropertyType_Enum:
             return CheckEnum(table, descriptor, data->EnumValue);
@@ -1239,6 +1342,8 @@ const unsigned char* PropertyType_GetName(PropertyType type)
             return u8"string";
         case PropertyType_AssetName:
             return u8"asset_name";
+        case PropertyType_LocalName:
+            return u8"local_name";
         case PropertyType_Enum:
             return u8"enum";
         case PropertyType_ObjectId:

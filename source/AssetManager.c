@@ -3,6 +3,7 @@
 #include "AssetTypesStandard.h"
 #include "GameTexture.h"
 #include "Logger.h"
+#include "NamespacedKey.h"
 #include "wr/WRHashMap.h"
 #include "wr/WRHashSet.h"
 #include "wr/WRArrayList.h"
@@ -10,6 +11,7 @@
 #include "wr/WRMap.h"
 #include "wr/WRSet.h"
 #include "wr/WRCollection.h"
+#include "wr/WRComparator.h"
 #include "wr/WRHash.h"
 #include "wr/WRBufferPool.h"
 #include "wr/WRFileSystem.h"
@@ -237,6 +239,15 @@ static bool StringsEqual(const unsigned char* a, const unsigned char* b)
     return Equal;
 }
 
+/* The full form of an asset name as written, into @p fullName (NAMESPACED_KEY_BUFFER_SIZE bytes); an error naming the
+   problem when the name is not valid. Allocates only for that error. */
+static Error ToFullName(const unsigned char* name, unsigned char* fullName)
+{
+    GenericBuffer Buffer;
+    GenericBuffer_CreateConstant(&Buffer, fullName, NAMESPACED_KEY_BUFFER_SIZE, sizeof(unsigned char), 0U);
+    return AssetManager_ParseAssetName(name, &Buffer);
+}
+
 static unsigned char ToLowerAscii(unsigned char character)
 {
     if ((character >= (unsigned char)u8'A') && (character <= (unsigned char)u8'Z'))
@@ -262,16 +273,6 @@ static bool EqualsIgnoreAsciiCase(const unsigned char* a, const unsigned char* b
         Right++;
     }
     return (*Left == (unsigned char)u8'\0') && (*Right == (unsigned char)u8'\0');
-}
-
-static bool IsAsciiLowercaseLetter(unsigned char character)
-{
-    return (character >= (unsigned char)u8'a') && (character <= (unsigned char)u8'z');
-}
-
-static bool IsAsciiDigit(unsigned char character)
-{
-    return (character >= (unsigned char)u8'0') && (character <= (unsigned char)u8'9');
 }
 
 /* Appends @p name to a message list ("a, b, c"). @p list is kept as one NUL-terminated growing string. */
@@ -573,6 +574,93 @@ static Error RemoveDefinitionRecord(AssetManager* self, AssetTypeID type, const 
     return RemoveResult;
 }
 
+/* Whether @p name starts with @p prefix. */
+static bool HasPrefix(const unsigned char* name, const unsigned char* prefix)
+{
+    size_t Index = 0U;
+    while ((prefix[Index] != (unsigned char)0) && (name[Index] == prefix[Index]))
+    {
+        Index++;
+    }
+    return prefix[Index] == (unsigned char)0;
+}
+
+/* Orders name pointers by their bytes (a type's names are unique, so there are no ties). */
+static ComparisonResult CompareNamePointers(GenericBuffer* buffer, GenericBufferElementData a,
+    GenericBufferElementData b, const UserData* userData)
+{
+    (void)buffer;
+    (void)userData;
+    const unsigned char* First = NULL;
+    const unsigned char* Second = NULL;
+    Memory_Copy(a._element, &First, sizeof(First));
+    Memory_Copy(b._element, &Second, sizeof(Second));
+    size_t Index = 0U;
+    while ((First[Index] == Second[Index]) && (First[Index] != (unsigned char)0))
+    {
+        Index++;
+    }
+    return COMPARE_NUMBER(First[Index], Second[Index]);
+}
+
+/* Appends to @p outNames (a buffer of pointers into the definitions) the names of @p type's definitions that start with
+   @p prefix. */
+static Error CollectDefinitionNames(AssetManager* self, AssetTypeID type, const unsigned char* prefix,
+    GenericBuffer* outNames)
+{
+    CollectionEnumerator* Enumerator = ICollection_CreateEnumerator(IMap_AsValueCollection(DefinitionsMap(self)));
+    if (Enumerator == NULL)
+    {
+        return Error_Construct3(ErrorCode_BufferTooLarge, u8"Failed to enumerate asset definitions.");
+    }
+
+    Error Result = Error_CreateSuccess();
+    while (true)
+    {
+        bool HasNext = false;
+        Result = CollectionEnumerator_HasNext(Enumerator, &HasNext);
+        if ((Result.Code != ErrorCode_Success) || !HasNext)
+        {
+            break;
+        }
+        void* RecordPointer = NULL;
+        Result = CollectionEnumerator_NextByReference(Enumerator, &RecordPointer);
+        if (Result.Code != ErrorCode_Success)
+        {
+            break;
+        }
+        const AssetDefinition* Definition = ((const DefinitionRecord*)RecordPointer)->Definition;
+        const unsigned char* Name = Definition->Name;
+        if ((Definition->Type == type) && HasPrefix(Name, prefix) && !GenericBuffer_AddLast(outNames, &Name))
+        {
+            Result = Error_Construct3(ErrorCode_BufferTooSmall, u8"The definition names could not be collected.");
+            break;
+        }
+    }
+    CollectionEnumerator_Destroy(Enumerator);
+    return Result;
+}
+
+/* Appends the names (NUL-terminated) and their offsets; on failure both buffers keep their earlier contents only. */
+static Error AppendNames(const GenericBuffer* names, GenericBuffer* outNames, GenericBuffer* outOffsets)
+{
+    size_t NamesStart = outNames->_count;
+    size_t OffsetsStart = outOffsets->_count;
+    const unsigned char* const* Names = (const unsigned char* const*)names->_data;
+    for (size_t Index = 0U; Index < names->_count; Index++)
+    {
+        size_t Offset = outNames->_count;
+        if (!GenericBuffer_AppendString(outNames, Names[Index]) || !GenericBuffer_AppendByte(outNames, (unsigned char)0)
+            || !GenericBuffer_AddLast(outOffsets, &Offset))
+        {
+            GenericBuffer_SetCount(outNames, NamesStart);
+            GenericBuffer_SetCount(outOffsets, OffsetsStart);
+            return Error_Construct3(ErrorCode_BufferTooSmall, u8"AssetManager_GetDefinitionNames: a buffer could not grow.");
+        }
+    }
+    return Error_CreateSuccess();
+}
+
 /* Forgets every cached load failure. O(1) when nothing failed. */
 static Error ClearAllLoadFailures(AssetManager* self)
 {
@@ -677,14 +765,24 @@ static Error RegisterDefinition(AssetManager* self, AssetDefinition* definition,
         return Error_Construct3(ErrorCode_IllegalArgument, u8"Definition has an unregistered type id.");
     }
 
-    if (!AssetManager_IsValidAssetName(definition->Name))
+    const char* NameProblem = AssetManager_DescribeAssetNameProblem(definition->Name);
+    if (NameProblem != NULL)
     {
         // Build the message before destroying the definition: the name belongs to it.
-        Error NameResult = Error_Construct3(ErrorCode_InvalidAssetDefinition,
-            u8"Invalid %s name \"%s\": a name starts with a lowercase letter (a-z) and contains only a-z, 0-9, '_', '.' and '-'.",
-            Type->Name, (definition->Name != NULL) ? definition->Name : (const unsigned char*)u8"");
+        Error NameResult = Error_Construct3(ErrorCode_InvalidAssetDefinition, u8"Invalid %s name \"%s\": %s.",
+            Type->Name, (definition->Name != NULL) ? definition->Name : (const unsigned char*)u8"", NameProblem);
         definition->VTable->Destroy(definition);
         return NameResult;
+    }
+
+    // A name written without its namespace becomes its full form, the one every map key and message uses.
+    unsigned char FullName[NAMESPACED_KEY_BUFFER_SIZE];
+    Error FullNameResult = ToFullName(definition->Name, FullName);
+    Error_Deconstruct(&FullNameResult); // the name is valid and the buffer holds any key
+    if (!StringsEqual(definition->Name, FullName))
+    {
+        Memory_Free(definition->Name);
+        definition->Name = DuplicateString(FullName);
     }
 
     DefinitionRecord* Existing = NULL;
@@ -2316,16 +2414,19 @@ Error AssetManager_RemoveDefinition(AssetManager* self, AssetTypeID type, const 
 {
     if (self == NULL) { return CreateNullError(u8"self"); }
     if (name == NULL) { return CreateNullError(u8"name"); }
+    unsigned char FullName[NAMESPACED_KEY_BUFFER_SIZE];
+    Error NameResult = ToFullName(name, FullName);
+    if (NameResult.Code != ErrorCode_Success) { return NameResult; }
 
     DefinitionRecord* Record = NULL;
-    if (!TryGetDefinitionRecord(self, type, name, &Record))
+    if (!TryGetDefinitionRecord(self, type, FullName, &Record))
     {
-        return Error_Construct3(ErrorCode_InvalidOperation, u8"No definition named \"%s\" for the type.", name);
+        return Error_Construct3(ErrorCode_InvalidOperation, u8"No definition named \"%s\" for the type.", FullName);
     }
 
     Error ClearResult = ClearAllLoadFailures(self);
     if (ClearResult.Code != ErrorCode_Success) { return ClearResult; }
-    return RemoveDefinitionRecord(self, type, name);
+    return RemoveDefinitionRecord(self, type, FullName);
 }
 
 Error AssetManager_HasDefinition(AssetManager* self, AssetTypeID type, const unsigned char* name, bool* outExists)
@@ -2333,33 +2434,65 @@ Error AssetManager_HasDefinition(AssetManager* self, AssetTypeID type, const uns
     if (self == NULL) { return CreateNullError(u8"self"); }
     if (name == NULL) { return CreateNullError(u8"name"); }
     if (outExists == NULL) { return CreateNullError(u8"outExists"); }
+    *outExists = false;
+    unsigned char FullName[NAMESPACED_KEY_BUFFER_SIZE];
+    Error NameResult = ToFullName(name, FullName);
+    if (NameResult.Code != ErrorCode_Success)
+    {
+        Error_Deconstruct(&NameResult); // an invalid name is never registered
+        return Error_CreateSuccess();
+    }
     DefinitionRecord* Record = NULL;
-    *outExists = TryGetDefinitionRecord(self, type, name, &Record);
+    *outExists = TryGetDefinitionRecord(self, type, FullName, &Record);
     return Error_CreateSuccess();
+}
+
+Error AssetManager_GetDefinitionNames(AssetManager* self, AssetTypeID type, const unsigned char* prefix,
+    GenericBuffer* outNames, GenericBuffer* outOffsets)
+{
+    if (self == NULL) { return CreateNullError(u8"self"); }
+    if (prefix == NULL) { return CreateNullError(u8"prefix"); }
+    if (outNames == NULL) { return CreateNullError(u8"outNames"); }
+    if (outOffsets == NULL) { return CreateNullError(u8"outOffsets"); }
+    if ((outNames->_elementSize != sizeof(unsigned char)) || (outOffsets->_elementSize != sizeof(size_t)))
+    {
+        return Error_Construct3(ErrorCode_IllegalArgument, u8"outNames must be a byte buffer and outOffsets hold size_t.");
+    }
+    if (FindTypeByID(self, type) == NULL) { return Error_Construct3(ErrorCode_IllegalArgument, u8"Unknown asset type id."); }
+
+    // Pointers into the definitions, which nothing changes while this runs.
+    GenericBuffer* Names = NULL;
+    Error Result = AssetManager_BorrowGenericBuffer(self, sizeof(const unsigned char*), &Names);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+    Result = CollectDefinitionNames(self, type, prefix, Names);
+    if (Result.Code == ErrorCode_Success)
+    {
+        const unsigned char* Scratch[2];
+        UserData Context = UserData_CreateEmpty();
+        GenericBuffer_SortAscending(Names, CompareNamePointers, &Context, Scratch);
+        Result = AppendNames(Names, outNames, outOffsets);
+    }
+    Error ReturnResult = AssetManager_ReturnGenericBuffer(self, Names);
+    Error_Deconstruct(&ReturnResult); // the buffer came from the pool
+    return Result;
 }
 
 bool AssetManager_IsValidAssetName(const unsigned char* name)
 {
-    // Every allowed character is ASCII, so a byte-wise check is exact for UTF-8: any byte of a multi-byte
-    // sequence is >= 0x80 and therefore rejected.
-    if ((name == NULL) || !IsAsciiLowercaseLetter(name[0]))
-    {
-        return false;
-    }
-    for (const unsigned char* Cursor = name + 1; *Cursor != (unsigned char)u8'\0'; Cursor++)
-    {
-        unsigned char Character = *Cursor;
-        bool IsAllowed = IsAsciiLowercaseLetter(Character)
-            || IsAsciiDigit(Character)
-            || (Character == (unsigned char)u8'_')
-            || (Character == (unsigned char)u8'.')
-            || (Character == (unsigned char)u8'-');
-        if (!IsAllowed)
-        {
-            return false;
-        }
-    }
-    return true;
+    return (name != NULL) && (AssetManager_DescribeAssetNameProblem(name) == NULL);
+}
+
+const char* AssetManager_DescribeAssetNameProblem(const unsigned char* name)
+{
+    size_t Length = (name != NULL) ? StringUTF8_GetByteLength(name) : 0U;
+    return NamespacedKey_DescribeProblem(name, Length, NULL);
+}
+
+Error AssetManager_ParseAssetName(const unsigned char* name, GenericBuffer* outFullName)
+{
+    if (name == NULL) { return CreateNullError(u8"name"); }
+    if (outFullName == NULL) { return CreateNullError(u8"outFullName"); }
+    return NamespacedKey_Parse(name, StringUTF8_GetByteLength(name), NULL, outFullName);
 }
 
 Error AssetManager_ClearLoadFailures(AssetManager* self)
@@ -2379,16 +2512,19 @@ Error AssetManager_ReleaseAsset(AssetManager* self, AssetTypeID assetType, const
 {
     if (self == NULL) { return CreateNullError(u8"self"); }
     if (name == NULL) { return CreateNullError(u8"name"); }
+    unsigned char FullName[NAMESPACED_KEY_BUFFER_SIZE];
+    Error NameResult = ToFullName(name, FullName);
+    if (NameResult.Code != ErrorCode_Success) { return NameResult; }
 
     LoadedAssetRecord* Record = NULL;
-    if (!TryGetLoadedRecord(self, assetType, name, &Record))
+    if (!TryGetLoadedRecord(self, assetType, FullName, &Record))
     {
-        return Error_Construct3(ErrorCode_InvalidOperation, u8"Asset \"%s\" is not loaded.", name);
+        return Error_Construct3(ErrorCode_InvalidOperation, u8"Asset \"%s\" is not loaded.", FullName);
     }
 
     if (!UserSetContains(&Record->Holders, user))
     {
-        return Error_Construct3(ErrorCode_InvalidOperation, u8"User does not hold asset \"%s\".", name);
+        return Error_Construct3(ErrorCode_InvalidOperation, u8"User does not hold asset \"%s\".", FullName);
     }
 
     bool WasRemoved = false;
@@ -2431,10 +2567,13 @@ Error AssetManager_LoadAssetSingle(AssetManager* self, AssetTypeID assetType, co
     TypeRecord* Type = FindTypeByID(self, assetType);
     if (Type == NULL) { return Error_Construct3(ErrorCode_IllegalArgument, u8"Unknown asset type id."); }
     if (!IsUserActive(self, user)) { return Error_Construct3(ErrorCode_IllegalArgument, u8"Invalid asset user id."); }
+    unsigned char FullName[NAMESPACED_KEY_BUFFER_SIZE];
+    Error NameResult = ToFullName(name, FullName);
+    if (NameResult.Code != ErrorCode_Success) { return NameResult; }
 
     // Already loaded: share it and record the hold.
     LoadedAssetRecord* Existing = NULL;
-    if (TryGetLoadedRecord(self, assetType, name, &Existing))
+    if (TryGetLoadedRecord(self, assetType, FullName, &Existing))
     {
         bool WasAdded = false;
         Error AddResult = UserSetAdd(&Existing->Holders, user, &WasAdded);
@@ -2444,9 +2583,9 @@ Error AssetManager_LoadAssetSingle(AssetManager* self, AssetTypeID assetType, co
     }
 
     DefinitionRecord* DefinitionEntry = NULL;
-    if (!TryGetDefinitionRecord(self, assetType, name, &DefinitionEntry))
+    if (!TryGetDefinitionRecord(self, assetType, FullName, &DefinitionEntry))
     {
-        return Error_Construct3(ErrorCode_InvalidOperation, u8"No definition named \"%s\" for the type.", name);
+        return Error_Construct3(ErrorCode_InvalidOperation, u8"No definition named \"%s\" for the type.", FullName);
     }
 
     // A remembered failure is returned at once: no I/O and no dependency user.
@@ -2454,7 +2593,7 @@ Error AssetManager_LoadAssetSingle(AssetManager* self, AssetTypeID assetType, co
     {
         return Error_Construct3(DefinitionEntry->LoadFailure.Code,
             u8"Asset \"%s\" failed to load earlier (not retried until definitions or roots change): %s",
-            name, GetErrorMessage(&DefinitionEntry->LoadFailure));
+            FullName, GetErrorMessage(&DefinitionEntry->LoadFailure));
     }
 
     // The record may move while loading (see DefinitionRecord); the definition object itself does not.
@@ -2473,14 +2612,14 @@ Error AssetManager_LoadAssetSingle(AssetManager* self, AssetTypeID assetType, co
         Error ReleaseResult = ReleaseAllForUser(self, DependencyUser);
         Error_Deconstruct(&ReleaseResult);
         RemoveActiveUser(self, DependencyUser);
-        CacheLoadFailure(self, Type, name, &LoadResult);
+        CacheLoadFailure(self, Type, FullName, &LoadResult);
         return LoadResult;
     }
 
     LoadedAssetRecord* Record = Memory_Allocate(sizeof(LoadedAssetRecord));
     Memory_Zero(Record, sizeof(*Record));
     Record->Type = assetType;
-    Record->Name = DuplicateString(name);
+    Record->Name = DuplicateString(FullName);
     Record->Loaded = Loaded;
     Record->DependencyUser = DependencyUser;
 
@@ -2648,10 +2787,13 @@ Error AssetManager_LoadTexturePixels(AssetManager* self, const unsigned char* na
     {
         return Error_Construct3(ErrorCode_InvalidState, u8"Standard asset types were not registered.");
     }
+    unsigned char FullName[NAMESPACED_KEY_BUFFER_SIZE];
+    Error NameResult = ToFullName(name, FullName);
+    if (NameResult.Code != ErrorCode_Success) { return NameResult; }
     DefinitionRecord* Record = NULL;
-    if (!TryGetDefinitionRecord(self, self->_standardTypes.Texture, name, &Record))
+    if (!TryGetDefinitionRecord(self, self->_standardTypes.Texture, FullName, &Record))
     {
-        return Error_Construct3(ErrorCode_InvalidOperation, u8"No texture named \"%s\" is defined.", name);
+        return Error_Construct3(ErrorCode_InvalidOperation, u8"No texture named \"%s\" is defined.", FullName);
     }
     // The record may move when the definitions map changes; the definition object does not, and reading its file
     // registers nothing.
@@ -2687,11 +2829,14 @@ Error AssetBulkOperation_AddEntry(AssetBulkOperation* self, AssetTypeID assetTyp
     if (name == NULL) { return CreateNullError(u8"name"); }
     if (outPromise != NULL) { *outPromise = NULL; }
     if (self->NextIndex > 0U) { return Error_Construct3(ErrorCode_InvalidOperation, u8"Cannot add entries after stepping has begun."); }
+    unsigned char FullName[NAMESPACED_KEY_BUFFER_SIZE];
+    Error NameResult = ToFullName(name, FullName);
+    if (NameResult.Code != ErrorCode_Success) { return NameResult; }
 
     PromisedAsset* Entry = Memory_Allocate(sizeof(PromisedAsset));
     Memory_Zero(Entry, sizeof(*Entry));
     Entry->Type = assetType;
-    Entry->Name = DuplicateString(name);
+    Entry->Name = DuplicateString(FullName);
     Entry->Asset = NULL;
     Entry->Resolved = false;
     Entry->LoadError = Error_CreateSuccess();

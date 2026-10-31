@@ -1,5 +1,5 @@
 {
-    "name": "test_smoke",
+    "name": "tbp:test_smoke",
     "frames": [
         {
             "source": "texture",

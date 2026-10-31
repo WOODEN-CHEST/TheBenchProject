@@ -1,5 +1,5 @@
 {
-    "name": "test_humanoid",
+    "name": "tbp:test_humanoid",
     "fade_seconds": 0.2,
     "parameters": {
         "is_placing": { "type": "bool", "default": false }

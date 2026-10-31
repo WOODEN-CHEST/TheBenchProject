@@ -61,9 +61,14 @@ Rules for rows:
   put its id into the table's `RetiredWireIds` (the check rejects a retired id on a descriptor).
 - **Enums** that are saved give their C constants explicit values and never renumber them: GHDF stores the value,
   JSON the entry's name.
-- **Strings** (`String`, `AssetName`) must set `Rules.MaxLength` (content from other players must not grow a save
-  without bound). A string that may be NULL (`IsNullAllowed`) must default to NULL, because GHDF has no null: a NULL
-  string is an absent entry, which reads back as the default.
+- **Strings** (`String`, `AssetName`, `LocalName`) must set `Rules.MaxLength` (content from other players must not grow
+  a save without bound). A string that may be NULL (`IsNullAllowed`) must default to NULL, because GHDF has no null: a
+  NULL string is an absent entry, which reads back as the default.
+- **Asset names** (`AssetName`, `AssetNameList`) are read and set as written and kept in full: a valid name without its
+  namespace (`desk`) becomes `tbp:desk` wherever a value is stored (`PropertyInternal_AdoptOwned`: reads, sets, copies),
+  so the writers write names in full and compares see one spelling. The length rule counts the name in full. A default
+  that is a name is written in full in the table (`tbp:sky_moon`), or the writer would not recognise it as the default.
+  Names local to one object (a socket, a climate preset) are `LocalName` rows: never namespaced.
 - **Display order** is table order: the inspector's order and the order the JSON writer inserts keys in.
 - `SinceVersion` is the table version that added the property, in [1, `Version`].
 
@@ -102,14 +107,15 @@ no `inherit` states: a flag cannot collide with a real value, and the editor sho
 | `Color` | raylib `Color` (RGBA all data) | `"#rrggbb"`, `"#rrggbbaa"` when not opaque | UInt8 array of 4 |
 | `RenderColor` | `RenderColor` | `"#rrggbb"` when brightness and opacity are 1, else `{tint: [r,g,b], brightness, opacity}` | Compound {1: UInt8[3] tint, 2: Float brightness, 3: Float opacity} |
 | `String` | owned `unsigned char*` | string or `null` | String (absent when NULL) |
-| `AssetName` | owned `unsigned char*`, `AssetManager_IsValidAssetName` | string or `null` | String (absent when NULL) |
+| `AssetName` | owned `unsigned char*`, `AssetManager_IsValidAssetName`, kept in full (`tbp:desk`) | string or `null`, read as written (`desk` is `tbp:desk`), written in full | String (absent when NULL; a short name reads as `tbp`'s) |
+| `LocalName` | owned `unsigned char*`, `NamespacedKey_IsValidLocalName` (`[a-z][a-z0-9_.-]*`, no namespace): a name inside one asset or object (a socket, a climate preset) | string or `null` | String (absent when NULL) |
 | `Enum` | integer of 1, 2 (unsigned) or 4 bytes | the entry's name, e.g. `"near"` | EncodedInteger (the value) |
 | `ObjectId` | `uint64_t`, 0 = none | like UInt64 | the smallest integer type that holds the value |
 | `Date` | `int64_t` day number ([GameCalendar.md](GameCalendar.md)), inside the calendar (years 1 to 9999) | `"yyyy-mm-dd"` only, e.g. `"2026-10-18"` | EncodedInteger (the day number; three bytes for this era) |
 | `DataMap` | owned `DataMap*` ([ObjectData.md](ObjectData.md)), NULL while empty (its only default) | two keys: the tags under the descriptor's `TagsKey` (`["town:lamp"]`), the values under its `Key` (`{"town:visits": 3}`) | Compound array of entry compounds |
 | `FloatList` | owned `PropertyFloatList*`, NULL while empty (its only default) | array of numbers, `[3.0, 6.0, 60.0]` (`[]` when empty) | Float array (empty when empty) |
 | `EnumSet` | `uint32_t` mask: bit N is the enum entry of value N | array of the entries' names in the table's order, `["world", "prop"]` (`[]` when empty) | the smallest unsigned integer type that holds the mask |
-| `AssetNameList` | owned `PropertyAssetNameList*`, NULL while empty (its only default) | array of strings, `["human_motions", "gestures"]` (`[]` when empty) | String array (empty when empty) |
+| `AssetNameList` | owned `PropertyAssetNameList*`, NULL while empty (its only default), each name kept in full | array of strings, `["tbp:human_motions", "tbp:gestures"]` (`[]` when empty), read as written | String array (empty when empty) |
 | `InstanceList` | owned `PropertyInstanceList*` of `PropertyInstanceEntry` (a `Vector3Double` position, a radians `Vector3` rotation, a `Vector3` scale, a `Color` tint), NULL while empty (its only default) | array of instances, each `{"position": [x, y, z], "rotation": [x, y, z], "scale": s or [x, y, z], "tint": "#rrggbb"}` with the defaults left out (rotation 0, scale 1, white; the position always written; rotations in degrees, a scale one number when even, the tint as a `Color`); any other key is refused; `[]` when empty | Compound {1: Double array of the positions (3 per instance), 2: Float array of the rotations in radians, 3: Float array of the scales, 4: UInt8 array of the tints (4 each)}; 2, 3 and 4 only when an instance differs from its default, each of exactly its length |
 
 The integer types are written in the smallest GHDF integer type that holds the value (a `parent` of 12 is one
@@ -139,8 +145,9 @@ An `EnumSet` takes an enum table like an `Enum`, whose values must be 0 to `PROP
 check refuses others); a mask with a bit that is no entry of the table is refused. JSON reads an array of names: an
 unknown name or one given twice is refused, naming its index (`[1]: ...`). The collider's `collides_with` (a set of
 collision layers) is the first. An `AssetNameList` takes `PROPERTY_RULES_ASSET_NAME_LIST(maxCount, maxLength)` (both
-required: 1 to `PROPERTY_ASSET_NAME_LIST_MAX_COUNT`, 64, names and 1 to `PROPERTY_ASSET_NAME_LIST_MAX_LENGTH`, 256,
-bytes each); every name must be a valid asset name (`AssetManager_IsValidAssetName`); its default must be NULL. The
+required: 1 to `PROPERTY_ASSET_NAME_LIST_MAX_COUNT`, 64, names and 1 to `PROPERTY_ASSET_NAME_LIST_MAX_LENGTH`, 128,
+bytes each, counted in full); every name must be a valid asset name (`AssetManager_IsValidAssetName`); its default must
+be NULL. The
 animator's `animation_libraries` is the first. An `InstanceList` takes `PROPERTY_RULES_INSTANCE_LIST(maxCount,
 positionLimit)` (`Rules.MaxCount`, required: 1 to `PROPERTY_INSTANCE_LIST_MAX_COUNT`, 262 144, and every position's
 components within ±`positionLimit`); every rotation and scale must be finite; its default must be NULL. A refusal names

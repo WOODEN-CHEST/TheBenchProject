@@ -1,5 +1,5 @@
 {
-    "name": "world_terrain",
+    "name": "tbp:world_terrain",
     "vertex_location": "terrain/vertex",
     "fragment_location": "terrain/fragment"
 }

@@ -1,5 +1,5 @@
 {
-    "name": "sky_milky_way",
+    "name": "tbp:sky_milky_way",
     "location": "sky/placeholder_milky_way",
     "texture_properties": { "filtering": "trilinear", "wrap": "repeat", "mipmaps": true },
     "color_space": "srgb"

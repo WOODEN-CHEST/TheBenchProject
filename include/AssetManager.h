@@ -26,8 +26,11 @@
  * registered together by AssetManager_CreateStandardAssetTypes.
  *
  * DEFINITIONS. Each definition has a name that is unique within its type (names may repeat across types).
- * A name starts with a lowercase ASCII letter and contains only a-z, 0-9, '_', '.' and '-' (see
- * AssetManager_IsValidAssetName). Definitions may be added or removed at any time; removing a definition
+ * A name is a namespaced key, "namespace:path" (NamespacedKey.h's rules, at most NAMESPACED_KEY_MAX_LENGTH bytes in
+ * full), so two packs' assets never collide: "mymod:desk" and "tbp:desk" are two assets. Written without a namespace
+ * it is the default namespace's: every function that takes a name accepts "desk" for "tbp:desk"
+ * (AssetManager_ParseAssetName), and everything the manager stores, logs and returns is the full name. Definitions
+ * may be added or removed at any time; removing a definition
  * does NOT unload an asset already built from it: while that asset stays loaded it keeps being shared with
  * new users, and only once it has been unloaded can it no longer be built (until the definition is re-added). Definitions are usually read from files at startup with AssetManager_ReadDefinitions (a bad
  * definition file is logged and skipped, never fatal), but they can also be built in code and registered
@@ -290,8 +293,10 @@ typedef struct AssetDefinitionStruct
     const AssetDefinitionVTable* VTable;
     /** @brief The type this definition belongs to; set by the manager at registration. */
     AssetTypeID Type;
-    /** @brief Owned, NUL-terminated UTF-8 asset name, unique within the type; set by the constructor.
-     *         Registration rejects names that fail AssetManager_IsValidAssetName. */
+    /** @brief Owned, NUL-terminated asset name, unique within the type, allocated with Memory_Allocate; set by the
+     *         constructor (AssetJSON_ReadName gives the full name). Registration rejects a name that fails
+     *         AssetManager_IsValidAssetName and replaces one written without its namespace with its full form (freeing
+     *         the old string with Memory_Free). */
     unsigned char* Name;
 } AssetDefinition;
 
@@ -817,8 +822,9 @@ Error AssetManager_BuildDefinition(AssetManager* self, AssetTypeID type,
  * @brief Registers (or overrides) a definition by its (Type, Name); the manager ALWAYS takes ownership.
  *
  * The definition's Type must be set to a registered type (a builder/constructor result already carries it
- * via the type used) and Name must pass AssetManager_IsValidAssetName. If a definition with the same
- * (Type, Name) exists it is destroyed and replaced, whatever its source. This is the entry point for
+ * via the type used) and Name must pass AssetManager_IsValidAssetName; a Name written without its namespace is
+ * replaced with its full form. If a definition with the same (Type, full Name) exists it is destroyed and replaced,
+ * whatever its source. This is the entry point for
  * runtime-created definitions and custom sources; such a definition has no source file and is never
  * replaced by AssetManager_ReadDefinitions.
  *
@@ -843,25 +849,67 @@ Error AssetManager_SetDefinition(AssetManager* self, AssetDefinition* definition
  * Clears all cached load failures before removing the definition (not when it does not exist).
  * @param self The manager; must not be NULL.
  * @param type The definition's type.
- * @param name The definition's name; NUL-terminated UTF-8, must not be NULL.
- * @returns Success; ErrorCode_IllegalArgument for NULL args; ErrorCode_InvalidOperation if no such
- *          definition exists.
+ * @param name The definition's name, with or without its namespace; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument for NULL args; ErrorCode_ArgumentOutOfRange for an invalid name;
+ *          ErrorCode_InvalidOperation if no such definition exists.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
 Error AssetManager_RemoveDefinition(AssetManager* self, AssetTypeID type, const unsigned char* name);
 
 /**
- * @brief Reports whether a string is a valid asset definition name.
+ * @brief Reports whether a string is a valid asset name as written: a namespaced key, with or without its namespace.
  *
- * The grammar is [a-z][a-z0-9_.-]*: at least one byte, starting with a lowercase ASCII letter, followed
- * only by lowercase ASCII letters, ASCII digits, '_', '.' and '-'. Any other byte (uppercase, space,
- * '/', or any non-ASCII UTF-8 sequence) makes the name invalid. Registration applies this check to every
- * definition, whatever its type or source. Pure function; no allocation.
+ * "tbp:desk", "mymod:furniture/desk" and "desk" (the default namespace's) are valid; uppercase letters, spaces, a
+ * second colon, an empty namespace or path, any non-ASCII byte, and a name over NAMESPACED_KEY_MAX_LENGTH bytes in
+ * full are not. Registration applies this check to every definition, whatever its type or source. Pure function.
  * @param name The candidate name; NUL-terminated. NULL is invalid.
  * @returns true if @p name is a valid asset name, false otherwise.
  */
 bool AssetManager_IsValidAssetName(const unsigned char* name);
+
+/**
+ * @brief Describes what is wrong with an asset name as written, for messages ("... is not a valid asset name: %s.").
+ * @param name The candidate name; NUL-terminated. NULL is described as empty.
+ * @returns NULL for a valid asset name (AssetManager_IsValidAssetName); otherwise a static description such as
+ *          "uppercase letters are not allowed (keys are lowercase)".
+ */
+const char* AssetManager_DescribeAssetNameProblem(const unsigned char* name);
+
+/**
+ * @brief Reads an asset name as written, with or without its namespace, and appends its full form.
+ *
+ * "desk" becomes "tbp:desk" (NAMESPACED_KEY_DEFAULT_NAMESPACE); "mymod:desk" stays as it is. The destination is one
+ * growing string: a trailing NUL is dropped before appending, and the result is NUL-terminated. A buffer of
+ * NAMESPACED_KEY_BUFFER_SIZE bytes always suffices (on the stack through GenericBuffer_CreateConstant). Nothing is
+ * appended on failure.
+ * @param name The name (NUL-terminated); must not be NULL.
+ * @param outFullName The byte buffer to append the full name to; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if an argument is NULL; ErrorCode_ArgumentOutOfRange when @p name is not
+ *          a valid asset name (the message names the problem); ErrorCode_BufferTooSmall if @p outFullName cannot hold
+ *          the name.
+ */
+Error AssetManager_ParseAssetName(const unsigned char* name, GenericBuffer* outFullName);
+
+/**
+ * @brief Lists the full names of a type's definitions that start with a prefix, in byte order.
+ *
+ * For loading every definition of a type and for autocomplete: "mymod:" lists a mod's definitions, the empty prefix
+ * every one. The prefix is compared with the full names as it is ("desk" finds nothing, "tbp:d" finds "tbp:desk").
+ * Each name is appended to @p outNames as a NUL-terminated text and its byte offset there to @p outOffsets (offsets,
+ * not pointers: the names buffer may move as it grows); the earlier contents of both buffers are untouched. A linear
+ * scan over every definition; allocates only to grow the buffers and a pooled scratch buffer.
+ * @param self The manager; must not be NULL.
+ * @param type The asset type.
+ * @param prefix The prefix (NUL-terminated); must not be NULL.
+ * @param outNames A byte buffer the names are appended to; must not be NULL.
+ * @param outOffsets A buffer of size_t the names' offsets are appended to; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument for NULL arguments, buffers of the wrong element size or an unknown
+ *          type; ErrorCode_BufferTooSmall if a buffer could not grow (nothing appended then).
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error AssetManager_GetDefinitionNames(AssetManager* self, AssetTypeID type, const unsigned char* prefix,
+    GenericBuffer* outNames, GenericBuffer* outOffsets);
 
 /**
  * @brief Forgets every remembered load failure, so the next load of each such asset is attempted again.
@@ -881,7 +929,7 @@ Error AssetManager_ClearLoadFailures(AssetManager* self);
  * @brief Reports whether a definition with the given (type, name) is registered.
  * @param self The manager; must not be NULL.
  * @param type The type to check.
- * @param name The name to check; NUL-terminated UTF-8, must not be NULL.
+ * @param name The name to check, with or without its namespace; must not be NULL. An invalid name is not registered.
  * @param outExists [out] Receives the result. Must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument for NULL args.
  */
@@ -903,10 +951,10 @@ Error AssetManager_GetNewUserID(AssetManager* self, AssetUserID* outID);
  * @brief Drops one user's hold on one asset; unloads the asset if it was the last holder.
  * @param self The manager; must not be NULL.
  * @param assetType The asset's type.
- * @param name The asset's name; NUL-terminated UTF-8, must not be NULL.
+ * @param name The asset's name, with or without its namespace; must not be NULL.
  * @param user The releasing user.
- * @returns Success; ErrorCode_IllegalArgument for NULL args; ErrorCode_InvalidOperation if the asset is
- *          not loaded or the user does not hold it.
+ * @returns Success; ErrorCode_IllegalArgument for NULL args; ErrorCode_ArgumentOutOfRange for an invalid name;
+ *          ErrorCode_InvalidOperation if the asset is not loaded or the user does not hold it.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */
@@ -952,10 +1000,11 @@ Error AssetManager_RetireUser(AssetManager* self, AssetUserID user);
  * every holder releases it).
  * @param self The manager; must not be NULL.
  * @param assetType The asset's type.
- * @param name The asset's name; NUL-terminated UTF-8, must not be NULL.
+ * @param name The asset's name, with or without its namespace ("desk" is "tbp:desk"); must not be NULL.
  * @param user The user taking a hold; must be a valid id.
  * @param outAsset [out] Receives the borrowed wrapper pointer on success, NULL on failure. Must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument for NULL args or an unknown type/invalid user;
+ *          ErrorCode_ArgumentOutOfRange for an invalid name (AssetManager_IsValidAssetName);
  *          ErrorCode_InvalidOperation if no definition exists for (assetType, name); forwards the loader's
  *          error on a build failure, and that same error code (with a new message) while the failure is
  *          remembered.
@@ -1076,13 +1125,14 @@ Error AssetManager_LoadClimate(AssetManager* self, const unsigned char* name, As
  * past the end of a short file (a hostile pack's), so the pixels come from png, bmp, gif and qoi images only. The size is
  * checked before the image is converted to RGBA.
  * @param self The manager; must not be NULL.
- * @param name The texture asset's name; must not be NULL.
+ * @param name The texture asset's name, with or without its namespace; must not be NULL.
  * @param maxSide The largest width or height to read, in pixels (the caller's limit; at least 1, and the texture type's
  *        own limit, 8192, applies above it).
  * @param outPixels [out] Receives the pixels; the caller frees them with TexturePixels_Deconstruct. Zeroed on failure.
  *        Must not be NULL.
- * @returns Success; ErrorCode_IllegalArgument for a NULL argument or a @p maxSide below 1; ErrorCode_InvalidState if the
- *          standard types were not registered; ErrorCode_InvalidOperation when no texture of that name is defined, or
+ * @returns Success; ErrorCode_IllegalArgument for a NULL argument or a @p maxSide below 1; ErrorCode_ArgumentOutOfRange
+ *          for an invalid name; ErrorCode_InvalidState if the standard types were not registered;
+ *          ErrorCode_InvalidOperation when no texture of that name is defined, or
  *          its definition is not read from an image file (one built in code); the file's errors as
  *          AssetManager_AcquireResourcePath gives them; ErrorCode_InvalidAssetData for a DDS file, an image that cannot
  *          be decoded, one with no pixels or more than @p maxSide per side (the message names both), or a compressed
@@ -1111,10 +1161,10 @@ Error AssetManager_CreateAssetBulkOperation(AssetManager* self, AssetUserID user
  * @brief Queues one asset in a bulk operation and returns its promise immediately (before loading).
  * @param self The operation; must not be NULL.
  * @param assetType The asset's type.
- * @param name The asset's name; NUL-terminated UTF-8, must not be NULL (copied).
+ * @param name The asset's name, with or without its namespace; must not be NULL (its full form is copied).
  * @param outPromise [out] Receives the promise (owned by the operation). May be NULL if not needed.
- * @returns Success; ErrorCode_IllegalArgument for NULL args; ErrorCode_InvalidOperation if the operation
- *          has already started stepping.
+ * @returns Success; ErrorCode_IllegalArgument for NULL args; ErrorCode_ArgumentOutOfRange for an invalid name;
+ *          ErrorCode_InvalidOperation if the operation has already started stepping.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the
  *       full set.
  */

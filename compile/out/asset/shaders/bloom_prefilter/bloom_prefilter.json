@@ -1,4 +1,4 @@
 {
-    "name": "world_bloom_prefilter",
+    "name": "tbp:world_bloom_prefilter",
     "fragment_location": "bloom_prefilter/fragment"
 }

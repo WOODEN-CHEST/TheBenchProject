@@ -5,6 +5,7 @@
 #include "AssetDefinitionCommon.h"
 #include "AssetManager.h"
 #include "GameJSON.h"
+#include "NamespacedKey.h"
 #include "raylib/raymath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
@@ -151,7 +152,7 @@ static Error ParseSocket(SocketParse* parse, const unsigned char* key, const JSO
     AssetJSON_CopyPrintable(key, Shown, sizeof(Shown));
     FormatPath(Where, sizeof(Where), "sockets.%s", Shown);
     WorldModelSocketDefinition* Definition = parse->Definition;
-    if (!AssetManager_IsValidAssetName(key) || (StringUTF8_GetByteLength(key) > WORLD_MODEL_SOCKET_NAME_MAX_LENGTH))
+    if (!NamespacedKey_IsValidLocalName(key) || (StringUTF8_GetByteLength(key) > WORLD_MODEL_SOCKET_NAME_MAX_LENGTH))
     {
         return Fail(parse->Name, ErrorCode_InvalidAssetDefinition, "sockets: \"%s\" is not a valid socket name "
             "([a-z][a-z0-9_.-]*, at most %" PRIu64 " bytes).", Shown, (uint64_t)WORLD_MODEL_SOCKET_NAME_MAX_LENGTH);

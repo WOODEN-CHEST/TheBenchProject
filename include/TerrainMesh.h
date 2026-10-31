@@ -307,8 +307,9 @@ typedef struct TerrainGltfOptionsStruct
     /** @brief The attributes carrying the densities, and how many. */
     const TerrainAttributeMapping* Densities;
     size_t DensityMappingCount;
-    /** @brief The palette's material names (1 to TERRAIN_MAX_MATERIALS): a primitive whose material has one of these
-     *  names takes it outright on all its faces. */
+    /** @brief The palette's material names (1 to TERRAIN_MAX_MATERIALS), asset names: a primitive whose material slot
+     *  names one of them takes it outright on all its faces. Slot names and these are compared as asset names, each
+     *  in full ("dirt" is "tbp:dirt"), after the blend slot and "hole" (which a slot names exactly). */
     const unsigned char* const* MaterialNames;
     uint32_t MaterialCount;
     /** @brief The number of density channels (0 to TERRAIN_MAX_DENSITY_CHANNELS). */

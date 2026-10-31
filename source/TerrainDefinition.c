@@ -6,6 +6,7 @@
 #include "AssetDefinitionCommon.h"
 #include "CollisionLayer.h"
 #include "Logger.h"
+#include "NamespacedKey.h"
 #include "TerrainAsset.h"
 #include "wr/WRJSON.h"
 #include "wr/WRMemory.h"
@@ -208,7 +209,8 @@ static Error GetOptionalArray(const TerrainDefinition* definition, JSONCompound*
 }
 
 /* The strings of an array, each an owned copy into @p outNames (at most @p maximum, each at most
- * TERRAIN_NAME_MAX_LENGTH bytes, unique, valid by @p isValid). */
+ * TERRAIN_NAME_MAX_LENGTH bytes, unique): asset names kept in full ("grass" is "tbp:grass") when @p isValid is NULL,
+ * else names valid by @p isValid. */
 static Error ReadNameList(TerrainDefinition* definition, JSONArray* array, const char* key, size_t maximum,
     bool (*isValid)(const unsigned char* name), const char* rule, unsigned char** outNames, uint32_t* outCount)
 {
@@ -236,7 +238,17 @@ static Error ReadNameList(TerrainDefinition* definition, JSONArray* array, const
         }
         char Printable[NAME_PRINT_CAPACITY];
         AssetJSON_CopyPrintable(outNames[Index], Printable, sizeof(Printable));
-        if (!isValid(outNames[Index]) || (StringUTF8_GetByteLength(outNames[Index]) > TERRAIN_NAME_MAX_LENGTH))
+        if (isValid == NULL)
+        {
+            const char* Problem = AssetJSON_MakeFullAssetName(&outNames[Index]);
+            if (Problem != NULL)
+            {
+                return Fail(definition, "%s[%" PRIu64 "] is \"%s\", which is not a valid asset name: %s.", key,
+                    (uint64_t)Index, Printable, Problem);
+            }
+            AssetJSON_CopyPrintable(outNames[Index], Printable, sizeof(Printable));
+        }
+        else if (!isValid(outNames[Index]) || (StringUTF8_GetByteLength(outNames[Index]) > TERRAIN_NAME_MAX_LENGTH))
         {
             return Fail(definition, "%s[%" PRIu64 "] is \"%s\"; names are %s, at most %" PRIu64 " bytes.", key,
                 (uint64_t)Index, Printable, rule, (uint64_t)TERRAIN_NAME_MAX_LENGTH);
@@ -317,8 +329,8 @@ static Error ParseNames(TerrainDefinition* definition, JSONCompound* root)
     {
         return Fail(definition, "\"materials\" must name 1 to %u terrain materials: the palette.", TERRAIN_MAX_MATERIALS);
     }
-    Result = ReadNameList(definition, Materials, "materials", TERRAIN_MAX_MATERIALS, AssetManager_IsValidAssetName,
-        "asset names ([a-z][a-z0-9_.-]*)", definition->MaterialNames, &definition->MaterialCount);
+    Result = ReadNameList(definition, Materials, "materials", TERRAIN_MAX_MATERIALS, NULL, "asset names",
+        definition->MaterialNames, &definition->MaterialCount);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
@@ -344,6 +356,18 @@ static int32_t FindName(unsigned char* const* names, uint32_t count, const unsig
         }
     }
     return -1;
+}
+
+/* The index of a palette material by its name as written ("grass" is "tbp:grass"), or -1 (also for an invalid name). */
+static int32_t FindMaterial(const TerrainDefinition* definition, const unsigned char* name)
+{
+    unsigned char Storage[NAMESPACED_KEY_BUFFER_SIZE];
+    GenericBuffer FullName;
+    GenericBuffer_CreateConstant(&FullName, Storage, sizeof(Storage), sizeof(unsigned char), 0U);
+    Error ParseResult = AssetManager_ParseAssetName(name, &FullName);
+    bool IsName = ParseResult.Code == ErrorCode_Success;
+    Error_Deconstruct(&ParseResult);
+    return IsName ? FindName(definition->MaterialNames, definition->MaterialCount, Storage) : -1;
 }
 
 /* One mapping { "attribute": ..., "r": name, "g": ..., "b": ..., "a": ... }: each channel names a palette material
@@ -397,7 +421,7 @@ static Error ParseMapping(TerrainDefinition* definition, JSONCompound* compound,
         {
             continue;
         }
-        int32_t Target = isWeights ? FindName(definition->MaterialNames, definition->MaterialCount, Name)
+        int32_t Target = isWeights ? FindMaterial(definition, Name)
             : FindName(definition->ChannelNames, definition->ChannelCount, Name);
         char Printable[NAME_PRINT_CAPACITY];
         AssetJSON_CopyPrintable(Name, Printable, sizeof(Printable));
@@ -499,23 +523,24 @@ static Error ParseModelOptions(TerrainDefinition* definition, JSONCompound* root
         || (StringUTF8_GetByteLength(definition->BlendSlot) > TERRAIN_NAME_MAX_LENGTH)
         || !StringUTF8_IsEncodingValid(definition->BlendSlot)
         || AreNamesEqual(definition->BlendSlot, (const unsigned char*)u8"hole")
-        || (FindName(definition->MaterialNames, definition->MaterialCount, definition->BlendSlot) >= 0)))
+        || (FindMaterial(definition, definition->BlendSlot) >= 0)))
     {
         return Fail(definition, "\"blend_slot\" must be 1 to %" PRIu64 " bytes of UTF-8, and neither \"hole\" nor a "
-            "palette material.", (uint64_t)TERRAIN_NAME_MAX_LENGTH);
+            "palette material's name (\"dirt\" names \"tbp:dirt\").", (uint64_t)TERRAIN_NAME_MAX_LENGTH);
     }
-    // A palette material's slot gives its faces that material, but the import reads the slots "hole" and the blend
-    // slot first: a material of either name could never be a face's.
+    // The import reads the slots "hole" and the blend slot first and every other slot as a palette material's name
+    // ("dirt" is "tbp:dirt"): a material those two names would name could take faces only through a slot written in
+    // full, which is refused as a likely mistake.
     const unsigned char* Slot = IsFound ? definition->BlendSlot : TERRAIN_DEFAULT_BLEND_SLOT;
-    for (uint32_t Index = 0U; Index < definition->MaterialCount; Index++)
+    int32_t Hole = FindMaterial(definition, (const unsigned char*)u8"hole");
+    int32_t Blend = FindMaterial(definition, Slot);
+    if ((Hole >= 0) || (Blend >= 0))
     {
-        bool IsHole = AreNamesEqual(definition->MaterialNames[Index], (const unsigned char*)u8"hole");
-        if (IsHole || AreNamesEqual(definition->MaterialNames[Index], Slot))
-        {
-            return Fail(definition, "materials[%" PRIu32 "] is \"%s\", the name of the material slot that %s: a face "
-                "could never take that material. Rename the material%s.", Index, IsHole ? "hole" : (const char*)Slot,
-                IsHole ? "makes holes" : "uses the painted weights", IsHole ? "" : " or set another \"blend_slot\"");
-        }
+        bool IsHole = Hole >= 0;
+        uint32_t Index = (uint32_t)(IsHole ? Hole : Blend);
+        return Fail(definition, "materials[%" PRIu32 "] is \"%s\": the material slot \"%s\" %s, so give the material "
+            "another name%s.", Index, (const char*)definition->MaterialNames[Index], IsHole ? "hole" : (const char*)Slot,
+            IsHole ? "makes holes" : "uses the painted weights", IsHole ? "" : " or set another \"blend_slot\"");
     }
     return Error_CreateSuccess();
 }
@@ -909,7 +934,7 @@ static Error ParseRuleMaterials(const TerrainDefinition* definition, JSONCompoun
         Error_Deconstruct(&Result);
         IsFound = false;
     }
-    int32_t Placed = IsFound ? FindName(definition->MaterialNames, definition->MaterialCount, Name) : -1;
+    int32_t Placed = IsFound ? FindMaterial(definition, Name) : -1;
     char Printable[NAME_PRINT_CAPACITY];
     AssetJSON_CopyPrintable(Name, Printable, sizeof(Printable));
     Memory_Free(Name);
@@ -943,7 +968,7 @@ static Error ParseRuleMaterials(const TerrainDefinition* definition, JSONCompoun
         }
         bool IsString = Result.Code == ErrorCode_Success;
         Error_Deconstruct(&Result);
-        int32_t Covered = IsString ? FindName(definition->MaterialNames, definition->MaterialCount, Entry) : -1;
+        int32_t Covered = IsString ? FindMaterial(definition, Entry) : -1;
         AssetJSON_CopyPrintable(Entry, Printable, sizeof(Printable));
         Memory_Free(Entry);
         if (Covered < 0)

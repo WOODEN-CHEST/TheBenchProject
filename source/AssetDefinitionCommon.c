@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include "AssetDefinitionCommon.h"
 #include "GameJSON.h"
+#include "NamespacedKey.h"
 #include "wr/WRString.h"
 #include "wr/WRMemory.h"
 
@@ -15,6 +16,8 @@
 #define ENUMERATOR_STORAGE_SIZE ((size_t)256)
 /** How many bytes of an unknown key its message shows. */
 #define UNKNOWN_KEY_PRINT_CAPACITY ((size_t)65)
+/** Room for a definition's name quoted in a message (AssetJSON_CopyPrintable shortens longer ones). */
+#define ASSET_JSON_NAME_PRINT_CAPACITY ((size_t)65)
 /** The printable ASCII range [first, last]: AssetJSON_CopyPrintable shows every other byte as '?'. */
 #define FIRST_PRINTABLE_ASCII 0x20U
 #define LAST_PRINTABLE_ASCII 0x7EU
@@ -253,7 +256,47 @@ Error AssetJSON_ReadName(JSONCompound* root, const unsigned char* sourceDescript
             u8"Asset definition is missing a string \"name\" (\"%s\").",
             (sourceDescription != NULL) ? sourceDescription : (const unsigned char*)u8"?");
     }
-    return AssetJSON_ValueToOwnedString(&Value, outName);
+    unsigned char* Name = NULL;
+    Error TextResult = AssetJSON_ValueToOwnedString(&Value, &Name);
+    if (TextResult.Code != ErrorCode_Success)
+    {
+        return TextResult;
+    }
+    const char* Problem = AssetJSON_MakeFullAssetName(&Name);
+    if (Problem != NULL)
+    {
+        char Printable[ASSET_JSON_NAME_PRINT_CAPACITY];
+        AssetJSON_CopyPrintable(Name, Printable, sizeof(Printable));
+        Memory_Free(Name);
+        return Error_Construct3(ErrorCode_InvalidAssetDefinition,
+            u8"Asset definition name \"%s\" is not a valid asset name: %s (\"%s\").", Printable, Problem,
+            (sourceDescription != NULL) ? sourceDescription : (const unsigned char*)u8"?");
+    }
+    *outName = Name;
+    return Error_CreateSuccess();
+}
+
+const char* AssetJSON_MakeFullAssetName(unsigned char** name)
+{
+    const char* Problem = AssetManager_DescribeAssetNameProblem(*name);
+    if (Problem != NULL)
+    {
+        return Problem;
+    }
+    unsigned char Storage[NAMESPACED_KEY_BUFFER_SIZE];
+    GenericBuffer FullName;
+    GenericBuffer_CreateConstant(&FullName, Storage, sizeof(Storage), sizeof(unsigned char), 0U);
+    Error ParseResult = AssetManager_ParseAssetName(*name, &FullName);
+    Error_Deconstruct(&ParseResult); // the name is valid and the buffer holds any key
+    if (FullName._count == (StringUTF8_GetByteLength(*name) + 1U))
+    {
+        return NULL; // already full
+    }
+    unsigned char* Copy = Memory_Allocate(FullName._count);
+    Memory_Copy(Storage, Copy, FullName._count);
+    Memory_Free(*name);
+    *name = Copy;
+    return NULL;
 }
 
 Error AssetJSON_ParseLocation(const JSONObjectValue* value, const unsigned char* sourceDescription,

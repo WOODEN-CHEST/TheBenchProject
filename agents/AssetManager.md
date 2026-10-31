@@ -130,8 +130,30 @@ anything ([GameAssets.md](GameAssets.md), "GameTexture"). Custom types use
 
 ## Definitions
 
-- **Names** match `[a-z][a-z0-9_.-]*` (`AssetManager_IsValidAssetName`), checked at registration whatever the source.
-  A name is unique within its type; different types may reuse it.
+- **Names** are namespaced keys, `namespace:path` ([NamespacedKey.md](NamespacedKey.md): `[a-z0-9_.-]+:[a-z0-9_./-]+`,
+  at most 128 bytes in full), so two packs' assets never collide (`mymod:desk`, `tbp:desk`). Written without a namespace
+  a name is the default namespace's: `desk` is `tbp:desk`. A name is unique within its type; different types may reuse
+  it.
+  - **One spelling inside, both outside.** Every function that takes a name (the loads, `ReleaseAsset`,
+    `HasDefinition`, `RemoveDefinition`, `LoadTexturePixels`, `AssetBulkOperation_AddEntry`) accepts it as written and
+    works on its full form (a stack buffer, no allocation); an invalid one is `ErrorCode_ArgumentOutOfRange` naming the
+    problem (`HasDefinition` reports it absent). Everything the manager keeps, logs and returns is the full name.
+  - **Definitions get their full names.** `AssetJSON_ReadName` reads a definition's `name` in full, and registration
+    (files and `AssetManager_SetDefinition` alike) checks every definition's name (`AssetManager_IsValidAssetName`) and
+    replaces one written without its namespace with its full form: `AssetDefinition.Name` is allocated with
+    `Memory_Allocate`, and the manager frees the old string. `desk` in one root and `tbp:desk` in a higher one are one
+    name (an override); both in one root are a duplicate.
+  - **Names inside definitions** (a world model's LOD models, a world sprite's animation, a terrain's materials, a sprite
+    sheet frame's `sprite_sheet`, ...) are read the same way and kept in full (`AssetJSON_MakeFullAssetName`), so the
+    loaders' messages show full names. Names local to one asset (variants, sockets, clips, graph states, presets) are
+    not asset names: `NamespacedKey_IsValidLocalName`.
+  - **The helpers:** `AssetManager_IsValidAssetName(name)`, `AssetManager_DescribeAssetNameProblem(name)` (what is wrong,
+    for a message; NULL when valid) and `AssetManager_ParseAssetName(name, outFullName)` (appends the full form;
+    a buffer of `NAMESPACED_KEY_BUFFER_SIZE` bytes always suffices).
+  - **Listing:** `AssetManager_GetDefinitionNames(self, type, prefix, outNames, outOffsets)` appends a type's full names
+    that start with a prefix, in byte order, as NUL-terminated texts with their offsets (the `StringUTF8_Split`
+    convention), for loading every definition of a type and for autocomplete (`mymod:` lists a mod's). The prefix is
+    compared with the full names as it is.
 - **Search roots** form an ordered list; index 0 has the highest priority. `AssetManager_AddSearchRoot` appends,
   `AssetManager_InsertSearchRoot` inserts at an index, `AssetManager_RemoveSearchRoot` removes. A resource pack or mod
   that overrides base assets inserts its root at index 0.
@@ -337,7 +359,8 @@ unknown keys with `AssetJSON_RejectUnknownKeys`, which a new type should use too
   sheet type by its name, `sprite_sheet`.
 - `AssetManager_Deconstruct` is best-effort (the first error is returned, later ones are released) and accepts NULL.
 - **Tests:** `tests/AssetManagerTests.c` (run with `sh tests/run_linux.sh`) covers skipped and counted definition
-  files, name validation, same-root duplicates, file matching (material libraries, ambiguity, the whole last name,
+  files, names (short and full spellings of one asset, other namespaces, the full form at registration, overrides and
+  duplicates by full name, the listing, sprite-sheet frames' `sprite_sheet`), same-root duplicates, file matching (material libraries, ambiguity, the whole last name,
   unsupported extensions) and the failed-load cache, all without a window. Extend it when you change that logic.
   `tests/TextureTests.c` covers the texture type and the `texture_properties` parser (including the size limit, which
   fails before the GPU upload), `tests/ShaderSourceTests.c` the shader `#include` expander, `tests/WorldModelTests.c`

@@ -44,7 +44,7 @@
 
 
 // Macros.
-/** @brief The most bytes the character asset's name may have (without the terminator). */
+/** @brief The most bytes the character asset's name may have in full (namespace included, without the terminator). */
 #define WORLD_CHARACTER_COMPONENT_NAME_MAX_LENGTH ((size_t)128)
 /** @brief The steepest a character looks up or down, in radians (89 degrees, the camera's limit). */
 #define CHARACTER_MAX_LOOK_PITCH 1.5533f
@@ -360,7 +360,7 @@ static inline WorldComponent* WorldCharacterComponent_AsComponent(WorldCharacter
 /**
  * @brief The character asset's name the component uses.
  * @param self The component; must not be NULL.
- * @returns The name (borrowed: valid until it changes), or NULL for none.
+ * @returns The name in full (borrowed: valid until it changes), or NULL for none.
  */
 static inline const unsigned char* WorldCharacterComponent_GetCharacter(const WorldCharacterComponent* self)
 {
@@ -370,7 +370,8 @@ static inline const unsigned char* WorldCharacterComponent_GetCharacter(const Wo
 /**
  * @brief Names the character asset to use, and binds it (a name is loaded under the world's asset user).
  * @param self The component; must not be NULL.
- * @param character A valid asset name of at most WORLD_CHARACTER_COMPONENT_NAME_MAX_LENGTH bytes, or NULL for none.
+ * @param character A valid asset name as written, at most WORLD_CHARACTER_COMPONENT_NAME_MAX_LENGTH bytes in full (it is
+ *        kept in full: "dog" is "tbp:dog"), or NULL for none.
  * @returns Success; ErrorCode_IllegalArgument for a NULL @p self; ErrorCode_ArgumentOutOfRange for an invalid name.
  */
 Error WorldCharacterComponent_SetCharacter(WorldCharacterComponent* self, const unsigned char* character);

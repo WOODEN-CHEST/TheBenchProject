@@ -1,20 +1,20 @@
 {
-    "name": "trash_can_lined",
+    "name": "tbp:trash_can_lined",
     "lods": [
         {
-            "model": "world.trash_can_lined.lod0",
+            "model": "tbp:world.trash_can_lined.lod0",
             "max_distance": 10
         },
         {
-            "model": "world.trash_can_lined.lod1",
+            "model": "tbp:world.trash_can_lined.lod1",
             "max_distance": 35
         },
         {
-            "model": "world.trash_can_lined.lod2",
+            "model": "tbp:world.trash_can_lined.lod2",
             "max_distance": 90
        },
        {
-            "model": "world.trash_can_lined.lod3",
+            "model": "tbp:world.trash_can_lined.lod3",
             "max_distance": 300
        }
     ],

@@ -1,5 +1,5 @@
 {
-    "name": "world_normal_instanced",
+    "name": "tbp:world_normal_instanced",
     "vertex_location": "normal/instanced",
     "fragment_location": "normal/fragment",
     "defines": ["WORLD_INSTANCED"]

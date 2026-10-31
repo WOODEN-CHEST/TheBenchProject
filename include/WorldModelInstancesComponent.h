@@ -185,7 +185,7 @@ static inline WorldComponent* WorldModelInstancesComponent_AsComponent(WorldMode
 /**
  * @brief Returns the borrowed asset name of the world model every copy draws (may be NULL); valid until it changes.
  * @param self The component; must not be NULL.
- * @returns The NUL-terminated UTF-8 asset name, or NULL.
+ * @returns The NUL-terminated asset name, in full ("tbp:desk"), or NULL.
  */
 static inline const unsigned char* WorldModelInstancesComponent_GetWorldModel(const WorldModelInstancesComponent* self)
 {
@@ -196,7 +196,7 @@ static inline const unsigned char* WorldModelInstancesComponent_GetWorldModel(co
  * @brief Sets the world model every copy draws (a clone of @p worldModel; NULL draws nothing). The renderer resolves it at
  *        its next frame.
  * @param self The component; must not be NULL.
- * @param worldModel Borrowed asset name, or NULL.
+ * @param worldModel Borrowed asset name as written ("tree" is kept as "tbp:tree"), or NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if @p worldModel is not
  *          a valid asset name of at most WORLD_MODEL_COMPONENT_NAME_MAX_LENGTH bytes (nothing changes then).
  */

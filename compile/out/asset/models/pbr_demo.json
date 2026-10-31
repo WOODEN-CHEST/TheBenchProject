@@ -1,5 +1,5 @@
 {
-    "name": "pbr_demo",
+    "name": "tbp:pbr_demo",
     "location": "test/test_model",
     "material_overrides": [
         {

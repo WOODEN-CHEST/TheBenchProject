@@ -739,7 +739,7 @@ static void AColliderWinsOverATerrainAndProblemsAreWarnedOnce(TestRun* run)
     if (IsRun)
     {
         TEST_CHECK(run, CountInLatestLog(run, Directory._data, "has a collider and a terrain") == 1U);
-        TEST_CHECK(run, CountInLatestLog(run, Directory._data, "has no collision from its terrain \"nowhere\"") == 1U);
+        TEST_CHECK(run, CountInLatestLog(run, Directory._data, "has no collision from its terrain \"tbp:nowhere\"") == 1U);
         TEST_CHECK(run, CountInLatestLog(run, Directory._data, "has a terrain that its transform flattens") == 1U);
     }
     Memory_Free(Directory._data);

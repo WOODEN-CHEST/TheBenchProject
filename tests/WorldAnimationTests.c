@@ -610,10 +610,10 @@ static void ProblemsAreReportedOnce(TestRun* run)
     TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
     TEST_CHECK(run, CountInLatestLog(run, Directory._data, "has no clip \"nowhere\"") == 1U);
     TEST_CHECK(run, CountInLatestLog(run, Directory._data, "has no clip \"elsewhere\"") == 1U);
-    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "world model \"statue\" has no skinned LOD") == 1U);
-    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "world model \"ghost\" could not be loaded") == 1U);
-    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "plays nothing from animation library \"foreign\"") == 1U);
-    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "plays without animation library \"lost\"") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "world model \"tbp:statue\" has no skinned LOD") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "world model \"tbp:ghost\" could not be loaded") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "plays nothing from animation library \"tbp:foreign\"") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "plays without animation library \"tbp:lost\"") == 1U);
     TEST_CHECK(run, CountInLatestLog(run, Directory._data, "has no clip \"lift\"") == 1U);
     Memory_Free(Directory._data);
 }
@@ -917,7 +917,7 @@ static void TheAnimatorRowsAreChecked(TestRun* run)
         const char* Many[WORLD_ANIMATOR_MAX_ANIMATION_LIBRARIES + 1U];
         for (size_t Index = 0U; Index < (WORLD_ANIMATOR_MAX_ANIMATION_LIBRARIES + 1U); Index++)
         {
-            snprintf(Texts[Index], sizeof(Texts[Index]), "library_%u", (unsigned int)Index);
+            snprintf(Texts[Index], sizeof(Texts[Index]), "tbp:library_%u", (unsigned int)Index);
             Many[Index] = Texts[Index];
         }
         PropertyAssetNameList* TooMany = MakeNames(run, Many, WORLD_ANIMATOR_MAX_ANIMATION_LIBRARIES + 1U);

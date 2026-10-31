@@ -1,6 +1,6 @@
 {
-    "name": "test_card",
+    "name": "tbp:test_card",
     "lods": [
-        { "model": "test_card", "max_distance": 200 }
+        { "model": "tbp:test_card", "max_distance": 200 }
     ]
 }

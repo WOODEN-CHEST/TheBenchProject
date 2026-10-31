@@ -449,6 +449,38 @@ Error NamespacedKey_Parse(const unsigned char* text, size_t byteCount, const uns
     return Error_CreateSuccess();
 }
 
+const char* NamespacedKey_DescribeProblem(const unsigned char* text, size_t byteCount,
+    const unsigned char* defaultNamespace)
+{
+    const unsigned char* Default = (defaultNamespace != NULL) ? defaultNamespace : NAMESPACED_KEY_DEFAULT_NAMESPACE;
+    if ((text == NULL) || (byteCount == 0U))
+    {
+        return DescribeProblem(KeyProblem_Empty);
+    }
+    size_t Separator = FindSeparator(text, byteCount);
+    bool HasNamespace = Separator < byteCount;
+    KeyProblem Problem = HasNamespace
+        ? FindPartProblem(text, Separator, text + Separator + 1U, byteCount - Separator - 1U)
+        : FindPartProblem(Default, StringUTF8_GetByteLength(Default), text, byteCount);
+    return (Problem == KeyProblem_None) ? NULL : DescribeProblem(Problem);
+}
+
+bool NamespacedKey_IsValidLocalName(const unsigned char* name)
+{
+    if ((name == NULL) || (name[0] < (unsigned char)'a') || (name[0] > (unsigned char)'z'))
+    {
+        return false;
+    }
+    for (size_t Index = 1U; name[Index] != (unsigned char)0; Index++)
+    {
+        if (!IsNamespaceByte(name[Index]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 size_t NamespacedKey_GetNamespaceLength(const unsigned char* key)
 {
     if (key == NULL)

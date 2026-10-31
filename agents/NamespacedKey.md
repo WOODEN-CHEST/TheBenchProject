@@ -3,9 +3,9 @@
 `include/NamespacedKey.h`, `source/NamespacedKey.c`. Tests: `tests/NamespacedKeyTests.c`.
 
 A **namespaced key** names something across story packs without collisions, like Minecraft's identifiers:
-`town:street_lamp`, `game:office`. Tags and the keys of object data use them today
-([ObjectData.md](ObjectData.md)); asset names across packs, climate presets, actions and events will
-use them later.
+`town:street_lamp`, `game:office`. Tags and the keys of object data use them ([ObjectData.md](ObjectData.md)), and so
+do asset names ([AssetManager.md](AssetManager.md), "Definitions": `tbp:desk`; the asset manager keeps them as texts,
+not ids) and the entries of registries ([Registry.md](Registry.md)); events will use them later.
 
 ## The key
 
@@ -26,8 +26,19 @@ use them later.
     namespace (`text` need not be terminated: JSON strings are not). It appends the full form, NUL-terminated, to a
     byte buffer (one growing string, like the string writers), and appends nothing on failure. A stack buffer of
     `NAMESPACED_KEY_BUFFER_SIZE` bytes through `GenericBuffer_CreateConstant` always suffices.
+  - `NamespacedKey_DescribeProblem(text, byteCount, defaultNamespace)`: what is wrong with a key as people write it,
+    as a static text for the caller's own message ("uppercase letters are not allowed (keys are lowercase)"), or NULL
+    when it is valid; the parse's rules without building anything, the default namespace counted in the length.
   - `NamespacedKey_IsNamespaceValid(text, byteCount)`, `NamespacedKey_GetNamespaceLength(key)` (the colon's index) and
     `NamespacedKey_GetPath(key)` (a pointer after the colon).
+
+## Local names
+
+A **local name** is unique only inside one asset or object and is never namespaced: an animation clip, a socket, a
+material variant, a state or parameter of an animation graph, a climate preset, a translation key.
+`NamespacedKey_IsValidLocalName(name)`: `[a-z][a-z0-9_.-]*`, a lowercase letter first (callers apply their own length
+limits). A property row of one is `PropertyType_LocalName` ([PropertyDescriptors.md](PropertyDescriptors.md)). A
+namespaced key is not a local name: `tbp:walk` is refused where a clip's name is expected.
 
 ## The registry
 

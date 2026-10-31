@@ -48,7 +48,7 @@ typedef struct WorldAnimatorRuntimeStruct WorldAnimatorRuntime;
 #define WORLD_ANIMATOR_CLIP_NAME_MAX_LENGTH ((size_t)64)
 /** @brief The most animation libraries a placement may name instead of its world model's. */
 #define WORLD_ANIMATOR_MAX_ANIMATION_LIBRARIES ((size_t)16)
-/** @brief The most bytes a library name in that list may have. */
+/** @brief The most bytes a library name in that list may have in full (namespace included). */
 #define WORLD_ANIMATOR_LIBRARY_NAME_MAX_LENGTH ((size_t)128)
 /** @brief The fastest an animator may play (its speed multiplies every clip's). */
 #define WORLD_ANIMATOR_MAX_SPEED 100.0f
@@ -56,7 +56,7 @@ typedef struct WorldAnimatorRuntimeStruct WorldAnimatorRuntime;
 #define WORLD_ANIMATOR_MAX_FADE_SECONDS 60.0f
 /** @brief The cross-fade time of a new animator, in seconds. */
 #define WORLD_ANIMATOR_DEFAULT_FADE_SECONDS 0.2f
-/** @brief The most bytes the animation graph row may have (an asset name). */
+/** @brief The most bytes the animation graph row may have (an asset name, in full). */
 #define WORLD_ANIMATOR_GRAPH_NAME_MAX_LENGTH ((size_t)128)
 
 

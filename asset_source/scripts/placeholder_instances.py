@@ -275,25 +275,25 @@ def write_text(path, text):
 
 def write_model_definition(name, location):
     write_text(os.path.join(MODEL_DIRECTORY, location + ".json"),
-        '{\n    "name": "%s",\n    "location": "placeholder_instances/%s"\n}\n' % (name, location))
+        '{\n    "name": "tbp:%s",\n    "location": "placeholder_instances/%s"\n}\n' % (name, location))
 
 
 TREE_WORLD_MODEL = """{
-    "name": "test_tree",
+    "name": "tbp:test_tree",
     "lods": [
-        { "model": "test_tree_lod0", "max_distance": 30 },
-        { "model": "test_tree_lod1", "max_distance": 70 },
-        { "model": "test_tree_lod2", "max_distance": 250 }
+        { "model": "tbp:test_tree_lod0", "max_distance": 30 },
+        { "model": "tbp:test_tree_lod1", "max_distance": 70 },
+        { "model": "tbp:test_tree_lod2", "max_distance": 250 }
     ],
     "lod_hysteresis": 0.1
 }
 """
 
 PEBBLE_WORLD_MODEL = """{
-    "name": "test_pebble",
+    "name": "tbp:test_pebble",
     "lods": [
-        { "model": "test_pebble_lod0", "max_distance": 12 },
-        { "model": "test_pebble_lod1", "max_distance": 45 }
+        { "model": "tbp:test_pebble_lod0", "max_distance": 12 },
+        { "model": "tbp:test_pebble_lod1", "max_distance": 45 }
     ],
     "lod_hysteresis": 0.15
 }
@@ -383,7 +383,7 @@ def write_grove(trees):
             instance["tint"] = tint
         instances.append(instance)
     obj = {"id": GROVE_ID, "name": GROVE_NAME,
-           "components": {"model_instances": {"world_model": "test_tree", "instances": instances}}}
+           "components": {"model_instances": {"world_model": "tbp:test_tree", "instances": instances}}}
     lamp = {"id": LAMP_ID, "name": LAMP_NAME, "position": lamp_position(trees), "components": {"light": LAMP_LIGHT}}
     world["objects"] = [other for other in world["objects"] if other.get("id") not in (GROVE_ID, LAMP_ID)] + [obj, lamp]
     world["next_object_id"] = max(world["next_object_id"], LAMP_ID + 1)

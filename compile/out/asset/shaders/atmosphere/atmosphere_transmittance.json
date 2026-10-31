@@ -1,4 +1,4 @@
 {
-    "name": "world_atmosphere_transmittance",
+    "name": "tbp:world_atmosphere_transmittance",
     "fragment_location": "atmosphere/transmittance"
 }

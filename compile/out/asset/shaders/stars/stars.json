@@ -1,5 +1,5 @@
 {
-    "name": "world_stars",
+    "name": "tbp:world_stars",
     "vertex_location": "stars/vertex",
     "fragment_location": "stars/fragment"
 }

@@ -1,4 +1,4 @@
 {
-    "name": "world_atmosphere_irradiance",
+    "name": "tbp:world_atmosphere_irradiance",
     "fragment_location": "atmosphere/irradiance"
 }

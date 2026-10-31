@@ -312,7 +312,7 @@ static const PropertyDescriptor EnvironmentProperties[] =
     },
     {
         .Key = u8"milky_way_texture", .WireId = 42U, .Type = PropertyType_AssetName,
-        PROPERTY_MEMBER(WorldEnvironment, MilkyWayTexture), .Default.StringValue = u8"sky_milky_way",
+        PROPERTY_MEMBER(WorldEnvironment, MilkyWayTexture), .Default.StringValue = u8"tbp:sky_milky_way",
         .Rules = PROPERTY_RULES_STRING(WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH, false), .Flags = PROPERTY_FLAGS_SETTING,
         .Category = CATEGORY_NIGHT_SKY, .DisplayName = u8"Milky Way texture",
         .Description = u8"The texture the Milky Way is drawn from: a panorama in galactic coordinates.",
@@ -416,7 +416,7 @@ static const PropertyDescriptor EnvironmentProperties[] =
     },
     {
         .Key = u8"moon_texture", .WireId = 41U, .Type = PropertyType_AssetName,
-        PROPERTY_MEMBER(WorldEnvironment, MoonTexture), .Default.StringValue = u8"sky_moon",
+        PROPERTY_MEMBER(WorldEnvironment, MoonTexture), .Default.StringValue = u8"tbp:sky_moon",
         .Rules = PROPERTY_RULES_STRING(WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH, false), .Flags = PROPERTY_FLAGS_SETTING,
         .Category = CATEGORY_MOON, .DisplayName = u8"Moon texture",
         .Description = u8"The texture of the moon's face: the full moon, flat-lit (the game shades the phases).",

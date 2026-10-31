@@ -325,11 +325,13 @@ static Error CreateNullSelfError(const char* function)
     return Error_Construct4(ErrorCode_IllegalArgument, "%s: self must not be NULL.", function);
 }
 
-/* Replaces an owned string field with a clone of @p value (checked by the caller), then reports the change. */
+/* Replaces an owned string field with a clone of @p value (checked by the caller; an asset name in full), then reports
+ * the change. */
 static void SetString(WorldModelComponent* self, unsigned char** field, const unsigned char* value,
     ModelProperty property)
 {
-    unsigned char* Clone = WorldInternal_CloneString(value);
+    unsigned char* Clone = (ModelProperties[property].Type == PropertyType_AssetName) ? WorldInternal_CloneAssetName(value)
+        : WorldInternal_CloneString(value);
     Memory_Free(*field);
     *field = Clone;
     WorldInternal_ComponentAfterSet(self, &ModelProperties[property]);

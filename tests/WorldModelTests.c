@@ -274,7 +274,7 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": -4}]}",
             ErrorCode_InvalidAssetDefinition, "it must be above 0" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": \"far\"}]}", ErrorCode_InvalidJSON,
-            "World model \"m\": lods[0]: \"max_distance\"" },
+            "World model \"tbp:m\": lods[0]: \"max_distance\"" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 1e40}]}", ErrorCode_InvalidJSON,
             "beyond the float range" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"a\", \"max_distance\": 10}, {\"model\": \"b\", "
@@ -297,20 +297,20 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"lod_hysteresis\": -0.5}",
             ErrorCode_InvalidAssetDefinition, "lod_hysteresis is -0.5" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"lodz\": 1}",
-            ErrorCode_InvalidAssetDefinition, "Unknown key \"lodz\" in world model \"m\"; the keys allowed there are: "
+            ErrorCode_InvalidAssetDefinition, "Unknown key \"lodz\" in world model \"tbp:m\"; the keys allowed there are: "
                 "name, "
             "lods, draw_distance" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"collision\": {}}",
             ErrorCode_InvalidAssetDefinition, "collision.sets must hold 1 to 32 sets" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"maxdistance\": 40}]}", ErrorCode_InvalidAssetDefinition,
-            "Unknown key \"maxdistance\" in world model \"m\", lods[0]; the keys allowed there are: model, "
+            "Unknown key \"maxdistance\" in world model \"tbp:m\", lods[0]; the keys allowed there are: model, "
                 "max_distance" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"\\u001b[31m\": 1}",
             ErrorCode_InvalidAssetDefinition, "Unknown key \"?[31m\"" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": 4}",
             ErrorCode_InvalidAssetDefinition, "render must be a JSON object" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": {\"outline\": true}}",
-            ErrorCode_InvalidAssetDefinition, "Unknown key \"outline\" in world model \"m\", render" },
+            ErrorCode_InvalidAssetDefinition, "Unknown key \"outline\" in world model \"tbp:m\", render" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"render\": {\"shadow_tier\": "
             "\"middle\"}}", ErrorCode_InvalidAssetDefinition,
             "render.shadow_tier is \"middle\"; it must be \"both\", \"near\" or \"far\"" },
@@ -344,14 +344,14 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
             ErrorCode_InvalidAssetDefinition, "variants[0] needs a \"name\"" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"variants\": [{\"name\": "
             "\"Dark Wood\"}]}", ErrorCode_InvalidAssetDefinition, "variants[0].name \"Dark Wood\" is not a valid "
-                "asset name" },
+                "variant name" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"variants\": [{\"name\": "
             "\"dark\"}, "
             "{\"name\": \"dark\"}]}", ErrorCode_InvalidAssetDefinition,
             "variants[1].name \"dark\" is used by variants[0] too" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"variants\": [{\"name\": "
             "\"dark\", "
-            "\"look\": 1}]}", ErrorCode_InvalidAssetDefinition, "Unknown key \"look\" in world model \"m\", "
+            "\"look\": 1}]}", ErrorCode_InvalidAssetDefinition, "Unknown key \"look\" in world model \"tbp:m\", "
                 "variants[0]" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"variants\": [{\"name\": "
             "\"dark\", "
@@ -386,7 +386,7 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"variants\": [{\"name\": "
             "\"dark\", "
             "\"material_overrides\": [{\"slot\": 0, \"texture_properties\": {}}]}]}", ErrorCode_InvalidAssetDefinition,
-            "Unknown key \"texture_properties\" in world model \"m\", variants[0].material_overrides[0]" },
+            "Unknown key \"texture_properties\" in world model \"tbp:m\", variants[0].material_overrides[0]" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"bounds\": {\"center\": [0, 0, "
             "0]}}",
             ErrorCode_InvalidAssetDefinition, "bounds needs a \"radius\" of at least 0 metres" },
@@ -400,7 +400,7 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"bounds\": {\"center\": [0, 0, "
             "0], "
             "\"radius\": 1, \"size\": 2}}", ErrorCode_InvalidAssetDefinition, "Unknown key \"size\" in world model "
-                "\"m\", "
+                "\"tbp:m\", "
             "bounds" },
     };
     TestAssetFixture Fixture;
@@ -537,6 +537,52 @@ static void LoadingHoldsTheDependenciesUntilTheLastHolderGoes(TestRun* run)
     TestAssetFixture_Deconstruct(run, &Fixture);
 }
 
+/* The models a world model names are asset names: "mesh" and "tbp:mesh" are one model, "mymod:mesh" another; an
+ * invalid name is refused naming the problem, and a variant's name is a local name, never namespaced. */
+static void ReferencesAreAssetNames(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    TestAssetCounters BaseCounters = { 0 };
+    TestAssetCounters ModCounters = { 0 };
+    BoundingBox Box = { .min = { -1.0f, -1.0f, -1.0f }, .max = { 1.0f, 1.0f, 1.0f } };
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    if (TestAssetFixture_Construct(run, &Fixture) && TestAssets_AddModel(run, &Fixture, "mesh", Box, &BaseCounters)
+        && TestAssets_AddModel(run, &Fixture, "mymod:mesh", Box, &ModCounters)
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"short_ref\", \"lods\": [{\"model\": \"mesh\", "
+            "\"max_distance\": 10}]}")
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"full_ref\", \"lods\": [{\"model\": \"tbp:mesh\", "
+            "\"max_distance\": 10}]}")
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"mymod:mod_ref\", \"lods\": [{\"model\": "
+            "\"mymod:mesh\", \"max_distance\": 10}]}")
+        && TEST_CHECK_SUCCESS(run, AssetManager_GetNewUserID(Fixture.Manager, &User)))
+    {
+        WorldModel* Short = NULL;
+        WorldModel* Full = NULL;
+        WorldModel* Mod = NULL;
+        TEST_CHECK_SUCCESS(run, AssetManager_LoadWorldModel(Fixture.Manager, (const unsigned char*)u8"short_ref", User,
+            &Short));
+        TEST_CHECK_SUCCESS(run, AssetManager_LoadWorldModel(Fixture.Manager, (const unsigned char*)u8"full_ref", User,
+            &Full));
+        TEST_CHECK(run, (Short != NULL) && (Full != NULL) && (BaseCounters.LoadCount == 1U)
+            && (ModCounters.LoadCount == 0U));
+        TEST_CHECK_SUCCESS(run, AssetManager_LoadWorldModel(Fixture.Manager, (const unsigned char*)u8"mymod:mod_ref", User,
+            &Mod));
+        TEST_CHECK(run, (Mod != NULL) && (BaseCounters.LoadCount == 1U) && (ModCounters.LoadCount == 1U));
+        TEST_CHECK_SUCCESS(run, AssetManager_RetireUser(Fixture.Manager, User));
+    }
+    if (Fixture.Manager != NULL)
+    {
+        const char* const InvalidFragments[] = { "lods[0].model \"Mesh\" is not a valid asset name: uppercase", NULL };
+        TestText_CheckErrorMessage(run, BuildDefinition(&Fixture, "{\"name\": \"m\", \"lods\": [{\"model\": \"Mesh\", "
+            "\"max_distance\": 10}]}"), ErrorCode_InvalidAssetDefinition, InvalidFragments);
+        const char* const VariantFragments[] = { "variants[0].name \"tbp:dark\" is not a valid variant name", NULL };
+        TestText_CheckErrorMessage(run, BuildDefinition(&Fixture, "{\"name\": \"m\", \"lods\": [{\"model\": \"mesh\", "
+            "\"max_distance\": 10}], \"variants\": [{\"name\": \"tbp:dark\"}]}"), ErrorCode_InvalidAssetDefinition,
+            VariantFragments);
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
 /* A dependency that cannot load fails the world model, names it, and leaves nothing held (the LODs that loaded before
  * it are released). */
 static void AMissingDependencyFailsTheLoadAndHoldsNothing(TestRun* run)
@@ -559,7 +605,7 @@ static void AMissingDependencyFailsTheLoadAndHoldsNothing(TestRun* run)
         WorldModel* Loaded = NULL;
         const char* const LodFragments[] =
         {
-            "World model \"broken_lod\": LOD 1 (model \"missing\"): No definition named \"missing\"", NULL
+            "World model \"tbp:broken_lod\": LOD 1 (model \"tbp:missing\"): No definition named \"tbp:missing\"", NULL
         };
         TestText_CheckErrorMessage(run, AssetManager_LoadWorldModel(Fixture.Manager,
             (const unsigned char*)u8"broken_lod", User, &Loaded), ErrorCode_InvalidOperation, LodFragments);
@@ -567,7 +613,7 @@ static void AMissingDependencyFailsTheLoadAndHoldsNothing(TestRun* run)
 
         const char* const VariantFragments[] =
         {
-            "World model \"broken_variant\": variant \"red\", slot 2: texture \"no_such_texture\"", NULL
+            "World model \"tbp:broken_variant\": variant \"red\", slot 2: texture \"tbp:no_such_texture\"", NULL
         };
         TestText_CheckErrorMessage(run, AssetManager_LoadWorldModel(Fixture.Manager,
             (const unsigned char*)u8"broken_variant", User, &Loaded), ErrorCode_InvalidOperation, VariantFragments);
@@ -690,11 +736,11 @@ static void AnOlderDefinitionsShadowTierIsReadAsTheShadowDistance(TestRun* run)
     TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
     TEST_CHECK(run, CountInLatestLog(run, Directory._data, "render.shadow_tier \"near\" is read as "
         "render.shadow_distance") == 2U);
-    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "World model \"cup\": render.shadow_tier \"near\" is read "
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "World model \"tbp:cup\": render.shadow_tier \"near\" is read "
         "as render.shadow_distance 16") == 1U);
-    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "World model \"tower\": render.shadow_tier \"far\" is not "
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "World model \"tbp:tower\": render.shadow_tier \"far\" is not "
         "read") == 1U);
-    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "World model \"crate\": render.shadow_tier \"both\" is what "
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "World model \"tbp:crate\": render.shadow_tier \"both\" is what "
         "every model does") == 1U);
     Memory_Free(Directory._data);
 }
@@ -1569,7 +1615,7 @@ static void SocketsTheGraphAndTheFirstPersonBlockLoadWithTheSkeleton(TestRun* ru
     if (Figure != NULL)
     {
         TEST_CHECK(run, (WorldModel_GetAnimationGraph(Figure) != NULL)
-            && (strcmp((const char*)WorldModel_GetAnimationGraphName(Figure), "figure_graph") == 0));
+            && (strcmp((const char*)WorldModel_GetAnimationGraphName(Figure), "tbp:figure_graph") == 0));
         TEST_CHECK(run, WorldModel_GetSocketCount(Figure) == 3U);
         uint32_t Hand = 0U;
         uint32_t Seat = 0U;
@@ -1642,7 +1688,7 @@ static void SocketsTheGraphAndTheFirstPersonBlockLoadWithTheSkeleton(TestRun* ru
             { "bad_bone", "which its skeleton lacks" },
             { "rigid_bone", "none of its LOD models has a skeleton" },
             { "bad_hidden", "hidden_bones names \"skull\", which its skeleton lacks" },
-            { "lost_graph", "animation graph \"nowhere\"" },
+            { "lost_graph", "animation graph \"tbp:nowhere\"" },
         };
         for (size_t Index = 0U; Index < (sizeof(Failing) / sizeof(Failing[0])); Index++)
         {
@@ -1783,6 +1829,7 @@ void WorldModelTests_Run(TestRun* run)
         { "variant_limits_are_enforced", VariantLimitsAreEnforced },
         { "loading_holds_the_dependencies_until_the_last_holder_goes",
             LoadingHoldsTheDependenciesUntilTheLastHolderGoes },
+        { "references_are_asset_names", ReferencesAreAssetNames },
         { "a_missing_dependency_fails_the_load_and_holds_nothing", AMissingDependencyFailsTheLoadAndHoldsNothing },
         { "an_unused_variant_slot_is_logged_once", AnUnusedVariantSlotIsLoggedOnce },
         { "hand_written_shadow_keys_turn_their_flags_on", HandWrittenShadowKeysTurnTheirFlagsOn },

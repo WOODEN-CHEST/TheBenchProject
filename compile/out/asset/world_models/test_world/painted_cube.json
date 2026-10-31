@@ -1,7 +1,7 @@
 {
-    "name": "painted_cube",
+    "name": "tbp:painted_cube",
     "lods": [
-        { "model": "test", "max_distance": 600 }
+        { "model": "tbp:test", "max_distance": 600 }
     ],
     "variants": [
         { "name": "red", "material_overrides": [ { "slot": 0, "tint": "#c8463c" } ] },

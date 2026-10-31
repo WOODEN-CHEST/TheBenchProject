@@ -1,4 +1,4 @@
 {
-    "name": "world_atmosphere_multiscatter",
+    "name": "tbp:world_atmosphere_multiscatter",
     "fragment_location": "atmosphere/multiscatter"
 }

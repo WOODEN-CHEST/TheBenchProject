@@ -414,6 +414,49 @@ static void MaterialSlotsSetTheFaceFlags(TestRun* run)
     TestTerrain_FreeGrid(&Grid);
 }
 
+/* A slot names a palette material as an asset name: "grass" and "tbp:grass" are one material, another namespace's is
+ * written in full, and "mud" is "tbp:mud", which a palette holding "mymod:mud" does not have. */
+static void SlotsNamePaletteMaterialsAsAssetNames(TestRun* run)
+{
+    TestTerrainGrid Grid;
+    TestTerrain_BuildGrid(&Grid, 4U, 2U, 1.0f, 0.0f, 0.0f, NULL);
+    const char* Slots[3] = { "grass", "mymod:mud", "tbp:grass" };
+    uint32_t Counts[3] = { 6U, 6U, 4U };
+    TestGltfMesh File = MakeGridFile(&Grid, Slots, Counts);
+    File.PrimitiveCount = 3U;
+    GenericBuffer Bytes;
+    GenericBuffer_AllocateVariable(&Bytes, 0U, sizeof(unsigned char));
+    TestTerrain_WriteGlb(&File, &Bytes);
+    static const unsigned char* const FullPalette[2] = { u8"tbp:grass", u8"mymod:mud" };
+    TerrainGltfOptions Options = MakeOptions();
+    Options.MaterialNames = FullPalette;
+    Options.MaterialCount = 2U;
+    TerrainMesh* Terrain = NULL;
+    if (TEST_CHECK_SUCCESS(run, Import(&Bytes, &Options, &Terrain)))
+    {
+        bool AreRight = true;
+        for (uint32_t Triangle = 0U; Triangle < Grid.TriangleCount; Triangle++)
+        {
+            const TerrainTriangle* Entry = TerrainMesh_GetTriangle(Terrain, Triangle);
+            uint8_t Expected = ((Triangle >= 6U) && (Triangle < 12U)) ? 1U : 0U;
+            AreRight = AreRight && (Entry->_flags == TERRAIN_TRIANGLE_FLAG_OVERRIDES_MATERIAL)
+                && (Entry->_material == Expected);
+        }
+        TEST_CHECK(run, AreRight);
+    }
+    TerrainMesh_Destroy(Terrain);
+    Memory_Free(Bytes._data);
+
+    const char* Short[1] = { "mud" };
+    uint32_t All[1] = { Grid.TriangleCount };
+    TestGltfMesh Other = MakeGridFile(&Grid, Short, All);
+    GenericBuffer_AllocateVariable(&Bytes, 0U, sizeof(unsigned char));
+    TestTerrain_WriteGlb(&Other, &Bytes);
+    CheckImportRefused(run, &Bytes, &Options, ErrorCode_InvalidAssetData, "has the material slot \"mud\"");
+    Memory_Free(Bytes._data);
+    TestTerrain_FreeGrid(&Grid);
+}
+
 static void ImportedNormalsKeepHardEdges(TestRun* run)
 {
     // A valley: two slopes meeting at x = 2, each with its own vertices along the fold and its own normals.
@@ -671,6 +714,7 @@ void TerrainGltfTests_Run(TestRun* run)
         { "colour_attributes_of_every_kind_feed_weights_and_densities",
             ColourAttributesOfEveryKindFeedWeightsAndDensities },
         { "material_slots_set_the_face_flags", MaterialSlotsSetTheFaceFlags },
+        { "slots_name_palette_materials_as_asset_names", SlotsNamePaletteMaterialsAsAssetNames },
         { "imported_normals_keep_hard_edges", ImportedNormalsKeepHardEdges },
         { "hostile_files_are_refused", HostileFilesAreRefused },
         { "an_import_written_and_read_back_is_the_same_mesh", AnImportWrittenAndReadBackIsTheSameMesh },

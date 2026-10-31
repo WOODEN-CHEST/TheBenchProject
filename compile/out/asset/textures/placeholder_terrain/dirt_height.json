@@ -1,5 +1,5 @@
 {
-    "name": "placeholder_terrain_dirt_height",
+    "name": "tbp:placeholder_terrain_dirt_height",
     "location": "placeholder_terrain/dirt_height",
     "color_space": "linear"
 }

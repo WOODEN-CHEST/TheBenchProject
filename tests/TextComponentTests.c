@@ -316,7 +316,7 @@ static void StringsAreCopied(TestRun* run)
         TEST_CHECK(run, TextEquals(StringComponent_GetText(String), ""));
 
         TEST_CHECK_SUCCESS(run, StringComponent_SetFontName(String, (const unsigned char*)u8"noto_sans"));
-        TEST_CHECK(run, TextEquals(StringComponent_GetFontName(String), "noto_sans"));
+        TEST_CHECK(run, TextEquals(StringComponent_GetFontName(String), "tbp:noto_sans"));
         TEST_CHECK_SUCCESS(run, StringComponent_SetFontName(String, NULL));
         TEST_CHECK(run, StringComponent_GetFontName(String) == NULL);
         ReturnTree(run, &Factory, StringComponent_AsComponent(String));
@@ -595,7 +595,7 @@ static void TextStyleAppliesByType(TestRun* run)
         TEST_CHECK_SUCCESS(run, TextStyle_ApplyToComponent(&Style, Title));
         TEST_CHECK_SUCCESS(run, TextStyle_ApplyToComponent(&Style, Coin));
         TEST_CHECK_SUCCESS(run, TextStyle_ApplyToComponent(&Style, Root));
-        TEST_CHECK(run, TextEquals(StringComponent_GetFontName(TextComponent_AsStringComponent(Title)), "noto_sans"));
+        TEST_CHECK(run, TextEquals(StringComponent_GetFontName(TextComponent_AsStringComponent(Title)), "tbp:noto_sans"));
         TEST_CHECK(run, StringComponent_GetSize(TextComponent_AsStringComponent(Title)) == 0.3f);
         TEST_CHECK(run, StringComponent_IsUnderlined(TextComponent_AsStringComponent(Title)));
         TEST_CHECK(run, SpriteComponent_GetSize(TextComponent_AsSpriteComponent(Coin)).x == 0.2f);

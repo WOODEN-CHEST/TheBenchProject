@@ -60,6 +60,7 @@ typedef struct DataMapStruct DataMap;
  * | RenderColor | RenderColor                 | "#rrggbb" or {tint, brightness, opacity} | Compound {1: UInt8[3] tint, 2: Float brightness, 3: Float opacity} |
  * | String      | unsigned char*, owned       | string, or null                        | String (absent when NULL)     |
  * | AssetName   | unsigned char*, owned       | string, or null                        | String (absent when NULL)     |
+ * | LocalName   | unsigned char*, owned       | string, or null                        | String (absent when NULL)     |
  * | Enum        | integer of 1, 2 or 4 bytes  | the entry's name, e.g. "near"          | EncodedInteger (the value)    |
  * | ObjectId    | uint64_t, 0 = none          | integer (a string above INT64_MAX)     | smallest unsigned type (*)    |
  * | Date        | int64_t day number          | "yyyy-mm-dd", e.g. "2026-10-18"        | EncodedInteger (the day number) |
@@ -144,8 +145,9 @@ typedef struct DataMapStruct DataMap;
 #define PROPERTY_RULES_ASSET_NAME_LIST(maxCount, maxLength) { .MaxLength = (maxLength), .MaxCount = (maxCount) }
 /** @brief The most names any AssetNameList may hold, whatever its rules say. */
 #define PROPERTY_ASSET_NAME_LIST_MAX_COUNT ((size_t)64)
-/** @brief The longest name any AssetNameList may hold, in bytes, whatever its rules say. */
-#define PROPERTY_ASSET_NAME_LIST_MAX_LENGTH ((size_t)256)
+/** @brief The longest name any AssetNameList may hold, in bytes, whatever its rules say: a full asset name's limit
+ *         (NAMESPACED_KEY_MAX_LENGTH). */
+#define PROPERTY_ASSET_NAME_LIST_MAX_LENGTH ((size_t)128)
 /** @brief Rules for an InstanceList: at most @p maxCount instances (at most PROPERTY_INSTANCE_LIST_MAX_COUNT), each
  *         position's components in [-@p positionLimit, @p positionLimit] (every rotation and scale finite). */
 #define PROPERTY_RULES_INSTANCE_LIST(maxCount, positionLimit) \
@@ -211,8 +213,14 @@ typedef enum PropertyTypeEnum
      *  Rules.IsNullAllowed. */
     PropertyType_String,
     /** @brief An owned asset name (`unsigned char*`) matching AssetManager_IsValidAssetName, at most Rules.MaxLength
-     *  bytes; NULL only if Rules.IsNullAllowed. The editor will offer a picker. */
+     *  bytes; NULL only if Rules.IsNullAllowed. Read and set as written ("desk") and stored, compared and written in
+     *  full ("tbp:desk"), so a default that is a name is written in full in its table. The editor will offer a
+     *  picker. */
     PropertyType_AssetName,
+    /** @brief An owned local name (`unsigned char*`): a name unique inside one asset or object (a socket, a climate
+     *  preset), matching NamespacedKey_IsValidLocalName (`[a-z][a-z0-9_.-]*`, never namespaced), at most
+     *  Rules.MaxLength bytes; NULL only if Rules.IsNullAllowed. */
+    PropertyType_LocalName,
     /** @brief An enum stored as an integer of 1, 2 (both unsigned) or 4 bytes (int32); its value must be an entry of
      *  the descriptor's EnumTable, and JSON writes the entry's name. */
     PropertyType_Enum,
@@ -234,7 +242,8 @@ typedef enum PropertyTypeEnum
     PropertyType_EnumSet,
     /** @brief A list of asset names: an owned `PropertyAssetNameList*`, NULL while empty, which is its only default. Every
      *  name is a valid asset name (AssetManager_IsValidAssetName) of at most Rules.MaxLength bytes (required, at most
-     *  PROPERTY_ASSET_NAME_LIST_MAX_LENGTH); Rules.MaxCount (required) bounds the count. */
+     *  PROPERTY_ASSET_NAME_LIST_MAX_LENGTH), stored in full like an AssetName; Rules.MaxCount (required) bounds the
+     *  count. */
     PropertyType_AssetNameList,
     /** @brief A list of instances: an owned `PropertyInstanceList*`, NULL while empty, which is its only default.
      *  Every position component is finite and within the optional bounds (compared in double precision), every rotation
@@ -352,7 +361,7 @@ typedef union PropertyDataUnion
     Color ColorValue;
     /** @brief PropertyType_RenderColor. */
     RenderColor RenderColorValue;
-    /** @brief PropertyType_String and PropertyType_AssetName: a NUL-terminated UTF-8 string or NULL. Borrowed: in a
+    /** @brief PropertyType_String, AssetName and LocalName: a NUL-terminated UTF-8 string or NULL. Borrowed: in a
      *  default it is a static string the instance gets a clone of; from Properties_Get it points into the instance
      *  and stays valid until that property changes or the instance is deconstructed. */
     const unsigned char* StringValue;
@@ -739,6 +748,12 @@ static inline PropertyValue PropertyValue_FromString(const unsigned char* value)
 static inline PropertyValue PropertyValue_FromAssetName(const unsigned char* value)
 {
     return (PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = value };
+}
+
+/** @brief Makes a LocalName value. @param value The name (borrowed) or NULL. @returns The typed value. */
+static inline PropertyValue PropertyValue_FromLocalName(const unsigned char* value)
+{
+    return (PropertyValue){ .Type = PropertyType_LocalName, .Data.StringValue = value };
 }
 
 /** @brief Makes an Enum value. @param value The entry's value. @returns The typed value. */

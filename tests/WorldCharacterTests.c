@@ -2456,7 +2456,7 @@ static void ADefinitionReadsItsKeysAndRefusesTheRest(TestRun* run)
     static const Refused Cases[] =
     {
         { "{\"name\": \"c\", \"walking_speed\": 1}", ErrorCode_InvalidAssetDefinition,
-            "Unknown key \"walking_speed\" in character \"c\"" },
+            "Unknown key \"walking_speed\" in character \"tbp:c\"" },
         { "{\"name\": \"c\", \"radius\": -1}", ErrorCode_InvalidJSON, "radius" },
         { "{\"name\": \"c\", \"radius\": 1.0, \"height\": 1.5}", ErrorCode_InvalidAssetDefinition,
             "height (1.5 m) must be at least twice the radius" },

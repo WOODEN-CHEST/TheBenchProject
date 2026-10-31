@@ -77,9 +77,11 @@ shown as `?`. GHDF ids a table retired are skipped silently. These warnings are 
 failed load's error says what is wrong; the world it was building may still log its own lines, such as a refused
 parent, before it is destroyed).
 
-**Versions** (`GetTableVersion` in WorldFile.c): `WORLD_FILE_FORMAT_VERSION` is 2. Format 1 holds every table at its
-version 1; format 2 every table at its current `Version` (2 for `model_component`, `model_instances_component` and
-`terrain_component`, 1 for the others). The reads pass that as `PropertyReadOptions.DataVersion`, with the load's
+**Versions** (`GetTableVersion` in WorldFile.c): `WORLD_FILE_FORMAT_VERSION` is 3. Format 3 writes asset names in full
+(`tbp:desk`, which a format-2 game refuses: its names had no colon); formats 1 and 2 wrote them short, which every read
+takes as `tbp`'s (the asset name rows keep names in full, [PropertyDescriptors.md](PropertyDescriptors.md)), so they need
+no migration. Format 1 holds every table at its version 1; formats 2 and 3 every table at its current `Version` (2 for
+`model_component`, `model_instances_component` and `terrain_component`, 1 for the others). The reads pass that as `PropertyReadOptions.DataVersion`, with the load's
 `Logger`, JSON pool and GHDF pool. Each block (the environment, each object, each component) is **migrated before its
 unknown names are noted** (`Properties_MigrateJSON` / `Properties_MigrateGHDF`, [PropertyDescriptors.md](PropertyDescriptors.md)),
 so the keys a migration consumes are no unknown names; a migration's error fails the load, naming the object. The three

@@ -1586,11 +1586,11 @@ static void ProblemsAreWarnedOnce(TestRun* run)
     CollisionScene_Deconstruct(run, &Scene);
     TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
     TEST_CHECK(run, CountInLatestLog(run, Directory._data, "has no collision from its world model "
-        "\"no_such_world_model\": No definition named") == 1U);
+        "\"tbp:no_such_world_model\": No definition named") == 1U);
     TEST_CHECK(run, CountInLatestLog(run, Directory._data, "its world model has no collision set \"ajar\"") == 1U);
     TEST_CHECK(run, CountInLatestLog(run, Directory._data, "that its transform flattens") == 1U);
     TEST_CHECK(run, CountInLatestLog(run, Directory._data, "has a collider but no shapes: it uses no own shape and its "
-        "world model \"plain\" has no collision section.") == 1U);
+        "world model \"tbp:plain\" has no collision section.") == 1U);
     Memory_Free(Directory._data);
 }
 

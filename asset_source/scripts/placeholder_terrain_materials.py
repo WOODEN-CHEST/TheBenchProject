@@ -321,12 +321,12 @@ def main():
             "normal": (3, normal_map(heights, depth)),
             "roughness_ao": (3, roughness_ao_map(heights, roughness_range, rng)),
         }
-        material = {"name": name}
+        material = {"name": "tbp:" + name}
         for map_name, colour_space in MAPS:
             stem = "%s_%s" % (name, map_name)
             channels, pixels = images[map_name]
             write_png(os.path.join(TEXTURE_DIRECTORY, stem + ".png"), channels, pixels)
-            texture = "placeholder_terrain_%s" % stem
+            texture = "tbp:placeholder_terrain_%s" % stem
             write_json(os.path.join(TEXTURE_DIRECTORY, stem + ".json"),
                        {"name": texture, "location": "placeholder_terrain/%s" % stem, "color_space": colour_space})
             material[map_name] = texture

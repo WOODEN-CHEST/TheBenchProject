@@ -35,7 +35,7 @@
 
 
 // Macros.
-/** @brief The most bytes the terrain's asset name may have. */
+/** @brief The most bytes the terrain's asset name may have in full (namespace included). */
 #define WORLD_TERRAIN_COMPONENT_NAME_MAX_LENGTH ((size_t)128)
 
 
@@ -150,7 +150,7 @@ static inline WorldComponent* WorldTerrainComponent_AsComponent(WorldTerrainComp
 /**
  * @brief Returns the borrowed asset name of the terrain (may be NULL); valid until it changes.
  * @param self The component; must not be NULL.
- * @returns The NUL-terminated UTF-8 asset name, or NULL.
+ * @returns The NUL-terminated asset name, in full ("tbp:desk"), or NULL.
  */
 static inline const unsigned char* WorldTerrainComponent_GetTerrain(const WorldTerrainComponent* self)
 {
@@ -160,7 +160,7 @@ static inline const unsigned char* WorldTerrainComponent_GetTerrain(const WorldT
 /**
  * @brief Names the terrain to place (a copy is kept).
  * @param self The component; must not be NULL.
- * @param terrain The asset name, or NULL for none.
+ * @param terrain The asset name as written (kept in full: "town" is "tbp:town"), or NULL for none.
  * @returns Success; ErrorCode_IllegalArgument for a NULL self; ErrorCode_ArgumentOutOfRange for a name that is not a
  *          valid asset name of at most WORLD_TERRAIN_COMPONENT_NAME_MAX_LENGTH bytes (nothing changes then).
  */

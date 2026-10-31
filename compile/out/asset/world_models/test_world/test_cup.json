@@ -1,7 +1,7 @@
 {
-    "name": "test_cup",
+    "name": "tbp:test_cup",
     "lods": [
-        { "model": "test_cup", "max_distance": 40 }
+        { "model": "tbp:test_cup", "max_distance": 40 }
     ],
     "collision": "bounds",
     "sockets": {

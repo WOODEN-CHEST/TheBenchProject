@@ -76,7 +76,7 @@ static const PropertyDescriptor ObjectProperties[ObjectProperty_Count] =
     [ObjectProperty_ParentSocket] =
     {
         // A file without this row reads as no socket, so the row needs no new table version. Next free wire id: 14.
-        .Key = u8"parent_socket", .WireId = 13U, .Type = PropertyType_AssetName,
+        .Key = u8"parent_socket", .WireId = 13U, .Type = PropertyType_LocalName,
         PROPERTY_MEMBER(WorldObject, _parentSocket), .Default.StringValue = NULL,
         .Rules = PROPERTY_RULES_STRING(WORLD_OBJECT_SOCKET_NAME_MAX_LENGTH, true), .Flags = PROPERTY_FLAGS_SETTING,
         .Category = CATEGORY_TRANSFORM, .DisplayName = u8"Parent's socket",

@@ -95,13 +95,27 @@ Error AssetJSON_DeserializeRoot(JSONObjectPool* pool, const GenericBuffer* rawDa
 Error AssetJSON_ValueToOwnedString(const JSONObjectValue* value, unsigned char** outString);
 
 /**
- * @brief Reads the required "name" property of a definition root into an owned string.
+ * @brief Reads the required "name" property of a definition root into an owned copy of its full form ("desk" is read
+ *        as "tbp:desk", AssetManager_ParseAssetName).
  * @param root The root compound.
  * @param sourceDescription Origin for error messages; may be NULL.
- * @param outName [out] Receives the owned name. Must not be NULL.
- * @returns Success; ErrorCode_InvalidAssetDefinition if absent or not a string.
+ * @param outName [out] Receives the owned full name. Must not be NULL.
+ * @returns Success; ErrorCode_InvalidAssetDefinition if absent, not a string or not a valid asset name (the message
+ *          names the problem).
  */
 Error AssetJSON_ReadName(JSONCompound* root, const unsigned char* sourceDescription, unsigned char** outName);
+
+/**
+ * @brief Replaces an owned asset name as written with an owned copy of its full form ("desk" becomes "tbp:desk").
+ *
+ * For the names a definition reads (a world model's LOD models, a world sprite's animation, ...): the loaders keep and
+ * show full names. The old string is freed with Memory_Free when it is replaced.
+ * @param name [in, out] The owned name, allocated with Memory_Allocate; must not be NULL and must point to a string.
+ *        Left as it is when invalid.
+ * @returns NULL on success; otherwise what is wrong with the name (a static description for the caller's message,
+ *          AssetManager_DescribeAssetNameProblem).
+ */
+const char* AssetJSON_MakeFullAssetName(unsigned char** name);
 
 /**
  * @brief Parses an asset location from a JSON value (a bare string is a file path; a compound is

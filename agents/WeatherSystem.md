@@ -31,7 +31,7 @@ autumn; storms come in the afternoon and more in summer.
 - **The reader** (`Climate_ReadJSON`) treats the file as hostile: unknown keys are refused everywhere, every value is
   checked against its rule while it is read (names exist, weights above 0, exactly twelve month weights, hours in [0, 24],
   ranges in order, values in their quantity's range: the same bounds as the environment's rows, which a test pins), and
-  every message names the path to the bad value (`Climate "default": presets[5] ("storm").lightning.per_minute: ...`).
+  every message names the path to the bad value (`Climate "tbp:default": presets[5] ("storm").lightning.per_minute: ...`).
   Presets are read in two passes, names first, so a link may name a preset that comes later.
 - **The data** is one block of plain data with no pointers inside (links are indices; at most `CLIMATE_MAX_PRESETS` 64
   presets and `CLIMATE_MAX_LINKS` 512 links), so the loaded asset is a copy of the definition's and no dependency is

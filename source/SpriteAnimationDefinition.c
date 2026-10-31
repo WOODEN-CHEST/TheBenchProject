@@ -10,8 +10,8 @@
  * Loads a 2D sprite animation. Each frame is sourced either from a standalone texture (owned by the
  * animation) or from an image within a sprite sheet asset. Sprite-sheet frames load that sheet as a
  * DEPENDENCY (attributed to the animation's dependency user, so it stays alive for the animation's
- * lifetime and unloads with it). A sprite-sheet frame's "location" value is interpreted as the sprite
- * sheet asset's NAME, and its "name" selects the image within that sheet. A texture frame's location must be
+ * lifetime and unloads with it). A sprite-sheet frame names its sheet with "sprite_sheet", an asset name kept in
+ * full, and its "name" selects the image within that sheet; it has no "location". A texture frame's location must be
  * a file path (nothing could name a reference's image format). Every failure path unloads the standalone
  * frame textures loaded so far, so a failed load leaks nothing.
  */
@@ -20,6 +20,8 @@
 // Macros.
 /** What a texture frame's location points at, for parse-time messages. */
 #define ANIMATION_FRAME_TEXTURE_KIND ((const unsigned char*)u8"animation frame texture")
+/** Room for a sheet's name quoted in a message (AssetJSON_CopyPrintable shortens longer ones). */
+#define SHEET_NAME_PRINT_CAPACITY ((size_t)65)
 
 
 // Types.
@@ -32,7 +34,8 @@ typedef enum AnimationFrameSourceEnum
 typedef struct AnimationFrameDefStruct
 {
     AnimationFrameSource Source;
-    OwnedAssetLocation Location;
+    OwnedAssetLocation Location; // the image file (texture source); empty for a sprite-sheet frame
+    unsigned char* SheetName; // owned; the sprite sheet's full asset name (spritesheet source), else NULL
     unsigned char* ImageName; // owned; sprite-sheet image name (spritesheet source), else NULL
     int Filter;               // texture source filtering
 } AnimationFrameDef;
@@ -126,7 +129,7 @@ static Error LoadSheetFrame(AssetManager* manager, AssetUserID dependencyUser, A
         return Error_Construct3(ErrorCode_InvalidState, u8"The sprite sheet type is not registered.");
     }
     void* SheetAsset = NULL;
-    Error LoadResult = AssetManager_LoadAssetSingle(manager, sheetType, frameDef->Location.Value, dependencyUser, &SheetAsset);
+    Error LoadResult = AssetManager_LoadAssetSingle(manager, sheetType, frameDef->SheetName, dependencyUser, &SheetAsset);
     if (LoadResult.Code != ErrorCode_Success) { return LoadResult; }
 
     SpriteSheet* Sheet = SheetAsset;
@@ -243,6 +246,7 @@ static void SpriteAnimationDefinition_Destroy(void* self)
     for (size_t i = 0; i < Definition->FrameCount; i++)
     {
         OwnedAssetLocation_Deconstruct(&Definition->Frames[i].Location);
+        Memory_Free(Definition->Frames[i].SheetName);
         Memory_Free(Definition->Frames[i].ImageName);
     }
     Memory_Free(Definition->Frames);
@@ -251,6 +255,46 @@ static void SpriteAnimationDefinition_Destroy(void* self)
 }
 
 static const AssetDefinitionVTable SpriteAnimationDefinitionVTable = { SpriteAnimationDefinition_LoadAsset, SpriteAnimationDefinition_Destroy };
+
+/* A sprite-sheet frame: "sprite_sheet" (the sheet's asset name, kept in full) and "name" (the image in it). */
+static Error ParseSheetFrame(JSONCompound* compound, AnimationFrameDef* outFrame)
+{
+    JSONObjectValue Location;
+    bool HasLocation = false;
+    Error Result = JSONCompound_GetOptional(compound, (const unsigned char*)u8"location", &Location, &HasLocation);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+    if (HasLocation)
+    {
+        return Error_Construct3(ErrorCode_InvalidAssetDefinition,
+            u8"A sprite-sheet frame names its sheet with \"sprite_sheet\" (an asset name), not \"location\".");
+    }
+
+    bool Found = false;
+    Result = AssetJSON_ReadOptionalOwnedString(compound, (const unsigned char*)u8"sprite_sheet", &outFrame->SheetName,
+        &Found);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+    if (!Found)
+    {
+        return Error_Construct3(ErrorCode_InvalidAssetDefinition,
+            u8"A sprite-sheet frame requires a \"sprite_sheet\": the name of the sprite sheet asset.");
+    }
+    const char* Problem = AssetJSON_MakeFullAssetName(&outFrame->SheetName);
+    if (Problem != NULL)
+    {
+        char Printable[SHEET_NAME_PRINT_CAPACITY];
+        AssetJSON_CopyPrintable(outFrame->SheetName, Printable, sizeof(Printable));
+        return Error_Construct3(ErrorCode_InvalidAssetDefinition, u8"A sprite-sheet frame's sprite_sheet \"%s\" is not a "
+            u8"valid asset name: %s.", Printable, Problem);
+    }
+
+    Result = AssetJSON_ReadOptionalOwnedString(compound, (const unsigned char*)u8"name", &outFrame->ImageName, &Found);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+    if (!Found)
+    {
+        return Error_Construct3(ErrorCode_InvalidAssetDefinition, u8"A sprite-sheet frame requires an image \"name\".");
+    }
+    return Error_CreateSuccess();
+}
 
 static Error ParseFrame(JSONCompound* compound, const unsigned char* sourceDescription, AnimationFrameDef* outFrame)
 {
@@ -281,29 +325,20 @@ static Error ParseFrame(JSONCompound* compound, const unsigned char* sourceDescr
     Memory_Free(SourceText);
     if (Result.Code != ErrorCode_Success) { return Result; }
 
-    Result = AssetJSON_ReadLocation(compound, (const unsigned char*)u8"location", sourceDescription, &outFrame->Location);
-    if (Result.Code != ErrorCode_Success) { return Result; }
-
     if (outFrame->Source == AnimationFrameSource_SpriteSheet)
     {
-        bool Found = false;
-        Result = AssetJSON_ReadOptionalOwnedString(compound, (const unsigned char*)u8"name", &outFrame->ImageName, &Found);
-        if (Result.Code != ErrorCode_Success) { return Result; }
-        if (!Found)
-        {
-            return Error_Construct3(ErrorCode_InvalidAssetDefinition, u8"A sprite-sheet frame requires an image \"name\".");
-        }
+        return ParseSheetFrame(compound, outFrame);
     }
-    else
-    {
-        Result = OwnedAssetLocation_RequireFile(&outFrame->Location, ANIMATION_FRAME_TEXTURE_KIND);
-        if (Result.Code != ErrorCode_Success) { return Result; }
 
-        TextureProperties Properties;
-        Result = AssetJSON_ReadTextureProperties(compound, (const unsigned char*)u8"texture_properties", false, &Properties);
-        if (Result.Code != ErrorCode_Success) { return Result; }
-        outFrame->Filter = Properties.Filter;
-    }
+    Result = AssetJSON_ReadLocation(compound, (const unsigned char*)u8"location", sourceDescription, &outFrame->Location);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+    Result = OwnedAssetLocation_RequireFile(&outFrame->Location, ANIMATION_FRAME_TEXTURE_KIND);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+
+    TextureProperties Properties;
+    Result = AssetJSON_ReadTextureProperties(compound, (const unsigned char*)u8"texture_properties", false, &Properties);
+    if (Result.Code != ErrorCode_Success) { return Result; }
+    outFrame->Filter = Properties.Filter;
     return Error_CreateSuccess();
 }
 

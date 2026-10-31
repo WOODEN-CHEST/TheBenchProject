@@ -1,10 +1,10 @@
 {
-    "name": "test_humanoid_short",
+    "name": "tbp:test_humanoid_short",
     "lods": [
-        { "model": "test_humanoid_short", "max_distance": 80 }
+        { "model": "tbp:test_humanoid_short", "max_distance": 80 }
     ],
-    "animation_libraries": [ "test_humanoid_motions" ],
-    "animation_graph": "test_humanoid",
+    "animation_libraries": [ "tbp:test_humanoid_motions" ],
+    "animation_graph": "tbp:test_humanoid",
     "sockets": {
         "hand_r": { "bone": "hand_r", "position": [ 0.03, -0.06, 0.0 ], "rotation": [ 100.0, 0.0, 0.0 ] },
         "hand_l": { "bone": "hand_l", "position": [ -0.03, -0.06, 0.0 ], "rotation": [ 100.0, 0.0, 0.0 ] },

@@ -2,6 +2,7 @@
 #include "WorldEnvironment.h"
 #include "GameCalendar.h"
 #include "GameClock.h"
+#include "NamespacedKey.h"
 #include "PropertyDescriptor.h"
 #include "wr/WRGHDF.h"
 #include "wr/WRJSON.h"
@@ -152,8 +153,8 @@ static void DefaultsAreValid(TestRun* run)
 
     // The texture names are owned copies of the shipped asset names; the moon starts on the calendar.
     TEST_CHECK(run, (Environment.MilkyWayTexture != NULL)
-        && (strcmp((const char*)Environment.MilkyWayTexture, "sky_milky_way") == 0));
-    TEST_CHECK(run, (Environment.MoonTexture != NULL) && (strcmp((const char*)Environment.MoonTexture, "sky_moon") == 0));
+        && (strcmp((const char*)Environment.MilkyWayTexture, "tbp:sky_milky_way") == 0));
+    TEST_CHECK(run, (Environment.MoonTexture != NULL) && (strcmp((const char*)Environment.MoonTexture, "tbp:sky_moon") == 0));
     TEST_CHECK(run, Environment.IsMoonEnabled && (Environment.MoonPhaseSource == WorldMoonPhaseSource_Calendar));
     TEST_CHECK(run, (Environment.MoonCycleDays == WORLD_ENVIRONMENT_MOON_CYCLE_DAYS) && !Environment.AreSeasonsEnabled);
     TEST_CHECK(run, (Environment.NightVisionStrength == 1.0f) && (Environment.NightVisionBlueShift == 0.5f));
@@ -432,12 +433,14 @@ static void MoonSettingsAreValidated(TestRun* run)
         &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"Not A Name" }), ErrorCode_ArgumentOutOfRange);
     TEST_CHECK_ERROR(run, Properties_Set(Table, &Environment, u8"milky_way_texture",
         &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = NULL }), ErrorCode_ArgumentOutOfRange);
+    // The limit counts a name in full: written without its namespace, the default namespace and its colon count.
+    size_t Namespace = strlen((const char*)NAMESPACED_KEY_DEFAULT_NAMESPACE) + 1U;
     unsigned char LongName[WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH + 2U];
     memset(LongName, 'a', sizeof(LongName) - 1U);
-    LongName[sizeof(LongName) - 1U] = (unsigned char)'\0';
+    LongName[WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH - Namespace + 1U] = (unsigned char)'\0';
     TEST_CHECK_ERROR(run, Properties_Set(Table, &Environment, u8"moon_texture",
         &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = LongName }), ErrorCode_ArgumentOutOfRange);
-    LongName[WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH] = (unsigned char)'\0'; // exactly the limit
+    LongName[WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH - Namespace] = (unsigned char)'\0'; // exactly the limit in full
     TEST_CHECK_SUCCESS(run, Properties_Set(Table, &Environment, u8"moon_texture",
         &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = LongName }));
     TEST_CHECK(run, strlen((const char*)Environment.MoonTexture) == WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH);
@@ -531,9 +534,9 @@ static void CopyToCopiesEverySetting(TestRun* run)
         && (Destination.NightLightIntensity == 0.5f));
     // The names are the destination's own copies.
     TEST_CHECK(run, (Destination.MoonTexture != Source.MoonTexture)
-        && (strcmp((const char*)Destination.MoonTexture, "red_moon") == 0));
+        && (strcmp((const char*)Destination.MoonTexture, "tbp:red_moon") == 0));
     TEST_CHECK(run, (Destination.MilkyWayTexture != Source.MilkyWayTexture)
-        && (strcmp((const char*)Destination.MilkyWayTexture, "sky_milky_way") == 0));
+        && (strcmp((const char*)Destination.MilkyWayTexture, "tbp:sky_milky_way") == 0));
     TEST_CHECK(run, Properties_Equals(WorldEnvironment_GetPropertyTable(), &Source, &Destination));
     TEST_CHECK_SUCCESS(run, WorldEnvironment_CopyTo(&Destination, &Destination));
     TEST_CHECK_ERROR(run, WorldEnvironment_CopyTo(NULL, &Destination), ErrorCode_IllegalArgument);
@@ -993,7 +996,7 @@ static void WeatherStartsCalmAndIsValidated(TestRun* run)
     TEST_CHECK(run, (Environment.WindDirection == 0.0f) && (Environment.WindSpeed == 0.0f) && (Environment.WindGust == 0.0f));
     TEST_CHECK(run, (Environment.FogDensity == 0.0f) && (Environment.FogHeight == 20.0f)
         && (Environment.Temperature == 15.0f));
-    TEST_CHECK(run, (Environment.Climate != NULL) && (strcmp((const char*)Environment.Climate, "default") == 0));
+    TEST_CHECK(run, (Environment.Climate != NULL) && (strcmp((const char*)Environment.Climate, "tbp:default") == 0));
     TEST_CHECK(run, (Environment.LightningFlash == 0.0f) && (Environment.LightningDirection.z == 1.0f)
         && (Environment.LightningDistance == 1000.0f));
 

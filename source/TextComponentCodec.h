@@ -29,7 +29,8 @@
 typedef enum TextCodecValueKindEnum
 {
     TextCodecValueKind_Text,        /* UTF-8 text without NUL bytes */
-    TextCodecValueKind_Name,        /* an asset name or translation key ([a-z][a-z0-9_.-]*) */
+    TextCodecValueKind_AssetName,   /* an asset name: a namespaced key, the namespace optional (a font, an animation) */
+    TextCodecValueKind_LocalName,   /* a local name ([a-z][a-z0-9_.-]*: a translation key) */
     TextCodecValueKind_Decimal,     /* a finite decimal within the field's range */
     TextCodecValueKind_Boolean,
     TextCodecValueKind_RenderColor, /* brightness and opacity within [0, 1] */

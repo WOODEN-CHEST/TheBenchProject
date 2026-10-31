@@ -359,6 +359,7 @@ static Error CreateValue(JSONObjectPool* pool, const PropertyDescriptor* descrip
             return GameJSON_CreateRenderColorValue(pool, data->RenderColorValue, outValue);
         case PropertyType_String:
         case PropertyType_AssetName:
+        case PropertyType_LocalName:
             if (data->StringValue == NULL)
             {
                 *outValue = JSONObjectValue_CreateNull();
@@ -585,6 +586,7 @@ static Error ParseValue(const PropertyDescriptor* descriptor, const JSONObjectVa
             return Result;
         case PropertyType_String:
         case PropertyType_AssetName:
+        case PropertyType_LocalName:
             return Error_Construct2(ErrorCode_InvalidState, "Strings are read separately.");
         case PropertyType_Enum:
             return ReadEnum(descriptor, value, &outData->EnumValue);

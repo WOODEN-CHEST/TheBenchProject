@@ -7,6 +7,7 @@
 #include "AssetManager.h"
 #include "GltfChecks.h"
 #include "SkeletalAnimation.h"
+#include "NamespacedKey.h"
 #include "raylib/cgltf.h"
 #include "raylib/raymath.h"
 #include "wr/WRFileSystem.h"
@@ -289,7 +290,7 @@ static const AnimationClipSettings* FindSettings(Reader* reader, const char* fil
 
 static bool IsValidClipName(const unsigned char* name)
 {
-    return AssetManager_IsValidAssetName(name) && (StringUTF8_GetByteLength(name) <= ANIMATION_CLIP_NAME_MAX_LENGTH);
+    return NamespacedKey_IsValidLocalName(name) && (StringUTF8_GetByteLength(name) <= ANIMATION_CLIP_NAME_MAX_LENGTH);
 }
 
 /* Counts one channel's keys and floats into the plan (its key times once per accessor). */

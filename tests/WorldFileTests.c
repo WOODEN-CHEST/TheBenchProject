@@ -149,6 +149,9 @@ static PropertyValue MakeCandidate(const PropertyDescriptor* row, size_t attempt
         case PropertyType_AssetName:
             Value.Data.StringValue = u8"test_asset.v2";
             break;
+        case PropertyType_LocalName:
+            Value.Data.StringValue = u8"test_local.v2";
+            break;
         case PropertyType_Enum:
             for (size_t Index = 0U; Index < row->EnumTable->EntryCount; Index++)
             {
@@ -874,7 +877,7 @@ static void WrittenJSONLeavesOutDefaultsInTableOrder(TestRun* run)
     }
     const char* Expected =
         "{\n"
-        "    \"format_version\": 2,\n"
+        "    \"format_version\": 3,\n"
         "    \"next_object_id\": 3,\n"
         "    \"environment\": {},\n"
         "    \"objects\": [\n"
@@ -891,7 +894,7 @@ static void WrittenJSONLeavesOutDefaultsInTableOrder(TestRun* run)
         "            \"scale\": [2.0, 2.0, 2.0],\n"
         "            \"components\": {\n"
         "                \"model\": {\n"
-        "                    \"world_model\": \"desk\"\n"
+        "                    \"world_model\": \"tbp:desk\"\n"
         "                }\n"
         "            }\n"
         "        }\n"
@@ -1029,8 +1032,8 @@ static void HostileJSONIsRefusedWithNothingLeft(TestRun* run)
     CheckRefusedJSON(run, &Keys, "{\"objects\": []}", NoVersion);
     const char* const ZeroVersion[] = { "at least 1", NULL };
     CheckRefusedJSON(run, &Keys, "{\"format_version\": 0}", ZeroVersion);
-    const char* const NewerVersion[] = { "format version 3 is newer than this game reads (2)", NULL };
-    CheckRefusedJSON(run, &Keys, "{\"format_version\": 3}", NewerVersion);
+    const char* const NewerVersion[] = { "format version 4 is newer than this game reads (3)", NULL };
+    CheckRefusedJSON(run, &Keys, "{\"format_version\": 4}", NewerVersion);
     const char* const TextVersion[] = { "format_version", NULL };
     CheckRefusedJSON(run, &Keys, "{\"format_version\": \"one\"}", TextVersion);
     const char* const LongName[] = { "name is longer than the 256 bytes", NULL };
@@ -1540,7 +1543,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
             WorldComponent* Ground = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 51U, WorldComponentType_Terrain, &Ground)
                 && AreNamesEqual(WorldTerrainComponent_GetTerrain(WorldTerrainComponent_FromComponent(Ground)),
-                    (const unsigned char*)u8"placeholder_terrain"));
+                    (const unsigned char*)u8"tbp:placeholder_terrain"));
             TEST_CHECK(run, AreNamesEqual(World_GetName(&Loaded), (const unsigned char*)u8"test"));
             // The file holds none of the air's settings: they read as their defaults, and (below) are left out again.
             const WorldEnvironment* Environment = World_GetEnvironment(&Loaded);
@@ -1569,7 +1572,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
             size_t DistanceCount = 0U;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 25U, WorldComponentType_Model, &Forced)
                 && AreNamesEqual(WorldModelComponent_GetWorldModel(WorldModelComponent_FromComponent(Forced)),
-                    (const unsigned char*)u8"lod_test"));
+                    (const unsigned char*)u8"tbp:lod_test"));
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 31U, WorldComponentType_Model, &Forced)
                 && WorldModelComponent_IsLodForced(WorldModelComponent_FromComponent(Forced))
                 && (WorldModelComponent_GetForcedLod(WorldModelComponent_FromComponent(Forced)) == 2U));
@@ -1584,7 +1587,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
             WorldComponent* Mirrored = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 24U, WorldComponentType_Sprite, &Mirrored)
                 && AreNamesEqual(WorldSpriteComponent_GetWorldSprite(WorldSpriteComponent_FromComponent(Mirrored)),
-                    (const unsigned char*)u8"test_tree")
+                    (const unsigned char*)u8"tbp:test_tree")
                 && WorldSpriteComponent_IsOverridden(WorldSpriteComponent_FromComponent(Mirrored),
                     WorldSpriteSetting_FlipX)
                 && WorldSpriteComponent_IsFlippedX(WorldSpriteComponent_FromComponent(Mirrored)));
@@ -1594,7 +1597,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 63U, WorldComponentType_Model, &OneSided)
                 && World_TryGetComponent(&Loaded, 64U, WorldComponentType_Model, &TwoSided)
                 && AreNamesEqual(WorldModelComponent_GetWorldModel(WorldModelComponent_FromComponent(OneSided)),
-                    (const unsigned char*)u8"test_card")
+                    (const unsigned char*)u8"tbp:test_card")
                 && !WorldModelComponent_IsOverridden(WorldModelComponent_FromComponent(OneSided),
                     WorldModelSetting_HasTwoSidedShadows)
                 && WorldModelComponent_IsOverridden(WorldModelComponent_FromComponent(TwoSided),
@@ -1657,7 +1660,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
             WorldObject* TrashCanObject = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 65U, WorldComponentType_Model, &TrashCan)
                 && AreNamesEqual(WorldModelComponent_GetWorldModel(WorldModelComponent_FromComponent(TrashCan)),
-                    (const unsigned char*)u8"trash_can_lined"));
+                    (const unsigned char*)u8"tbp:trash_can_lined"));
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 65U, WorldComponentType_Collider, &TrashCanCollider)
                 && WorldColliderComponent_IsPushable(WorldColliderComponent_FromComponent(TrashCanCollider))
                 && World_TryGetObject(&Loaded, 65U, &TrashCanObject)
@@ -1678,7 +1681,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
             WorldComponent* DoorModel = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 33U, WorldComponentType_Model, &DoorModel)
                 && AreNamesEqual(WorldModelComponent_GetWorldModel(WorldModelComponent_FromComponent(DoorModel)),
-                    (const unsigned char*)u8"test_door"));
+                    (const unsigned char*)u8"tbp:test_door"));
             WorldComponent* Zone = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 34U, WorldComponentType_Collider, &Zone)
                 && WorldColliderComponent_UsesOwnShape(WorldColliderComponent_FromComponent(Zone))
@@ -1704,7 +1707,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
             }
             TEST_CHECK(run, (Trees != NULL) && (TreeCount == 400U) && AreNamesEqual(
                 WorldModelInstancesComponent_GetWorldModel(WorldModelInstancesComponent_FromComponent(Grove)),
-                (const unsigned char*)u8"test_tree") && (UnevenCount == 133U) && (HalfCount == 10U));
+                (const unsigned char*)u8"tbp:test_tree") && (UnevenCount == 133U) && (HalfCount == 10U));
             // Its lamp, in a clearing: the copies' cube shadows.
             WorldComponent* GroveLamp = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 53U, WorldComponentType_Light, &GroveLamp)
@@ -1958,7 +1961,7 @@ static void EveryTableInAWorldFileIsAtTheVersionItsFormatWrites(TestRun* run)
     // that mapping.
     KeyRegistry Keys;
     World Probe;
-    TEST_CHECK(run, WORLD_FILE_FORMAT_VERSION == 2U);
+    TEST_CHECK(run, WORLD_FILE_FORMAT_VERSION == 3U);
     TEST_CHECK(run, WorldEnvironment_GetPropertyTable()->Version == 1U);
     TEST_CHECK(run, WorldObject_GetPropertyTable()->Version == 1U);
     if (TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys)))
@@ -2080,7 +2083,7 @@ static void AnOlderFilesShadowTierIsReadIntoTheShadowDistance(TestRun* run)
                 && TEST_CHECK(run, GenericBuffer_NullTerminate(&Written)))
             {
                 const char* Again = (const char*)Written._data;
-                TEST_CHECK(run, (strstr(Again, "\"format_version\": 2,") != NULL) && (strstr(Again, "shadow_tier") == NULL)
+                TEST_CHECK(run, (strstr(Again, "\"format_version\": 3,") != NULL) && (strstr(Again, "shadow_tier") == NULL)
                     && (strstr(Again, "\"overrides_shadow_distance\": true,") != NULL)
                     && (strstr(Again, "\"shadow_distance\": 16.0") != NULL));
             }

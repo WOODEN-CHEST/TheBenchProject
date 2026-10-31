@@ -1,7 +1,7 @@
 {
-    "name": "test",
+    "name": "tbp:test",
     "lods": [
-        { "model": "test", "max_distance": 600 }
+        { "model": "tbp:test", "max_distance": 600 }
     ],
     "collision": "bounds"
 }

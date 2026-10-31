@@ -151,7 +151,8 @@ static Error ReadKindValue(JSONTextReader* reader, const TextCodecField* field, 
     switch (field->Kind)
     {
         case TextCodecValueKind_Text:
-        case TextCodecValueKind_Name:
+        case TextCodecValueKind_AssetName:
+        case TextCodecValueKind_LocalName:
             if (raw->Type != JSONValueType_String)
             {
                 return Error_Construct2(ErrorCode_InvalidJSON, "must be a string.");
@@ -455,7 +456,8 @@ static Error Writer_WriteField(void* self, TextCodecNode* node, const TextCodecF
     switch (field->Kind)
     {
         case TextCodecValueKind_Text:
-        case TextCodecValueKind_Name:
+        case TextCodecValueKind_AssetName:
+        case TextCodecValueKind_LocalName:
             return SetStringEntry(Writer, Target, field->JsonKey, value->Text);
         case TextCodecValueKind_Decimal:
             return SetEntry(Writer, Target, field->JsonKey, GameJSON_CreateFloatValue(value->Decimal));

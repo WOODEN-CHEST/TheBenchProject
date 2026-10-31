@@ -1,5 +1,5 @@
 {
-    "name": "test_sign",
+    "name": "tbp:test_sign",
     "frames": [
         {
             "source": "texture",

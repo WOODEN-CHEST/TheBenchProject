@@ -1,4 +1,4 @@
 {
-    "name": "world_depth",
+    "name": "tbp:world_depth",
     "fragment_location": "depth/fragment"
 }

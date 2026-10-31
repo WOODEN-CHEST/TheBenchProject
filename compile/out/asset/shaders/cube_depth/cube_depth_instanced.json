@@ -1,5 +1,5 @@
 {
-    "name": "world_cube_depth_instanced",
+    "name": "tbp:world_cube_depth_instanced",
     "vertex_location": "cube_depth/instanced",
     "fragment_location": "cube_depth/fragment",
     "defines": ["WORLD_INSTANCED"]

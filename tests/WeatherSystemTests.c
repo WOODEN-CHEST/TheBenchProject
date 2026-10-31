@@ -970,7 +970,11 @@ static void ASavedPresetTheClimateLostStartsOver(TestRun* run)
     if (Rig_Construct(run, &Rig, "cycle", Climates))
     {
         Rig_Run(&Rig, 1.0, 60.0, NULL);
-        PropertyValue Gone = PropertyValue_FromAssetName((const unsigned char*)u8"blizzard");
+        // A preset's name is a local name of its climate: no namespace.
+        PropertyValue Namespaced = PropertyValue_FromLocalName((const unsigned char*)u8"tbp:blizzard");
+        TEST_CHECK_ERROR(run, Properties_Set(WeatherSystem_GetPropertyTable(), &Rig.System,
+            (const unsigned char*)u8"preset", &Namespaced), ErrorCode_ArgumentOutOfRange);
+        PropertyValue Gone = PropertyValue_FromLocalName((const unsigned char*)u8"blizzard");
         TEST_CHECK_SUCCESS(run, Properties_Set(WeatherSystem_GetPropertyTable(), &Rig.System,
             (const unsigned char*)u8"preset", &Gone));
         TEST_CHECK(run, WeatherSystem_GetPreset(&Rig.System) == NULL); // to be found again
@@ -1674,7 +1678,7 @@ static void AFailingClimateIsLoggedOnce(TestRun* run)
     }
     Rig_Deconstruct(run, &Rig);
     TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
-    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "the climate \"nowhere\" could not be loaded") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "the climate \"tbp:nowhere\" could not be loaded") == 1U);
     Memory_Free(Directory._data);
 }
 

@@ -1,5 +1,5 @@
 {
-    "name": "pbr_metal",
+    "name": "tbp:pbr_metal",
     "location": "test/test_model",
     "material_overrides": [
         {

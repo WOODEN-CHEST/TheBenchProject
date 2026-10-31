@@ -1,4 +1,4 @@
 {
-    "name": "world_ao_blur",
+    "name": "tbp:world_ao_blur",
     "fragment_location": "ao_blur/fragment"
 }

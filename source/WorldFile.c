@@ -40,12 +40,12 @@
 
 // Static functions: loading.
 /* The version of @p table that files of @p formatVersion were written with (PropertyReadOptions.DataVersion). Format 1
- * wrote every table at its first version; format 2, the current one, writes every table at its current version (the
- * model, model instances and terrain components' 2, every other table's 1), and its tables' migrations read format 1's
- * data. */
+ * wrote every table at its first version; formats 2 and 3 (the current one, which writes asset names in full) write
+ * every table at its current version (the model, model instances and terrain components' 2, every other table's 1),
+ * and the tables' migrations read format 1's data. */
 // TODO: when a table's Version rises again (its Migrate converting older data), raise WORLD_FILE_FORMAT_VERSION with it
-// and return here the versions format 2 wrote (the ones above); tests/WorldFileTests.c checks that every table a world
-// file holds is still at the version format 2 maps it to.
+// and return here the versions formats 2 and 3 wrote (the ones above); tests/WorldFileTests.c checks that every table a
+// world file holds is still at the version formats 2 and 3 map it to.
 static uint32_t GetTableVersion(uint32_t formatVersion, const PropertyTable* table)
 {
     return (formatVersion <= WORLD_FILE_FIRST_FORMAT_VERSION) ? WORLD_FILE_FIRST_FORMAT_VERSION : table->Version;

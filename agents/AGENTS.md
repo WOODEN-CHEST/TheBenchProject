@@ -58,7 +58,9 @@ Current module list:
 * AssetManager (AssetManager.md) - Loads, shares and unloads assets built from JSON definitions in prioritized search
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
   caches failed loads, registers the fifteen standard types, and reads a texture asset's image file as CPU pixels
-  without loading it (AssetManager_LoadTexturePixels). Read its lifetime rules before touching assets.
+  without loading it (AssetManager_LoadTexturePixels). Asset names are namespaced keys (`tbp:desk`; written without a
+  namespace, `tbp`'s), accepted as written and kept, logged and listed in full (AssetManager_GetDefinitionNames by
+  prefix). Read its lifetime rules before touching assets.
 * Game asset wrappers (GameAssets.md) - GameFont, GameModel, GameShader, GameSound and GameTexture: the manager-owned
   wrappers for the standard font, model, shader, sound and texture types, with their ownership rules, accessors and
   pitfalls; a skinned model carries its GameSkeleton (Animation.md). GameModel.h also holds GameMaterialFactors
@@ -242,9 +244,10 @@ Current module list:
 * GameFrame (GameFrame.md) - Abstract base for a game "scene"/section (menu, level, loading screen), with stepped load/unload, logic lifecycle, per-target rendering and an optional PrepareRender slot: the update side's last step before a render (posing skeletons once per shown frame).
 * GameFrameManager (GameFrameManager.md) - Owns a z-stack of game frames, drives their lifecycle and update loop (polls the input, then updates frames top-down so the top frame gets input first), runs their PrepareRender before each render, and composites them to the screen; crashes gracefully on frame errors.
 * NamespacedKey (NamespacedKey.md) - Namespaced keys (`namespace:path`, Minecraft's character set, at most 128 bytes,
-  a default namespace for keys written without one) and the KeyRegistry that interns them to uint32 ids (one per
-  program: main creates it, Services.Keys carries it, every World borrows it), with stable texts and prefix search for
-  autocomplete.
+  a default namespace for keys written without one: tags, data keys, asset names) and the KeyRegistry that interns them
+  to uint32 ids (one per program: main creates it, Services.Keys carries it, every World borrows it), with stable texts
+  and prefix search for autocomplete; also the local names (`[a-z][a-z0-9_.-]*`, never namespaced) of things inside
+  one asset or object (clips, sockets, variants, presets).
 * Registry (Registry.md) - Registries: namespaced keys mapped to entries of one kind (named registrations from engine
   code, asset types' loaders and scripts), with stable indices (a withdrawn entry keeps its slot and revives under the
   same key), active duplicates refused, sources withdrawn together, prefix search and a revision; and RegistryRoot, the
@@ -455,7 +458,8 @@ Current module list:
   keys by mode, migration hook) and write (defaults left out by default, integers in GHDF's smallest type), and get/set
   by key. The one module allowed to write `_` fields by offset. Clients: WorldEnvironment, GameClock, the world objects
   and their components, the world sprite's settings, the character asset's settings; new data types get a table, not
-  hand-written codecs. A FloatList
+  hand-written codecs. AssetName rows keep names in full (read and set as written, `desk` is `tbp:desk`) and LocalName
+  rows a name inside one object (a socket, a preset) that is never namespaced. A FloatList
   type (PropertyFloatList: an owned list of floats with a maximum count, per-value bounds and an optional rising rule)
   carries lists such as a placement's LOD distances; an EnumSet type (a uint32 mask of an enum's entries, JSON an
   array of names) carries a collider's layer mask; an AssetNameList type (PropertyAssetNameList: an owned list of

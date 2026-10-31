@@ -1,4 +1,4 @@
 {
-    "name": "world_atmosphere_volume",
+    "name": "tbp:world_atmosphere_volume",
     "fragment_location": "atmosphere/volume"
 }

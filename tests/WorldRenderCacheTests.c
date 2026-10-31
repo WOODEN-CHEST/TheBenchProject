@@ -1536,7 +1536,7 @@ static void ThePlacementAndThePlayerMoveTheSwitches(TestRun* run)
     }
     CacheFixture_Deconstruct(run, &Fixture);
     TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
-    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "uses its world model \"steps\"'s LOD distances: its own "
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "uses its world model \"tbp:steps\"'s LOD distances: its own "
         "lod_distances holds 2, the world model has 3 LODs.") == 1U);
     TEST_CHECK(run, CountInLatestLog(run, Directory._data, "lod_distances holds 1,") == 1U);
     Memory_Free(Directory._data);
@@ -1900,7 +1900,7 @@ static void TerrainEntriesFollowTheirComponents(TestRun* run)
     TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
     if (Owner != NULL)
     {
-        TEST_CHECK(run, CountInLatestLog(run, Directory._data, "draws no terrain: terrain \"nowhere\"") == 1U);
+        TEST_CHECK(run, CountInLatestLog(run, Directory._data, "draws no terrain: terrain \"tbp:nowhere\"") == 1U);
     }
     Memory_Free(Directory._data);
 }
@@ -2164,9 +2164,9 @@ static void InstanceEntriesFollowTheirComponents(TestRun* run)
     TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
     if (Owner != NULL)
     {
-        TEST_CHECK(run, CountInLatestLog(run, Directory._data, "draws no instances: world model \"nowhere\"") == 1U);
+        TEST_CHECK(run, CountInLatestLog(run, Directory._data, "draws no instances: world model \"tbp:nowhere\"") == 1U);
         TEST_CHECK(run, CountInLatestLog(run, Directory._data,
-            "draws the instances of world model \"box\" with its own materials: it has no variant \"red\"") == 1U);
+            "draws the instances of world model \"tbp:box\" with its own materials: it has no variant \"red\"") == 1U);
     }
     Memory_Free(Directory._data);
 }
@@ -2303,7 +2303,7 @@ static void InstanceLodListsThatDoNotFitAreLoggedOnce(TestRun* run)
     if (IsReady)
     {
         TEST_CHECK(run, CountInLatestLog(run, Directory._data,
-            "uses its world model \"shrub\"'s LOD distances: its own lod_distances holds 3, the world model has 2 LODs")
+            "uses its world model \"tbp:shrub\"'s LOD distances: its own lod_distances holds 3, the world model has 2 LODs")
             == 2U);
     }
     Memory_Free(Directory._data);

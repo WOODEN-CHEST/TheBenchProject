@@ -569,7 +569,8 @@ static inline const unsigned char* StringComponent_GetFontName(const StringCompo
 }
 
 /**
- * @brief Sets the component's font asset name to a copy of @p fontName.
+ * @brief Sets the component's font asset name to a copy of @p fontName in full ("noto_sans" is kept as
+ *        "tbp:noto_sans").
  * @param self The string component; must not be NULL.
  * @param fontName A font asset name (matching AssetManager_IsValidAssetName), or NULL for the document's default
  *        font. Copied.
@@ -786,7 +787,7 @@ static inline const unsigned char* SpriteComponent_GetAnimationName(const Sprite
 }
 
 /**
- * @brief Sets the sprite's animation asset name to a copy of @p animationName.
+ * @brief Sets the sprite's animation asset name to a copy of @p animationName in full ("coin" is kept as "tbp:coin").
  * @param self The sprite component; must not be NULL.
  * @param animationName A sprite-animation asset name (matching AssetManager_IsValidAssetName), or NULL to draw
  *        nothing. Copied.
@@ -876,8 +877,8 @@ Error TranslateComponent_SetFallback(TranslateComponent* self, const unsigned ch
 
 // Validation.
 /**
- * @brief Reports whether @p key is a valid translation key: the asset-name grammar `[a-z][a-z0-9_.-]*`, so keys can
- *        be namespaced the same way as asset names later (for example "paper.form_17.title").
+ * @brief Reports whether @p key is a valid translation key: a local name, `[a-z][a-z0-9_.-]*` (for example
+ *        "paper.form_17.title"); whether keys take namespaces is decided with the string tables, not built yet.
  * @param key The key; may be NULL (invalid).
  * @returns true if valid.
  */

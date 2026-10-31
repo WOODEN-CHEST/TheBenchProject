@@ -1,5 +1,5 @@
 {
-    "name": "world_cube_depth_skinned",
+    "name": "tbp:world_cube_depth_skinned",
     "vertex_location": "cube_depth/skinned",
     "fragment_location": "cube_depth/fragment"
 }

@@ -196,6 +196,42 @@ static void JSONWritesShorthandsAndOnlyNonDefaults(TestRun* run)
     TEST_CHECK_SUCCESS(run, TextComponentFactory_Deconstruct(&Factory));
 }
 
+/* A font is an asset name: read as written ("mono") and written in full ("tbp:mono"); a translation key stays as it is
+ * written. */
+static void JSONWritesAssetNamesInFull(TestRun* run)
+{
+    TextComponentFactory Factory;
+    JSONObjectPool* Pool = NULL;
+    if (!TEST_CHECK_SUCCESS(run, TextComponentFactory_Construct(&Factory)) || !TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)))
+    {
+        return;
+    }
+    JSONObjectValue Value;
+    TextComponent* Root = NULL;
+    const char* Json = "[{\"type\":\"string\",\"text\":\"a\",\"font\":\"mono\"}, {\"type\":\"translate\","
+        "\"key\":\"menu.quit\"}]";
+    if (TestText_ParseJSON(run, Pool, Json, &Value) && TEST_CHECK_SUCCESS(run, TextComponentJSON_Deserialize(&Value, &Factory, &Root)))
+    {
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+        const StringComponent* Mono = TextComponent_AsConstStringComponent(TextComponent_GetSubComponentAt(Root, 0U));
+        TEST_CHECK(run, (Mono != NULL) && (strcmp((const char*)StringComponent_GetFontName(Mono), "tbp:mono") == 0));
+        GenericBuffer Text;
+        GenericBuffer_AllocateVariable(&Text, 0U, sizeof(unsigned char));
+        JSONObjectValue Written = JSONObjectValue_CreateNull();
+        if (TEST_CHECK_SUCCESS(run, TextComponentJSON_Serialize(Root, Pool, &Written)) && SerializeToText(run, &Written, &Text))
+        {
+            TEST_CHECK(run, (strstr((const char*)Text._data, "\"tbp:mono\"") != NULL)
+                && (strstr((const char*)Text._data, "\"menu.quit\"") != NULL)
+                && (strstr((const char*)Text._data, "\"mono\"") == NULL));
+        }
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Written));
+        Memory_Free(Text._data);
+    }
+    ReturnTree(run, &Factory, Root);
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    TEST_CHECK_SUCCESS(run, TextComponentFactory_Deconstruct(&Factory));
+}
+
 static void JSONReadsShorthandsAndIgnoresUnknownKeys(TestRun* run)
 {
     TextComponentFactory Factory;
@@ -250,8 +286,11 @@ static void JSONRejectsBadTypesNamesAndMissingFields(TestRun* run)
     CheckJSONFailure(run, "{\"type\":\"string\"}", TextFragments);
     static const char* const KeyFragments[] = { "\"key\"", "required", NULL };
     CheckJSONFailure(run, "{\"type\":\"translate\",\"fallback\":\"x\"}", KeyFragments);
-    static const char* const NameFragments[] = { "\"font\"", "[a-z][a-z0-9_.-]*", NULL };
+    static const char* const NameFragments[] = { "\"font\"", "must be an asset name", NULL };
     CheckJSONFailure(run, "{\"type\":\"string\",\"text\":\"x\",\"font\":\"Fonts/Bold\"}", NameFragments);
+    // A translation key is a local name: no namespace.
+    static const char* const LocalFragments[] = { "\"key\"", "[a-z][a-z0-9_.-]*", NULL };
+    CheckJSONFailure(run, "{\"type\":\"translate\",\"key\":\"tbp:menu.title\"}", LocalFragments);
     static const char* const NulFragments[] = { "NUL", NULL };
     CheckJSONFailure(run, "{\"type\":\"string\",\"text\":\"a\\u0000b\"}", NulFragments);
     static const char* const ShapeFragments[] = { "object, an array or a string", NULL };
@@ -536,6 +575,7 @@ void TextComponentCodecTests_Run(TestRun* run)
     {
         { "json_round_trip_keeps_every_field", JSONRoundTripKeepsEveryField },
         { "json_writes_shorthands_and_only_non_defaults", JSONWritesShorthandsAndOnlyNonDefaults },
+        { "json_writes_asset_names_in_full", JSONWritesAssetNamesInFull },
         { "json_reads_shorthands_and_ignores_unknown_keys", JSONReadsShorthandsAndIgnoresUnknownKeys },
         { "json_errors_name_the_field_and_path", JSONErrorsNameTheFieldAndPath },
         { "json_rejects_bad_types_names_and_missing_fields", JSONRejectsBadTypesNamesAndMissingFields },

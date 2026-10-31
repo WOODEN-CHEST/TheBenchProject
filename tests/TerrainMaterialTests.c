@@ -195,7 +195,7 @@ static void AMinimalDefinitionGetsTheDefaults(TestRun* run)
     if (Loaded != NULL)
     {
         const TerrainMaterialSettings* Settings = TerrainMaterial_GetSettings(Loaded);
-        TEST_CHECK(run, AreNamesEqual(Settings->Albedo, "moss_albedo") && (Settings->Height == NULL)
+        TEST_CHECK(run, AreNamesEqual(Settings->Albedo, "tbp:moss_albedo") && (Settings->Height == NULL)
             && (Settings->Normal == NULL) && (Settings->RoughnessAo == NULL));
         TEST_CHECK(run, (Settings->TileSize == 2.0f) && (Settings->AlbedoTint.r == 255U) && (Settings->AlbedoTint.g == 255U)
             && (Settings->AlbedoTint.b == 255U) && (Settings->Roughness == 0.9f) && (Settings->NormalStrength == 1.0f)
@@ -252,9 +252,9 @@ static void EveryKeyIsRead(TestRun* run)
     if (Loaded != NULL)
     {
         const TerrainMaterialSettings* Settings = TerrainMaterial_GetSettings(Loaded);
-        TEST_CHECK(run, AreNamesEqual(Settings->Albedo, "cobbles_albedo") && AreNamesEqual(Settings->Height,
-            "cobbles_height") && AreNamesEqual(Settings->Normal, "cobbles_normal")
-            && AreNamesEqual(Settings->RoughnessAo, "cobbles_roughness_ao"));
+        TEST_CHECK(run, AreNamesEqual(Settings->Albedo, "tbp:cobbles_albedo") && AreNamesEqual(Settings->Height,
+            "tbp:cobbles_height") && AreNamesEqual(Settings->Normal, "tbp:cobbles_normal")
+            && AreNamesEqual(Settings->RoughnessAo, "tbp:cobbles_roughness_ao"));
         TEST_CHECK(run, (Settings->TileSize == 3.5f) && (Settings->AlbedoTint.r == 128U) && (Settings->AlbedoTint.g == 128U)
             && (Settings->AlbedoTint.b == 64U) && (Settings->Roughness == 0.6f) && (Settings->NormalStrength == 2.5f)
             && (Settings->HeightBlendStrength == 4.0f) && (Settings->Triplanar == TerrainTriplanarMode_Always)
@@ -279,7 +279,7 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
 {
     static const RefusedMaterial Cases[] =
     {
-        { "{\"name\": \"m\"}", ErrorCode_InvalidAssetDefinition, "Terrain material \"m\": \"albedo\" must name the "
+        { "{\"name\": \"m\"}", ErrorCode_InvalidAssetDefinition, "Terrain material \"tbp:m\": \"albedo\" must name the "
             "texture of its colour." },
         { "{\"name\": \"m\", \"albedo\": \"a\", \"colour\": \"#ff0000\"}", ErrorCode_InvalidAssetDefinition,
             "\"colour\"" },
@@ -295,8 +295,8 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
         { "{\"name\": \"m\", \"albedo\": \"a\", \"triplanar\": \"sometimes\"}", ErrorCode_Success, "triplanar" },
         { "{\"name\": \"m\", \"albedo\": \"a\", \"triplanar_slope\": 91}", ErrorCode_Success, "triplanar_slope" },
         { "{\"name\": \"m\", \"albedo\": \"a\", \"triplanar_slope\": -1}", ErrorCode_Success, "triplanar_slope" },
-        { "{\"name\": \"m\", \"albedo\": \"a\", \"surface\": \"Bad Key\"}", ErrorCode_Success, "Terrain material \"m\"" },
-        { "{\"name\": \"m\", \"albedo\": \"a\", \"surface\": \"\"}", ErrorCode_Success, "Terrain material \"m\"" },
+        { "{\"name\": \"m\", \"albedo\": \"a\", \"surface\": \"Bad Key\"}", ErrorCode_Success, "Terrain material \"tbp:m\"" },
+        { "{\"name\": \"m\", \"albedo\": \"a\", \"surface\": \"\"}", ErrorCode_Success, "Terrain material \"tbp:m\"" },
         { "{\"name\": \"m\", \"albedo\": \"a\", \"puddles\": 2}", ErrorCode_Success, "puddles" },
         { "{\"name\": \"m\", \"albedo\": \"a\", \"porosity\": -0.1}", ErrorCode_Success, "porosity" },
         { "{\"name\": \"m\", \"albedo\": \"a\", \"height\": 3}", ErrorCode_Success, "height" },
@@ -410,19 +410,19 @@ static void BadMapsFailTheLoadNamingWhatAndWhere(TestRun* run)
     if (IsReady)
     {
         TerrainMaterial* Loaded = NULL;
-        const char* const MismatchFragments[] = { "Terrain material \"mismatched\": its height \"mismatched_height\" is "
+        const char* const MismatchFragments[] = { "Terrain material \"tbp:mismatched\": its height \"tbp:mismatched_height\" is "
             "8 x 8 pixels and its albedo 4 x 4; they must be the same size", NULL };
         TestText_CheckErrorMessage(run, AssetManager_LoadTerrainMaterial(Pack.Manager, (const unsigned char*)u8"mismatched",
             Pack.User, &Loaded), ErrorCode_InvalidAssetData, MismatchFragments);
-        const char* const HugeFragments[] = { "Terrain material \"huge\": its albedo \"huge_albedo\" could not be read: "
-            "Texture \"huge_albedo\"", "is 1025 x 1025 pixels; at most 1024 per side are allowed.", NULL };
+        const char* const HugeFragments[] = { "Terrain material \"tbp:huge\": its albedo \"tbp:huge_albedo\" could not be "
+            "read: Texture \"tbp:huge_albedo\"", "is 1025 x 1025 pixels; at most 1024 per side are allowed.", NULL };
         TestText_CheckErrorMessage(run, AssetManager_LoadTerrainMaterial(Pack.Manager, (const unsigned char*)u8"huge",
             Pack.User, &Loaded), ErrorCode_InvalidAssetData, HugeFragments);
-        const char* const LostFragments[] = { "Terrain material \"lost\": its albedo \"nothing\" could not be read: No "
-            "texture named \"nothing\" is defined.", NULL };
+        const char* const LostFragments[] = { "Terrain material \"tbp:lost\": its albedo \"tbp:nothing\" could not be read: "
+            "No texture named \"tbp:nothing\" is defined.", NULL };
         TestText_CheckErrorMessage(run, AssetManager_LoadTerrainMaterial(Pack.Manager, (const unsigned char*)u8"lost",
             Pack.User, &Loaded), ErrorCode_InvalidOperation, LostFragments);
-        const char* const CodedFragments[] = { "its albedo \"made_in_code\" could not be read: Texture \"made_in_code\" is "
+        const char* const CodedFragments[] = { "its albedo \"tbp:made_in_code\" could not be read: Texture \"tbp:made_in_code\" is "
             "not read from an image file", NULL };
         TestText_CheckErrorMessage(run, AssetManager_LoadTerrainMaterial(Pack.Manager, (const unsigned char*)u8"coded",
             Pack.User, &Loaded), ErrorCode_InvalidOperation, CodedFragments);
@@ -472,12 +472,12 @@ static void TexturePixelsAreReadAsRgba(TestRun* run)
             Pack.User);
         TEST_CHECK(run, Released.Code == ErrorCode_InvalidOperation);
         Error_Deconstruct(&Released);
-        const char* const Fragments[] = { "No texture named \"absent\" is defined.", NULL };
+        const char* const Fragments[] = { "No texture named \"tbp:absent\" is defined.", NULL };
         TestText_CheckErrorMessage(run, AssetManager_LoadTexturePixels(Pack.Manager, (const unsigned char*)u8"absent", 16,
             &Pixels), ErrorCode_InvalidOperation, Fragments);
         TEST_CHECK(run, (Pixels.Pixels == NULL) && (Pixels.Width == 0) && (Pixels.Height == 0));
         // Past the caller's size: refused, naming both (3 x 2 against 2); no size at all is not a limit.
-        const char* const SizeFragments[] = { "Texture \"grey_one\"", "is 3 x 2 pixels; at most 2 per side are allowed.",
+        const char* const SizeFragments[] = { "Texture \"tbp:grey_one\"", "is 3 x 2 pixels; at most 2 per side are allowed.",
             NULL };
         TestText_CheckErrorMessage(run, AssetManager_LoadTexturePixels(Pack.Manager, (const unsigned char*)u8"grey_one", 2,
             &Pixels), ErrorCode_InvalidAssetData, SizeFragments);
@@ -486,12 +486,12 @@ static void TexturePixelsAreReadAsRgba(TestRun* run)
         TestText_CheckErrorMessage(run, AssetManager_LoadTexturePixels(Pack.Manager, (const unsigned char*)u8"grey_one", 0,
             &Pixels), ErrorCode_IllegalArgument, LimitFragments);
         // A DDS file is never decoded (raylib's reader trusts its header's sizes), even a well-formed one.
-        const char* const DdsFragments[] = { "Texture \"dds_one\"", "is a DDS file, whose pixels are not read", NULL };
+        const char* const DdsFragments[] = { "Texture \"tbp:dds_one\"", "is a DDS file, whose pixels are not read", NULL };
         TestText_CheckErrorMessage(run, AssetManager_LoadTexturePixels(Pack.Manager, (const unsigned char*)u8"dds_one", 16,
             &Pixels), ErrorCode_InvalidAssetData, DdsFragments);
         TEST_CHECK(run, (Pixels.Pixels == NULL) && (Pixels.Width == 0));
         // In any case of its extension (the file names resolve ignoring case, and raylib reads ".DDS" as DDS too).
-        const char* const LoudFragments[] = { "Texture \"dds_loud\"", "is a DDS file", NULL };
+        const char* const LoudFragments[] = { "Texture \"tbp:dds_loud\"", "is a DDS file", NULL };
         TestText_CheckErrorMessage(run, AssetManager_LoadTexturePixels(Pack.Manager, (const unsigned char*)u8"dds_loud", 16,
             &Pixels), ErrorCode_InvalidAssetData, LoudFragments);
     }

@@ -9,6 +9,7 @@
 #include "GameModel.h"
 #include "GameTexture.h"
 #include "Logger.h"
+#include "NamespacedKey.h"
 #include "WorldModel.h"
 #include "WorldModelCollisionInternal.h"
 #include "WorldModelSocketInternal.h"
@@ -198,7 +199,7 @@ static const char* Printable(const unsigned char* text, char* buffer, size_t cap
 
 
 // Static functions: reading.
-/* Reads a required string key that must be a valid asset name (an owned copy into *outName). */
+/* Reads a string key that names an asset: an owned copy of its full name into *outName ("desk" is "tbp:desk"). */
 static Error ReadAssetName(const ParseContext* context, JSONCompound* compound, const unsigned char* key,
     bool isRequired, const char* where, unsigned char** outName)
 {
@@ -213,11 +214,12 @@ static Error ReadAssetName(const ParseContext* context, JSONCompound* compound, 
     {
         return isRequired ? Fail(context, "%s needs a \"%s\".", where, (const char*)key) : Error_CreateSuccess();
     }
-    if (!AssetManager_IsValidAssetName(*outName))
+    const char* Problem = AssetJSON_MakeFullAssetName(outName);
+    if (Problem != NULL)
     {
         char Name[NAME_PRINT_CAPACITY];
-        return Fail(context, "%s.%s \"%s\" is not a valid asset name ([a-z][a-z0-9_.-]*).", where, (const char*)key,
-            Printable(*outName, Name, sizeof(Name)));
+        return Fail(context, "%s.%s \"%s\" is not a valid asset name: %s.", where, (const char*)key,
+            Printable(*outName, Name, sizeof(Name)), Problem);
     }
     return Error_CreateSuccess();
 }
@@ -682,15 +684,26 @@ static Error ParseOverride(const ParseContext* context, JSONCompound* compound, 
     return (Result.Code == ErrorCode_Success) ? Result : WrapError(context, path, &Result);
 }
 
-/* A variant's name: a valid asset name of at most WORLD_MODEL_VARIANT_NAME_MAX_LENGTH bytes, unique in the world
- * model. */
+/* A variant's name: a local name of at most WORLD_MODEL_VARIANT_NAME_MAX_LENGTH bytes, unique in the world model. */
 static Error ParseVariantName(const ParseContext* context, JSONCompound* compound, const char* path, size_t index)
 {
     WorldModelVariantDefinition* Variant = &context->Definition->Variants[index];
-    Error Result = ReadAssetName(context, compound, (const unsigned char*)u8"name", true, path, &Variant->Name);
+    bool Found = false;
+    Error Result = AssetJSON_ReadOptionalOwnedString(compound, (const unsigned char*)u8"name", &Variant->Name, &Found);
     if (Result.Code != ErrorCode_Success)
     {
-        return Result;
+        Error_Deconstruct(&Result);
+        return Fail(context, "%s.name must be a string.", path);
+    }
+    if (!Found)
+    {
+        return Fail(context, "%s needs a \"name\".", path);
+    }
+    if (!NamespacedKey_IsValidLocalName(Variant->Name))
+    {
+        char Name[NAME_PRINT_CAPACITY];
+        return Fail(context, "%s.name \"%s\" is not a valid variant name ([a-z][a-z0-9_.-]*).", path,
+            Printable(Variant->Name, Name, sizeof(Name)));
     }
     if (StringUTF8_GetByteLength(Variant->Name) > WORLD_MODEL_VARIANT_NAME_MAX_LENGTH)
     {
@@ -885,10 +898,12 @@ static Error ParseAnimationLibraries(const ParseContext* context, JSONCompound* 
         Definition->AnimationLibraries[Index] = Name;
         Definition->AnimationLibraryCount = Index + 1U;
         char PrintableName[NAME_PRINT_CAPACITY];
-        if (!AssetManager_IsValidAssetName(Name))
+        const char* Problem = AssetJSON_MakeFullAssetName(&Definition->AnimationLibraries[Index]);
+        Name = Definition->AnimationLibraries[Index];
+        if (Problem != NULL)
         {
-            return Fail(context, "animation_libraries[%" PRIu64 "] \"%s\" is not a valid asset name ([a-z][a-z0-9_.-]*).",
-                (uint64_t)Index, Printable(Name, PrintableName, sizeof(PrintableName)));
+            return Fail(context, "animation_libraries[%" PRIu64 "] \"%s\" is not a valid asset name: %s.",
+                (uint64_t)Index, Printable(Name, PrintableName, sizeof(PrintableName)), Problem);
         }
         for (size_t Earlier = 0U; Earlier < Index; Earlier++)
         {

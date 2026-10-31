@@ -5,6 +5,7 @@
 #include "AssetTypesStandard.h"
 #include "AssetDefinitionCommon.h"
 #include "AnimationLibrary.h"
+#include "NamespacedKey.h"
 #include "wr/WRJSON.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
@@ -102,7 +103,7 @@ static Error ParseClip(const unsigned char* libraryName, JSONCompound* compound,
         return Fail(libraryName, "clips[%" PRIu64 "].name must be a string.", (uint64_t)index);
     }
     outClip->Name = Name;
-    if (!HasName || !AssetManager_IsValidAssetName(Name) || (StringUTF8_GetByteLength(Name) > ANIMATION_CLIP_NAME_MAX_LENGTH))
+    if (!HasName || !NamespacedKey_IsValidLocalName(Name) || (StringUTF8_GetByteLength(Name) > ANIMATION_CLIP_NAME_MAX_LENGTH))
     {
         return Fail(libraryName, "clips[%" PRIu64 "] needs a \"name\" of [a-z][a-z0-9_.-]*, at most %" PRIu64 " bytes: the "
             "name the clip plays under.", (uint64_t)index, (uint64_t)ANIMATION_CLIP_NAME_MAX_LENGTH);

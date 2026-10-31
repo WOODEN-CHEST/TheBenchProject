@@ -1,5 +1,5 @@
 {
-    "name": "sky_moon",
+    "name": "tbp:sky_moon",
     "location": "sky/placeholder_moon",
     "texture_properties": { "filtering": "point", "wrap": "clamp", "mipmaps": false },
     "color_space": "srgb"

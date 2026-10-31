@@ -444,7 +444,7 @@ Error WorldTerrainComponent_SetTerrain(WorldTerrainComponent* self, const unsign
     {
         return Result;
     }
-    unsigned char* Clone = WorldInternal_CloneString(terrain);
+    unsigned char* Clone = WorldInternal_CloneAssetName(terrain);
     Memory_Free(self->_terrain);
     self->_terrain = Clone;
     WorldInternal_ComponentAfterSet(self, &TerrainProperties[TerrainProperty_Terrain]);

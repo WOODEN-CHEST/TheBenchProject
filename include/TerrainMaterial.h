@@ -45,7 +45,7 @@
 /** @brief The most pixels a terrain material's map may have per side: sixteen materials' maps at this size are about
  *  128 MiB of pixels, kept on the CPU and uploaded once (a hostile pack cannot ask for gigabytes). */
 #define TERRAIN_MATERIAL_MAX_SIDE 1024
-/** @brief The most bytes a texture asset name or the surface key of a terrain material may have. */
+/** @brief The most bytes a texture asset name (in full) or the surface key of a terrain material may have. */
 #define TERRAIN_MATERIAL_NAME_MAX_LENGTH ((size_t)128)
 /** @brief The surface a terrain material is unless its definition says (a namespaced key: footsteps, the scattering's
  *  limits and later systems read it). */

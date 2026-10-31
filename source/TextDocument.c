@@ -1,6 +1,7 @@
 #include "TextDocument.h"
 #include "TextComponentInternal.h"
 #include "Logger.h"
+#include "NamespacedKey.h"
 #include "wr/WRString.h"
 #include "wr/WRMemory.h"
 
@@ -356,14 +357,24 @@ Error TextDocument_SetDefaultFontName(TextDocument* self, const unsigned char* f
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "TextDocument_SetDefaultFontName: self must not be NULL.");
     }
-    if ((fontName != NULL) && !AssetManager_IsValidAssetName(fontName))
+    const char* Problem = (fontName != NULL) ? AssetManager_DescribeAssetNameProblem(fontName) : NULL;
+    if (Problem != NULL)
     {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
-            "TextDocument_SetDefaultFontName: the font name must be an asset name ([a-z][a-z0-9_.-]*).");
+        return Error_Construct4(ErrorCode_ArgumentOutOfRange,
+            "TextDocument_SetDefaultFontName: the font name must be an asset name: %s.", Problem);
     }
 
+    // Kept in full, as the components keep theirs: "noto_sans" binds the same font as "tbp:noto_sans".
+    unsigned char Storage[NAMESPACED_KEY_BUFFER_SIZE];
+    GenericBuffer FullName;
+    GenericBuffer_CreateConstant(&FullName, Storage, sizeof(Storage), sizeof(unsigned char), 0U);
+    if (fontName != NULL)
+    {
+        Error ParseResult = AssetManager_ParseAssetName(fontName, &FullName);
+        Error_Deconstruct(&ParseResult); // the name is valid and the buffer holds any key
+    }
     Memory_Free(self->_defaultFontName);
-    self->_defaultFontName = (fontName != NULL) ? CloneName(fontName) : NULL;
+    self->_defaultFontName = (fontName != NULL) ? CloneName(Storage) : NULL;
     self->_revision++;
     return Error_CreateSuccess();
 }

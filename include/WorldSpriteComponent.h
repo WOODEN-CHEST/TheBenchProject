@@ -70,7 +70,7 @@
 
 
 // Macros.
-/** @brief The most bytes a world sprite's asset name may have (without the terminator). */
+/** @brief The most bytes a world sprite's asset name may have in full (namespace included, without the terminator). */
 #define WORLD_SPRITE_COMPONENT_NAME_MAX_LENGTH ((size_t)128)
 
 
@@ -238,7 +238,7 @@ static inline WorldComponent* WorldSpriteComponent_AsComponent(WorldSpriteCompon
 /**
  * @brief Returns the borrowed asset name of the world sprite (may be NULL); valid until it changes.
  * @param self The sprite component; must not be NULL.
- * @returns The NUL-terminated UTF-8 asset name, or NULL.
+ * @returns The NUL-terminated asset name, in full ("tbp:desk"), or NULL.
  */
 static inline const unsigned char* WorldSpriteComponent_GetWorldSprite(const WorldSpriteComponent* self)
 {
@@ -252,7 +252,7 @@ static inline const unsigned char* WorldSpriteComponent_GetWorldSprite(const Wor
  * instance's event subscriptions; a missing world sprite is logged once and leaves the sprite empty without failing. The
  * object keeps its id, tags, data, children and overrides.
  * @param self The sprite component; must not be NULL.
- * @param worldSprite Borrowed asset name, or NULL.
+ * @param worldSprite Borrowed asset name as written ("sign" is kept as "tbp:sign"), or NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if @p worldSprite is not
  *          a valid asset name of at most WORLD_SPRITE_COMPONENT_NAME_MAX_LENGTH bytes (nothing changes then).
  */

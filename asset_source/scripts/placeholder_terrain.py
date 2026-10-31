@@ -337,17 +337,17 @@ def write_glb(path, positions, triangles, slots):
 
 
 DEFINITION = """{
-    "name": "placeholder_terrain",
+    "name": "tbp:placeholder_terrain",
     "source": "model",
     "model": "test_world/placeholder_terrain",
-    "materials": [ "grass", "dirt", "rock", "gravel" ],
+    "materials": [ "tbp:grass", "tbp:dirt", "tbp:rock", "tbp:gravel" ],
     "density_channels": [ "trees" ],
-    "weights": [ { "attribute": "COLOR_0", "r": "grass", "g": "dirt", "b": "rock", "a": "gravel" } ],
+    "weights": [ { "attribute": "COLOR_0", "r": "tbp:grass", "g": "tbp:dirt", "b": "tbp:rock", "a": "tbp:gravel" } ],
     "densities": [ { "attribute": "_DENSITY_0", "r": "trees" } ],
     "rules": [
-        { "material": "rock", "slope": { "min": 35.0, "blend": 8.0 }, "only_on": [ "grass", "dirt" ] },
-        { "material": "dirt", "height": { "max": -4.5, "blend": 2.5 },
-            "noise": { "scale": 2.5, "strength": 0.6, "seed": 11 }, "only_on": [ "grass" ] }
+        { "material": "tbp:rock", "slope": { "min": 35.0, "blend": 8.0 }, "only_on": [ "tbp:grass", "tbp:dirt" ] },
+        { "material": "tbp:dirt", "height": { "max": -4.5, "blend": 2.5 },
+            "noise": { "scale": 2.5, "strength": 0.6, "seed": 11 }, "only_on": [ "tbp:grass" ] }
     ]
 }
 """

@@ -227,6 +227,6 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
   fix is the owner's choice: build raylib without DDS (`SUPPORT_FILEFORMAT_DDS` 0, see `BUILDING.md`) and drop `dds`
   from `ASSET_EXTENSIONS_TEXTURE`, or check each dds file's header against its size before raylib reads it (which leaves
   the files models name inside raylib).
-- Shipped: `sky_milky_way` (`textures/sky/milky_way.json`), a generated placeholder panorama
+- Shipped: `tbp:sky_milky_way` (`textures/sky/milky_way.json`), a generated placeholder panorama
   (`placeholder_milky_way.png`, 1024x512, trilinear, mipmaps) until the owner's art replaces it; the sky pass draws it
   ([WorldRuntime.md](WorldRuntime.md), "Night sky").

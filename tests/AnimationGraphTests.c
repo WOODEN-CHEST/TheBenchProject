@@ -434,7 +434,7 @@ static void TheAssetTypeLoadsACopyOfTheDefinition(TestRun* run)
         GenericBuffer_AllocateVariable(&Bytes, 0U, sizeof(unsigned char));
         GenericBuffer_AppendString(&Bytes, (const unsigned char*)u8"{\"name\": \"broken\", \"layers\": []}");
         AssetDefinition* Definition = NULL;
-        const char* Fragments[] = { "Animation graph \"broken\"", "1 to", NULL };
+        const char* Fragments[] = { "Animation graph \"tbp:broken\"", "1 to", NULL };
         TestText_CheckErrorMessage(run, AssetManager_BuildDefinition(Fixture.Manager, Fixture.Types.AnimationGraph,
             &Bytes, (const unsigned char*)u8"test", &Definition), ErrorCode_InvalidAssetDefinition, Fragments);
         Memory_Free(Bytes._data);
