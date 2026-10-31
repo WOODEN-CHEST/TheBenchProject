@@ -34,6 +34,7 @@ int main(void)
     TerrainBlendTests_Run(&Run);
     WorldLightCullingTests_Run(&Run);
     NamespacedKeyTests_Run(&Run);
+    RegistryTests_Run(&Run);
     DataValueTests_Run(&Run);
     WorldTests_Run(&Run);
     WorldModelTests_Run(&Run);

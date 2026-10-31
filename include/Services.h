@@ -11,9 +11,9 @@
  *
  * As the game grows, most subsystems need the same handful of long-lived services: the logger, the loaded
  * Unicode database, the asset manager (and the standard asset-type ids), the game-frame manager, the game
- * config, the per-tick input, the key registry, and a GHDF object pool for world save/load. Services aggregates BORROWED
- * pointers to them so a
- * frame or subsystem can be handed one Services* rather than a growing argument list.
+ * config, the per-tick input, the key registry, the root registry, and a GHDF object pool for world save/load.
+ * Services aggregates BORROWED pointers to them so a frame or subsystem can be handed one Services* rather than a
+ * growing argument list.
  *
  * OWNERSHIP. Services owns NONE of what it points to. The composition root (main) constructs each service,
  * fills a Services with pointers to them, and tears them down itself in the correct order. Services_Deconstruct
@@ -39,6 +39,8 @@ typedef struct GHDFObjectPoolStruct GHDFObjectPool;
 typedef struct GameInputStruct GameInput;
 /** @brief The program's namespaced key registry; full type in NamespacedKey.h. Borrowed. */
 typedef struct KeyRegistryStruct KeyRegistry;
+/** @brief The program's root registry (the registry of registries); full type in Registry.h. Borrowed. */
+typedef struct RegistryRootStruct RegistryRoot;
 
 
 // Types.
@@ -71,6 +73,10 @@ typedef struct ServicesStruct
     /** @brief The program's one key registry: namespaced keys (tags, object data keys) interned to ids. Every World
      *  borrows it, so it outlives every frame. Borrowed. */
     KeyRegistry* Keys;
+    /** @brief The program's root registry: every system's registries under their keys (`tbp:input_action`, ...), for
+     *  tools that work on every kind (the terminal, autocomplete, the editor's pickers). Systems add their registries
+     *  at startup and keep direct pointers to them; nothing looks a registry up per tick. It borrows Keys. Borrowed. */
+    RegistryRoot* Registries;
     /** @brief Absolute UTF-8 directory that game files (config, assets, logs, the asset cache) are resolved
      *  against: the executable's directory, or the working directory if the OS could not report it. Borrowed. */
     const unsigned char* BaseDirectory;

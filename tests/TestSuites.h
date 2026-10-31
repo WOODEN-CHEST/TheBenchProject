@@ -61,6 +61,12 @@ void WorldLightCullingTests_Run(TestRun* run);
  *  prefix search (NamespacedKeyTests.c). */
 void NamespacedKeyTests_Run(TestRun* run);
 
+/** @brief Registries: registering, finding by id and text, getting, prefix search in byte order, active duplicates
+ *  refused with both sources named, withdrawn keys reviving their index, a source's withdrawal, the element
+ *  deconstructor run once per element, stable element addresses, the maximum, bad arguments, the revision, and the root
+ *  registry (RegistryTests.c). */
+void RegistryTests_Run(TestRun* run);
+
 /** @brief Data values: equality, deep copies, homogeneous lists, the depth and size limits, compound names, validation,
  *  byte sizes, and the JSON and GHDF forms with hostile input (DataValueTests.c). */
 void DataValueTests_Run(TestRun* run);

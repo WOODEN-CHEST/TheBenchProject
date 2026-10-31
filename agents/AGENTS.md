@@ -245,6 +245,11 @@ Current module list:
   a default namespace for keys written without one) and the KeyRegistry that interns them to uint32 ids (one per
   program: main creates it, Services.Keys carries it, every World borrows it), with stable texts and prefix search for
   autocomplete.
+* Registry (Registry.md) - Registries: namespaced keys mapped to entries of one kind (named registrations from engine
+  code, asset types' loaders and scripts), with stable indices (a withdrawn entry keeps its slot and revives under the
+  same key), active duplicates refused, sources withdrawn together, prefix search and a revision; and RegistryRoot, the
+  registry of registries (Services.Registries) that tools find any registry through. Assets, component types, widget
+  types and GameKey are not registries.
 * Object data (ObjectData.md) - Tags and typed custom data on world objects, and queries over them. Covers:
   * DataValue - One typed value (tag, bool, int, float, string, key, object, vector3, color, date_time, list,
     compound) for object data, global variables, selectors, the editor and saves: the storable part of the future
@@ -319,7 +324,7 @@ Current module list:
   * GameCamera - 3D camera (a double position, fov/yaw/pitch/roll; +Y up, +Z forward), converted at render time to
     raylib's render camera, which sits at the origin and only turns (render space).
   * Services - Bundle of borrowed shared services (logger, config, unicode, asset manager, frame manager, input, GHDF
-    pool, key registry).
+    pool, key registry, root registry).
   * WorldRenderer - Renders a World through a GameCamera (PBR lit by the sun and the moon, HDR, sky with the moon,
     stars, Milky Way and light pollution, the eye's night vision, sun and moon shadows, AO, outlines, bloom, sun
     shafts, crisp overlay, lit sprites with decals, sorted transparency and shadows that face the light; frustum

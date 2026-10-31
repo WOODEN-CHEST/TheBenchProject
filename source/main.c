@@ -1,9 +1,11 @@
+#include <inttypes.h>
 #include <stdio.h>
 #include "wr/WRCompile.h"
 #include "wr/WRError.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRMemory.h"
 #include "wr/WRPath.h"
+#include "wr/WRString.h"
 #include "wr/WRUnicode.h"
 #include "wr/WRUnicodeLoader.h"
 #include "wr/WRGHDF.h"
@@ -12,6 +14,7 @@
 #include "GameInput.h"
 #include "Logger.h"
 #include "NamespacedKey.h"
+#include "Registry.h"
 #include "ProgramTime.h"
 #include "GameFrameManager.h"
 #include "Renderer.h"
@@ -271,6 +274,45 @@ static void LoadControls(Logger* logger, const unsigned char* baseDirectory, Gam
     Error_Deconstruct(&LogResult);
 }
 
+/* Logs the registries in the root and their active entries, once at startup. */
+static void LogRegistries(Logger* logger, const RegistryRoot* registries)
+{
+    GenericBuffer Line;
+    GenericBuffer_AllocateVariable(&Line, 128U, sizeof(unsigned char));
+    const Registry* Root = RegistryRoot_AsRegistry(registries);
+    Error Result = StringUTF8_Format((const unsigned char*)u8"Registries:", &Line);
+    uint32_t ListedCount = 0U;
+    uint32_t SlotCount = RegistryRoot_GetCount(registries);
+    for (uint32_t Index = 0U; (Result.Code == ErrorCode_Success) && (Index < SlotCount); Index++)
+    {
+        const Registry* Listed = RegistryRoot_Get(registries, Index);
+        if (Listed == NULL)
+        {
+            continue;
+        }
+        const char* Separator = (ListedCount == 0U) ? "" : ",";
+        uint32_t EntryCount = Registry_GetActiveCount(Listed);
+        Result = StringUTF8_Format((const unsigned char*)u8"%s %s (%" PRIu32 " %s)", &Line, Separator,
+            (const char*)Registry_GetKeyText(Root, Index), EntryCount, (EntryCount == 1U) ? "entry" : "entries");
+        ListedCount++;
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = StringUTF8_Format((ListedCount == 0U) ? (const unsigned char*)u8" none." : (const unsigned char*)u8".",
+            &Line);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Error LogResult = Logger_LogInfo(logger, Line._data);
+        Error_Deconstruct(&LogResult);
+    }
+    else
+    {
+        LogWarningAndRelease(logger, (const unsigned char*)u8"Could not list the registries: %s", &Result);
+    }
+    Memory_Free(Line._data);
+}
+
 /* Loads the Unicode database from disk, falling back to an empty (valid) database on failure. */
 static void LoadUnicodeData(Logger* logger, const unsigned char* baseDirectory, UnicodeData* outData)
 {
@@ -459,12 +501,19 @@ int main(int argc, char** argv)
     Error KeysResult = KeyRegistry_Construct(&Keys);
     Error_Deconstruct(&KeysResult); // Only fails for a NULL argument.
 
+    // The root registry: every system adds its registries to it, for tools that work on every kind. It is torn down
+    // after everything that added a registry withdrew it, and before the key registry it borrows.
+    RegistryRoot Registries;
+    Error RegistriesResult = RegistryRoot_Construct(&Registries, &Keys);
+    Error_Deconstruct(&RegistriesResult); // Only fails for a NULL argument (its key is the first key interned).
+
     // The input: default bindings, then the player's controls file over them. The frame manager polls it every update
     // tick.
     GameInput Input;
     Error InputResult = GameInput_Construct(&Input);
     Error_Deconstruct(&InputResult); // Only fails for a NULL argument.
     LoadControls(&Log, BaseDirectory._data, &Input);
+    LogRegistries(&Log, &Registries);
 
     // The frame manager owns the scenes and the per-frame update/render logic. The window (GL context)
     // exists by now, which is what its render targets need.
@@ -482,9 +531,10 @@ int main(int argc, char** argv)
         if (JsonPool != NULL) { Error e = JSONObjectPool_Deconstruct(JsonPool); Error_Deconstruct(&e); }
         if (GhdfPool != NULL) { Error e = GHDFObjectPool_Deconstruct(GhdfPool); Error_Deconstruct(&e); }
         CloseWindow();
-        KeyRegistry_Deconstruct(&Keys);
         Error InputCloseResult = GameInput_Deconstruct(&Input);
         Error_Deconstruct(&InputCloseResult);
+        RegistryRoot_Deconstruct(&Registries);
+        KeyRegistry_Deconstruct(&Keys);
         UnicodeData_Deconstruct(&Unicode);
         GameConfig_Deconstruct(&Config);
         Memory_Free(BaseDirectory._data);
@@ -505,6 +555,7 @@ int main(int argc, char** argv)
     GameServices.Input = &Input;
     GameServices.GHDFPool = GhdfPool;
     GameServices.Keys = &Keys;
+    GameServices.Registries = &Registries;
     GameServices.BaseDirectory = BaseDirectory._data;
 
     // The world-test frame needs the asset manager; only add it if the asset manager came up.
@@ -551,7 +602,8 @@ int main(int argc, char** argv)
 
     // Tear down in the reverse of construction: frames first (they release assets and GPU render targets
     // and need both the asset manager and the GL context alive), then the asset manager and pools, then
-    // the window, then the remaining plain resources.
+    // the window, then the remaining plain resources (the input before the root registry, the root before the key
+    // registry).
     Error ManagerCloseResult = GameFrameManager_Deconstruct(&FrameManager);
     if (ManagerCloseResult.Code != ErrorCode_Success)
     {
@@ -580,9 +632,10 @@ int main(int argc, char** argv)
     CloseWindow();
 
     Services_Deconstruct(&GameServices);
-    KeyRegistry_Deconstruct(&Keys);
     Error InputCloseResult = GameInput_Deconstruct(&Input);
     Error_Deconstruct(&InputCloseResult);
+    RegistryRoot_Deconstruct(&Registries);
+    KeyRegistry_Deconstruct(&Keys);
     UnicodeData_Deconstruct(&Unicode);
     GameConfig_Deconstruct(&Config);
     Memory_Free(BaseDirectory._data);

@@ -64,6 +64,9 @@ index and an offset, `_locations`); texts are stored in id order. Only truncatio
 ids from the newest, handing each hash chain back to the key that headed it before (the newest key always heads its
 chain), then cuts the storage after the last kept text.
 
+**Not a Registry.** The key registry interns key texts for the whole program; a `Registry` ([Registry.md](Registry.md))
+maps some of those ids to entries of one kind (actions, commands), and its prefix search scans only its own entries.
+
 **Limits.** At most `KEY_REGISTRY_MAX_KEY_COUNT` (2^20) keys: interning more fails with `InvalidOperation`, so content
 from other players cannot grow the registry without bound. Interning is permanent for the program's life (keys of every
 story loaded in a session stay), except that a read that fails gives back the keys it interned (above): the data
