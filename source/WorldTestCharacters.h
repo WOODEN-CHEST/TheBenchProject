@@ -37,6 +37,8 @@
 #define WORLD_TEST_NPC_COUNT 3U
 /** How many holders the test characters remember what they hold of (the player and the NPC human, with room). */
 #define WORLD_TEST_MAX_HOLDERS 4U
+/** The test content's action that makes everyone wave (input_actions/test_frame.json; default 0). */
+#define WORLD_TEST_WAVE_ACTION ((const unsigned char*)u8"tbp:test_wave")
 
 
 // Types.
@@ -83,13 +85,17 @@ typedef struct WorldTestCharactersStruct
     WorldAnimation* _animation;
     /** What the holders took, by their grabs (HolderId 0: a free slot). */
     WorldTestHeld _held[WORLD_TEST_MAX_HOLDERS];
+    /** Whether the test content's wave action (WORLD_TEST_WAVE_ACTION) is registered, and its id. */
+    bool _hasWaveAction;
+    GameActionId _waveAction;
 } WorldTestCharacters;
 
 
 // Functions.
-/** Sets up the test characters over a world, its collision world and its character system (all borrowed). */
+/** Sets up the test characters over a world, its collision world and its character system (all borrowed), and finds
+ *  the wave action in @p input once (without it, logged, nobody waves). */
 void WorldTestCharacters_Construct(WorldTestCharacters* self, World* world, WorldCollision* collision,
-    WorldCharacters* characters, Logger* logger);
+    WorldCharacters* characters, GameInput* input, Logger* logger);
 
 /** Releases what the test characters own (nothing beyond the controller; the objects belong to the world). */
 void WorldTestCharacters_Deconstruct(WorldTestCharacters* self);
@@ -111,8 +117,9 @@ static inline bool WorldTestCharacters_IsWalking(const WorldTestCharacters* self
 
 /**
  * The tick's input, before the drivers: the debug keys (F1 walk mode, F2 NPCs, F3 flight, F4 kind, 8 the NPC human
- * sits or stands, 9 the player puts down, 0 waving) and, while walking, the player controller (which consumes the use
- * action's press). @p camera places the player when walk mode starts and the NPCs when they spawn.
+ * sits or stands, 9 the player puts down), the wave action (WORLD_TEST_WAVE_ACTION, default 0) and, while walking, the
+ * player controller (which consumes the use action's press). @p camera places the player when walk mode starts and the
+ * NPCs when they spawn.
  */
 void WorldTestCharacters_HandleInput(WorldTestCharacters* self, GameInput* input, GameCamera* camera,
     bool isCursorCaptured);

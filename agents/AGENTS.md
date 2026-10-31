@@ -57,7 +57,7 @@ Current module list:
 * Logger (Logger.md) - Writes timestamped, level-tagged messages to <base>/logs/latest.log and stdout, and rotates the previous log into <base>/logs/archived/ (keeping the newest 30).
 * AssetManager (AssetManager.md) - Loads, shares and unloads assets built from JSON definitions in prioritized search
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
-  caches failed loads, registers the fifteen standard types, and reads a texture asset's image file as CPU pixels
+  caches failed loads, registers the sixteen standard types, and reads a texture asset's image file as CPU pixels
   without loading it (AssetManager_LoadTexturePixels). Asset names are namespaced keys (`tbp:desk`; written without a
   namespace, `tbp`'s), accepted as written and kept, logged and listed in full (AssetManager_GetDefinitionNames by
   prefix). Read its lifetime rules before touching assets.
@@ -239,8 +239,13 @@ Current module list:
   * GameKey - The game-wide key identity (keyboard keys and mouse buttons, room for gamepad buttons) with stable id
     strings for binding files and display names; the raylib codes stay private to the input layer.
   * GameInput - The per-tick input snapshot (keys, mouse, wheel, typed text drained once), polled by the frame manager
-    right after PollInputEvents, with consumption (a consumed key reads as not pressed while held) and the action layer
-    (GameAction: named actions bound to keys with modifiers; JSON controls file load/save).
+    right after PollInputEvents, with consumption (a consumed key reads as not pressed while held) and the action layer:
+    actions and their categories in two registries (`tbp:input_action`, `tbp:input_category`; the engine's are the
+    GameAction enum, each value its id), registered by the engine, by packs' `input_actions` assets (InputActions:
+    a category, its actions and overrides of others' names, descriptions and defaults; all or nothing per definition)
+    and later by scripts; bindings with modifiers (the most specific wins, a key index keeps queries cheap), actions
+    that always keep a binding, and a JSON controls file holding only what the player set (kept entries for actions
+    not loaded).
 * GameFrame (GameFrame.md) - Abstract base for a game "scene"/section (menu, level, loading screen), with stepped load/unload, logic lifecycle, per-target rendering and an optional PrepareRender slot: the update side's last step before a render (posing skeletons once per shown frame).
 * GameFrameManager (GameFrameManager.md) - Owns a z-stack of game frames, drives their lifecycle and update loop (polls the input, then updates frames top-down so the top frame gets input first), runs their PrepareRender before each render, and composites them to the screen; crashes gracefully on frame errors.
 * NamespacedKey (NamespacedKey.md) - Namespaced keys (`namespace:path`, Minecraft's character set, at most 128 bytes,
@@ -439,7 +444,8 @@ Current module list:
     the showcase figure through the clips, 6 a crowd of 100 walking figures, 7 slow motion (the private
     source/WorldTestAnimation.{h,c}); it poses them in its PrepareRender, the humans wear the animated humanoid (the
     player in first person), E starts the action the object looked at offers (the bench's sit, the coffee cup's
-    pick-up, the door's push), 8 sends the NPC human to the bench, 9 puts down, 0 waves. Its world has a terrain around
+    pick-up, the door's push), 8 sends the NPC human to the bench, 9 puts down, 0 waves (the test content's action
+    `tbp:test_wave`, rebindable). Its world has a terrain around
     the slab in four placeholder materials (the minus key shows the terrain's chunk key, the equals key cycles its
     views: shaded, painted weights, rule weights, the dominant material) and a grove of 400 instanced trees; the
     apostrophe shows a field of 20 000 instanced pebbles (a runtime object) and the semicolon switches instanced

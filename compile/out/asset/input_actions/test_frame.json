@@ -1,0 +1,13 @@
+{
+    "name": "tbp:test_frame",
+    "display_name": "Test Frame",
+    "description": "The test frame's own controls.",
+    "order": 900,
+    "actions": {
+        "test_wave": {
+            "display_name": "Wave",
+            "description": "Every test character waves hello.",
+            "default_bindings": ["0"]
+        }
+    }
+}

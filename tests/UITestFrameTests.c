@@ -22,6 +22,7 @@
 typedef struct FrameFixtureStruct
 {
     Logger Log;
+    KeyRegistry Keys;
     GameInput Input;
     GameInputSample Sample;
     GameFrameManager Manager;
@@ -42,7 +43,8 @@ static bool FrameFixture_Construct(TestRun* run, FrameFixture* self)
     self->IsLoggerConstructed = TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "frame", &Base))
         && TEST_CHECK_SUCCESS(run, Logger_Construct(&self->Log, Base._data));
     Memory_Free(Base._data);
-    TEST_CHECK_SUCCESS(run, GameInput_Construct(&self->Input));
+    TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&self->Keys));
+    TEST_CHECK_SUCCESS(run, GameInput_Construct(&self->Input, &self->Keys, NULL, NULL));
     self->IsManagerConstructed = self->IsLoggerConstructed && TEST_CHECK_SUCCESS(run,
         GameFrameManager_Construct(&self->Manager, &self->Log, &self->Input, 16.0f / 9.0f, RenderTargetPosition_Centered()));
     GameInputSample_Clear(&self->Sample);
@@ -68,6 +70,7 @@ static void FrameFixture_Deconstruct(TestRun* run, FrameFixture* self)
         TEST_CHECK_SUCCESS(run, GameFrameManager_Deconstruct(&self->Manager));
     }
     TEST_CHECK_SUCCESS(run, GameInput_Deconstruct(&self->Input));
+    KeyRegistry_Deconstruct(&self->Keys);
     if (self->IsLoggerConstructed)
     {
         TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&self->Log));

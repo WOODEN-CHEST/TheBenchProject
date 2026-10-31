@@ -31,7 +31,7 @@ typedef enum NavDirectionEnum
 /* A navigation step that repeats while its key auto-repeats: sequential (ui_next / ui_previous) or an arrow. */
 typedef struct NavRepeatingStepStruct
 {
-    GameAction Action;
+    GameActionId Action;
     bool IsSequential;
     /* Sequential steps: towards the next candidate (ui_next) or the previous one (ui_previous). */
     bool IsForward;
@@ -464,7 +464,7 @@ static Error NavigateBack(UIScreen* self, bool* outIsActed)
 
 /* Consumes the action of a step that used it. For a repeating step, its keys that are still held are followed: the
  * consumption hides their auto-repeat from the usual queries. */
-static Error ApplyStep(UIScreen* self, GameAction action, Error result, bool isActed, bool isRepeating)
+static Error ApplyStep(UIScreen* self, GameActionId action, Error result, bool isActed, bool isRepeating)
 {
     if ((result.Code != ErrorCode_Success) || !isActed)
     {
@@ -489,7 +489,7 @@ static Error ApplyStep(UIScreen* self, GameAction action, Error result, bool isA
 
 // Static functions: held keys.
 /* Whether @p key is one of the keys an action's bindings match this tick (consumed or not). */
-static bool IsActionKey(const GameInput* input, GameAction action, GameKey key)
+static bool IsActionKey(const GameInput* input, GameActionId action, GameKey key)
 {
     GameKey Keys[GAME_INPUT_MAX_BINDINGS_PER_ACTION];
     size_t KeyCount = GameInput_GetActionKeys(input, action, Keys);

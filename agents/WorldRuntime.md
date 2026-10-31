@@ -1719,7 +1719,8 @@ raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writi
   crushed.`), the atmosphere's tables (on, off or unavailable, their sizes, how often they were built, the height
   the sky is seen from) and the frame times (`WorldTest: the last frame took 16.67 ms (60.0 a second; ...); its update
   0.41 ms and its render 2.10 ms on the CPU ...`: the frame time is the render's delta, the update and the render are
-  WRStopwatch times);
+  WRStopwatch times), and every input action by category with its bindings (`Input: 20 actions in 5 categories:`,
+  then `Input:   tbp:move_forward "Move Forward": w` and so on; `GameInput_LogActions`);
 - **the hierarchy:** J starts and stops the desk sliding back and forth along X (1.2 m either way, a 6-second
   period of real time): its parts, the cup, the lamp and the lamp's light follow; H hides and shows the desk, and with it
   everything on it (the lamp's light goes off). Both logged;
@@ -1776,8 +1777,10 @@ raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writi
   `sit` (the player slides onto its seat and sits; E again stands up), the coffee cup on the desk (50) `pick_up` (the
   player slides in front of it, reaches, takes it in its right hand and holds it; refused while the hand is full) and
   the door (33) `open_door` (the player slides to it and pushes it: the frame swings it as F6 does). **9** puts down what
-  the player holds (`put_down`: it leaves the hand at the reach and is set down on what is under it), **0** has the
-  player (a human) and the NPC human wave with the right arm over whatever they do, **8** sends the NPC human to the
+  the player holds (`put_down`: it leaves the hand at the reach and is set down on what is under it), **0** (the test
+  content's action `tbp:test_wave` from `input_actions/test_frame.json`: `"tbp:test_wave": ["end"]` in `controls.json`
+  moves it to End) has the player (a human) and the NPC human wave with the right arm over whatever they do, **8**
+  sends the NPC human to the
   bench: it walks to a point in front of it and starts the same `sit` (8 again gets it up). Every action's start, end or
   failure and every graph event is logged (`WorldTest: you: action "pick_up" starts (target 50 "coffee_cup").`,
   `WorldTest: you: "grab".`);
@@ -1845,8 +1848,9 @@ directory was unavailable, warn and fall back to a copy of `GetWorkingDirectory(
 game's `pause` action, never raylib's quit key) → AssetManager (`Construct1` with the logger, `CreateStandardAssetTypes`,
 cache directory `<base>/.wr_asset_cache`, absolute `<base>/asset` search root, `ReadDefinitions`) → GHDF pool → the
 key registry (`KeyRegistry`, [NamespacedKey.md](NamespacedKey.md)) → the root registry (`RegistryRoot`,
-[Registry.md](Registry.md)) → `GameInput` (defaults, then `<base>/controls.json` if present) → one log line listing the
-root's registries → GameFrameManager (polls the input) → build `Services` (`Services.BaseDirectory`, `Services.Input`,
+[Registry.md](Registry.md)) → `GameInput` (the engine's actions and categories; its two registries join the root) →
+the packs' input actions (`InputActions_RegisterDefinitions`, [GameInput.md](GameInput.md)) → `<base>/controls.json` if
+present → one log line listing the root's registries → GameFrameManager (polls the input) → build `Services` (`Services.BaseDirectory`, `Services.Input`,
 `Services.Keys`, `Services.Registries`) → create + add `WorldTestFrame`, then `UITestFrame` on top → run loop.
 Teardown (reverse, ordering matters): frame manager (releases assets + GPU targets, needs asset manager + GL alive;
 its worlds borrow the key registry) → asset manager → JSON pool → GHDF pool → `CloseWindow` → input → root registry

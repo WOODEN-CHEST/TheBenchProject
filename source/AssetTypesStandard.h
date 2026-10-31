@@ -66,6 +66,10 @@
  *  links and rates). */
 #define ASSET_TYPE_NAME_CLIMATE      ((const unsigned char*)u8"climate")
 #define ASSET_TYPE_DIRECTORY_CLIMATE ((const unsigned char*)u8"climates")
+/** @brief Standard input actions type name / directory (InputActions.h: one action category with its actions, and
+ *  overrides of registered actions and categories). */
+#define ASSET_TYPE_NAME_INPUT_ACTIONS      ((const unsigned char*)u8"input_actions")
+#define ASSET_TYPE_DIRECTORY_INPUT_ACTIONS ((const unsigned char*)u8"input_actions")
 
 /** @brief Definition-file extension (without the dot) for every standard type: their definitions are JSON.
  *  AssetManager_ReadDefinitions uses it to skip non-definition resource files sharing the type directory. */
@@ -126,6 +130,10 @@ Error TerrainDefinition_Construct(AssetManager* manager, const UserData* userDat
 /** @brief Builds a climate definition from a JSON blob (ClimateDefinition.c). See AssetDefinitionConstructor. */
 Error ClimateDefinition_Construct(AssetManager* manager, const UserData* userData,
     const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);
+/** @brief Builds an input actions definition from a JSON blob (InputActionsDefinition.c). See
+ *  AssetDefinitionConstructor. */
+Error InputActionsDefinition_Construct(AssetManager* manager, const UserData* userData, const GenericBuffer* rawData,
+    const unsigned char* sourceDescription, AssetDefinition** outDefinition);
 /** @brief Builds a terrain material definition from a JSON blob (TerrainMaterialDefinition.c). See
  *  AssetDefinitionConstructor. */
 Error TerrainMaterialDefinition_Construct(AssetManager* manager, const UserData* userData,

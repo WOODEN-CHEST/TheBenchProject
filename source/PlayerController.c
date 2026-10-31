@@ -21,7 +21,7 @@ static WorldCharacterComponent* FindCharacter(World* world, uint64_t id)
 }
 
 /* +1 while @p positive is held, -1 while @p negative is, 0 for both or neither. */
-static float GetAxis(const GameInput* input, GameAction positive, GameAction negative)
+static float GetAxis(const GameInput* input, GameActionId positive, GameActionId negative)
 {
     float Value = 0.0f;
     if (GameInput_IsActionDown(input, positive))

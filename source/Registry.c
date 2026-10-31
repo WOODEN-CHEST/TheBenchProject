@@ -365,6 +365,15 @@ bool Registry_Find(Registry* self, uint32_t keyId, uint32_t* outIndex)
     return true;
 }
 
+bool Registry_FindSlot(Registry* self, uint32_t keyId, uint32_t* outIndex)
+{
+    if ((self == NULL) || (outIndex == NULL))
+    {
+        return false;
+    }
+    return FindSlot(self, keyId, outIndex);
+}
+
 bool Registry_FindText(Registry* self, const unsigned char* key, uint32_t* outIndex)
 {
     if ((self == NULL) || (key == NULL) || (outIndex == NULL))

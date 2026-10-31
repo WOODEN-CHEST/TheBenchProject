@@ -1370,3 +1370,70 @@ The shipped `climates/default.json` has seven presets: `clear`, `cloudy`, `overc
 `fog`. Their links give the sequence clear, cloudy, overcast, light rain or rain, storm, light rain, cloudy, clear; fog
 only starts between 03:00 and 09:00 and twice as often in autumn as in spring; storms only start between 11:00 and 23:00,
 most in summer, and strike about six times a minute.
+
+## Input actions.
+A category of input actions with its actions, and changes to actions and categories that others registered
+(`agents/GameInput.md`): a mod's controls appear in the controls menu under its category, the player can rebind them
+in `controls.json` (`references/controls_structure.md`), and the game reads them as it reads its own. Definitions live
+under `input_actions/` and have no resource files and no dependencies. They register once at startup, after the
+engine's own actions and before the player's controls file.
+
+```
+{
+    "name": "mymod:journal",            // the category's key
+    "display_name": "Journal",          // the menu's heading for the category
+    "description": "Reading and writing in the journal.",  // [OPTIONAL] default ""
+    "order": 500,                       // [OPTIONAL] default 1000: where the category is listed
+    "actions": {                        // [OPTIONAL] at most 256, registered in this order
+        "open_journal": {               // the action's key: "mymod:open_journal"
+            "display_name": "Open Journal",
+            "description": "Opens the journal at the last page read.",  // [OPTIONAL] default ""
+            "default_bindings": ["j"],  // [OPTIONAL] default none; at most 4
+            "keeps_a_binding": true     // [OPTIONAL] default false
+        },
+        "next_page": { "display_name": "Next Page", "default_bindings": ["page_down", "mouse_side"] }
+    },
+    "overrides": {                      // [OPTIONAL] at most 256
+        "tbp:use": { "display_name": "Inspect", "default_bindings": ["f"] }
+    },
+    "category_overrides": {             // [OPTIONAL] at most 256
+        "tbp:movement": { "order": 50 }
+    }
+}
+```
+
+**The category** is the definition: its `name` is the category's key, and `display_name` is required (a file that only
+holds overrides still names its category, one without actions). The engine's categories are `tbp:movement` (order 100),
+`tbp:character` (200), `tbp:general` (300) and `tbp:interface` (400); categories are listed by order, then by key (as
+the test frame's I key lists them).
+
+**An action's** key is the category's namespace, a colon and the action's name, which is a key path (`[a-z0-9_./-]+`;
+the whole key at most 128 bytes). Its keys:
+
+| Key | Value | Meaning |
+|---|---|---|
+| `display_name` | 1 to 64 bytes of text | Required. The controls menu shows it (English until translations exist). |
+| `description` | at most 512 bytes of text | What the action does. |
+| `default_bindings` | up to 4 binding strings (`"j"`, `"shift+tab"`; `references/controls_structure.md`) | Its keys until the player sets their own. A default on a key another action uses is allowed and logged once, naming both. |
+| `keeps_a_binding` | a boolean | The player can move it to other keys, never leave it with none: an empty list restores its defaults. It needs a default binding. |
+| `kind` | `"button"` | What kind of input it is (the only kind until gamepads). |
+
+**Overrides** change actions and categories other sources registered, the engine's included (a story can call
+`tbp:use` "Inspect" and move it to F). An override's key is the full key of the action (`overrides`) or category
+(`category_overrides`) it changes; a key without a namespace is `tbp:`'s. An action override holds `display_name`,
+`description` and `default_bindings`, a category override `display_name`, `description` and `order`; each is optional,
+at least one is given. `keeps_a_binding` is not overridable. Bindings the player set win over changed defaults. One
+override per action or category: when a second definition overrides it too, the second definition's overrides are
+refused (logged). An override of an action another definition declares works whatever the order of the two files.
+
+**Rules.** Text may hold no control characters. A definition that breaks a rule is refused when the definitions are
+read, with the path to the bad value (`Input actions "mymod:journal": actions.open_journal: an action that keeps a
+binding needs a default binding.`): unknown keys are refused everywhere, action names must be key paths, the same target
+may not be overridden twice in one file (`"use"` and `"tbp:use"` are one key), and an override must change something.
+At startup a definition registers **all or nothing**: when its category or one of its actions is registered already
+(an engine action's key, or a C registration), nothing of it registers, and it is logged; its overrides apply all or
+nothing too (an override of an action nobody registered refuses them all, logged; its own actions stay).
+
+The shipped `input_actions/test_frame.json` declares the test frame's own category (`tbp:test_frame`, "Test Frame",
+order 900) with one action, `tbp:test_wave` ("Wave", default `0`): the test characters wave on it
+(`agents/WorldRuntime.md`, the test frame).

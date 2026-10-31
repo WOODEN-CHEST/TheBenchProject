@@ -104,6 +104,7 @@ typedef struct UIFixtureStruct
 {
     UIWidgetFactory Factory;
     UIScreen Screen;
+    KeyRegistry Keys;
     GameInput Input;
     GameInputSample Sample;
     UIScreenInput ScreenInput;
@@ -354,7 +355,8 @@ static bool Fixture_ConstructLogged(TestRun* run, UIFixture* self, Logger* logge
         .PropertyCount = 1U,
         .IsFocusable = false
     };
-    bool IsBuilt = TEST_CHECK_SUCCESS(run, GameInput_Construct(&self->Input))
+    bool IsBuilt = TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&self->Keys))
+        && TEST_CHECK_SUCCESS(run, GameInput_Construct(&self->Input, &self->Keys, NULL, NULL))
         && TEST_CHECK_SUCCESS(run, UIWidgetFactory_Construct(&self->Factory))
         && TEST_CHECK_SUCCESS(run, UIWidgetFactory_RegisterType(&self->Factory, &Descriptor, &self->ProbeType));
     self->IsScreenConstructed = IsBuilt && TEST_CHECK_SUCCESS(run, UIScreen_Construct(&self->Screen, &self->Factory, logger));
@@ -385,6 +387,7 @@ static void Fixture_Deconstruct(TestRun* run, UIFixture* self)
     TEST_CHECK(run, UIWidgetFactory_GetTotalLiveWidgetCount(&self->Factory) == 0U);
     TEST_CHECK_SUCCESS(run, UIWidgetFactory_Deconstruct(&self->Factory));
     TEST_CHECK_SUCCESS(run, GameInput_Deconstruct(&self->Input));
+    KeyRegistry_Deconstruct(&self->Keys);
 }
 
 /* Creates an initialized, detached probe with a box (parent-relative). */

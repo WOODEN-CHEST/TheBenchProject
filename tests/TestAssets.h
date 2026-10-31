@@ -214,6 +214,13 @@ bool TestAssets_AddAnimationGraph(TestRun* run, TestAssetFixture* fixture, const
 bool TestAssets_AddClimate(TestRun* run, TestAssetFixture* fixture, const char* json);
 
 /**
+ * @brief Builds an input actions definition from @p json with the real "input_actions" type and registers it (plain
+ *        data: it loads without a GL context).
+ * @returns true when it was built and registered.
+ */
+bool TestAssets_AddInputActions(TestRun* run, TestAssetFixture* fixture, const char* json);
+
+/**
  * @brief Registers a terrain definition named @p name, of the standard "terrain" type, whose asset is a copy of @p mesh
  *        (its binary form, read again at every load as the real type reads its file, with the same chunk size), with
  *        @p settings and palette names "m0" to "m15" and density channel names "d0" to "d7".

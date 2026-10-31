@@ -2650,9 +2650,12 @@ static void BeginInputTick(GameInput* input, const GameKey* keys, size_t keyCoun
 static void ThePlayerControllerFillsTheCharactersInput(TestRun* run)
 {
     CharacterScene Scene;
+    KeyRegistry Keys;
+    TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys));
     GameInput Input;
-    if (!TEST_CHECK_SUCCESS(run, GameInput_Construct(&Input)))
+    if (!TEST_CHECK_SUCCESS(run, GameInput_Construct(&Input, &Keys, NULL, NULL)))
     {
+        KeyRegistry_Deconstruct(&Keys);
         return;
     }
     if (Scene_Construct(run, &Scene))
@@ -2732,6 +2735,7 @@ static void ThePlayerControllerFillsTheCharactersInput(TestRun* run)
     }
     Scene_Deconstruct(run, &Scene);
     TEST_CHECK_SUCCESS(run, GameInput_Deconstruct(&Input));
+    KeyRegistry_Deconstruct(&Keys);
 }
 
 static void ThePlayersLookTargetReportsItsChanges(TestRun* run)
@@ -2764,9 +2768,12 @@ static void ThePlayersLookTargetReportsItsChanges(TestRun* run)
 static void TheCharacterLetGoOfStopsWalking(TestRun* run)
 {
     CharacterScene Scene;
+    KeyRegistry Keys;
+    TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys));
     GameInput Input;
-    if (!TEST_CHECK_SUCCESS(run, GameInput_Construct(&Input)))
+    if (!TEST_CHECK_SUCCESS(run, GameInput_Construct(&Input, &Keys, NULL, NULL)))
     {
+        KeyRegistry_Deconstruct(&Keys);
         return;
     }
     if (Scene_Construct(run, &Scene))
@@ -2795,6 +2802,7 @@ static void TheCharacterLetGoOfStopsWalking(TestRun* run)
     }
     Scene_Deconstruct(run, &Scene);
     TEST_CHECK_SUCCESS(run, GameInput_Deconstruct(&Input));
+    KeyRegistry_Deconstruct(&Keys);
 }
 
 

@@ -12,6 +12,7 @@
 #include "wr/WRJSON.h"
 #include "Config.h"
 #include "GameInput.h"
+#include "InputActions.h"
 #include "Logger.h"
 #include "NamespacedKey.h"
 #include "Registry.h"
@@ -507,11 +508,39 @@ int main(int argc, char** argv)
     Error RegistriesResult = RegistryRoot_Construct(&Registries, &Keys);
     Error_Deconstruct(&RegistriesResult); // Only fails for a NULL argument (its key is the first key interned).
 
-    // The input: default bindings, then the player's controls file over them. The frame manager polls it every update
-    // tick.
+    // The input: the engine's actions, the packs' (input_actions assets), then the player's controls file over their
+    // defaults. The frame manager polls it every update tick.
     GameInput Input;
-    Error InputResult = GameInput_Construct(&Input);
-    Error_Deconstruct(&InputResult); // Only fails for a NULL argument.
+    Error InputResult = GameInput_Construct(&Input, &Keys, &Registries, &Log);
+    if (InputResult.Code != ErrorCode_Success)
+    {
+        Error LogResult = Logger_LogCriticalFormatted(&Log, (const unsigned char*)u8"Failed to set up the input: %s",
+            (InputResult.Message != NULL) ? (const char*)InputResult.Message : "no details");
+        Error_Deconstruct(&LogResult);
+        Error_Deconstruct(&InputResult);
+
+        if (Assets != NULL) { Error e = AssetManager_Deconstruct(Assets); Error_Deconstruct(&e); }
+        if (JsonPool != NULL) { Error e = JSONObjectPool_Deconstruct(JsonPool); Error_Deconstruct(&e); }
+        if (GhdfPool != NULL) { Error e = GHDFObjectPool_Deconstruct(GhdfPool); Error_Deconstruct(&e); }
+        CloseWindow();
+        RegistryRoot_Deconstruct(&Registries);
+        KeyRegistry_Deconstruct(&Keys);
+        UnicodeData_Deconstruct(&Unicode);
+        GameConfig_Deconstruct(&Config);
+        Memory_Free(BaseDirectory._data);
+        Error CloseLog = Logger_Deconstruct(&Log);
+        Error_Deconstruct(&CloseLog);
+        return 1;
+    }
+    if (Assets != NULL)
+    {
+        Error ActionsResult = InputActions_RegisterDefinitions(Assets, &Input, &Log);
+        if (ActionsResult.Code != ErrorCode_Success)
+        {
+            LogWarningAndRelease(&Log, (const unsigned char*)u8"Failed to register the packs' input actions: %s",
+                &ActionsResult);
+        }
+    }
     LoadControls(&Log, BaseDirectory._data, &Input);
     LogRegistries(&Log, &Registries);
 

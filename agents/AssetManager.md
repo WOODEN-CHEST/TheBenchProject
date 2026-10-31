@@ -13,13 +13,15 @@ The definition JSON format is specified in `references/asset_structure.md`.
 
 Loads, shares and unloads game assets. The manager stores **definitions** (named recipes, normally JSON files
 under the asset search roots) and builds an asset from its definition the first time someone loads it. Asset
-types are registered at runtime (`AssetManager_CreateAssetType`); the fifteen standard types (sprite sheet, sprite
+types are registered at runtime (`AssetManager_CreateAssetType`); the sixteen standard types (sprite sheet, sprite
 animation, sound, font, shader, model, texture, world model, world sprite, character, animation library, animation
-graph, terrain, terrain material, climate) are
+graph, terrain, terrain material, climate, input actions) are
 registered together by `AssetManager_CreateStandardAssetTypes`. The wrappers it hands out are documented in
 [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md),
 [WorldModels.md](WorldModels.md), [WorldSprites.md](WorldSprites.md), [Characters.md](Characters.md),
-[Animation.md](Animation.md), [Terrain.md](Terrain.md) and [WeatherSystem.md](WeatherSystem.md).
+[Animation.md](Animation.md), [Terrain.md](Terrain.md), [WeatherSystem.md](WeatherSystem.md) and
+[GameInput.md](GameInput.md) (input actions: the input registers every definition at startup with
+`InputActions_RegisterDefinitions`, which lists them with `AssetManager_GetDefinitionNames`).
 
 ## Lifetime rules (read first)
 

@@ -92,7 +92,7 @@ the AssetManager are both main-thread-only). Update runs at a fixed rate, render
 
 ```c
 GameInput Input;
-GameInput_Construct(&Input);                            // the manager polls it every update tick
+GameInput_Construct(&Input, &Keys, &Registries, &Log);  // the manager polls it every update tick
 GameFrameManager Manager;
 GameFrameManager_Construct(&Manager, &Log, &Input, 16.0f / 9.0f, RenderTargetPosition_Centered());
 // ... add initial frames ...

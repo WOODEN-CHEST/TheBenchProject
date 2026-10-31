@@ -144,6 +144,7 @@ static bool HasCalls(const CallLog* log, const char* expected)
 static void PrepareRenderRunsTopDownOverTheActiveFrames(TestRun* run)
 {
     Logger Log;
+    KeyRegistry Keys;
     GameInput Input;
     GameFrameManager Manager;
     GenericBuffer Base;
@@ -151,7 +152,8 @@ static void PrepareRenderRunsTopDownOverTheActiveFrames(TestRun* run)
     bool IsLoggerConstructed = TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "frame_manager", &Base))
         && TEST_CHECK_SUCCESS(run, Logger_Construct(&Log, Base._data));
     Memory_Free(Base._data);
-    TEST_CHECK_SUCCESS(run, GameInput_Construct(&Input));
+    TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys));
+    TEST_CHECK_SUCCESS(run, GameInput_Construct(&Input, &Keys, NULL, NULL));
     bool IsManagerConstructed = IsLoggerConstructed && TEST_CHECK_SUCCESS(run, GameFrameManager_Construct(&Manager, &Log,
         &Input, 16.0f / 9.0f, RenderTargetPosition_Centered()));
     CallLog Calls = { .Names = { 0 }, .Count = 0U };
@@ -194,6 +196,7 @@ static void PrepareRenderRunsTopDownOverTheActiveFrames(TestRun* run)
         TEST_CHECK_SUCCESS(run, GameFrameManager_Deconstruct(&Manager));
     }
     TEST_CHECK_SUCCESS(run, GameInput_Deconstruct(&Input));
+    KeyRegistry_Deconstruct(&Keys);
     if (IsLoggerConstructed)
     {
         TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));

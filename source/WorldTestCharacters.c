@@ -850,7 +850,7 @@ static void LogEvents(WorldTestCharacters* self)
 
 // Functions (WorldTestCharacters.h).
 void WorldTestCharacters_Construct(WorldTestCharacters* self, World* world, WorldCollision* collision,
-    WorldCharacters* characters, Logger* logger)
+    WorldCharacters* characters, GameInput* input, Logger* logger)
 {
     Memory_Zero(self, sizeof(*self));
     self->_world = world;
@@ -859,6 +859,12 @@ void WorldTestCharacters_Construct(WorldTestCharacters* self, World* world, Worl
     self->_logger = logger;
     PlayerController_Construct(&self->_controller);
     self->_playerKind = TEST_KIND_HUMAN;
+    self->_hasWaveAction = (input != NULL) && GameInput_FindActionText(input, WORLD_TEST_WAVE_ACTION, &self->_waveAction);
+    if (!self->_hasWaveAction)
+    {
+        Log(self, "the wave action \"%s\" is not registered (input_actions/test_frame.json): nobody waves.",
+            (const char*)WORLD_TEST_WAVE_ACTION);
+    }
 }
 
 void WorldTestCharacters_Deconstruct(WorldTestCharacters* self)
@@ -942,7 +948,7 @@ void WorldTestCharacters_HandleInput(WorldTestCharacters* self, GameInput* input
     {
         ToggleNpcSitting(self);
     }
-    if (GameInput_IsKeyPressed(input, GameKey_0))
+    if (self->_hasWaveAction && GameInput_IsActionPressed(input, self->_waveAction))
     {
         WaveHello(self);
     }

@@ -300,6 +300,9 @@ void LabelWidgetTests_Run(TestRun* run);
 /** @brief Keys, the per-tick input with consumption, actions and controls files (GameInputTests.c). */
 void GameInputTests_Run(TestRun* run);
 
+/** @brief The input_actions asset type: its reader's rules and its registration with the input (InputActionsTests.c). */
+void InputActionsTests_Run(TestRun* run);
+
 /** @brief Easing, keyframe validation and evaluation of typed values (UIAnimationTests.c). */
 void UIAnimationTests_Run(TestRun* run);
 

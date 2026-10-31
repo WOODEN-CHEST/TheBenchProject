@@ -117,6 +117,8 @@ typedef struct TerrainAssetStruct TerrainAsset;
 typedef struct TerrainMaterialStruct TerrainMaterial;
 /** @brief A climate asset (Climate.h). */
 typedef struct ClimateStruct Climate;
+/** @brief An input actions asset (InputActions.h). */
+typedef struct InputActionsStruct InputActions;
 /** @brief A texture asset's image as CPU pixels (GameTexture.h), filled by AssetManager_LoadTexturePixels. */
 typedef struct TexturePixelsStruct TexturePixels;
 
@@ -391,6 +393,9 @@ typedef struct StandardAssetTypesStruct
     /** @brief Climate type id: how a world's weather behaves over game time: its presets, their seasons, links and rates
      *  (Climate.h). */
     AssetTypeID Climate;
+    /** @brief Input actions type id: one action category with its actions, and overrides of registered actions and
+     *  categories, which the input registers at startup (InputActions.h). */
+    AssetTypeID InputActions;
 } StandardAssetTypes;
 
 
@@ -470,10 +475,9 @@ Error AssetManager_CreateAssetType(AssetManager* self, const AssetTypeInfo* info
 /**
  * @brief Registers all standard asset types and a shared JSON pool used to parse their definitions.
  *
- * Registers the fifteen standard types (sprite sheet, sprite animation, sound, font, shader, model, texture, world
- * model, world sprite, character, animation library, animation graph, terrain, terrain material and climate), writing
- * their ids into
- * @p outTypes. Creates one JSONObjectPool and wires it into every standard type's
+ * Registers the sixteen standard types (sprite sheet, sprite animation, sound, font, shader, model, texture, world
+ * model, world sprite, character, animation library, animation graph, terrain, terrain material, climate and input
+ * actions), writing their ids into @p outTypes. Creates one JSONObjectPool and wires it into every standard type's
  * ConstructorUserData so all standard definition parsing recycles JSON compounds/arrays/strings instead of
  * reallocating. The caller OWNS @p *outDefinitionPool and must free it with JSONObjectPool_Deconstruct after (or
  * alongside) the manager. The same pool may be reused as the ConstructorUserData of a custom JSON-based type to
@@ -1111,6 +1115,13 @@ Error AssetManager_LoadTerrainMaterial(AssetManager* self, const unsigned char* 
  *        AssetManager_LoadSpriteSheet for semantics.
  */
 Error AssetManager_LoadClimate(AssetManager* self, const unsigned char* name, AssetUserID user, Climate** outAsset);
+
+/**
+ * @brief Loads an input actions definition by name (InputActions.h): a category, its actions and its overrides, plain
+ *        data with no dependencies. See AssetManager_LoadSpriteSheet for semantics.
+ */
+Error AssetManager_LoadInputActions(AssetManager* self, const unsigned char* name, AssetUserID user,
+    InputActions** outAsset);
 
 /**
  * @brief Decodes the image file a texture asset's definition names into 8-bit RGBA pixels on the CPU, for a loader that

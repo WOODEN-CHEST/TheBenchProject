@@ -58,7 +58,9 @@ Registry_Deconstruct(&Things); // deconstructs the active entries
 - **Stable addresses.** Elements live in blocks of 64 that never move, so `Registry_Get`'s pointer stays valid until
   the entry is withdrawn or the registry is deconstructed.
 - **Reads.** `Registry_Find(keyId)` and `Registry_FindText(fullKey)` (never interns; a key written without its namespace
-  goes through `NamespacedKey_Parse` first) find active entries; `Registry_GetCount` (slots, withdrawn included),
+  goes through `NamespacedKey_Parse` first) find active entries; `Registry_FindSlot(keyId)` finds a key's slot also
+  while it is withdrawn (for a user that keeps data per index, such as the input's bindings of a withdrawn action);
+  `Registry_GetCount` (slots, withdrawn included),
   `Registry_GetActiveCount`, `Registry_IsActive`, `Registry_GetKey` / `Registry_GetKeyText` (also while withdrawn),
   `Registry_Get` (NULL while withdrawn). `Registry_FindByPrefix` appends the indices of the active entries whose key
   starts with a prefix, in byte order of the key text, scanning only the registry's own entries (for autocomplete:
@@ -96,6 +98,9 @@ most `REGISTRY_ROOT_MAX_ENTRY_COUNT` (256) registries.
 - Systems keep direct pointers to their own registries and never look them up in the root per tick.
 - At startup `main.c` logs one line with the root's registries and their active entry counts ("Registries: none." while
   nothing has added one).
+- The registries in it today: the input's actions (`tbp:input_action`) and their categories (`tbp:input_category`),
+  added by `GameInput_Construct` and withdrawn by `GameInput_Deconstruct` ([GameInput.md](GameInput.md)). Their elements
+  are the input's own records: read them through the input's functions, which also apply overrides.
 
 ## Not built
 

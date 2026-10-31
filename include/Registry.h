@@ -230,6 +230,16 @@ uint32_t Registry_WithdrawSource(Registry* self, uint32_t sourceKeyId);
 bool Registry_Find(Registry* self, uint32_t keyId, uint32_t* outIndex);
 
 /**
+ * @brief Finds the slot of a key whether its entry is active or withdrawn: for a user that keeps data per index (the
+ *        input's bindings of an action that is withdrawn now) and must reach it by key.
+ * @param self The registry; must not be NULL.
+ * @param keyId The key id.
+ * @param outIndex [out] Receives the index when found; must not be NULL. Unchanged otherwise.
+ * @returns true if the key was ever registered (false for NULL arguments and keys never registered).
+ */
+bool Registry_FindSlot(Registry* self, uint32_t keyId, uint32_t* outIndex);
+
+/**
  * @brief Finds the active entry of a key's full text, without interning it: a text the key registry does not hold is
  *        not found.
  * @param self The registry; must not be NULL.

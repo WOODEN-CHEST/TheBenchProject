@@ -940,7 +940,7 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
     }
 
     // I logs what the renderer did in its last render (active / inactive / unavailable features, object counts),
-    // e.g. to check on a new GPU which effects actually run, and the game time.
+    // e.g. to check on a new GPU which effects actually run, the game time, and every input action with its bindings.
     if (GameInput_IsKeyPressed(input, GameKey_I))
     {
         WorldRenderer_LogStatus(frame->_renderer);
@@ -953,6 +953,7 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         WorldTestWeather_LogStatus(&frame->_testWeather);
         LogCameraStatus(frame);
         LogFrameTimes(frame);
+        GameInput_LogActions(input);
     }
 
     // T toggles the text sample (checks font drawing, Latvian and Cyrillic glyphs, decorations, inline sprites).
@@ -2043,7 +2044,7 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         return CharactersResult;
     }
     WorldTestCharacters_Construct(&Frame->_testCharacters, &Frame->_world, Frame->_collision, Frame->_characters,
-        services->Logger);
+        services->Input, services->Logger);
     Error AnimationResult = WorldTestAnimation_Construct(&Frame->_testAnimation, &Frame->_world, services->Assets,
         services->Logger);
     if (AnimationResult.Code != ErrorCode_Success)

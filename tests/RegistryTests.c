@@ -280,6 +280,14 @@ static void AWithdrawnKeyRevivesItsIndex(TestRun* run)
         && (Registry_GetKey(&Things, B) == BKey) && (Registry_GetSource(&Things, B) == Fixture.PackA));
     TEST_CHECK(run, (Registry_GetCount(&Things) == 3U) && (Registry_GetActiveCount(&Things) == 2U)
         && (GetValue(&Things, A) == 1U) && (GetValue(&Things, C) == 3U));
+    // Its slot is still found by key, as active ones are; a key never registered has none.
+    TEST_CHECK(run, Registry_FindSlot(&Things, BKey, &Found) && (Found == B)
+        && Registry_FindSlot(&Things, Registry_GetKey(&Things, C), &Found) && (Found == C));
+    uint32_t Unregistered = NAMESPACED_KEY_ID_NONE;
+    TEST_CHECK_SUCCESS(run, KeyRegistry_Intern(&Fixture.Keys, (const unsigned char*)u8"test:never", &Unregistered));
+    Found = REGISTRY_INDEX_NONE;
+    TEST_CHECK(run, !Registry_FindSlot(&Things, Unregistered, &Found) && (Found == REGISTRY_INDEX_NONE)
+        && !Registry_FindSlot(NULL, BKey, &Found));
 
     // Withdrawing it again, or an index the registry does not have, fails.
     TEST_CHECK_ERROR(run, Registry_Withdraw(&Things, B), ErrorCode_InvalidOperation);

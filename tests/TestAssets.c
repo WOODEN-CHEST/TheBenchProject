@@ -848,6 +848,11 @@ bool TestAssets_AddClimate(TestRun* run, TestAssetFixture* fixture, const char* 
     return AddFromJSON(run, fixture, fixture->Types.Climate, json, "test climate");
 }
 
+bool TestAssets_AddInputActions(TestRun* run, TestAssetFixture* fixture, const char* json)
+{
+    return AddFromJSON(run, fixture, fixture->Types.InputActions, json, "test input actions");
+}
+
 bool TestAssets_AddWorldSpriteOf(TestRun* run, TestAssetFixture* fixture, const char* name, const char* animationName)
 {
     char Json[256];
