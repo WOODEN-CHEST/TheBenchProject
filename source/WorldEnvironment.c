@@ -68,6 +68,21 @@
 #define DEFAULT_TEMPERATURE 15.0f
 /** Default distance of a strike, in metres, before the weather sets one. */
 #define DEFAULT_LIGHTNING_DISTANCE 1000.0f
+/** The clouds' defaults: the weather's clouds from 1.5 to 4 km, an altocumulus layer at 5 km and a cirrus layer at
+ *  9 km (both off until a world gives them coverage), drifting at twice the weather's wind. */
+#define DEFAULT_CLOUD_BASE 1500.0f
+#define DEFAULT_CLOUD_THICKNESS 2500.0f
+#define DEFAULT_CLOUD_WIND_SCALE 2.0f
+#define DEFAULT_CLOUD_MID_TYPE 1.0f
+#define DEFAULT_CLOUD_MID_DENSITY 0.4f
+#define DEFAULT_CLOUD_MID_BASE 5000.0f
+#define DEFAULT_CLOUD_MID_THICKNESS 600.0f
+#define DEFAULT_CLOUD_HIGH_TYPE 0.2f
+#define DEFAULT_CLOUD_HIGH_DENSITY 0.5f
+#define DEFAULT_CLOUD_HIGH_HEIGHT 9000.0f
+#define DEFAULT_CLOUD_FORWARD_SCATTERING 0.8f
+#define MAX_CLOUD_FORWARD_SCATTERING 0.95
+#define MAX_CLOUD_LIGHT_POLLUTION 10.0
 /** The flags of a runtime value: shown and reachable by scripts, never saved. */
 #define PROPERTY_FLAGS_RUNTIME ((uint32_t)(PropertyFlags_Editable | PropertyFlags_Script))
 /** Default post-effect strength multiplier applied to bloom/sunshafts/shadows. */
@@ -126,6 +141,7 @@
 #define CATEGORY_AMBIENT ((const unsigned char*)u8"Ambient light")
 #define CATEGORY_HAZE ((const unsigned char*)u8"Haze")
 #define CATEGORY_WEATHER ((const unsigned char*)u8"Weather")
+#define CATEGORY_CLOUDS ((const unsigned char*)u8"Clouds")
 #define CATEGORY_EFFECTS ((const unsigned char*)u8"Effects")
 #define CATEGORY_PHYSICS ((const unsigned char*)u8"Physics")
 
@@ -650,6 +666,158 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_DISTANCE), .Flags = PROPERTY_FLAGS_RUNTIME,
         .Category = CATEGORY_WEATHER, .DisplayName = u8"Lightning distance",
         .Description = u8"How far away the current strike is, in metres (the weather sets it; never saved).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"are_clouds_enabled", .WireId = 79U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldEnvironment, AreCloudsEnabled), .Default.BoolValue = true, .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_CLOUDS, .DisplayName = u8"Clouds",
+        .Description = u8"When off, this world draws no clouds whatever the player's settings: the weather's clouds stay "
+            u8"one even grey deck over the sky.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_base", .WireId = 80U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, CloudBase),
+        .Default.FloatValue = DEFAULT_CLOUD_BASE, .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_CLOUD_HEIGHT),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_CLOUDS, .DisplayName = u8"Cloud base",
+        .Description = u8"The height of the weather's clouds' base above sea level (the far ground), in metres.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_thickness", .WireId = 81U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, CloudThickness), .Default.FloatValue = DEFAULT_CLOUD_THICKNESS,
+        .Rules = PROPERTY_RULES_BETWEEN(WORLD_ENVIRONMENT_MIN_CLOUD_THICKNESS, WORLD_ENVIRONMENT_MAX_CLOUD_HEIGHT),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_CLOUDS, .DisplayName = u8"Cloud thickness",
+        .Description = u8"How high above their base the weather's clouds may reach, in metres: towering storm clouds fill "
+            u8"all of it, cumulus about half, flat layers only its bottom.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_scale", .WireId = 82U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, CloudScale),
+        .Default.FloatValue = 1.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(WORLD_ENVIRONMENT_MIN_CLOUD_SCALE, WORLD_ENVIRONMENT_MAX_CLOUD_SCALE),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_CLOUDS, .DisplayName = u8"Cloud size",
+        .Description = u8"How large the clouds are, a multiplier: 2 makes every layer's clouds twice as wide.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_detail", .WireId = 83U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, CloudDetail),
+        .Default.FloatValue = 1.0f, .Rules = PROPERTY_RULES_BETWEEN(0.0, 2.0), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_CLOUDS, .DisplayName = u8"Cloud detail",
+        .Description = u8"How strongly the clouds' edges break up into wisps and billows, 0 (smooth) to 2.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_wind_scale", .WireId = 84U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, CloudWindScale), .Default.FloatValue = DEFAULT_CLOUD_WIND_SCALE,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_CLOUD_DRIFT), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_CLOUDS, .DisplayName = u8"Cloud drift",
+        .Description = u8"How fast the clouds drift, times the weather's wind (the wind aloft is stronger than at the "
+            u8"ground; the mid layer drifts 1.5 times as fast, the high layer 2.5 times). 0 holds them still.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_evolution", .WireId = 85U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, CloudEvolution), .Default.FloatValue = 1.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_CLOUD_DRIFT), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_CLOUDS, .DisplayName = u8"Cloud evolution",
+        .Description = u8"How fast the clouds' shapes change as they drift, a multiplier: 0 keeps their shapes, so they "
+            u8"only drift.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_mid_coverage", .WireId = 86U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, CloudMidCoverage), .Default.FloatValue = 0.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_CLOUDS,
+        .DisplayName = u8"Mid clouds",
+        .Description = u8"How much of the sky the mid layer covers (altocumulus and altostratus, above the weather's "
+            u8"clouds): 0 none, 1 all of it.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_mid_type", .WireId = 87U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, CloudMidType), .Default.FloatValue = DEFAULT_CLOUD_MID_TYPE,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_CLOUDS,
+        .DisplayName = u8"Mid cloud type",
+        .Description = u8"The mid layer's kind: 0 a smooth sheet (altostratus), 1 rows of small puffs (altocumulus).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_mid_density", .WireId = 88U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, CloudMidDensity), .Default.FloatValue = DEFAULT_CLOUD_MID_DENSITY,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_CLOUDS,
+        .DisplayName = u8"Mid cloud density", .Description = u8"How thick the mid layer's clouds are, 0 to 1.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_mid_base", .WireId = 89U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, CloudMidBase), .Default.FloatValue = DEFAULT_CLOUD_MID_BASE,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_CLOUD_HEIGHT), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_CLOUDS, .DisplayName = u8"Mid cloud base",
+        .Description = u8"The height of the mid layer's base above sea level, in metres.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_mid_thickness", .WireId = 90U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, CloudMidThickness), .Default.FloatValue = DEFAULT_CLOUD_MID_THICKNESS,
+        .Rules = PROPERTY_RULES_BETWEEN(WORLD_ENVIRONMENT_MIN_CLOUD_THICKNESS, WORLD_ENVIRONMENT_MAX_CLOUD_HEIGHT),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_CLOUDS, .DisplayName = u8"Mid cloud thickness",
+        .Description = u8"How thick the mid layer is, in metres.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_high_coverage", .WireId = 91U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, CloudHighCoverage), .Default.FloatValue = 0.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_CLOUDS,
+        .DisplayName = u8"High clouds",
+        .Description = u8"How much of the sky the high layer covers (cirrus and cirrocumulus: thin ice clouds): 0 none, 1 "
+            u8"all of it.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_high_type", .WireId = 92U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, CloudHighType), .Default.FloatValue = DEFAULT_CLOUD_HIGH_TYPE,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_CLOUDS,
+        .DisplayName = u8"High cloud type",
+        .Description = u8"The high layer's kind: 0 long streaks (cirrus), 1 small puffs (cirrocumulus).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_high_density", .WireId = 93U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, CloudHighDensity), .Default.FloatValue = DEFAULT_CLOUD_HIGH_DENSITY,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_CLOUDS,
+        .DisplayName = u8"High cloud density",
+        .Description = u8"How thick the high layer's clouds are, 0 to 1 (thin ice clouds: the sun shines through them).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_high_height", .WireId = 94U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, CloudHighHeight), .Default.FloatValue = DEFAULT_CLOUD_HIGH_HEIGHT,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_CLOUD_HEIGHT), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_CLOUDS, .DisplayName = u8"High cloud height",
+        .Description = u8"The height of the high layer above sea level, in metres.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_forward_scattering", .WireId = 95U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, CloudForwardScattering), .Default.FloatValue = DEFAULT_CLOUD_FORWARD_SCATTERING,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, MAX_CLOUD_FORWARD_SCATTERING), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_CLOUDS, .DisplayName = u8"Cloud silver lining",
+        .Description = u8"How strongly the clouds scatter light forward, 0 to 0.95: how brightly their edges glow toward "
+            u8"the sun and the moon.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_tint", .WireId = 96U, .Type = PropertyType_Color, PROPERTY_MEMBER(WorldEnvironment, CloudTint),
+        .Default.ColorValue = { 255, 255, 255, 255 }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_CLOUDS,
+        .DisplayName = u8"Cloud colour",
+        .Description = u8"The clouds' own colour, multiplying the light they scatter (white: clouds like ours).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"cloud_light_pollution", .WireId = 97U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, CloudLightPollution), .Default.FloatValue = 1.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, MAX_CLOUD_LIGHT_POLLUTION), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_CLOUDS, .DisplayName = u8"Town light on clouds",
+        .Description = u8"How much of the town's light (light pollution) lights the clouds' undersides, a multiplier: an "
+            u8"overcast night over a town glows in the light pollution's colour. 0: none.",
         .SinceVersion = 1U
     },
     {

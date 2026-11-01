@@ -14,9 +14,10 @@
 // pollution's and the night's own light too), tinted as the lit shaders tint the ambient. The haze in front of it
 // follows the frame's haze (the distance scale and the start), as the volume's does for everything else, its rays through the ground
 // (common/atmosphere) where the scale takes them past it. The sky's in-scatter is tinted by the sky's tint; the ground's
-// direct light is not. Under the weather's clouds (source/WorldWeatherLight.h) the half's light comes in dimmed by them,
-// and in the sun's half the deck's light lights the air from all around and the far ground from above (the sky pass draws
-// the deck itself).
+// direct light is not. Under the weather's clouds (source/WorldWeatherLight.h) the half's light comes in dimmed by them
+// while they are one even deck, or in full with their share below their base while they are drawn (the gaps between
+// them show the clear sky above); in the sun's half the deck's light lights the air below them from all around and the
+// far ground from above (the sky pass draws the deck, or the clouds are drawn themselves).
 
 uniform float lightCosZenith;      // the light's zenith cosine (its direction's y)
 uniform vec3 lightIntensity;       // its light above the air, colour in: ATMOSPHERE_SUN_LIGHT x this (the sun's, or the
@@ -35,7 +36,9 @@ uniform vec3 groundNightLight;     // the moonless night's own light on the far 
 uniform vec3 cloudSkyIrradiance;   // the clouds' deck's diffuse light (and a flash's) on a level surface (linear; 0 in
                                    // the moon's half)
 uniform vec3 cloudAmbientRadiance; // the even light they give the air from all around (linear; 0 in the moon's half)
-uniform float cloudHeight;         // the deck's height above the atmosphere's ground: the air below it takes that light
+uniform float cloudHeight;         // the clouds' base above the atmosphere's ground: the air below it takes that light
+uniform float cloudLightShare;     // the share of the light drawn clouds leave the air and the far ground below their
+                                   // base (1: the light is as given, already dimmed by the clouds' deck)
 
 out vec4 finalColor;
 
@@ -74,15 +77,17 @@ void main()
     vec3 transmittance;
     vec3 sky = atmosphereScatteredLight(atmosphereViewHeight, cosZenith, lightCosZenith, cosLightAngle, pathLength,
         SKY_VIEW_STEPS, lightRadiance, multipleScattering, lightPollutionRadiance, max(cloudAmbientRadiance, vec3(0.0)),
-        cloudHeight, transmittance)*max(skyTint, vec3(0.0));
+        cloudHeight, cloudLightShare, transmittance)*max(skyTint, vec3(0.0));
     if (isGround)
     {
         // The light's own zenith cosine over the ground point (WorldAtmosphere_GetLightCosAt), where it is lit like the
         // lit shaders' ground: through the air there, by the cosine to the light, and the sky's irradiance there.
         float radius = ATMOSPHERE_R_PLANET + atmosphereViewHeight;
         float groundCos = clamp((radius*lightCosZenith + toGround*cosLightAngle)/ATMOSPHERE_R_PLANET, -1.0, 1.0);
-        vec3 direct = lightRadiance*atmosphereLightTransmittance(0.0, groundCos)*max(groundCos, 0.0);
-        vec3 skyLight = (atmosphereSkyIrradiance(0.0, groundCos)*lightRadiance
+        // Below drawn clouds the far ground takes their share of the light, as the air there does.
+        vec3 groundLight = (cloudLightShare < 1.0) ? lightRadiance*cloudLightShare : lightRadiance;
+        vec3 direct = groundLight*atmosphereLightTransmittance(0.0, groundCos)*max(groundCos, 0.0);
+        vec3 skyLight = (atmosphereSkyIrradiance(0.0, groundCos)*groundLight
             + atmosphereLightPollutionIrradiance(0.0)*lightPollutionRadiance)*max(skyTint, vec3(0.0))
             + max(cloudSkyIrradiance, vec3(0.0));
         vec3 ground = groundAlbedo*((direct + skyLight*max(ambientTint, vec3(0.0)))/PI

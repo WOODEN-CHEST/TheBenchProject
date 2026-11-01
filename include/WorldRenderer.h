@@ -196,6 +196,17 @@ typedef enum WorldRendererFeatureEnum
      *  pre-pass (the same needs as ambient occlusion: its shaders and a G-buffer with samplable depth); active while
      *  the levels run and contact shadows are switched on (WorldRenderer_SetContactShadowsEnabled). */
     WorldRendererFeature_ContactShadows,
+    /** @brief Volumetric clouds: the weather's clouds and the layers above them marched for every sky pixel, lit by the
+     *  sun or the moon through the air and by the sky, hazed by the air in front of them, hiding the sun, the moon and the
+     *  stars. Unavailable without their shader (world_clouds), their noise's 3D textures (GL functions) or their target
+     *  (logged once), when the weather's clouds are one even deck; inactive while the player's quality is off
+     *  (WorldRenderer_SetCloudQuality), the world switches them off (AreCloudsEnabled), the atmosphere's tables do not
+     *  run, or no layer has coverage. */
+    WorldRendererFeature_Clouds,
+    /** @brief The clouds' shadow: a map of the light the clouds let through around the camera, which the sun (or the moon)
+     *  on every lit surface takes. Unavailable without its shader (world_clouds_shadow) or target; active while the clouds
+     *  are drawn and their light is above the horizon. */
+    WorldRendererFeature_CloudShadows,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -382,6 +393,14 @@ typedef struct WorldRendererStatusStruct
     float DeckIrradiance[3];
     float FlashIrradiance[3];
     float Wetness;
+    /** @brief The clouds as drawn: the player's quality (CONFIG_CLOUD_QUALITY_*), the cloud target's size (texels; 0
+     *  while it does not exist), whether the moon lit them (else the sun), and the cloud pass's CPU time this render
+     *  (milliseconds). */
+    int32_t CloudQuality;
+    int32_t CloudTargetWidth;
+    int32_t CloudTargetHeight;
+    bool IsCloudLightMoon;
+    double CloudMilliseconds;
     /** @brief The eye: the luminance it was adapted to (the view's log-average in the game's light units: the sky
      *  light's anchor before the first measurement), the real luminance that stands for (cd/m^2, on night vision's scale
      *  at the camera's mix of daylight and the night's lights), and whether a measurement of the picture set it. */
@@ -658,6 +677,22 @@ void WorldRenderer_SetContactShadowsEnabled(WorldRenderer* self, bool enabled);
  * @returns true if they are drawn while the levels run (given the ambient pre-pass is available).
  */
 bool WorldRenderer_AreContactShadowsEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Sets how the clouds are drawn: CONFIG_CLOUD_QUALITY_OFF (none: the weather's clouds as one even grey deck), _LOW
+ *        (half the scene's resolution, fewer steps) or _HIGH (the scene's resolution). Starts at the config's
+ *        cloud_quality; another value is taken as high. The cloud target is made again on the next render.
+ * @param self The renderer; must not be NULL.
+ * @param quality The quality.
+ */
+void WorldRenderer_SetCloudQuality(WorldRenderer* self, int32_t quality);
+
+/**
+ * @brief Reports the clouds' quality (CONFIG_CLOUD_QUALITY_*).
+ * @param self The renderer; must not be NULL.
+ * @returns The quality the renderer draws them at.
+ */
+int32_t WorldRenderer_GetCloudQuality(const WorldRenderer* self);
 
 /**
  * @brief Switches the shadow levels' debug view: every lit surface tinted by the level its shadow comes from (red, green,

@@ -142,6 +142,11 @@ void WorldRendererStars_LoadShader(WorldRenderer* self)
     self->_stars._locMoonDirection = GetShaderLocation(RayShader, "moonDirection");
     self->_stars._locMoonCosRadius = GetShaderLocation(RayShader, "moonCosRadius");
     self->_stars._locDepthReversed = GetShaderLocation(RayShader, "depthReversed");
+    self->_stars._locCloudsActive = GetShaderLocation(RayShader, "cloudsActive");
+    self->_stars._locCloudLayer = GetShaderLocation(RayShader, "cloudLayer");
+    self->_stars._locCloudLayerResolution = GetShaderLocation(RayShader, "cloudLayerResolution");
+    int CloudLayerUnit = (int)WorldRendererTextureUnit_CloudLayer;
+    SetShaderValue(RayShader, self->_stars._locCloudLayer, &CloudLayerUnit, SHADER_UNIFORM_INT);
     WorldRendererAtmosphere_PrepareShader(RayShader, &self->_stars._atmosphere);
     WorldRendererAtmosphere_PrepareHazeShader(RayShader, false, &self->_stars._haze);
 }
@@ -211,8 +216,8 @@ void WorldRendererStars_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     float Resolution[2] = { (float)frame->SceneWidth, (float)frame->SceneHeight };
     SetShaderValue(RayShader, self->_stars._locResolution, Resolution, SHADER_UNIFORM_VEC2);
     SetShaderValue(RayShader, self->_stars._locLimitingMagnitude, &frame->LimitingMagnitude, SHADER_UNIFORM_FLOAT);
-    // The weather's clouds hide their share of the stars.
-    float RadianceScale = STAR_RADIANCE_SCALE * fmaxf(Environment->StarBrightness, 0.0f) * frame->Weather.DirectShare;
+    // The weather's even deck hides its share of the stars; drawn clouds hide them per pixel.
+    float RadianceScale = STAR_RADIANCE_SCALE * fmaxf(Environment->StarBrightness, 0.0f) * frame->SkyObjectShare;
     SetShaderValue(RayShader, self->_stars._locRadianceScale, &RadianceScale, SHADER_UNIFORM_FLOAT);
     float TwinkleStrength = ClampUnit(Environment->StarTwinkle);
     SetShaderValue(RayShader, self->_stars._locTwinkleStrength, &TwinkleStrength, SHADER_UNIFORM_FLOAT);
@@ -228,6 +233,11 @@ void WorldRendererStars_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     WorldRendererAtmosphere_UploadFrame(RayShader, &self->_stars._atmosphere, frame);
     WorldRendererAtmosphere_UploadHaze(RayShader, &self->_stars._haze, frame);
     WorldRendererAtmosphere_BindTables(self, frame);
+    int CloudsActive = frame->AreCloudsActive ? 1 : 0;
+    SetShaderValue(RayShader, self->_stars._locCloudsActive, &CloudsActive, SHADER_UNIFORM_INT);
+    float CloudLayerResolution[2] = { (float)self->_clouds._width, (float)self->_clouds._height };
+    SetShaderValue(RayShader, self->_stars._locCloudLayerResolution, CloudLayerResolution, SHADER_UNIFORM_VEC2);
+    WorldRendererClouds_BindLayer(self, frame);
 
     // Added onto the sky with (ONE, ONE) blending, so the fragment's alpha of 0 leaves the scene's alpha alone.
     // Depth-tested but never written: the depth buffer must stay clear, which the bloom prefilter and the sun shafts

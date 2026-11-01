@@ -51,7 +51,9 @@ void WorldWeatherLight_GetFrame(const WorldEnvironment* environment, WorldWeathe
     float LevelLength = sqrtf(Level.x * Level.x + Level.z * Level.z);
     Level = (isfinite(LevelLength) && (LevelLength > 0.0f))
         ? (Vector3){ Level.x / LevelLength, 0.0f, Level.z / LevelLength } : (Vector3){ 0.0f, 0.0f, 1.0f };
-    Vector3 Glow = { Level.x * Distance, WORLD_WEATHER_CLOUD_HEIGHT, Level.z * Distance };
+    // The glow sits over the strike at the clouds' base.
+    float Base = ClampWeather(environment->CloudBase, 1.0f, (float)WORLD_ENVIRONMENT_MAX_CLOUD_HEIGHT);
+    Vector3 Glow = { Level.x * Distance, Base, Level.z * Distance };
     float GlowLength = sqrtf(Glow.x * Glow.x + Glow.y * Glow.y + Glow.z * Glow.z);
     outLight->FlashDirection = (Vector3){ Glow.x / GlowLength, Glow.y / GlowLength, Glow.z / GlowLength };
 

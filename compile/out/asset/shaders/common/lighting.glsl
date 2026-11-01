@@ -109,6 +109,19 @@ uniform float hazeMultiplier;
 // The weather's wetness of surfaces (0 dry .. 1 soaked; ApplyWetness).
 uniform float surfaceWetness;
 
+// The drawn clouds' shadow: a map around the camera of the share of the light that lights them (the sun, or the moon at
+// night) that passes them, for the points of a level plane at their base (shaders/clouds/shadow.frag: R through every
+// layer, G the low layer's share, B the upper layers'). A surface reads it where its ray toward that light crosses the
+// plane; beyond the map, the clouds' share on average.
+uniform bool cloudShadowActive;   // false: no map this frame (the light's share is in the sky's light already)
+uniform sampler2D cloudShadowMap;
+uniform vec4 cloudShadowFrame;    // the map's centre on the plane (render space x, z), 1 over its side, the plane's height
+                                  // in render space
+uniform float cloudShadowTop;     // the low layer's top's height in render space
+uniform vec3 cloudShadowLight;    // the light it was made for (unit)
+uniform float cloudShadowFallback; // the share of that light beyond the map
+uniform bool cloudShadowIsMoon;   // the map shades the moon's light (else the sun's)
+
 // The eye's night vision (shaders/common/night_vision.glsl): dim reflected light loses its colour as it does for the
 // eye; emitted light keeps it. The same values the sky pass gets.
 uniform float nightVisionFieldLuminance; // the scene luminance the sky's light gives (linear, the game's light units)
@@ -393,6 +406,32 @@ struct SkyLightValues
     vec3 ground;
 };
 
+// The least a light's ray climbs per metre for the clouds' shadow map (shaders/clouds/shadow.frag's, the C side's
+// WORLD_CLOUDS_SHADOW_MIN_UP).
+const float CLOUD_SHADOW_MIN_UP = 0.02;
+
+// The share of the clouds' light that passes them toward a render-space point: the map where the point's ray toward the
+// light crosses the clouds' base, fading into the average share over the map's outer tenth. A point inside or above the
+// low layer takes the low layer's share only by the part of its room above the point (as if its cloud were spread
+// evenly through it), and the upper layers' share.
+float CloudShadowAt(vec3 worldPos)
+{
+    float up = max(cloudShadowLight.y, CLOUD_SHADOW_MIN_UP);
+    vec2 crossing = worldPos.xz + cloudShadowLight.xz*((cloudShadowFrame.w - worldPos.y)/up);
+    vec2 uv = (crossing - cloudShadowFrame.xy)*cloudShadowFrame.z + 0.5;
+    float edge = 2.0*max(abs(uv.x - 0.5), abs(uv.y - 0.5)); // 0 at the centre, 1 at the edge
+    vec3 mapped = texture(cloudShadowMap, uv).rgb;
+    float passed = mapped.r;
+    float fallback = cloudShadowFallback;
+    if (worldPos.y > cloudShadowFrame.w)
+    {
+        float above = clamp((cloudShadowTop - worldPos.y)/max(cloudShadowTop - cloudShadowFrame.w, 1.0), 0.0, 1.0);
+        passed = pow(max(mapped.g, 1e-6), above)*mapped.b;
+        fallback = pow(max(cloudShadowFallback, 1e-6), above);
+    }
+    return mix(passed, fallback, smoothstep(0.9, 1.0, edge));
+}
+
 // One value of the sky's light at a height from the volume's last row, linear between the two heights around it.
 vec3 SkyLightValueAt(int value, float coordinate)
 {
@@ -404,7 +443,7 @@ vec3 SkyLightValueAt(int value, float coordinate)
 }
 
 // The sky's light at a render-space point: at its own height above the atmosphere's ground (the camera's plus its height
-// in render space), or the camera's while the volume holds none.
+// in render space), or the camera's while the volume holds none; the drawn clouds' shadow on the light that lights them.
 SkyLightValues SkyLightAt(vec3 worldPos)
 {
     SkyLightValues light;
@@ -415,6 +454,18 @@ SkyLightValues SkyLightAt(vec3 worldPos)
         light.moon = isMoonLit ? SkyLightValueAt(ATMOSPHERE_SKY_LIGHT_MOON, coordinate) : vec3(0.0);
         light.sky = SkyLightValueAt(ATMOSPHERE_SKY_LIGHT_SKY, coordinate);
         light.ground = SkyLightValueAt(ATMOSPHERE_SKY_LIGHT_GROUND, coordinate);
+        if (cloudShadowActive)
+        {
+            float passed = CloudShadowAt(worldPos);
+            if (cloudShadowIsMoon)
+            {
+                light.moon *= passed;
+            }
+            else
+            {
+                light.sun *= passed;
+            }
+        }
         return light;
     }
     light.sun = sunLight;

@@ -19,6 +19,7 @@
 #include "GLDepth.h"
 #include "GLSliceMap.h"
 #include "GLShadowArray.h"
+#include "GLTexture3D.h"
 #include "Config.h"
 #include "EyeAdaptation.h"
 #include "NightVision.h"
@@ -26,6 +27,7 @@
 #include "WorldInterior.h"
 #include "WorldSkyLight.h"
 #include "WorldWeatherLight.h"
+#include "WorldClouds.h"
 #include "SpriteTransform.h"
 #include "WorldRenderSpace.h"
 #include "WorldShadowLevels.h"
@@ -52,7 +54,11 @@
  *   WorldRendererAtmosphere.c the atmosphere's tables: transmittance, multiple scattering, the sky view, built
  *                            first in the frame and read by the sky and the stars; the haze's volume; the sky's
  *                            irradiance table and the sky's light by height in the volume's last row
- *   WorldRendererSky.c       the atmospheric sky with the moon, the Milky Way and light pollution's skyglow
+ *   WorldRendererSky.c       the atmospheric sky with the moon, the Milky Way, light pollution's skyglow and the
+ *                            drawn clouds over it
+ *   WorldRendererClouds.c    the clouds (WorldClouds.h, CloudNoise.h): their noise (3D textures through GLTexture3D.h,
+ *                            direct GL calls), their shadow map, their march over the sky's pixels and its
+ *                            accumulation, which the sky pass and the stars read; the lit shaders read the shadow map
  *   WorldRendererStars.c     the star field (the seeded catalogue as one-pixel quads)
  *   WorldRendererPost.c      outlines, bloom, sun shafts and the tonemap
  *   WorldRendererExposure.c  the eye's adaptation to the picture: the meter pass, its readback (GLReadback.h,
@@ -104,6 +110,8 @@
 /** The most shadow levels the lit shaders read (common/lighting's SHADOW_MAX_LEVELS; the levels' own and the config's
  *  limits are the same: checked below). */
 #define WORLD_RENDERER_MAX_SHADOW_LEVELS WORLD_SHADOW_MAX_LEVELS
+/** The widest the cloud target is, in texels (a window-sized scene without pixelation is marched at a fraction of it). */
+#define WORLD_RENDERER_CLOUD_MAX_WIDTH 640
 /** Number of maps in a raylib Material: the renderer module's RENDERER_MATERIAL_MAP_COUNT (raylib's private
  *  MAX_MATERIAL_MAPS, see BUILDING.md). DrawMesh reads, and binds textures from, exactly this many entries of
  *  Material.maps, so a per-draw material copy must have this many. Changing it means checking
@@ -143,10 +151,22 @@ typedef enum
     WorldRendererTextureUnit_TerrainAlbedoHeight = 9,   // sampler2DArray materialAlbedoHeight
     WorldRendererTextureUnit_TerrainNormal = 10,        // sampler2DArray materialNormal
     WorldRendererTextureUnit_TerrainRoughnessAo = 11,   // sampler2DArray materialRoughnessAo
-    // Every lit program's frame textures. Unit 13 is free in every lit program (agents/WorldRuntime.md's budget).
+    // Every lit program's frame textures.
     WorldRendererTextureUnit_ShadowLevels = 12,     // sampler2DArrayShadow shadowLevels (the sun's or the moon's levels)
+    WorldRendererTextureUnit_CloudShadow = 13,      // sampler2D cloudShadowMap (the clouds' shadow)
     WorldRendererTextureUnit_PointShadowCube = 14,  // samplerCube pointShadowCube
     WorldRendererTextureUnit_AmbientOcclusion = 15, // sampler2D ambientOcclusionMap
+    // The clouds in the sky pass and the stars (sampler2D cloudLayer: what the clouds add and their transmittance), on a
+    // unit those programs leave free; bound manually like the tables.
+    WorldRendererTextureUnit_CloudLayer = 9,
+    // The cloud pass's own programs (the march and the shadow map: 2D batch draws, which bind only units 0 to 4): the
+    // noise volumes on the GL_TEXTURE_3D target, the weather map, the G-buffer's flags and the irradiance table; the
+    // transmittance table on its readers' unit 7 and the haze's volume on 8.
+    WorldRendererTextureUnit_CloudShape = 9,        // sampler3D cloudShapeNoise
+    WorldRendererTextureUnit_CloudDetail = 10,      // sampler3D cloudDetailNoise
+    WorldRendererTextureUnit_CloudWeather = 11,     // sampler2D cloudWeatherMap
+    WorldRendererTextureUnit_CloudSkyMask = 12,     // sampler2D skyMask
+    WorldRendererTextureUnit_CloudIrradiance = 13,  // sampler2D atmosphereIrradianceTable
 } WorldRendererTextureUnit;
 
 _Static_assert(WorldRendererTextureUnit_ShadowLevels >= WORLD_RENDERER_MATERIAL_MAP_COUNT,
@@ -403,6 +423,24 @@ typedef struct WorldRenderFrameStruct
      *  deck's light, a flash's, the wetness, and the wind (its level direction, its speed and gust in metres per second,
      *  for what sways in it). */
     WorldWeatherLight Weather;
+    /** @brief The clouds this frame (WorldRendererClouds_PrepareFrame, then WorldRendererClouds_PrepareLight from the sky's
+     *  light): whether they are drawn (the pass is available, the player's quality and the world allow them, the
+     *  atmosphere's tables run and a layer has coverage), their layers, look and patterns' anchors, the light that lights
+     *  them (the sun, or the moon while the sun's light at their base is the weaker: its direction and its light above the
+     *  air, the surfaces' units) and whether their shadow map is drawn (that light above the horizon) with its frame. While
+     *  they are drawn the air is lit by the lights above the air in full above the clouds' base and by CloudLightShare of
+     *  them below it (the weather's DirectShare; 1 while they are not drawn, when the lights are dimmed by it everywhere),
+     *  and SkyObjectShare dims the discs, the stars and the Milky Way (1 while the clouds hide them per pixel,
+     *  DirectShare otherwise). */
+    bool AreCloudsActive;
+    WorldCloudsFrame Clouds;
+    bool IsCloudLightMoon;
+    Vector3 CloudLightDirection;
+    float CloudLightRadiance[3];
+    bool IsCloudShadowActive;
+    WorldCloudShadowFrame CloudShadow;
+    float CloudLightShare;
+    float SkyObjectShare;
     bool IsHazeActive;
     /** @brief The eye's night vision this frame, which the sky and PBR shaders apply: how strongly (the renderer toggle
      *  x the world's NightVisionStrength; 0 = off), the field luminance it compares with (NightVisionField: the sky's
@@ -590,6 +628,26 @@ typedef struct WorldRendererInteriorLocationsStruct
 } WorldRendererInteriorLocations;
 
 /**
+ * @brief The uniform locations of the clouds' shadow in a shader that includes shaders/common/lighting.glsl: whether it
+ *        applies, its map's sampler, the map's frame (its centre, the inverse of its side, the plane's height), the light
+ *        it was made for, the share of that light beyond the map, and whether that light is the moon. -1 for a uniform the
+ *        shader lacks.
+ *
+ * Filled by WorldRendererClouds_PrepareLitShader, which also points the sampler at WorldRendererTextureUnit_CloudShadow;
+ * WorldRendererClouds_UploadLitFrame uploads a frame's values.
+ */
+typedef struct WorldRendererCloudShadowLocationsStruct
+{
+    int _locActive;
+    int _locMap;
+    int _locFrame;
+    int _locLight;
+    int _locFallback;
+    int _locIsMoon;
+    int _locTop;
+} WorldRendererCloudShadowLocations;
+
+/**
  * @brief The uniform locations of a shader that includes shaders/common/lighting.glsl (the PBR and the sprite
  *        shaders): the frame's lights, shadows, AO, haze and night vision, and the per-object forward point lights and
  *        haze multiplier.
@@ -674,6 +732,10 @@ typedef struct WorldRendererLitLocationsStruct
     /** @brief Interior lighting (common/interior): the sky's visibility map on WorldRendererTextureUnit_SkyVisibility and
      *  the draw's ambient zones. */
     WorldRendererInteriorLocations _interior;
+    /** @brief The clouds' shadow (common/lighting's CloudShadowAt): its switch, its map on
+     *  WorldRendererTextureUnit_CloudShadow, the map's frame, its light, its share beyond the map and whether it shades
+     *  the moon. */
+    WorldRendererCloudShadowLocations _cloudShadow;
 } WorldRendererLitLocations;
 
 /** @brief One PBR program that shades model objects, and its uniform locations: the rigid one (world_pbr) or the skinned
@@ -851,6 +913,9 @@ typedef struct WorldRendererSkyStateStruct
     int _locFlashIrradiance;
     int _locFlashDirection;
     int _locCloudHeight;
+    int _locCloudsActive;
+    int _locCloudLayer;
+    int _locCloudLayerResolution;
     /** @brief The atmosphere (common/atmosphere): the air and the tables. */
     WorldRendererAtmosphereLocations _atmosphere;
     /** @brief The haze (common/haze): the ground haze in front of the sky, seen through the volume's air. */
@@ -893,6 +958,7 @@ typedef struct WorldRendererAtmosphereStateStruct
     int _skyViewLocCloudSkyIrradiance;
     int _skyViewLocCloudAmbientRadiance;
     int _skyViewLocCloudHeight;
+    int _skyViewLocCloudLightShare;
     /** @brief The volume's builder (world_atmosphere_volume), its atmosphere locations and its own; NULL = no haze. */
     GameShader* _volumeShader;
     WorldRendererAtmosphereLocations _volumeLocations;
@@ -909,6 +975,8 @@ typedef struct WorldRendererAtmosphereStateStruct
     int _volumeLocCloudSkyIrradiance;
     int _volumeLocCloudAmbientRadiance;
     int _volumeLocCloudHeight;
+    int _volumeLocCloudLightShare;
+    int _volumeLocDirectLightShares;
     /** @brief The irradiance table's builder (world_atmosphere_irradiance), its atmosphere locations and its own;
      *  NULL = the tables are unavailable. */
     GameShader* _irradianceShader;
@@ -945,6 +1013,134 @@ typedef struct WorldRendererAtmosphereStateStruct
     bool _isTargetFailureReported;
 } WorldRendererAtmosphereState;
 
+/**
+ * @brief The uniform locations of a shader that includes shaders/common/clouds.glsl: the noise's samplers, the layers,
+ *        the erosion, the patterns' anchors and tiles. -1 for a uniform the shader lacks.
+ *
+ * Filled by the cloud pass at load, which also points the samplers at their fixed units.
+ */
+typedef struct WorldRendererCloudLocationsStruct
+{
+    int _locShapeNoise;
+    int _locDetailNoise;
+    int _locWeatherMap;
+    int _locLowLayer;
+    int _locLowExtinction;
+    int _locDetailStrength;
+    int _locMidLayer;
+    int _locMidExtinction;
+    int _locHighLayer;
+    int _locShapeAnchor;
+    int _locDetailAnchor;
+    int _locCoverageAnchor;
+    int _locMidAnchor;
+    int _locHighAnchor;
+    int _locTiles;
+    int _locMapTiles;
+} WorldRendererCloudLocations;
+
+/**
+ * @brief The clouds (WorldRendererClouds.c): the march's, the accumulation's and the shadow map's shaders and locations,
+ *        the noise (two 3D textures through GLTexture3D, the weather map a raylib texture, made at load from
+ *        CloudNoise.h), the cloud target (RGBA16F at the quality's resolution: what the clouds add, their
+ *        transmittance), the accumulation's two targets and the shadow map, the player's quality, the patterns' drift
+ *        with the wind and the frame count for the steps' jitter.
+ */
+typedef struct WorldRendererCloudStateStruct
+{
+    /** @brief The march (world_clouds); NULL = no clouds (the weather's deck is drawn instead). */
+    GameShader* _marchShader;
+    WorldRendererAtmosphereLocations _marchAtmosphere;
+    WorldRendererHazeLocations _marchHaze;
+    WorldRendererCloudLocations _marchClouds;
+    int _marchLocResolution;
+    int _marchLocInvViewProj;
+    int _marchLocSkyMask;
+    int _marchLocHasSkyMask;
+    int _marchLocSkyMaskResolution;
+    int _marchLocSunDirection;
+    int _marchLocMoonDirection;
+    int _marchLocLightDirection;
+    int _marchLocLightRadiance;
+    int _marchLocSunRadiance;
+    int _marchLocMoonRadiance;
+    int _marchLocGroundIrradiance;
+    int _marchLocTownIrradiance;
+    int _marchLocTint;
+    int _marchLocForward;
+    int _marchLocFlashRadiance;
+    int _marchLocFlashPosition;
+    int _marchLocMaxDistance;
+    int _marchLocLowSteps;
+    int _marchLocLightSteps;
+    int _marchLocMidSteps;
+    int _marchLocFrame;
+    /** @brief The shadow map's builder (world_clouds_shadow); NULL = no cloud shadows (the sun's light is dimmed by the
+     *  clouds' share everywhere). */
+    GameShader* _shadowShader;
+    WorldRendererAtmosphereLocations _shadowAtmosphere;
+    WorldRendererCloudLocations _shadowClouds;
+    int _shadowLocResolution;
+    int _shadowLocCenter;
+    int _shadowLocExtent;
+    int _shadowLocPlane;
+    int _shadowLocLightDirection;
+    int _shadowLocSteps;
+    /** @brief The accumulation over frames (world_clouds_resolve); NULL = each frame's march is shown as it is. */
+    GameShader* _resolveShader;
+    WorldRendererCloudLocations _resolveClouds;
+    WorldRendererAtmosphereLocations _resolveAtmosphere;
+    int _resolveLocCurrent;
+    int _resolveLocHistory;
+    int _resolveLocResolution;
+    int _resolveLocInvViewProj;
+    int _resolveLocPreviousViewProjection;
+    int _resolveLocOriginShift;
+    int _resolveLocHasHistory;
+    int _resolveLocCurrentShare;
+    /** @brief The GL functions for the 3D textures, the shape's and the erosion's volumes (GL names, 0 none) and the
+     *  weather map; _hasNoise once all three are made. */
+    GLTexture3DApi _api;
+    unsigned int _shapeNoise;
+    unsigned int _detailNoise;
+    Texture2D _weatherMap;
+    bool _hasNoise;
+    /** @brief The cloud target (made with the scene's targets, at the quality's share of the scene's size: _width and
+     *  _height, the size last tried, made or not, so a target the GPU refuses is not tried again every frame) and the
+     *  shadow map (made once). */
+    RenderTexture2D _target;
+    bool _hasTarget;
+    bool _isTargetTried;
+    int _width;
+    int _height;
+    /** @brief The accumulated results (two, used in turn: the last one and this frame's; made with the cloud target, the
+     *  same size), which of them holds the newest, whether it holds this frame's (else the target does), and the last
+     *  frame's view-projection and origin the newest was made with (none after a new target or a frame without clouds). */
+    RenderTexture2D _history[2];
+    bool _hasHistory;
+    int _newest;
+    bool _isResolved;
+    bool _hasPreviousFrame;
+    Matrix _previousViewProjection;
+    Vector3Double _previousOrigin;
+    RenderTexture2D _shadowMap;
+    bool _hasShadowMap;
+    /** @brief The player's quality (CONFIG_CLOUD_QUALITY_*: the config's, or WorldRenderer_SetCloudQuality's). */
+    int32_t _quality;
+    /** @brief The patterns' drift with the wind (advanced by each frame's real seconds) and the frames drawn (the steps'
+     *  jitter). */
+    WorldCloudsDrift _drift;
+    uint32_t _frameIndex;
+    /** @brief The pass's CPU time in its last render, milliseconds (the status line). */
+    double _lastMilliseconds;
+    /** @brief Set once a failure has been logged: the noise (or its GL functions), the cloud target, the accumulation's
+     *  targets, the shadow map. */
+    bool _isFailureReported;
+    bool _isTargetFailureReported;
+    bool _isHistoryFailureReported;
+    bool _isShadowMapFailureReported;
+} WorldRendererCloudState;
+
 /** @brief The star field: the seeded star catalogue as one mesh of one-pixel quads, drawn right after the sky. */
 typedef struct WorldRendererStarStateStruct
 {
@@ -960,6 +1156,9 @@ typedef struct WorldRendererStarStateStruct
     int _locTimeSeconds;
     int _locMoonDirection;
     int _locMoonCosRadius;
+    int _locCloudsActive;
+    int _locCloudLayer;
+    int _locCloudLayerResolution;
     /** @brief The camera's depth convention (common/depth): where the stars sit in depth. */
     int _locDepthReversed;
     /** @brief The atmosphere (common/atmosphere): the transmittance table dims and reddens the stars near the
@@ -1649,6 +1848,7 @@ struct WorldRendererStruct
     WorldRendererInstanceState _instances;
     WorldRendererSkyVisibilityState _skyVisibility;
     WorldRendererInteriorState _interior;
+    WorldRendererCloudState _clouds;
 };
 
 
@@ -2437,6 +2637,112 @@ bool WorldRendererSky_IsMoonVisible(const WorldRenderFrame* frame);
  *        clear and BEFORE the 3D geometry: it writes no depth, so the geometry draws over it.
  */
 void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame);
+
+
+// WorldRendererClouds.c
+/**
+ * @brief Loads the clouds: their three shaders (each missing one logged by the loader), the GL functions for 3D
+ *        textures, and the noise (CloudNoise.h, generated here: about 0.13 s) as two 3D textures and the weather map, and
+ *        the shadow map's target. A failure is logged once; without the march, the noise or its GL functions there are no
+ *        clouds; without the accumulation each frame's march shows as it is; without the shadow map's shader or target
+ *        they cast no shadows. Needs a live GL context (from EnsureShaders).
+ * @param self The renderer.
+ */
+void WorldRendererClouds_Load(WorldRenderer* self);
+
+/**
+ * @brief Releases the noise and the shadow map (WorldRenderer_Deconstruct).
+ * @param self The renderer.
+ */
+void WorldRendererClouds_Unload(WorldRenderer* self);
+
+/**
+ * @brief Makes sure the cloud target matches the scene's size and the quality (made again when either changed; released
+ *        while the quality is off): the scene's size at high quality, half of it at low, at most
+ *        WORLD_RENDERER_CLOUD_MAX_WIDTH wide, with the accumulation's two targets; a failure is logged once (no clouds,
+ *        or no accumulation) and not tried again until the size or the quality changes. Every render, after the scene's
+ *        targets.
+ * @param self The renderer.
+ * @param sceneWidth The scene target's size, in pixels.
+ * @param sceneHeight
+ */
+void WorldRendererClouds_EnsureTarget(WorldRenderer* self, int sceneWidth, int sceneHeight);
+
+/** @brief Releases the cloud target. */
+void WorldRendererClouds_ReleaseTargets(WorldRenderer* self);
+
+/** @brief Whether the clouds can be drawn at all: the march and the noise exist, and the cloud target too unless the
+ *  quality is off (then they are available but not drawn: the status's "inactive"). */
+bool WorldRendererClouds_IsAvailable(const WorldRenderer* self);
+
+/**
+ * @brief Moves the clouds' patterns with the wind for the frame's real seconds and decides whether they are drawn this
+ *        frame (frame->AreCloudsActive: available, the player's quality above off, the world's AreCloudsEnabled, the
+ *        atmosphere's tables running, a layer with coverage), with their layers and anchors (frame->Clouds). Before the
+ *        sky's light (WorldRendererLighting_PrepareSkyLight takes the air's light from it).
+ * @param self The renderer.
+ * @param frame The frame (its origin and environment, the atmosphere's decisions).
+ * @param deltaSeconds The frame's real seconds (none for a negative or non-finite one).
+ */
+void WorldRendererClouds_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame, double deltaSeconds);
+
+/**
+ * @brief Chooses the light that lights the clouds from the clear sky's light at their base (@p cloudTop: the sun, or the
+ *        moon while the sun's is the weaker) and the shadow map's frame for it (frame->IsCloudShadowActive while the map
+ *        exists and the light is above the horizon). From WorldRendererLighting_PrepareSkyLight, while the clouds are
+ *        drawn.
+ * @param self The renderer.
+ * @param frame The frame.
+ * @param cloudTop The clear sky's light at the clouds' base, for the lights above the air in full.
+ */
+void WorldRendererClouds_PrepareLight(WorldRenderer* self, WorldRenderFrame* frame, const WorldSkyLightFrame* cloudTop);
+
+/**
+ * @brief Draws the clouds' shadow map (while it is active) and marches the clouds into the cloud target (while they are
+ *        drawn), after the atmosphere's tables, the haze's volume and the G-buffer, before the scene. Records the pass's
+ *        CPU time.
+ * @param self The renderer.
+ * @param frame The frame.
+ */
+void WorldRendererClouds_Render(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Binds the cloud target on WorldRendererTextureUnit_CloudLayer for the sky pass and the stars (manually, like the
+ *        tables), while the clouds are drawn.
+ * @param self The renderer.
+ * @param frame The frame.
+ */
+void WorldRendererClouds_BindLayer(const WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Binds the clouds' shadow map on WorldRendererTextureUnit_CloudShadow for the lit passes, while it is active.
+ * @param self The renderer.
+ * @param frame The frame.
+ */
+void WorldRendererClouds_BindShadow(const WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Fills a lit shader's cloud-shadow locations and points its map's sampler at WorldRendererTextureUnit_CloudShadow.
+ * @param shader The lit shader.
+ * @param outLocations [out] Its locations.
+ */
+void WorldRendererClouds_PrepareLitShader(Shader shader, WorldRendererCloudShadowLocations* outLocations);
+
+/**
+ * @brief Uploads the frame's cloud shadow to a lit shader (off while it is not active).
+ * @param shader The lit shader.
+ * @param locations Its cloud-shadow locations.
+ * @param frame The frame.
+ */
+void WorldRendererClouds_UploadLitFrame(Shader shader, const WorldRendererCloudShadowLocations* locations,
+    const WorldRenderFrame* frame);
+
+/**
+ * @brief Logs the clouds' status line (whether they are drawn, the quality and the target's size, the layers, the light,
+ *        the shadow map, the pass's CPU time).
+ * @param self The renderer.
+ */
+void WorldRendererClouds_LogStatus(const WorldRenderer* self);
 
 
 // WorldRendererStars.c

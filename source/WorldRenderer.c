@@ -72,6 +72,7 @@ static void EnsureShaders(WorldRenderer* self)
     WorldRendererGBuffer_LoadShaders(self);
     WorldRendererShadows_LoadShaders(self);
     WorldRendererSky_LoadShader(self);
+    WorldRendererClouds_Load(self);
     WorldRendererStars_LoadShader(self);
     WorldRendererTerrain_LoadShader(self);
     // The sky's occupancy volume, its programs before the instanced twins.
@@ -431,6 +432,15 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
         frame->IsPointShadowActive);
     Status->Features[WorldRendererFeature_AmbientOcclusion] = StateOf(IsAoAvailable(self), frame->IsAoActive);
     Status->Features[WorldRendererFeature_ContactShadows] = StateOf(IsAoAvailable(self), frame->AreContactShadowsActive);
+    Status->Features[WorldRendererFeature_Clouds] = StateOf(WorldRendererClouds_IsAvailable(self),
+        frame->AreCloudsActive);
+    Status->Features[WorldRendererFeature_CloudShadows] = StateOf((self->_clouds._shadowShader != NULL)
+        && self->_clouds._hasShadowMap, frame->IsCloudShadowActive);
+    Status->CloudQuality = self->_clouds._quality;
+    Status->CloudTargetWidth = self->_clouds._hasTarget ? (int32_t)self->_clouds._width : 0;
+    Status->CloudTargetHeight = self->_clouds._hasTarget ? (int32_t)self->_clouds._height : 0;
+    Status->IsCloudLightMoon = frame->AreCloudsActive && frame->IsCloudLightMoon;
+    Status->CloudMilliseconds = self->_clouds._lastMilliseconds;
     Status->Features[WorldRendererFeature_Outlines] = StateOf(AreOutlinesAvailable(self), frame->AreOutlinesActive);
     Status->Features[WorldRendererFeature_Bloom] = StateOf(IsBloomAvailable(self), frame->IsBloomActive);
     Status->Features[WorldRendererFeature_Sunshafts] = StateOf(AreSunshaftsAvailable(self), frame->AreSunshaftsActive);
@@ -710,6 +720,8 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_sunshaft._isEnabled = true;
     Renderer->_crisp._isEnabled = true;
     Renderer->_isCullingEnabled = true;
+    Renderer->_clouds._quality = (config != NULL) ? config->CloudQuality : CONFIG_CLOUD_QUALITY_HIGH;
+    WorldCloudsDrift_Reset(&Renderer->_clouds._drift);
     WorldRenderCache_Construct(&Renderer->_cache);
     WorldVisibility_Construct(&Renderer->_visibility);
     WorldRendererAtmosphere_Construct(Renderer);
@@ -746,6 +758,7 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     WorldRendererAtmosphere_Deconstruct(self);
     WorldRendererShadows_Unload(self);
     WorldRendererSkyVisibility_Unload(self);
+    WorldRendererClouds_Unload(self);
     WorldRendererStars_Unload(self);
     WorldRendererSprites_Deconstruct(self);
     WorldRendererSky_Deconstruct(self); // retires the sky textures' own asset users
@@ -856,6 +869,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     {
         return TargetResult;
     }
+    // The cloud target follows the scene's size and the clouds' quality.
+    WorldRendererClouds_EnsureTarget(self, self->_scene._width, self->_scene._height);
 
     AdvanceRenderTime(self, deltaSeconds);
     WorldRenderFrame Frame;
@@ -873,6 +888,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     // sky's irradiance there, the light the air is lit by, the scene luminance the eye adapts from, the night vision's
     // calibration and the shadows' light.
     WorldRendererAtmosphere_PrepareFrame(self, &Frame);
+    // The clouds' layers and patterns, and whether they are drawn: the sky's light takes the air's light from it.
+    WorldRendererClouds_PrepareFrame(self, &Frame, deltaSeconds);
     WorldRendererLighting_PrepareSkyLight(self, &Frame);
     // The stars and the Milky Way by the sky's brightness behind them (the twilight from the sky's light).
     WorldRendererSky_PrepareNightSky(&Frame);
@@ -925,6 +942,10 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     {
         WorldRendererGBuffer_RenderAo(self, &Frame);
     }
+
+    // The clouds: their shadow map (the lit passes read it), then their march over the sky's pixels (the G-buffer says
+    // which hold geometry), which the sky pass composites and the stars read.
+    WorldRendererClouds_Render(self, &Frame);
 
     // The 3D world into the scene target (pixel resolution when pixelating), and over it, when asked, the haze's debug
     // view (one slice of the volume).
@@ -1013,6 +1034,8 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_SkyVisibility:    return (const unsigned char*)u8"sky visibility";
         case WorldRendererFeature_AmbientZones:     return (const unsigned char*)u8"ambient zones";
         case WorldRendererFeature_ContactShadows:   return (const unsigned char*)u8"contact shadows";
+        case WorldRendererFeature_Clouds:           return (const unsigned char*)u8"clouds";
+        case WorldRendererFeature_CloudShadows:     return (const unsigned char*)u8"cloud shadows";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -1065,13 +1088,14 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
     Memory_Free(Lods._data);
     Memory_Free(Lists._data);
     // Each terrain's materials and texture arrays, the copies of the model instances components, the atmosphere's
-    // tables with the render's CPU time, the light at the camera, the shadow levels and interior lighting.
+    // tables with the render's CPU time, the light at the camera, the shadow levels, interior lighting and the clouds.
     WorldRendererTerrain_LogMaterials(self);
     WorldRendererInstances_LogStatus(self);
     WorldRendererAtmosphere_LogStatus(self);
     WorldRendererLighting_LogStatus(self);
     WorldRendererShadows_LogStatus(self);
     WorldRendererInterior_LogStatus(self);
+    WorldRendererClouds_LogStatus(self);
 }
 
 void WorldRenderer_SetPixelationEnabled(WorldRenderer* self, bool enabled)
@@ -1190,6 +1214,18 @@ void WorldRenderer_SetContactShadowsEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_AreContactShadowsEnabled(const WorldRenderer* self)
 {
     return self->_areContactShadowsEnabled;
+}
+
+void WorldRenderer_SetCloudQuality(WorldRenderer* self, int32_t quality)
+{
+    bool IsKnown = (quality == CONFIG_CLOUD_QUALITY_OFF) || (quality == CONFIG_CLOUD_QUALITY_LOW)
+        || (quality == CONFIG_CLOUD_QUALITY_HIGH);
+    self->_clouds._quality = IsKnown ? quality : CONFIG_CLOUD_QUALITY_HIGH;
+}
+
+int32_t WorldRenderer_GetCloudQuality(const WorldRenderer* self)
+{
+    return self->_clouds._quality;
 }
 
 void WorldRenderer_SetShadowLevelViewEnabled(WorldRenderer* self, bool enabled)

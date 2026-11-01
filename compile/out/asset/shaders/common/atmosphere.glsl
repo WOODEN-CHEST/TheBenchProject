@@ -432,14 +432,16 @@ vec3 atmosphereLightSource(float height, float lightCos, float phaseR, float pha
 // `lightPollution` (the radiance of the town's light in the air at the camera's foot; 0: none) and an even light
 // `ambientRadiance` around every point below the height `ambientTop` (the clouds' deck's, which lights the air below it
 // from all around; 0: none: the air scatters an even light toward the viewer at its scattering times the light's
-// radiance, whatever its phase; a step reaching past that height takes its share below it). Each
+// radiance, whatever its phase; a step reaching past that height takes its share below it). Below that height the
+// light's own share is `lightShareBelow` (the share drawn clouds leave of it below their base; 1: all of it, the air lit
+// alike at every height). Each
 // point's light is atmosphereLightSource's, the light's zenith there its own on the curved planet. The steps grow with
 // the square of their index (short near the viewer, where every ray meets the densest air; a level ray rises with the
 // square of its length as the planet curves away), and each step's light is integrated exactly over its own air and
 // dimmed by the air before it. Also gives the path's transmittance.
 vec3 atmosphereScatteredLight(float height, float cosZenith, float lightCosZenith, float cosLightAngle,
     float pathLength, int stepCount, vec3 lightRadiance, float multipleScattering, vec3 lightPollution,
-    vec3 ambientRadiance, float ambientTop, out vec3 transmittance)
+    vec3 ambientRadiance, float ambientTop, float lightShareBelow, out vec3 transmittance)
 {
     float radius = ATMOSPHERE_R_PLANET + height;
     float horizontal = sqrt(max(1.0 - cosZenith*cosZenith, 0.0));
@@ -448,6 +450,7 @@ vec3 atmosphereScatteredLight(float height, float cosZenith, float lightCosZenit
     bool hasLight = any(greaterThan(lightRadiance, vec3(0.0)));
     bool hasPollution = any(greaterThan(lightPollution, vec3(0.0)));
     bool hasAmbient = any(greaterThan(ambientRadiance, vec3(0.0)));
+    bool isLightShared = lightShareBelow < 1.0;
     float steps = float(stepCount);
     vec3 light = vec3(0.0);
     vec3 depth = vec3(0.0);
@@ -462,12 +465,28 @@ vec3 atmosphereScatteredLight(float height, float cosZenith, float lightCosZenit
         vec3 scatteringM;
         vec3 extinction;
         atmosphereAirAt(h, scatteringR, scatteringM, extinction);
+        // The step's share below the ambient's top, its height taken as linear through the step (smooth across
+        // directions).
+        float below = 0.0;
+        if (hasAmbient || isLightShared)
+        {
+            float fromHeight = atmosphereHeightAt(height, cosZenith, pathLength*from*from);
+            float toHeight = atmosphereHeightAt(height, cosZenith, pathLength*to*to);
+            float low = min(fromHeight, toHeight);
+            float high = max(fromHeight, toHeight);
+            below = (high > low) ? clamp((ambientTop - low)/(high - low), 0.0, 1.0)
+                : ((low < ambientTop) ? 1.0 : 0.0);
+        }
         vec3 source = vec3(0.0);
         if (hasLight)
         {
             float lightCos = clamp((radius*lightCosZenith + t*cosLightAngle)/(ATMOSPHERE_R_PLANET + h), -1.0, 1.0);
             source = lightRadiance*atmosphereLightSource(h, lightCos, phaseR, phaseM, scatteringR, scatteringM,
                 multipleScattering);
+            if (isLightShared)
+            {
+                source *= mix(1.0, lightShareBelow, below);
+            }
         }
         if (hasPollution)
         {
@@ -475,13 +494,6 @@ vec3 atmosphereScatteredLight(float height, float cosZenith, float lightCosZenit
         }
         if (hasAmbient)
         {
-            // The step's share below the top, its height taken as linear through the step (smooth across directions).
-            float fromHeight = atmosphereHeightAt(height, cosZenith, pathLength*from*from);
-            float toHeight = atmosphereHeightAt(height, cosZenith, pathLength*to*to);
-            float low = min(fromHeight, toHeight);
-            float high = max(fromHeight, toHeight);
-            float below = (high > low) ? clamp((ambientTop - low)/(high - low), 0.0, 1.0)
-                : ((low < ambientTop) ? 1.0 : 0.0);
             source += (scatteringR + scatteringM)*ambientRadiance*below;
         }
         vec3 stepDepth = extinction*stepLength;

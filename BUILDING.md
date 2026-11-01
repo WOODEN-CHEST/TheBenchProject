@@ -110,7 +110,7 @@ skinning (the test world's figures bend, no warning).
 
 ## Direct OpenGL calls
 
-Everything draws through raylib, with five exceptions, each in a private module of its own and nowhere else:
+Everything draws through raylib, with six exceptions, each in a private module of its own and nowhere else:
 - **texture arrays** (`GL_TEXTURE_2D_ARRAY`, `source/GLTextureArray.{h,c}`), which raylib does not have and the
   terrain's materials need (up to sixteen materials blended per pixel, one array layer each);
 - **readbacks that do not wait** (`source/GLReadback.{h,c}`): raylib reads a texture back only by stalling until
@@ -144,9 +144,14 @@ Everything draws through raylib, with five exceptions, each in a private module 
   `glTexParameteri`, `glGenFramebuffers`, `glDeleteFramebuffers`, `glBindFramebuffer`, `glFramebufferTextureLayer`,
   `glDrawBuffer`, `glReadBuffer`, `glCheckFramebufferStatus`, `glEnable`, `glDisable`, `glGetIntegerv`, `glGetError`:
   OpenGL 3.2 core at the newest; a missing one, or maps the GPU refuses, leave the sun and the moon without shadows,
-  logged once).
+  logged once);
+- **3D textures** (`source/GLTexture3D.{h,c}`): the clouds' noise is two volumes the cloud march reads at any point
+  with the hardware's trilinear filtering, repeating on every axis; raylib has no 3D textures (`glGenTextures`,
+  `glDeleteTextures`, `glBindTexture`, `glTexImage3D`, `glGenerateMipmap`, `glTexParameteri`, `glPixelStorei`,
+  `glGetIntegerv`, `glGetError`: OpenGL 3.0 core; a missing one, or a volume the GPU refuses, leaves the sky without
+  drawn clouds, the weather's clouds showing as one even deck, logged once).
 
-The texture arrays' module, as the pattern all five follow:
+The texture arrays' module, as the pattern all six follow:
 - the function pointers (`glGenTextures`, `glDeleteTextures`, `glBindTexture`, `glTexImage3D`, `glTexSubImage3D`,
   `glGenerateMipmap`, `glTexParameteri`, `glTexParameterf`, `glPixelStorei`, `glGetIntegerv`, `glGetFloatv`,
   `glGetError`) come through raylib's `rlGetProcAddress`, the loader raylib itself was initialized with (GLFW's on the

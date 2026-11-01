@@ -2,6 +2,7 @@
 #include <math.h>
 #include <stdio.h>
 #include "WorldTestFrame.h"
+#include "Config.h"
 #include "GameClock.h"
 #include "GameFrame.h"
 #include "Services.h"
@@ -866,6 +867,23 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         {
             Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
                 (const unsigned char*)u8"WorldTest: sun shafts %s.", Enabled ? "ON" : "OFF");
+            Error_Deconstruct(&LogResult);
+        }
+    }
+
+    // Keypad / steps the clouds' quality: off (the weather's clouds as one even deck), low, high.
+    if (GameInput_IsKeyPressed(input, GameKey_KeypadDivide))
+    {
+        int32_t Quality = (WorldRenderer_GetCloudQuality(frame->_renderer) + 1) % (CONFIG_CLOUD_QUALITY_HIGH + 1);
+        WorldRenderer_SetCloudQuality(frame->_renderer, Quality);
+        if (frame->_services->Logger != NULL)
+        {
+            static const char* const QualityNames[CONFIG_CLOUD_QUALITY_HIGH + 1] =
+            {
+                "off (the weather's clouds as one even deck)", "low (half the resolution)", "high"
+            };
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: clouds %s.", QualityNames[Quality]);
             Error_Deconstruct(&LogResult);
         }
     }

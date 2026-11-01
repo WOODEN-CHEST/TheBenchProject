@@ -22,7 +22,7 @@
  *    irradiance on surfaces (the ambient: the share shifts from the direct light to it as the clouds thicken), the
  *    ground's bounce, and the air below the deck is lit by it from all around (AMBIENT RADIANCE: the deck's mean radiance
  *    over its half of the sky, the overcast sky's (1 + 2 cos zenith) / 3, and the ground's bounce of it below);
- *  - the sky shows the deck at the clouds' height (WORLD_WEATHER_CLOUD_HEIGHT): its radiance at the zenith (ZENITH
+ *  - the sky shows the deck at the clouds' base (the environment's CloudBase): its radiance at the zenith (ZENITH
  *    RADIANCE, the overcast sky's) falling to a third at the horizon, through the air below it, on top of the clear sky
  *    the cover left. So the sky greys and darkens as
  *    the clouds thicken, and far hills fade into a grey haze that meets it at the horizon.
@@ -31,7 +31,7 @@
  * THE FLASH: a lightning strike lights the clouds over a wide area, so its light on a level surface falls off as
  * 1 / distance (not 1 / distance^2: an area that grows with the distance lights it), WORLD_WEATHER_FLASH_IRRADIANCE
  * at a kilometre, blue-white, at most WORLD_WEATHER_FLASH_MAX_IRRADIANCE; it joins the sky's light on surfaces and in
- * the air, and the sky glows with it, most toward the strike (the clouds' height, WORLD_WEATHER_CLOUD_HEIGHT, over it). The
+ * the air, and the sky glows with it, most toward the strike (the clouds' base, CloudBase, over it). The
  * eye's anchor and night vision's field leave it out: a fraction of a second is too short to adapt to.
  *
  * WETNESS darkens porous surfaces and makes them glossier, most on surfaces facing up (common/lighting's
@@ -51,9 +51,6 @@
 /** The distance the flash's falloff is measured from, metres, and the nearest it counts. */
 #define WORLD_WEATHER_FLASH_REFERENCE_DISTANCE 1000.0f
 #define WORLD_WEATHER_FLASH_NEAREST_DISTANCE 200.0f
-/** The clouds' height above the atmosphere's ground, metres: where the sky shows the deck (through the air below it)
- *  and where a flash's glow sits over its strike. */
-#define WORLD_WEATHER_CLOUD_HEIGHT 1500.0f
 
 
 // Types.
@@ -101,7 +98,7 @@ bool WorldWeatherLight_IsVisible(const WorldWeatherLight* self);
 
 /**
  * Adds the deck's light to the sky's light at the camera. @p cloudTop is the light falling on the clouds' top (the clear
- * sky's frame light at WORLD_WEATHER_CLOUD_HEIGHT, for the lights above the air), @p frame the camera's with the lights
+ * sky's frame light at the clouds' base, for the lights above the air), @p frame the camera's with the lights
  * dimmed by DirectShare (the clear sky's without clouds): its sky's irradiance takes the deck's, its daylight's part
  * (SunSky) the share the sun gave it, its ground's bounce the ground's share of it. Sets the deck's
  * irradiance, the zenith radiance and the ambient radiance (the flash's light in it). @p groundAlbedo is the ground's

@@ -10,11 +10,13 @@
 // common/night_sky's skyglow). The table holds the far ground below the horizon (the haze in front of it
 // included), and the ground haze (common/haze) lies in front of the sky and the far ground as it lies in front of the
 // world's surfaces, so a misty horizon meets misty ground without a seam.
-// The weather's clouds (source/WorldWeatherLight.h), until clouds are drawn, are one even deck over the sky: above the
-// horizon it shows the deck's radiance (an overcast sky's: brightest at the zenith, a third of it at the horizon) through
-// the air in front of it, on top of the clear sky the clouds leave (the renderer dims the lights the tables are built
-// with, and the discs, the stars and the Milky Way, by the share they leave), and a lightning flash's glow, most toward
-// the strike.
+// The weather's clouds are drawn by the cloud pass (shaders/clouds), and composited here over the sky behind them (the
+// Milky Way and the discs hidden by them, shown in their gaps) before the ground haze in front of it all. Without drawn
+// clouds (the player's quality off, a world without them) the weather's clouds are one even deck over the sky
+// (source/WorldWeatherLight.h): above the horizon it shows the deck's radiance (an overcast sky's: brightest at the
+// zenith, a third of it at the horizon) through the air in front of it, on top of the clear sky the clouds leave (the
+// renderer dims the lights the tables are built with, and the discs, the stars and the Milky Way, by the share they
+// leave), and a lightning flash's glow, most toward the strike.
 // Drawn behind the 3D geometry into the linear-HDR scene buffer; the tonemap post-pass maps it to display.
 // The per-pixel ray is reconstructed from the inverse view-projection so the sky lines up exactly with the 3D
 // camera. The renderer works in render space (the world's orientation with the camera at the origin), so that matrix
@@ -61,6 +63,11 @@ uniform vec3 cloudZenithRadiance;  // the clouds' deck's radiance at the zenith,
 uniform vec3 flashIrradiance;      // a lightning flash's light on a level surface (linear; 0: none)
 uniform vec3 flashDirection;       // unit direction toward the flash's glow (up toward the clouds over the strike)
 uniform float cloudHeight;         // the clouds' deck's height above the atmosphere's ground, metres
+uniform bool cloudsActive;         // the clouds are drawn (their target holds them): the deck is not, the flash's glow
+                                   // neither (the clouds glow with it themselves)
+uniform sampler2D cloudLayer;      // the cloud target: RGB what the clouds add, A the share of the sky behind them that
+                                   // shows (-1 where the march skipped a texel under geometry)
+uniform vec2 cloudLayerResolution; // its size in texels
 
 uniform float nightVisionFieldLuminance; // the scene luminance the sky's light gives (linear, the game's light units)
 uniform float nightVisionHalfLuminance;  // night vision's calibration on the game's light scale (source/NightVision.h)
@@ -120,6 +127,35 @@ vec3 weatherSky(vec3 rayDir, vec3 transmittance)
         deck += flashIrradiance*OVERCAST_ZENITH_PER_IRRADIANCE*lobe;
     }
     return deck*gradient*transmittance;
+}
+
+// The drawn clouds at this pixel: what they add and the share of the sky behind them that shows (nothing and 1 without
+// them), from the cloud target's texels around the pixel weighed bilinearly (one texel when the target is the scene's
+// size), the texels the march skipped under geometry left out.
+vec4 cloudsHere()
+{
+    if (!cloudsActive)
+    {
+        return vec4(0.0, 0.0, 0.0, 1.0);
+    }
+    vec2 position = gl_FragCoord.xy/resolution*cloudLayerResolution - 0.5;
+    vec2 base = floor(position);
+    vec2 share = position - base;
+    ivec2 last = ivec2(cloudLayerResolution) - 1;
+    vec4 sum = vec4(0.0);
+    float weightSum = 0.0;
+    for (int corner = 0; corner < 4; corner++)
+    {
+        ivec2 offset = ivec2(corner & 1, corner >> 1);
+        vec4 value = texelFetch(cloudLayer, clamp(ivec2(base) + offset, ivec2(0), last), 0);
+        float weight = ((offset.x == 1) ? share.x : 1.0 - share.x)*((offset.y == 1) ? share.y : 1.0 - share.y);
+        if ((value.a >= 0.0) && (weight > 0.0))
+        {
+            sum += value*weight;
+            weightSum += weight;
+        }
+    }
+    return (weightSum > 0.0) ? sum/weightSum : vec4(0.0, 0.0, 0.0, 1.0);
 }
 
 // The Milky Way toward a world direction. The panorama is in galactic coordinates: the galactic centre in the middle,
@@ -225,7 +261,7 @@ void main()
 
     // The weather's clouds and a flash's glow over the sky above the horizon (the far ground below it is lit by them in
     // the table already).
-    if (isBeyondAirShown && (any(greaterThan(cloudZenithRadiance, vec3(0.0)))
+    if (!cloudsActive && isBeyondAirShown && (any(greaterThan(cloudZenithRadiance, vec3(0.0)))
         || any(greaterThan(flashIrradiance, vec3(0.0)))))
     {
         sky += weatherSky(rayDir, atmosphereTablesActive ? weatherDeckTransmittance(rayDir) : transmittance)*tint;
@@ -246,6 +282,11 @@ void main()
     {
         sky += milkyWay(rayDir)*milkyWayExtinction*(1.0 - moonCover)*tint;
     }
+
+    // The drawn clouds over the sky behind them (the Milky Way's light with it; the air in front of them is in their
+    // light).
+    vec4 clouds = cloudsHere();
+    sky = sky*clouds.a + clouds.rgb;
 
     // The ground haze in front of all of it: up to the far ground below the horizon (where the table's rays end),
     // through the whole sky above it, along the curved planet for the rays that pass over the horizon. It dims the discs
@@ -277,7 +318,7 @@ void main()
         discs += atmosphereTablesActive ? (sunDisc*transmittance) : sunDisc;
     }
     discs += moon*transmittance*moonCover;
-    sky += discs*tint*mistTransmittance;
+    sky += discs*tint*mistTransmittance*clouds.a;
 
     finalColor = vec4(sky, 1.0); // linear HDR; tonemap post-pass maps it to display
 }

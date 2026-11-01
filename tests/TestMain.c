@@ -55,6 +55,8 @@ int main(void)
     ClimateTests_Run(&Run);
     WeatherSystemTests_Run(&Run);
     WorldWeatherLightTests_Run(&Run);
+    CloudNoiseTests_Run(&Run);
+    WorldCloudsTests_Run(&Run);
     NightSkyTests_Run(&Run);
     NightVisionTests_Run(&Run);
     EyeAdaptationTests_Run(&Run);

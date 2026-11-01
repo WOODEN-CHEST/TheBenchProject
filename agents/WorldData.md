@@ -782,6 +782,34 @@ The runtime rows are shown and reachable by scripts but not `Persistent`: files 
 reader's own. `WorldEnvironment_GetDaylightFactorAt(environment, date, timeOfDay)` is the daylight factor at another
 time for this environment's sun (the weather's drying reads the sun ahead of the clock).
 
+The clouds (category "Clouds"; [WorldRuntime.md](WorldRuntime.md), "Clouds"): how the weather's clouds look and the two
+layers above them. The weather's `cloud_coverage`, `cloud_type` and `cloud_density` are the low layer's; the mid and high
+layers have their own coverage and are off by default (coverage 0). Heights are above the atmosphere's ground (sea
+level, `horizon_ground_height`). The player's `cloud_quality` ([Config.md](Config.md)) decides whether they are drawn at
+all.
+
+| Key | Wire id | Rule | Default | Meaning |
+|---|---|---|---|---|
+| `are_clouds_enabled` | 79 | bool | true | When off, this world draws no clouds whatever the player's settings: the weather's clouds stay one even grey deck. |
+| `cloud_base` | 80 | [0, 30000] m | 1500 | The weather's clouds' base. |
+| `cloud_thickness` | 81 | [10, 30000] m | 2500 | How high above their base they may reach: storm clouds fill it, cumulus about half, flat layers its bottom. |
+| `cloud_scale` | 82 | [0.05, 20] | 1 | How large every layer's clouds are (2: twice as wide). |
+| `cloud_detail` | 83 | [0, 2] | 1 | How strongly the clouds' edges break up into wisps and billows (0 smooth). |
+| `cloud_wind_scale` | 84 | [0, 100] | 2 | How fast the clouds drift, times the weather's wind (the mid layer 1.5 times this, the high layer 2.5 times). |
+| `cloud_evolution` | 85 | [0, 100] | 1 | How fast the clouds' shapes change as they drift (0: they only drift). |
+| `cloud_mid_coverage` | 86 | [0, 1] | 0 | How much of the sky the mid layer (altocumulus, altostratus) covers. |
+| `cloud_mid_type` | 87 | [0, 1] | 1 | 0 a smooth sheet (altostratus), 1 small puffs (altocumulus). |
+| `cloud_mid_density` | 88 | [0, 1] | 0.4 | How thick the mid layer's clouds are. |
+| `cloud_mid_base` | 89 | [0, 30000] m | 5000 | The mid layer's base. |
+| `cloud_mid_thickness` | 90 | [10, 30000] m | 600 | The mid layer's thickness. |
+| `cloud_high_coverage` | 91 | [0, 1] | 0 | How much of the sky the high layer (cirrus, cirrocumulus: thin ice clouds) covers. |
+| `cloud_high_type` | 92 | [0, 1] | 0.2 | 0 long fibres (cirrus), 1 small puffs (cirrocumulus). |
+| `cloud_high_density` | 93 | [0, 1] | 0.5 | How thick the high layer is (1: an optical depth of 1 straight through). |
+| `cloud_high_height` | 94 | [0, 30000] m | 9000 | The high layer's height. |
+| `cloud_forward_scattering` | 95 | [0, 0.95] | 0.8 | How strongly the clouds scatter light forward: how brightly their edges glow toward the sun and the moon. |
+| `cloud_tint` | 96 | colour | (255, 255, 255) | The clouds' own colour, multiplying the light they scatter. |
+| `cloud_light_pollution` | 97 | [0, 10] | 1 | How much of the town's light (light pollution) lights the clouds' undersides at night (0: none). |
+
 The sun's and the moon's shadows ([WorldRuntime.md](WorldRuntime.md), "Sun and moon shadows"): `are_shadows_enabled`
 (default true) and `shadow_reach` (wire id 63, [0, 20000] m, default 4000: how far from the camera they reach, fading out
 over the last tenth; 0 none; `WORLD_ENVIRONMENT_MAX_SHADOW_REACH`, the levels' depth precision). How sharp they are is

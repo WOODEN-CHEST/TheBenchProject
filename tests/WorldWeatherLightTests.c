@@ -195,6 +195,7 @@ static void TheFlashFallsOffWithDistance(TestRun* run)
     Environment.LightningFlash = 1.0f;
     Environment.LightningDirection = (Vector3){ 1.0f, 0.0f, 0.0f };
     Environment.LightningDistance = 1000.0f;
+    Environment.CloudBase = 2400.0f; // the clouds' base the flash lights, not a fixed height
     WorldWeatherLight Weather;
     WorldWeatherLight_GetFrame(&Environment, &Weather);
     float AtOne = Weather.FlashIrradiance[2];
@@ -202,7 +203,7 @@ static void TheFlashFallsOffWithDistance(TestRun* run)
     TEST_CHECK(run, (Weather.FlashIrradiance[0] < Weather.FlashIrradiance[1]) && (Weather.FlashIrradiance[1] < AtOne));
     TEST_CHECK(run, WorldWeatherLight_IsVisible(&Weather) && !WorldWeatherLight_HasClouds(&Weather));
     // Toward the clouds over the strike: its level direction, up to the clouds' height at its distance.
-    TEST_CHECK(run, IsClose(Weather.FlashDirection.y / Weather.FlashDirection.x, WORLD_WEATHER_CLOUD_HEIGHT / 1000.0f)
+    TEST_CHECK(run, IsClose(Weather.FlashDirection.y / Weather.FlashDirection.x, Environment.CloudBase / 1000.0f)
         && (Weather.FlashDirection.z == 0.0f));
     Environment.LightningDistance = 2000.0f;
     WorldWeatherLight_GetFrame(&Environment, &Weather);

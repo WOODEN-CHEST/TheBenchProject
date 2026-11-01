@@ -5,12 +5,14 @@
 #include "ShaderSource.h"
 #include "SkeletalAnimation.h"
 #include "WorldAtmosphere.h"
+#include "WorldClouds.h"
 #include "WorldInstancing.h"
 #include "WorldInterior.h"
 #include "WorldLod.h"
 #include "WorldShadowLevels.h"
 #include "WorldSkyLight.h"
 #include "WorldVisibility.h"
+#include "WorldWeatherLight.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRJSON.h"
 #include <math.h>
@@ -1361,9 +1363,9 @@ static void ShippedShadersShowTheWeather(TestRun* run)
         const char* const Builders[][2] =
         {
             { "atmosphere/volume", "isTransmittance ? vec3(0.0) : max(cloudAmbientRadiance, vec3(0.0)), cloudHeight, "
-                "transmittance);" },
+                "cloudLightShare,\n        transmittance);" },
             { "atmosphere/skyview", "SKY_VIEW_STEPS, lightRadiance, multipleScattering, lightPollutionRadiance, "
-                "max(cloudAmbientRadiance, vec3(0.0)),\n        cloudHeight, transmittance)" },
+                "max(cloudAmbientRadiance, vec3(0.0)),\n        cloudHeight, cloudLightShare, transmittance)" },
         };
         for (size_t Index = 0U; Index < (sizeof(Builders) / sizeof(Builders[0])); Index++)
         {
@@ -1389,6 +1391,72 @@ static void ShippedShadersShowTheWeather(TestRun* run)
                 && (CountOccurrences(&Fixture.Text, "uniform vec3 cloudZenithRadiance;") == 1U)
                 && (CountOccurrences(&Fixture.Text, "sky += weatherSky(rayDir, atmosphereTablesActive ? "
                     "weatherDeckTransmittance(rayDir) : transmittance)*tint;") == 1U));
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
+/* Whether a value is a whole number (a pattern's repeats over its anchor's wrap). */
+static bool IsWhole(double value)
+{
+    return fabs(value - round(value)) < 1e-6;
+}
+
+/* The clouds' shaders and their readers: the shadow map's least climb is the C side's in both of its readers, the diffuse
+ * light's two-stream factor the weather deck's, every scale a pattern is read at repeats a whole number of times over its
+ * anchor's wrap (WorldClouds.h: else the clouds jump when an anchor wraps), the erosion never carves everything, the
+ * sky composites the clouds over what lies behind them (the discs too) and leaves the deck out while they are drawn,
+ * the stars are hidden by them, and the lit shaders take their shadow on the light it was made for, by the share of the
+ * low layer above a surface. */
+static void ShippedShadersDrawTheClouds(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        if (ExpandShippedStage(run, &Fixture, "clouds/shadow"))
+        {
+            TEST_CHECK(run, (fabs(GetConstValue(&Fixture.Text, "CLOUD_SHADOW_MIN_UP")
+                    - (double)WORLD_CLOUDS_SHADOW_MIN_UP) < 1.0e-7)
+                && (CountOccurrences(&Fixture.Text, "finalColor = vec4(low*upper, low, upper, 1.0);") == 1U));
+        }
+        if (ExpandShippedStage(run, &Fixture, "pbr/fragment"))
+        {
+            TEST_CHECK(run, (fabs(GetConstValue(&Fixture.Text, "CLOUD_SHADOW_MIN_UP") - (double)WORLD_CLOUDS_SHADOW_MIN_UP)
+                    < 1.0e-7)
+                && (CountOccurrences(&Fixture.Text, "float passed = CloudShadowAt(worldPos);") == 1U)
+                && (CountOccurrences(&Fixture.Text, "uniform float cloudShadowTop;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "passed = pow(max(mapped.g, 1e-6), above)*mapped.b;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "light.moon *= passed;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "light.sun *= passed;") == 1U));
+        }
+        if (ExpandShippedStage(run, &Fixture, "clouds/march"))
+        {
+            TEST_CHECK(run, fabs(GetConstValue(&Fixture.Text, "CLOUD_DIFFUSION")
+                - 0.75 * (1.0 - (double)WORLD_WEATHER_CLOUD_ASYMMETRY)) < 1.0e-6);
+            // The low layer's cells over its coverage map's tile; the mid layer's patches at half its map's frequency
+            // over its wrap of WORLD_CLOUDS_MID_ANCHOR_TILES; the high layer's fibres and puffs over its wrap.
+            TEST_CHECK(run, IsWhole(GetConstValue(&Fixture.Text, "CLOUD_CELL_REPEATS"))
+                && (CountOccurrences(&Fixture.Text, "textureLod(cloudWeatherMap, q.xz/(cloudMapTiles.x*2.0), 0.0)") == 1U)
+                && IsWhole(0.5 * WORLD_CLOUDS_MID_ANCHOR_TILES)
+                && IsWhole(GetConstValue(&Fixture.Text, "CLOUD_HIGH_FIBRE_SCALE") * WORLD_CLOUDS_HIGH_ANCHOR_TILES)
+                && IsWhole(GetConstValue(&Fixture.Text, "CLOUD_HIGH_PUFF_SCALE") * WORLD_CLOUDS_HIGH_ANCHOR_TILES));
+            TEST_CHECK(run, (GetConstValue(&Fixture.Text, "CLOUD_MAX_EROSION") < 1.0)
+                && (CountOccurrences(&Fixture.Text, "min(CLOUD_EROSION*cloudDetailStrength*modifier, CLOUD_MAX_EROSION)")
+                    == 1U));
+        }
+        TEST_CHECK(run, ExpandShippedStage(run, &Fixture, "clouds/resolve"));
+        if (ExpandShippedStage(run, &Fixture, "sky/fragment"))
+        {
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "sky = sky*clouds.a + clouds.rgb;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "sky += discs*tint*mistTransmittance*clouds.a;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "if (!cloudsActive && isBeyondAirShown") == 1U));
+        }
+        if (ExpandShippedStage(run, &Fixture, "stars/fragment"))
+        {
+            TEST_CHECK(run, CountOccurrences(&Fixture.Text, "finalColor = vec4(fragRadiance*cloudsTransmittanceHere(), "
+                "0.0);") == 1U);
         }
     }
     ShaderFixture_Deconstruct(run, &Fixture);
@@ -1424,6 +1492,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "shipped_sky_volume_matches_its_mirror", ShippedSkyVolumeMatchesItsMirror },
         { "shipped_shadow_levels_are_read_off_the_surface", ShippedShadowLevelsAreReadOffTheSurface },
         { "shipped_shaders_show_the_weather", ShippedShadersShowTheWeather },
+        { "shipped_shaders_draw_the_clouds", ShippedShadersDrawTheClouds },
     };
     TestRun_RunSuite(run, "ShaderSource", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

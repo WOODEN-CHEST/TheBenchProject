@@ -583,7 +583,8 @@ static void FillEnvironment(WorldEnvironment* environment)
  * (61 and 62), every one off its default. The names go through the table, which clones them and frees the old ones. */
 static const uint16_t LaterSettingWireIds[] =
     { 31U, 32U, 33U, 34U, 35U, 36U, 37U, 38U, 39U, 40U, 41U, 42U, 43U, 44U, 45U, 46U, 47U, 48U, 49U, 50U, 51U, 52U, 53U,
-        54U, 55U, 56U, 57U, 58U, 59U, 60U, 61U, 62U, 63U, 64U, 65U, 66U, 67U, 68U, 69U, 70U, 71U, 72U, 73U, 74U, 75U };
+        54U, 55U, 56U, 57U, 58U, 59U, 60U, 61U, 62U, 63U, 64U, 65U, 66U, 67U, 68U, 69U, 70U, 71U, 72U, 73U, 74U, 75U,
+        79U, 80U, 81U, 82U, 83U, 84U, 85U, 86U, 87U, 88U, 89U, 90U, 91U, 92U, 93U, 94U, 95U, 96U, 97U };
 
 static void FillLaterSettings(TestRun* run, WorldEnvironment* environment)
 {
@@ -629,6 +630,25 @@ static void FillLaterSettings(TestRun* run, WorldEnvironment* environment)
     environment->FogDensity = 0.03f;
     environment->FogHeight = 12.5f;
     environment->Temperature = -4.5f;
+    environment->AreCloudsEnabled = false;
+    environment->CloudBase = 900.0f;
+    environment->CloudThickness = 4500.0f;
+    environment->CloudScale = 1.5f;
+    environment->CloudDetail = 0.25f;
+    environment->CloudWindScale = 3.5f;
+    environment->CloudEvolution = 0.5f;
+    environment->CloudMidCoverage = 0.375f;
+    environment->CloudMidType = 0.25f;
+    environment->CloudMidDensity = 0.75f;
+    environment->CloudMidBase = 6500.0f;
+    environment->CloudMidThickness = 350.0f;
+    environment->CloudHighCoverage = 0.625f;
+    environment->CloudHighType = 0.875f;
+    environment->CloudHighDensity = 0.125f;
+    environment->CloudHighHeight = 11000.0f;
+    environment->CloudForwardScattering = 0.6f;
+    environment->CloudTint = (Color){ 255, 230, 210, 255 };
+    environment->CloudLightPollution = 2.5f;
     const PropertyTable* Table = WorldEnvironment_GetPropertyTable();
     TEST_CHECK_SUCCESS(run, Properties_Set(Table, environment, u8"moon_texture",
         &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"pack.red_moon" }));
@@ -2148,7 +2168,7 @@ static void JSONMigrationRunsOnItsOwn(TestRun* run)
 }
 
 /* The table writes the same GHDF tree as the reference encoder, for defaults and for changed values, except for the
- * retired ids 2 and 3 (left out), the date (id 30) and the settings the reference lacks (ids 31 to 63, left out of the
+ * retired ids 2 and 3 (left out), the date (id 30) and the settings the reference lacks (ids 31 and up, left out of the
  * comparison here; environment_ghdf_round_trip covers them). The reference's tree, with the retired ids and no date,
  * still reads. */
 static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
@@ -2195,7 +2215,7 @@ static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
             TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Expected, 30U,
                 GHDF_CreateRegularType(GHDFValueType_EncodedInteger), &Date));
             TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(Table, &Environment, Pool, Actual, &Everything));
-            TEST_CHECK(run, GHDFCompound_GetEntryCount(Actual) == 73U);
+            TEST_CHECK(run, GHDFCompound_GetEntryCount(Actual) == 92U);
             for (size_t Index = 0U; Index < (sizeof(LaterSettingWireIds) / sizeof(LaterSettingWireIds[0])); Index++)
             {
                 TEST_CHECK_SUCCESS(run, GHDFCompound_Remove(Actual, LaterSettingWireIds[Index]));
@@ -2226,7 +2246,7 @@ static void EnvironmentJSONRoundTrip(TestRun* run)
     if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
     {
         TEST_CHECK_SUCCESS(run, WorldEnvironment_WriteJSON(&Source, Pool, Compound, NULL));
-        TEST_CHECK(run, JSONCompound_GetEntryCount(Compound) == 73U);
+        TEST_CHECK(run, JSONCompound_GetEntryCount(Compound) == 92U);
         JSONObjectValue Parsed;
         if (ReparseCompound(run, Pool, Compound, &Parsed))
         {
@@ -2355,7 +2375,7 @@ static void EnvironmentGHDFRoundTrip(TestRun* run)
     if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Pool, &Compound)))
     {
         TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(Table, &Source, Pool, Compound, NULL));
-        TEST_CHECK(run, GHDFCompound_GetEntryCount(Compound) == 73U);
+        TEST_CHECK(run, GHDFCompound_GetEntryCount(Compound) == 92U);
         TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(Table, Compound, &Restored, NULL));
         TEST_CHECK(run, Properties_Equals(Table, &Source, &Restored));
         TEST_CHECK(run, (Restored.MoonTexture != Source.MoonTexture) && AreStringsEqual(Restored.MoonTexture, u8"tbp:pack.red_moon"));

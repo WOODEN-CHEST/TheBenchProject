@@ -9,9 +9,10 @@
 // sky's irradiance and the ground's bounce, what lights every surface at that height. Built every frame after the
 // sky-view table, from the transmittance, multiple scattering and irradiance tables (source/WorldRendererAtmosphere.c;
 // only its last row while the haze is off); the lit shaders, the sky pass and the outlines read it (common/haze,
-// common/lighting). Under the weather's clouds (source/WorldWeatherLight.h) the sun and the moon come in dimmed by them,
-// the deck's diffuse light (and a lightning flash's) joins the sky's light on surfaces at every height, and the air is
-// lit by it from all around.
+// common/lighting). Under the weather's clouds (source/WorldWeatherLight.h) the sun and the moon come in dimmed by them
+// (while they are one even deck; while they are drawn, in full with the clouds' share below their base, and on surfaces
+// in full where the clouds' shadow map shades them per surface), the deck's diffuse light (and a lightning flash's) joins
+// the sky's light on surfaces at every height, and the air below them is lit by it from all around.
 // Its rays pass through the planet's surface, the air below it as on it: the world's ground is flat and goes on where
 // the planet curves away (a level ray from 1.7 m meets the planet 4.65 km out), and a valley below sea level is hazed
 // like the plain around it.
@@ -29,7 +30,11 @@ uniform vec3 groundAlbedo;           // the ground's albedo (sky_ground_albedo, 
 uniform vec3 cloudSkyIrradiance;     // the clouds' deck's diffuse light on a level surface, and the flash's (linear; 0
                                      // without either)
 uniform vec3 cloudAmbientRadiance;   // the even light the deck (and the flash) gives the air from all around (linear)
-uniform float cloudHeight;           // the deck's height above the atmosphere's ground: the air below it takes that light
+uniform float cloudHeight;           // the clouds' base above the atmosphere's ground: the air below it takes that light
+uniform float cloudLightShare;       // the share of the sun's and the moon's light drawn clouds leave below their base
+                                     // (1: the lights are as given, already dimmed by the clouds' deck)
+uniform vec2 directLightShares;      // the share of the sun's (x) and the moon's (y) light on surfaces below the clouds'
+                                     // base: 1 where the clouds' shadow map takes it per surface, else cloudLightShare
 
 out vec4 finalColor;
 
@@ -38,9 +43,23 @@ out vec4 finalColor;
 // The largest value a texel of the volume (RGBA16F) holds.
 const float HALF_FLOAT_MAX = 65504.0;
 
-// One value of the sky's light (ATMOSPHERE_SKY_LIGHT_*) at one of its heights.
+// One value of the sky's light (ATMOSPHERE_SKY_LIGHT_*) at one of its heights. Below drawn clouds' base the lights take
+// their share (the direct ones per light: none of it where the clouds' shadow map shades them).
 vec3 SkyLightValue(int value, float height, vec3 sunRadiance, vec3 moonRadiance)
 {
+    if (height < cloudHeight)
+    {
+        if (value == ATMOSPHERE_SKY_LIGHT_SUN)
+        {
+            return sunRadiance*directLightShares.x*atmosphereLightTransmittance(height, sunDirection.y);
+        }
+        if (value == ATMOSPHERE_SKY_LIGHT_MOON)
+        {
+            return moonRadiance*directLightShares.y*atmosphereLightTransmittance(height, moonDirection.y);
+        }
+        sunRadiance *= cloudLightShare;
+        moonRadiance *= cloudLightShare;
+    }
     vec3 sun = sunRadiance*atmosphereLightTransmittance(height, sunDirection.y);
     vec3 moon = moonRadiance*atmosphereLightTransmittance(height, moonDirection.y);
     if (value == ATMOSPHERE_SKY_LIGHT_SUN)
@@ -84,18 +103,18 @@ void main()
         }
         else if (texel.x == ATMOSPHERE_VOLUME_GROUND_HAZE_SUN)
         {
-            value = sunRadiance*atmosphereLightTransmittance(baseHeight, sunDirection.y);
+            value = sunRadiance*cloudLightShare*atmosphereLightTransmittance(baseHeight, sunDirection.y);
         }
         else if (texel.x == ATMOSPHERE_VOLUME_GROUND_HAZE_MOON)
         {
-            value = moonRadiance*atmosphereLightTransmittance(baseHeight, moonDirection.y);
+            value = moonRadiance*cloudLightShare*atmosphereLightTransmittance(baseHeight, moonDirection.y);
         }
         else if (texel.x == ATMOSPHERE_VOLUME_GROUND_HAZE_AMBIENT)
         {
             // The sky's light from all around (its multiple scattering table, the light the air sends a point from
             // every direction), the town's and the clouds'.
-            value = sunRadiance*atmosphereMultipleScattering(baseHeight, sunDirection.y)
-                + moonRadiance*atmosphereMultipleScattering(baseHeight, moonDirection.y)
+            value = sunRadiance*cloudLightShare*atmosphereMultipleScattering(baseHeight, sunDirection.y)
+                + moonRadiance*cloudLightShare*atmosphereMultipleScattering(baseHeight, moonDirection.y)
                 + lightPollutionRadiance*atmosphereLightPollutionShare(baseHeight, 0.0)
                 + max(cloudAmbientRadiance, vec3(0.0));
         }
@@ -126,7 +145,8 @@ void main()
     vec3 light = atmosphereScatteredLight(atmosphereViewHeight, direction.y, sunDirection.y, cosSun, pathLength,
         stepCount, isTransmittance ? vec3(0.0) : sunRadiance, multipleScattering,
         isTransmittance ? vec3(0.0) : lightPollutionRadiance,
-        isTransmittance ? vec3(0.0) : max(cloudAmbientRadiance, vec3(0.0)), cloudHeight, transmittance);
+        isTransmittance ? vec3(0.0) : max(cloudAmbientRadiance, vec3(0.0)), cloudHeight, cloudLightShare,
+        transmittance);
     if (isTransmittance)
     {
         finalColor = vec4(transmittance, 1.0);
@@ -137,7 +157,7 @@ void main()
         vec3 moonTransmittance;
         light += atmosphereScatteredLight(atmosphereViewHeight, direction.y, moonDirection.y,
             dot(direction, moonDirection), pathLength, stepCount, moonRadiance, multipleScattering, vec3(0.0),
-            vec3(0.0), 0.0, moonTransmittance);
+            vec3(0.0), cloudHeight, cloudLightShare, moonTransmittance);
     }
     finalColor = vec4(min(light*max(skyTint, vec3(0.0)), vec3(HALF_FLOAT_MAX)), 1.0);
 }

@@ -147,6 +147,28 @@ static void ReadsTheShadowQuality(TestRun* run)
     TEST_CHECK(run, (Config.ShadowMapSize == 2048) && (Config.ShadowLevelFactor == 4.0f));
 }
 
+/* cloud_quality: off, low or high, high by default; anything else keeps the default. */
+static void ReadsTheCloudQuality(TestRun* run)
+{
+    GameConfig Config;
+    GameConfig_SetDefaults(&Config);
+    TEST_CHECK(run, Config.CloudQuality == CONFIG_CLOUD_QUALITY_HIGH);
+    const char* const Texts[] = { "{ \"cloud_quality\": 0 }", "{ \"cloud_quality\": 1 }", "{ \"cloud_quality\": 2 }" };
+    const int32_t Expected[] = { CONFIG_CLOUD_QUALITY_OFF, CONFIG_CLOUD_QUALITY_LOW, CONFIG_CLOUD_QUALITY_HIGH };
+    for (size_t Index = 0U; Index < (sizeof(Texts) / sizeof(Texts[0])); Index++)
+    {
+        TEST_CHECK_SUCCESS(run, LoadConfigText(run, "cloud_quality", Texts[Index], &Config));
+        TEST_CHECK(run, Config.CloudQuality == Expected[Index]);
+    }
+    const char* const Broken[] = { "{ \"cloud_quality\": 3 }", "{ \"cloud_quality\": -1 }",
+        "{ \"cloud_quality\": 1.5 }", "{ \"cloud_quality\": \"high\" }" };
+    for (size_t Index = 0U; Index < (sizeof(Broken) / sizeof(Broken[0])); Index++)
+    {
+        TEST_CHECK_SUCCESS(run, LoadConfigText(run, "cloud_quality_broken", Broken[Index], &Config));
+        TEST_CHECK(run, Config.CloudQuality == CONFIG_CLOUD_QUALITY_HIGH);
+    }
+}
+
 static void UnknownKeysAreIgnored(TestRun* run)
 {
     GameConfig Config;
@@ -183,6 +205,7 @@ void ConfigTests_Run(TestRun* run)
         { "fractional_integers_keep_the_default", FractionalIntegersKeepTheDefault },
         { "out_of_range_values_fall_back_to_defaults", OutOfRangeValuesFallBackToDefaults },
         { "reads_the_shadow_quality", ReadsTheShadowQuality },
+        { "reads_the_cloud_quality", ReadsTheCloudQuality },
         { "unknown_keys_are_ignored", UnknownKeysAreIgnored },
         { "non_object_root_fails_with_defaults", NonObjectRootFailsWithDefaults },
         { "malformed_json_fails_with_defaults", MalformedJsonFailsWithDefaults },

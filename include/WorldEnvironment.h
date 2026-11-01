@@ -105,6 +105,15 @@
 /** @brief The coldest and the hottest Temperature a world may give, in degrees Celsius. */
 #define WORLD_ENVIRONMENT_MIN_TEMPERATURE (-273.15)
 #define WORLD_ENVIRONMENT_MAX_TEMPERATURE 1000.0
+/** @brief The highest a cloud layer may lie (its base, or its base plus its thickness), metres above the atmosphere's
+ *  ground (a bound for hostile content: above any weather's clouds). */
+#define WORLD_ENVIRONMENT_MAX_CLOUD_HEIGHT 30000.0
+/** @brief The thinnest a volumetric cloud layer may be (CloudThickness, CloudMidThickness), metres. */
+#define WORLD_ENVIRONMENT_MIN_CLOUD_THICKNESS 10.0
+/** @brief The limits of the clouds' size and drift multipliers (CloudScale; CloudWindScale, CloudEvolution). */
+#define WORLD_ENVIRONMENT_MIN_CLOUD_SCALE 0.05
+#define WORLD_ENVIRONMENT_MAX_CLOUD_SCALE 20.0
+#define WORLD_ENVIRONMENT_MAX_CLOUD_DRIFT 100.0
 /** @brief The most bytes the climate's name (Climate) may have in full, without the terminator. */
 #define WORLD_ENVIRONMENT_CLIMATE_NAME_MAX_LENGTH ((size_t)128)
 /** @brief The climate a world uses unless it names another (Climate's default), in full. */
@@ -398,6 +407,64 @@ typedef struct WorldEnvironmentStruct
     /** @brief RUNTIME ONLY: how far away the current strike is, metres. Finite and in
      *  [0, WORLD_ENVIRONMENT_MAX_DISTANCE]. */
     float LightningDistance;
+
+    // ---- Clouds: how the weather's clouds look, and the layers above them (the renderer draws them) ----
+    /** @brief When false, this world draws no clouds whatever the player's settings: the weather's clouds stay one even
+     *  deck over the sky (default true). */
+    bool AreCloudsEnabled;
+    /** @brief The weather's clouds' base, metres above the atmosphere's ground (sea level; default 1500). Finite and in
+     *  [0, WORLD_ENVIRONMENT_MAX_CLOUD_HEIGHT]. */
+    float CloudBase;
+    /** @brief The room the weather's clouds may fill above their base, metres (default 2500): towering storm clouds fill
+     *  all of it, cumulus about half, flat layers its bottom. Finite and in [WORLD_ENVIRONMENT_MIN_CLOUD_THICKNESS,
+     *  WORLD_ENVIRONMENT_MAX_CLOUD_HEIGHT]. */
+    float CloudThickness;
+    /** @brief How large every layer's shapes are, a multiplier (default 1; 2: clouds twice as wide). Finite and in
+     *  [WORLD_ENVIRONMENT_MIN_CLOUD_SCALE, WORLD_ENVIRONMENT_MAX_CLOUD_SCALE]. */
+    float CloudScale;
+    /** @brief How strongly the volumetric clouds' edges are eroded into wisps and billows (default 1; 0 smooth). Finite
+     *  and in [0, 2]. */
+    float CloudDetail;
+    /** @brief How fast the clouds drift, times the weather's wind (default 2: the wind aloft is stronger; the mid layer
+     *  drifts at 1.5 times this, the high layer at 2.5 times). Finite and in [0, WORLD_ENVIRONMENT_MAX_CLOUD_DRIFT]. */
+    float CloudWindScale;
+    /** @brief How fast the clouds' shapes change as they drift, a multiplier (default 1; 0 shapes that only drift).
+     *  Finite and in [0, WORLD_ENVIRONMENT_MAX_CLOUD_DRIFT]. */
+    float CloudEvolution;
+    /** @brief The mid layer (altocumulus, altostratus): how much of the sky it covers, 0 none (the default) .. 1.
+     *  Finite and in [0, 1]. */
+    float CloudMidCoverage;
+    /** @brief The mid layer's kind: 0 a smooth sheet (altostratus) .. 1 rows of small puffs (altocumulus; the default).
+     *  Finite and in [0, 1]. */
+    float CloudMidType;
+    /** @brief How thick the mid layer's clouds are, 0 .. 1 (default 0.4). Finite and in [0, 1]. */
+    float CloudMidDensity;
+    /** @brief The mid layer's base, metres above the atmosphere's ground (default 5000). Finite and in
+     *  [0, WORLD_ENVIRONMENT_MAX_CLOUD_HEIGHT]. */
+    float CloudMidBase;
+    /** @brief The mid layer's thickness, metres (default 600). Finite and in [WORLD_ENVIRONMENT_MIN_CLOUD_THICKNESS,
+     *  WORLD_ENVIRONMENT_MAX_CLOUD_HEIGHT]. */
+    float CloudMidThickness;
+    /** @brief The high layer (cirrus, cirrocumulus: thin ice clouds, drawn as a sheet): how much of the sky it covers, 0
+     *  none (the default) .. 1. Finite and in [0, 1]. */
+    float CloudHighCoverage;
+    /** @brief The high layer's kind: 0 long streaks (cirrus; the default 0.2 a few puffs among them) .. 1 small puffs
+     *  (cirrocumulus). Finite and in [0, 1]. */
+    float CloudHighType;
+    /** @brief How thick the high layer's clouds are, 0 .. 1 (default 0.5; 1 an optical depth of 1 straight through).
+     *  Finite and in [0, 1]. */
+    float CloudHighDensity;
+    /** @brief The high layer's height, metres above the atmosphere's ground (default 9000). Finite and in
+     *  [0, WORLD_ENVIRONMENT_MAX_CLOUD_HEIGHT]. */
+    float CloudHighHeight;
+    /** @brief How strongly the clouds scatter light forward, the asymmetry of their droplets' main lobe, 0 .. 0.95
+     *  (default 0.8): how bright their edges glow toward the sun and the moon (silver linings). Finite. */
+    float CloudForwardScattering;
+    /** @brief The clouds' colour, multiplying the light they scatter (default white). */
+    Color CloudTint;
+    /** @brief How much of the town's light (LightPollution) reaches the clouds' undersides, a multiplier (default 1; 0:
+     *  none): an overcast night over a town glows in the light pollution's colour. Finite and in [0, 10]. */
+    float CloudLightPollution;
 
     // ---- Post-effect world multipliers (combined with the game config multipliers) ----
     /** @brief When false, this world suppresses bloom regardless of the config. */

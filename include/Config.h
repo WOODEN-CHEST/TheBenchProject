@@ -34,6 +34,11 @@
 #define CONFIG_MAX_SHADOW_MAP_SIZE 8192
 /** @brief The longest shadow level update period, in frames. */
 #define CONFIG_MAX_SHADOW_UPDATE_PERIOD 256
+/** @brief GameConfig.CloudQuality's values: no clouds drawn (the weather's clouds as one even deck), low (half the
+ *  scene's resolution, fewer steps) and high (the scene's resolution). */
+#define CONFIG_CLOUD_QUALITY_OFF 0
+#define CONFIG_CLOUD_QUALITY_LOW 1
+#define CONFIG_CLOUD_QUALITY_HIGH 2
 
 
 // Types.
@@ -113,6 +118,11 @@ typedef struct GameConfigStruct
      *  camera that moved far renders it at once). Default 1, 1, 2, 4, 8, 16, 32, 64; each in [1,
      *  CONFIG_MAX_SHADOW_UPDATE_PERIOD]. Longer periods cost less; a moving thing's shadow there lags by up to a period. */
     int32_t ShadowUpdatePeriods[CONFIG_MAX_SHADOW_LEVELS];
+    // ---- Clouds (quality) ----
+    /** @brief How the clouds are drawn: CONFIG_CLOUD_QUALITY_OFF (none: the weather's clouds as one even grey deck),
+     *  _LOW (half the scene's resolution, fewer steps: cheaper and softer) or _HIGH (the scene's resolution). Default
+     *  high; another value takes the default. */
+    int32_t CloudQuality;
 } GameConfig;
 
 

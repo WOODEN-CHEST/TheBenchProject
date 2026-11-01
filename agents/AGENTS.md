@@ -197,7 +197,7 @@ Current module list:
     (weights, rules with their periodic value noise, height blending, triplanar projections) and the material at a point
     of a terrain (a triangle and barycentrics: footsteps, the scattering's limits).
   * GLTextureArray - Texture arrays (private, source/GLTextureArray.{h,c}): direct OpenGL calls (the
-    project's only ones with GLReadback, GLDepth, GLSliceMap and GLShadowArray), through the function pointers raylib's rlGetProcAddress resolves
+    project's only ones with GLReadback, GLDepth, GLSliceMap, GLShadowArray and GLTexture3D), through the function pointers raylib's rlGetProcAddress resolves
     (no raylib rebuild), with their GL constants; used by the renderer's terrain pass. Anything else that needs GL raylib
     lacks belongs in a module like it, never in a pass (BUILDING.md, "Direct OpenGL calls").
   * GLReadback - Reading a small target back without waiting for the GPU (private, source/GLReadback.{h,c}): a
@@ -218,6 +218,10 @@ Current module list:
     framebuffer without colour that each layer is attached to in turn, and depth clamping around a level's draw; direct
     OpenGL calls in GLTextureArray's manner. Used by the shadow pass (WorldRendererShadows.c); without it the sun and
     the moon cast no shadows.
+  * GLTexture3D - 3D textures (private, source/GLTexture3D.{h,c}): one-channel or four-channel byte volumes with their
+    mipmaps, filtered trilinearly and repeating on every axis, bound to a unit's GL_TEXTURE_3D target; direct OpenGL
+    calls in GLTextureArray's manner. Used by the clouds' noise (WorldRendererClouds.c); without them no clouds are
+    drawn (the weather's clouds show as one even deck).
 * World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
   animation stands, is lit and is seen in the world, kept apart from its placements. WorldSprite (include/WorldSprite.h,
   source/WorldSprite.c) holds the animation it plays (loaded as its dependency) and the defaults of its placements
@@ -349,7 +353,10 @@ Current module list:
     a meter pass over the HDR picture read back a frame or two later; interior lighting
     (source/WorldRendererSkyVisibility.c, source/WorldRendererInterior.c and shaders/common/interior.glsl): a top-down
     map of what keeps the sky out around the camera, which every lit surface reads for its share of the sky's light,
-    ambient zones that light rooms, and the eye adapting to the light at the camera indoors; the camera's passes in
+    ambient zones that light rooms, and the eye adapting to the light at the camera indoors; volumetric clouds
+    (source/WorldRendererClouds.c and shaders/common/clouds.glsl): the weather's clouds and two layers above them
+    marched over the sky's pixels on the curved planet, accumulated over frames, lit by the sun or the moon, the sky,
+    the ground and the town, seen through the haze, and casting shadows on every lit surface; the camera's passes in
     reversed 32-bit float
     depth with no far plane where the GPU has clip control (GLDepth), so whatever has the draw distance draws at any
     distance), in render space: the world's orientation with the camera at the origin, every position relative to the
@@ -427,8 +434,16 @@ Current module list:
     (WorldRuntime.md, "Eye adaptation").
   * WorldWeatherLight - The weather's look as pure maths (private, source/WorldWeatherLight.h): the clouds as one even
     deck (their cover and what it leaves of the sun and the moon, their two-stream transmission, the deck's light on
-    surfaces, in the air and on the sky as an overcast sky shows it), a lightning flash's light and glow, the wetness and
-    the wind, from the environment's weather values each frame (WorldRuntime.md, "Weather").
+    surfaces, in the air and, while the clouds are not drawn, on the sky as an overcast sky shows it), a lightning
+    flash's light and glow, the wetness and the wind, from the environment's weather values each frame
+    (WorldRuntime.md, "Weather").
+  * WorldClouds - The clouds as pure maths (private, source/WorldClouds.h): the frame's three layers from the
+    environment (the weather's clouds and the mid and high layers' settings), the patterns' drift with the wind (in
+    double) and their anchors wrapped by their tiles, the shadow map's frame on its texel grid, and a ray's stretch
+    through a layer's shell: the C mirror of shaders/common/clouds.glsl's geometry (WorldRuntime.md, "Clouds").
+  * CloudNoise - The clouds' noise (private, source/CloudNoise.h): tileable gradient and Worley noise in 2D and 3D, and
+    the three textures the cloud pass uploads at load (the shape volume, the erosion volume, the weather map), each
+    spread evenly over its range and the same every time.
   * WorldInterior - Interior lighting as pure maths (private, source/WorldInterior.h): ambient zones in render space
     (placed by their objects' world matrices), their weights (the fade from the surface, surfaces facing in), the at
     most four a draw takes and their composition by priority, the haze inside them, the sky's visibility map on its

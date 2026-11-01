@@ -37,6 +37,7 @@
 #define CONFIG_KEY_SHADOW_LEVEL_COUNT ((const unsigned char*)u8"shadow_level_count")
 #define CONFIG_KEY_SHADOW_LEVEL_FACTOR ((const unsigned char*)u8"shadow_level_factor")
 #define CONFIG_KEY_SHADOW_MAP_SIZE ((const unsigned char*)u8"shadow_map_size")
+#define CONFIG_KEY_CLOUD_QUALITY ((const unsigned char*)u8"cloud_quality")
 #define CONFIG_KEY_SHADOW_UPDATE_PERIODS ((const unsigned char*)u8"shadow_update_periods")
 
 /** Index of the width element within the resolution array. */
@@ -68,6 +69,7 @@
 #define CONFIG_DEFAULT_SHADOW_LEVEL_COUNT ((int32_t)5)
 #define CONFIG_DEFAULT_SHADOW_LEVEL_FACTOR 4.0f
 #define CONFIG_DEFAULT_SHADOW_MAP_SIZE ((int32_t)2048)
+#define CONFIG_DEFAULT_CLOUD_QUALITY ((int32_t)CONFIG_CLOUD_QUALITY_HIGH)
 /** Default value for every post-effect config-side strength multiplier. */
 #define CONFIG_DEFAULT_EFFECT_STRENGTH (1.0f)
 /** Largest accepted effect strength multiplier; larger (or non-finite/negative) values fall back to the
@@ -291,6 +293,7 @@ static void ReadConfigValues(JSONCompound* root, GameConfig* config)
     ReadFloat(root, CONFIG_KEY_SHADOW_LEVEL_FACTOR, &config->ShadowLevelFactor);
     ReadInt32(root, CONFIG_KEY_SHADOW_MAP_SIZE, &config->ShadowMapSize);
     ReadShadowUpdatePeriods(root, config);
+    ReadInt32(root, CONFIG_KEY_CLOUD_QUALITY, &config->CloudQuality);
 }
 
 /* Parses the raw file bytes as a JSON object and overlays its settings onto the config, then discards the
@@ -361,6 +364,7 @@ void GameConfig_SetDefaults(GameConfig* self)
         Period = (Level < 2U) ? 1 : (Period * 2);
         self->ShadowUpdatePeriods[Level] = Period;
     }
+    self->CloudQuality = CONFIG_DEFAULT_CLOUD_QUALITY;
 }
 
 Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
@@ -401,6 +405,10 @@ Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
     ClampEffectStrength(&outConfig->DrawDistanceScale); // a multiplier like the effect strengths
     ClampEffectStrength(&outConfig->LodDistanceScale);
     ClampShadowSettings(outConfig);
+    if ((outConfig->CloudQuality < CONFIG_CLOUD_QUALITY_OFF) || (outConfig->CloudQuality > CONFIG_CLOUD_QUALITY_HIGH))
+    {
+        outConfig->CloudQuality = CONFIG_DEFAULT_CLOUD_QUALITY;
+    }
     return ParseResult;
 }
 

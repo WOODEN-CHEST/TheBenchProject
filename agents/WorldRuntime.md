@@ -21,6 +21,8 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | SpriteTransform | `source/SpriteTransform.h`, `source/SpriteTransform.c` (private) | A sprite quad's pure maths: its matrix for a viewer (billboard, axis billboard, fixed; the camera or a light), its world size, its bounds, and the back-to-front order of a transparent list (see "Sprites"). |
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
 | WorldWeatherLight | `source/WorldWeatherLight.h`, `source/WorldWeatherLight.c` (private) | The weather's look as pure maths (see "Weather"): the clouds' deck from the environment's weather values (their cover, the light they let through, their transmission), its light added to the sky's light at the camera, a lightning flash's light and direction, the wetness and the wind. |
+| WorldClouds | `source/WorldClouds.h`, `source/WorldClouds.c` (private) | The clouds as pure maths (see "Clouds"): the frame's three layers from the environment, the patterns' drift with the wind and their anchors (wrapped in double), the shadow map's frame on its texels, a ray's stretch through a layer's shell: the C mirror of `shaders/common/clouds.glsl`'s geometry. |
+| CloudNoise | `source/CloudNoise.h`, `source/CloudNoise.c` (private) | The clouds' noise (see "Clouds"): tileable gradient and Worley noise, and the three textures made from them at load (the shape volume, the erosion volume, the weather map), the same every time. |
 | WorldInterior | `source/WorldInterior.h`, `source/WorldInterior.c` (private) | Interior lighting as pure maths (see "Interior lighting"): ambient zones in render space, their weights, the draws' choice of zones and their composition, the haze inside them, the sky's occupancy volume (its map, slices and window) and the march through it, the camera's interior and the light the eye is in: the C mirror of `shaders/common/interior.glsl`. |
 | WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c`, `source/WorldTestCharacters.{h,c}` (private: walk mode and the test NPCs), `source/WorldTestAnimation.{h,c}` (private: the animation system and its keys), `source/WorldTestInstances.{h,c}` (private: the pebble field and the instancing A/B) | A concrete GameFrame: a WASD + mouse-look flycam over a test world, and walk mode (the player as a character) and test NPCs. |
 
@@ -457,11 +459,13 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    world's seed or density changed, and the sky textures reloaded if the world names others), the atmosphere's
    (`WorldRendererAtmosphere_PrepareFrame`: the air's coefficients, the height the sky is seen from, whether the
    tables draw the sky; the frame's haze, light pollution's light in the air, whether the volume hazes the frame),
-   the sky's light (`WorldRendererLighting_PrepareSkyLight`, see "Sky's light on surfaces": the C mirror's tables
+   the clouds' (`WorldRendererClouds_PrepareFrame`, see "Clouds": the patterns' drift by the frame's real seconds, the
+   layers, whether they are drawn), the sky's light (`WorldRendererLighting_PrepareSkyLight`, see "Sky's light on surfaces": the C mirror's tables
    kept on the air, the light at the camera (under the weather's clouds, with their deck's light: "Weather"), the light
-   the air is lit by, the sun's disc, the scene luminance, the light
+   the air is lit by (in full above drawn clouds), the sun's disc, the scene luminance, the light
    the eye is in (the sky's as the camera's interior leaves it, plus the rooms' own), night vision's field and
-   calibration, and the shadow light chosen from the light through the air), every model's LOD and
+   calibration, the shadow light chosen from the light through the air, and the light that lights the drawn clouds
+   with their shadow map's frame), every model's LOD and
    its cross-fade (`WorldRenderCache_UpdateLods`, see "LODs"), and every
    pass decision:
    first which shadow passes run (`DecideShadows`, with the shadow levels' settings: the player's quality and the
@@ -490,11 +494,13 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
 5. The normal/flag G-buffer (the camera's models, the LOD with the larger share, the copies the same way, terrain
    chunks and cutout sprites, solid below half their fade), when the AO, the contact shadows, the sky's visibility or
    the outlines run; then the ambient pre-pass and its blur (the AO, the contact shadows and the sky's visibility per
-   pixel, see "G-buffer, AO and outlines"), when any but the outlines run.
+   pixel, see "G-buffer, AO and outlines"), when any but the outlines run. Then the clouds
+   (`WorldRendererClouds_Render`, see "Clouds"): their shadow map, their march over the sky's pixels into the cloud
+   target (the texels whose pixels the G-buffer covers skipped) and its accumulation.
 6. The scene pass: clear, atmospheric sky (the sky-view table's glow, with the moonlit sky and light pollution's
-   light, and the far ground below the horizon; the weather's cloud deck and a lightning flash's glow above it; the
-   ground haze in front of it all; the moon's disc, the Milky Way), the
-   stars (none behind the moon), debug grid, the camera's PBR models (each dithered by its fade, both LODs
+   light, and the far ground below the horizon; the drawn clouds over it, or without them the weather's cloud deck and
+   a lightning flash's glow above it; the ground haze in front of it all; the moon's disc, the Milky Way), the
+   stars (none behind the moon, dimmed by the drawn clouds in front of them), debug grid, the camera's PBR models (each dithered by its fade, both LODs
    of a cross-fade with complementary dithers; the sun and the moon; per object: up to
    `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), the camera's
    instance cells (lit like the models, the lights per cell, both LODs of a copy's band), the camera's terrain
@@ -602,7 +608,7 @@ sky-view table's glow by direction (single and multiple scattering, with light p
 "Atmosphere"), or, with the tables off (the A/B, the fallback), the direct march of single scattering per pixel; the sun disc
 (dimmed and reddened by the transmittance table: orange as it sets; at a radiance of its own,
 `SUN_DISC_RADIANCE` 22 x `sun_color` x `sun_intensity`, scaled against the exposure: "Sky's light on surfaces"), the
-moon's disc, the Milky Way, drawn as
+moon's disc, the Milky Way, and the drawn clouds in front of them ("Clouds"), drawn as
 a full-screen pass before the geometry (it writes no depth). Each pixel's ray comes from the inverse of the frame's view-projection,
 so the sky lines up with the 3D camera; in render space that matrix is a rotation and a projection, so the ray is exact
 at any distance from the world's origin (see "Render space"). Falls back to a CPU gradient clear. Its textures are the ones the world's
@@ -844,7 +850,9 @@ radiances are calibrated on.
 **Weather** (the pure maths `source/WorldWeatherLight.{h,c}`, tested in `tests/WorldWeatherLightTests.c`; the values
 are the environment's "Weather" rows ([WorldData.md](WorldData.md)), which the weather system moves
 ([WeatherSystem.md](WeatherSystem.md))). The weather's look is the sky's light under clouds on the one light scale: no
-factor of its own dims the sun or the shadows. Until clouds are drawn, the clouds are one even deck over the whole sky.
+factor of its own dims the sun or the shadows. Their light below them is the deck's (their average) whether or not they
+are drawn ("Clouds"); while they are not (the player's `cloud_quality` off, the world's `are_clouds_enabled` off, or the
+cloud pass unavailable), the sky shows them as one even deck too, and their share dims the sun and the moon everywhere.
 - **The deck** (`WorldWeatherLight_GetFrame`, from `BuildSky`): a cloud's optical depth is 64 x `cloud_density`
   (`WORLD_WEATHER_CLOUD_DEPTH_PER_DENSITY`: density 1 is a storm cloud's), so the share of the sky the clouds hide, the
   cloud cover, is `cloud_coverage` x (1 - e^-depth), and the rest of the sun's and the moon's light comes through
@@ -853,7 +861,7 @@ factor of its own dims the sun or the shadows. Until clouds are drawn, the cloud
   it, a storm's about an eighth). `cloud_type` does not change the look (it decides where rain and lightning are
   possible).
 - **The light under it** (`WorldRendererLighting_PrepareSkyLight`): under clouds the C mirror's frame light is taken
-  for the clear sky at the clouds' height (what falls on the deck's top: a whiter sun than the ground's, less sky above)
+  for the clear sky at the clouds' base (`cloud_base`: what falls on the deck's top: a whiter sun than the ground's, less sky above)
   and for the camera with the lights above the air times `DirectShare`, so the sun's and the moon's light on surfaces,
   the sky's light from the air they light and the ground's bounce dim alike; `WorldWeatherLight_AddDeck` then adds the
   deck's irradiance on a level surface (the deck top's sun and moon on a level surface and its sky's irradiance, times
@@ -864,8 +872,9 @@ factor of its own dims the sun or the shadows. Until clouds are drawn, the cloud
   density 0.3) 0.344; cloudy (0.55, 0.5) 0.205; overcast (0.9, 0.7) 0.086; rain (1, 0.9) 0.045; a storm (0.95, 1)
   0.058. The start view's exposure, as the eye meters it, rises from 1.18 to 1.23, 1.73, 3.18, 5.54 and 4.75: the eye
   opens 2.2 of the 3.0 stops the light falls, so a rainy noon reads dull, not dark.
-- **The air and the far ground**: the sky-view table and the volume are built with the dimmed lights, so the clear
-  sky's glow and the haze dim with the sun. In the sun's half the deck also lights the air below it from all around:
+- **The air and the far ground**: the sky-view table and the volume are built with the dimmed lights (while the clouds
+  are drawn, with the lights in full and the clouds' share below their base: "Clouds"), so the clear sky's glow and the
+  haze dim with the sun. In the sun's half the deck also lights the air below it from all around:
   `atmosphereScatteredLight` takes an even `ambientRadiance` below a height (`cloudHeight`, the deck's: each point
   scatters (sigma_R + sigma_M) x it toward the eye, whatever the phase; a march step reaching past the deck takes its
   share below it, so the sky stays smooth across directions), the deck's mean radiance over its half of the sky (two
@@ -874,19 +883,20 @@ factor of its own dims the sun or the shadows. Until clouds are drawn, the cloud
   twentieth; near the horizon a ray stays below the deck for all the way the eye sees). The far ground and the
   volume's values row (the light on surfaces by height) take the deck's irradiance (`cloudSkyIrradiance`) on top of the
   sky's. So far hills fade into a grey haze that meets the deck at the horizon.
-- **The sky** (`world_sky`): above the horizon it adds the deck on top of the clear sky the clouds leave, an overcast
+- **The sky** (`world_sky`, while the clouds are not drawn): above the horizon it adds the deck on top of the clear sky the clouds leave, an overcast
   sky's radiance (CIE: the zenith's 9 / (7 pi) of the deck's irradiance, `cloudZenithRadiance`, falling as (1 + 2 cos
-  zenith) / 3 to a third at the horizon), seen through the air below the clouds' height (`WORLD_WEATHER_CLOUD_HEIGHT`,
-  1500 m: the transmittance to the top from the camera over the one from where the ray meets that height, in the form
+  zenith) / 3 to a third at the horizon), seen through the air below the clouds' base (`cloud_base`, 1500 m by default:
+  the transmittance to the top from the camera over the one from where the ray meets that height, in the form
   that does not cancel; the fallback's own transmittance while the tables are off). The sun's and the moon's discs, the
-  Milky Way and the stars are dimmed by `DirectShare`: an overcast night hides the stars.
+  Milky Way and the stars are dimmed by `DirectShare`: an overcast night hides the stars (drawn clouds hide them per
+  pixel instead).
 - **Lightning** (`lightning_flash`, `lightning_direction`, `lightning_distance`, runtime rows): a strike lights the
   clouds over a wide area, so its light on a level surface falls off as 1 / distance: 0.1 at a kilometre
   (`WORLD_WEATHER_FLASH_IRRADIANCE`), at most 0.5, the nearest counted 200 m, blue-white, times the flash (1 at the
   strike, then decaying). It joins the sky's irradiance and the ground's bounce on surfaces (the fallback uniforms and the
   values row), the far ground's and the air's light with the deck's, and the sky glows with it, most in a broad lobe
-  (power 6, three times the rest) toward the clouds over the strike (`FlashDirection`: the clouds' height over the
-  strike's distance). The C mirror's frame light leaves it out, so the eye's anchor and night vision's field do not
+  (power 6, three times the rest) toward the clouds over the strike (`FlashDirection`: the clouds' base over the
+  strike's distance); drawn clouds glow near the strike themselves instead. The C mirror's frame light leaves it out, so the eye's anchor and night vision's field do not
   follow it, and the meter, easing over seconds, barely does: a flash of a third of a second lights the scene.
 - **Wetness** (`surfaceWetness`, `common/lighting`'s `ApplyWetness`): wet = `wetness` x clamp(0.5 + 0.5 n.y) by the
   surface's own normal (most facing up, half upright, none facing down); the albedo x (1 - 0.7 x porosity x wet) (water
@@ -909,6 +919,111 @@ factor of its own dims the sun or the shadows. Until clouds are drawn, the cloud
   on a level surface, a flash's 0 0 0, wetness 1.`).
 - **Cost** (GTX 980 Ti, the far noon view): a storm's frame within the frame times' noise of a clear one's (5.37 to
   5.58 ms against 5.37 to 5.42); the C side adds one more frame light (2.3 microseconds) under clouds.
+
+**Clouds** (the pure maths `source/WorldClouds.{h,c}` and the noise `source/CloudNoise.{h,c}`, tested in
+`tests/WorldCloudsTests.c` and `tests/CloudNoiseTests.c`; the pass `source/WorldRendererClouds.c`, its GLSL
+`shaders/common/clouds.glsl` and `shaders/clouds/`; the settings are the environment's "Clouds" rows and the weather's
+cloud values ([WorldData.md](WorldData.md)), the quality the player's `cloud_quality` ([Config.md](Config.md))).
+Volumetric clouds over the curved planet, lit on the one light scale, in three layers that drift with the wind:
+- **The layers** (`WorldClouds_GetFrame`): the LOW layer is the weather's clouds (`cloud_coverage`, `cloud_type` and
+  `cloud_density`, which the weather system moves) between `cloud_base` and `cloud_base` + `cloud_thickness`, its
+  extinction 0.15 per metre at density 1 times `cloud_density` (`WORLD_CLOUDS_LOW_EXTINCTION`: light loses two thirds
+  in a dense cloud's first 7 m); the MID layer is altocumulus or altostratus (`cloud_mid_type`) between
+  `cloud_mid_base` and its thickness, 0.04 per metre times `cloud_mid_density`; the HIGH layer is cirrus or
+  cirrocumulus (`cloud_high_type`) as a sheet at `cloud_high_height`, an optical depth of 1 straight through times
+  `cloud_high_density`. A layer without coverage or density is not drawn; the mid and high layers have no coverage by
+  default.
+- **The shapes** (`common/clouds`, after Schneider and Vos, "The Real-time Volumetric Cloudscapes of Horizon Zero Dawn",
+  2015): a low cloud is where its footprint passes a threshold that rises with the height, from 1 - the coverage at the
+  base (so the coverage's share of the ground lies under clouds) to 1 at its type's top (flat layers stop at 14 % of
+  the room, cumulus at 60 %, storm clouds at the top), so every cloud has a flat base and a rounded top, and the
+  footprints that stand highest tower highest. The footprint is the shape volume (Perlin-Worley, bulging in 3D), for
+  cumulus and storm clouds mixed with the weather map's round cells near the base so that they stand apart, the mix
+  spread evenly again (`cloudEvenMix`: the coverage stays the coverage); the coverage itself rises and falls in patches
+  by the weather map. The density rises steeply inside the outline (crisp edges), and the erosion volume carves the
+  edges by `cloud_detail` (wisps below, billows above; at most 0.9 of the density, so the strongest detail still leaves
+  the densest cores). The mid layer is the shape volume (a sheet) or the map's cells
+  (puffs) by its type, in patches; the high layer the map's streaks (fibres) or its cells (ripples) by its type, in
+  patches.
+- **The patterns** tile every so many metres times `cloud_scale` (the low layer's shape 5 km, its erosion 700 m, its
+  coverage 80 km; the mid layer's shape 2.4 km and map 12 km; the high layer's map 40 km) and drift with the weather's
+  wind times `cloud_wind_scale` (the mid layer 1.5 times as fast, the high layer 2.5 times), the shape and the erosion a
+  little faster and rising by `cloud_evolution`, so the clouds change as they drift. The drift is the renderer's own
+  state (`WorldCloudsDrift`, in double, advanced by each frame's real seconds: the wind is in metres per real second);
+  a shader gets each pattern's anchor, never a position: the frame's origin less the drift (a feature of the pattern
+  then stands at its place plus the drift: it moves downwind), wrapped in double where every read of the pattern
+  repeats (the low layer's at its tiles, the mid layer's across at four of its map's tiles, the high layer's at ten:
+  its fibres are read at 2.7 times its map's frequency; `tests/ShaderSourceTests.c` checks the shaders' scales against
+  the wraps), so the clouds are exact far from the world's origin and never jump when an anchor wraps.
+- **The noise** (`CloudNoise`), made on the CPU at load (about 130 ms, logged) and the same every time: the shape
+  volume (64 cubed, Perlin-Worley), the erosion volume (32 cubed, Worley octaves) and the weather map (512 square:
+  coverage blobs, a finer variation, streaks, cells), each tileable and spread evenly over 0 .. 1 by its histogram (a
+  threshold t keeps 1 - t of the texels: the coverage means what it says). The volumes are 3D textures (`GLTexture3D`),
+  the map a 2D texture, all with mipmaps, read at their finest level everywhere (`textureLod`: the march's loops leave
+  the derivatives undefined).
+- **The march** (`world_clouds`, `shaders/clouds/march.frag`), per texel of the cloud target (the scene's size, at most
+  640 wide, at high quality; half of it at low): the ray's stretch in each layer's shell on the curved planet (roots in
+  forms that do not cancel; `WorldClouds_GetShellSegment` is its C mirror), nearest layer first, at most 60 km out. The
+  low layer takes coarse steps through clear air (without the erosion) and, in a cloud, a step back and fine steps,
+  each crossing about 0.7 of optical depth (at least 8 m), on at least to where the coarse step found it (so a cloud
+  shorter than a coarse step is not lost) and back to coarse ones after four empty fine steps past it: at most 96
+  samples (56 at low); the mid layer takes up to 16 steps (8), the high layer one sample where the ray crosses its
+  height. The light at a step (`cloudPointLight`): the light that lights the clouds (the sun, or the moon while it
+  gives more at the clouds' base) through the transmittance table at the step's height and through the cloud toward it
+  (5 steps doubling in length, 4 at low, and the upper layers' depth on the way: their shadow on the low layer),
+  scattered once (two Henyey-Greenstein lobes: a forward one of `cloud_forward_scattering`, 0.8 of it, the silver
+  linings, and a weak backward one), a few times (a softer forward glow, after Wrenninge, "Oz: The Great and
+  Volumetric", 2013) and many times (diffuse: 3 / (4 pi) of it through the two-stream transmission 1 / (1 + 0.1125
+  depth), the weather deck's for droplets of g 0.85, so a cloud's base sends down what the deck does); the sky's
+  irradiance from above (the irradiance table at the step's height) and the ground's bounce and the town's light
+  (`cloud_light_pollution` times light pollution's radiance) from below, each diffused through the cloud on its side;
+  a lightning flash near its strike; all times `cloud_tint`. Each step's light is integrated over its own depth
+  (Hillaire, "Physically Based Sky, Atmosphere and Cloud Rendering in Frostbite", 2016), so long steps keep their
+  energy. Each layer is seen through the air in front of it (the haze volume's in-scatter and transmittance at the
+  layer's apparent distance, the mean of its light's distances), and the air in front of a layer hides the sky behind
+  as the layer does. The target holds RGB, the light the clouds add, and A, the share of the sky behind them that still
+  shows; a texel whose scene pixels all hold geometry (the G-buffer's flags, while the G-buffer runs) is skipped (A
+  -1). The steps are jittered per pixel: interleaved gradient noise, advanced by the golden ratio every frame.
+- **The accumulation** (`world_clouds_resolve`): each frame's march is blended into the last result, reprojected (the
+  last frame's view-projection and the origin's shift, at the first layer's distance along the ray) and clamped to the
+  march's 3 x 3 neighbourhood, 5 % of the new frame at high quality (8 % at low): the steps' grain averages away over
+  about twenty frames while the clouds drift smoothly. A camera that moved more than 500 m in a frame, a new target or
+  a frame without clouds starts it again; without its two targets each frame's march shows as it is.
+- **On the sky**: the sky pass composites the target over the sky behind it (bilinear over its valid texels: sky x A +
+  RGB) after the Milky Way and before the ground haze in front of it all, and the discs times A; the stars take A too.
+  So the clouds hide the sun, the moon, the stars and the Milky Way per pixel, and their gaps show them; the weather's
+  even deck and the flash's glow are not drawn (the clouds glow with the flash themselves). They lie behind every
+  surface: seen from inside or above them, the geometry is not hidden by them (only by the haze).
+- **The light in the air** (`WorldRendererLighting_PrepareSkyLight`): while the clouds are drawn, the sky-view table and
+  the volume take the sun's and the moon's light in full (the clear sky shows in the gaps) and the clouds' share of it
+  (the weather's `DirectShare`) below their base (`atmosphereScatteredLight`'s `lightShareBelow`): the air below them,
+  the far ground and the ground haze are lit as under the deck, and the deck's diffuse light stays (their average).
+- **Their shadows** (`world_clouds_shadow`, `shaders/clouds/shadow.frag`): a map (512 square, about 47 m a texel) of the
+  share of the light that passes the layers (R all three, G the low layer's, B the upper layers'), for the points of a
+  level plane at the low layer's base, 24 km wide around where the camera's ray toward the light crosses it, its centre
+  on the map's texel grid in the world (snapped in double: the texels stand still while the camera moves); each layer
+  marched from where the light's ray through the plane's point reaches its base (the layers curve down with the planet:
+  a low sun's map lies tens of kilometres out, where the level plane stands hundreds of metres above the curved base),
+  the low layer in 24 steps without its erosion, the mid layer in 4, the high layer once. Every lit surface
+  (`common/lighting`'s `CloudShadowAt`, in `SkyLightAt`) reads it where its ray toward the light crosses the plane (the
+  light's climb taken as at least 0.02) and multiplies that light (the sun's, or the moon's) by it, fading into the
+  clouds' average share (`DirectShare`) over the map's outer tenth; a surface inside or above the low layer (a hill
+  over low clouds) takes the low layer's share only by the part of the layer's room above it, as if its cloud were
+  spread evenly through it, and the upper layers' share (`cloudShadowTop`, the low layer's top). The volume's values
+  row leaves that light undimmed below the clouds' base. So the clouds' shadows drift over the
+  ground, and sunlit patches move through a broken cover. There is no map while the light is below the horizon (its
+  share is then `DirectShare` everywhere).
+- **Quality** (`cloud_quality`, `WorldRenderer_SetCloudQuality`; keypad / in the test frame): 0 off (the deck), 1 low,
+  2 high. The world's `are_clouds_enabled` off draws none whatever the quality. The clouds need the atmosphere's tables
+  and the haze's volume: without them the deck shows.
+- **Without clouds** (quality off, the world's switch off, or no layer with coverage) the pass does nothing and the
+  picture is the deck's (or the clear sky's) bit for bit.
+- **Status**: the features "clouds" and "cloud shadows", `WorldRendererStatus.CloudQuality`, `CloudTargetWidth`,
+  `CloudTargetHeight`, `IsCloudLightMoon`, `CloudMilliseconds` (the pass's CPU time), and a log line (`WorldRenderer:
+  clouds: drawn at high quality (640x360), lit by the sun, shadow map on; the pass took 0.048 ms on the CPU.`).
+- **Cost** (GTX 980 Ti, the scene at 640 x 360, noon, the start view toward the sky): 1.5 to 1.56 ms of GPU time a frame
+  at high quality under cumulus, 1.2 under an overcast; 0.56 to 0.59 ms and 0.47 at low; the light's steps take most
+  of it, the shadow map about 0.2 ms.
 
 **Interior lighting** (the pure maths `source/WorldInterior.{h,c}`, tested in `tests/WorldInteriorTests.c`; the
 renderer's parts `source/WorldRendererSkyVisibility.c` and `source/WorldRendererInterior.c`; the lit shaders' part
@@ -1395,10 +1510,15 @@ get no AO and no outlines.
   projection and its 4 km; a camera pass's 32-bit depth that cannot be made is logged once and the pass's target fails
   as any target does), "sky visibility" the sky's visibility map (unavailable without the depth shader or its
   target, inactive while interior lighting is off), "ambient zones" the zones' light (active while interior lighting
-  runs and a zone is listed). It also counts what the camera's passes
+  runs and a zone is listed), "clouds" the drawn clouds (unavailable without their march shader, 3D textures, their
+  noise or the cloud target, each logged once; inactive while the quality is off, the world switches them off, no layer
+  has coverage, or the atmosphere's tables or the haze's volume do not run, when the weather's clouds show as the
+  deck; the status adds the quality, the target's size, the light that lights them and the pass's CPU time), "cloud
+  shadows" their shadow map (unavailable without its shader or map; inactive while the clouds are not drawn or their
+  light is below the horizon). It also counts what the camera's passes
   drew and what culling and fading removed (see "Visibility"). The renderer logs the status once after its first
   render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame), with a line for the atmosphere's tables,
-  one for the haze and one for interior lighting.
+  one for the haze, one for interior lighting and one for the clouds.
 
 ### Renderer structure (keep it clean)
 
@@ -1424,8 +1544,12 @@ get no AO and no outlines.
 | `GLDepth.c` (not a pass) | Reversed depth (see "Render space"): whether the GPU has clip control, 32-bit float depth textures and renderbuffers, the switch to the reversed state and back; direct OpenGL calls in `GLTextureArray`'s manner; private (`source/GLDepth.h`). |
 | `GLSliceMap.c` (not a pass) | Slice maps (the sky's occupancy volume): RGBA32UI textures with their levels, their integer clear, the logic operations (XOR, OR) and per-level reads for the pyramid; direct OpenGL calls in `GLTextureArray`'s manner; private (`source/GLSliceMap.h`). |
 | `WorldRendererAtmosphere.c` | The atmosphere's tables (see "Atmosphere"): their four builders and targets, the rebuild when the air changes, the sky view every frame (the moon's half while its sky shows; the far ground below the horizon); the haze's volume (see "Haze"), its builder and target, the frame's haze and light pollution, the haze uniforms every reader gets (`WorldRendererHazeLocations`), the volume's unit and binds, the debug view; the atmosphere uniforms every reader gets (`WorldRendererAtmosphereLocations`), the tables' fixed units, the A/B, the status lines. Runs first among the GPU passes. |
-| `WorldRendererSky.c` | The atmospheric sky with the moon, the moonlit sky, the Milky Way and the ground haze in front of it (the far ground and light pollution's light are the tables'); the sky textures the world names; the night sky values (the direct march's skyglow among them) and the moon's disc for the frame. |
-| `WorldRendererStars.c` | The star field: the catalogue's mesh (rebuilt when the seed or density changes) and its draw (none behind the moon). |
+| `WorldRendererSky.c` | The atmospheric sky with the moon, the moonlit sky, the Milky Way, the drawn clouds (the cloud target) and the ground haze in front of it (the far ground and light pollution's light are the tables'); the sky textures the world names; the night sky values (the direct march's skyglow among them) and the moon's disc for the frame. |
+| `WorldRendererStars.c` | The star field: the catalogue's mesh (rebuilt when the seed or density changes) and its draw (none behind the moon; dimmed by the drawn clouds in front). |
+| `WorldRendererClouds.c` | The clouds (see "Clouds"): their noise made at load (`CloudNoise`, the volumes through `GLTexture3D`), the frame's layers and drift, the light that lights them and their shadow map's frame, the shadow map's pass, the march into the cloud target and its accumulation (two history targets in turn), the binds of the newest result (the sky pass, the stars) and of the shadow map (the lit programs), the lit shaders' cloud-shadow uniforms, the status line. Runs after the G-buffer, before the scene pass. |
+| `GLTexture3D.c` (not a pass) | 3D textures (`GL_TEXTURE_3D`, R8 or RGBA8, with mipmaps, repeating): direct OpenGL calls in `GLTextureArray`'s manner; private (`source/GLTexture3D.h`). |
+| `WorldClouds.c` (pure maths, not a pass) | The clouds' model: the frame's layers from the environment, the drift and the anchors, the shadow map's frame, a ray's stretch through a shell (the C mirror of `common/clouds`); see "Clouds". |
+| `CloudNoise.c` (not a pass) | The clouds' noise textures, made on the CPU at load; see "Clouds". |
 | `WorldRendererPost.c` | Outlines, bloom, sun shafts and the tonemap. |
 | `WorldRendererExposure.c` | The eye (see "Eye adaptation"): the meter's shader, target and readback, the meter pass after the sun shafts, the eye's update from the newest blocks (`EyeAdaptation`) and the exposure the tonemap takes. |
 | `WorldRendererCrisp.c` | The crisp overlay. |
@@ -1463,11 +1587,12 @@ The renderer keeps receiving features, so:
   | 0–11 | raylib's `DrawMesh` | A drawn material's maps, map i on unit i (`GL_TEXTURE_2D`, cubes on 7–9); the 2D batch uses 0–4. Free in a program whose materials carry no maps. |
   | 7–8 | the sky pass and the stars; the lit programs (models, sprites, terrain) | In the sky pass and the stars 7 the transmittance table, 8 the sky-view table (`sampler2D`, `WorldRendererTextureUnit_Atmosphere*`). In the lit programs 7 the sky's occupancy volume (`usampler2D skyVolume`, an integer texture whose levels are its pyramid, `WorldRendererTextureUnit_SkyVisibility`; their transmittance sampler there is declared and unused, so it never meets the volume's: they read no table) and 8 the haze's volume (`sampler2D atmosphereVolume`, `WorldRendererTextureUnit_HazeVolume`, also for the sky's light by height in its last row, while the haze is off too). raylib binds only cube maps there (`MATERIAL_MAP_CUBEMAP`, `_IRRADIANCE`, filled by no material of ours) and the 2D batch only 0–4, so what a pass binds stays bound; the lit passes bind the occupancy volume on 7 and the haze's volume on 8 with their frame textures, the sky pass and the stars the tables before their draws (the sky pass and the outlines take the volume through `SetShaderValueTexture`). Units chosen because they are free in every lit program, the terrain's included, with no capability check (units 16 and up would have needed GL_MAX_TEXTURE_IMAGE_UNITS above 16). |
   | 9–11 | the terrain program only | Its material arrays (`sampler2DArray`: albedo and height, normal, roughness and AO). The terrain draws with no raylib maps, and an array sampler reads only a unit's `GL_TEXTURE_2D_ARRAY` target, which nothing else binds, so the models' maps on the same units never meet them. |
-  | 12, 14–15 | every lit program | The frame's textures: 12 the shadow levels' maps (`sampler2DArrayShadow shadowLevels`, the array's `GL_TEXTURE_2D_ARRAY` target), 14 the cube shadow, 15 the ambient pre-pass's map (the AO, the sky's visibility, the contact shadows). |
-  | 13 | nobody | Free in every lit program. |
+  | 9 | the sky pass and the stars | The cloud target (`sampler2D cloudLayer`, `WorldRendererTextureUnit_CloudLayer`: the clouds' newest result), bound before their draws while the clouds are drawn. |
+  | 12–15 | every lit program | The frame's textures: 12 the shadow levels' maps (`sampler2DArrayShadow shadowLevels`, the array's `GL_TEXTURE_2D_ARRAY` target), 13 the clouds' shadow map (`sampler2D cloudShadowMap`), 14 the cube shadow, 15 the ambient pre-pass's map (the AO, the sky's visibility, the contact shadows). |
+  | 7–13 | the cloud programs (`world_clouds`, `world_clouds_shadow`, `world_clouds_resolve`) | 7 the transmittance table, 8 the haze's volume, 9 and 10 the shape and the erosion noise (`sampler3D`, the units' `GL_TEXTURE_3D` target), 11 the weather map, 12 the G-buffer (the march's sky mask), 13 the irradiance table (the multiple scattering table's sampler, declared and unread, points there too). Full-screen passes without material maps; the resolve's two images come through `SetShaderValueTexture`. |
 
-  The wetness and puddle masks (rain and wetness) will need units in the lit programs too: 13 is free, and 7, 8, 12,
-  14 and 15 are taken; beyond 13, a frame texture for the model programs takes a unit below 12 that no material map the models
+  The wetness and puddle masks (rain and wetness) will need units in the lit programs too: 7, 8 and 12 to 15 are
+  taken, so a frame texture for the model programs takes a unit below 12 that no material map the models
   use binds (the PBR materials use maps 0, 1, 2 and 5: albedo, the packed ORM, normal, emission; raylib's importers
   also fill 3 (roughness) and 4 (occlusion) in some formats (a glTF file's are packed into 1 and emptied when the model
   loads) and its OBJ import 6 (height) when the file has those maps, so 10 and 11 are the safe ones there), and the
@@ -1503,7 +1628,7 @@ The renderer keeps receiving features, so:
 - **Terrain never skins and is never instanced**: its chunks draw with one rigid shader per pass and need no
   skinned or instanced twin.
 - **Direct OpenGL calls** live only in `source/GLTextureArray.{h,c}` (raylib has no texture arrays) and the modules
-  like it, `source/GLReadback.{h,c}` and `source/GLDepth.{h,c}`. Anything else that needs GL raylib lacks goes there or into a module like it (its function pointers through
+  like it, `source/GLReadback.{h,c}`, `source/GLDepth.{h,c}` and `source/GLTexture3D.{h,c}`. Anything else that needs GL raylib lacks goes there or into a module like it (its function pointers through
   `rlGetProcAddress`, its constants defined in it, a missing function or a GL error degrading with one log line), never
   into a pass.
 - **Vertex attributes (the budget).** GL 3.3 guarantees 16 attribute locations (0 to 15). raylib binds 0 to 12
@@ -1560,13 +1685,19 @@ packed distance; used by `world_cube_depth`, `world_sprite_cube_depth` and `comm
 dithered fades: the draw's fade and its part of a LOD cross-fade; used by every world geometry shader, see
 "Visibility") and `common/skinning` (the bone attributes and the palette, and a vertex's blended rows; used by
 every skinned vertex stage, [Animation.md](Animation.md)), and `common/instancing` (a copy's record attributes, its
-fade, LOD band and draw per pass, see "Model instances"; used by every instanced vertex stage). Put new shared lighting
+fade, LOD band and draw per pass, see "Model instances"; used by every instanced vertex stage), and `common/clouds` (the
+clouds' layers on the curved planet, their densities and their phase, see "Clouds"; used by the cloud programs). Put new shared lighting
 or noise code there instead of copying it between shaders.
 
 The atmosphere's table builders (`world_atmosphere_transmittance`, `world_atmosphere_multiscatter`,
 `world_atmosphere_skyview`, `world_atmosphere_irradiance`) and the haze's volume builder (`world_atmosphere_volume`)
 share one directory, `shaders/atmosphere/` (`atmosphere_*.json` with the fragment stages `transmittance`,
 `multiscatter`, `skyview`, `irradiance` and `volume` over raylib's default vertex stage): full-screen passes into the tables' and the volume's targets.
+
+The clouds draw with `world_clouds` (the march), `world_clouds_shadow` (the shadow map) and `world_clouds_resolve`
+(the accumulation): `shaders/clouds/` (`clouds.json`, `clouds_shadow.json`, `clouds_resolve.json` with the fragment
+stages `march`, `shadow` and `resolve` over raylib's default vertex stage), full-screen passes into the cloud pass's
+targets.
 
 The sky's occupancy volume draws with `world_sky_slices` (`shaders/sky_slices/`: its fragment stage over raylib's
 default vertex stage; its twins `world_sky_slices_skinned` and `world_sky_slices_instanced` take the depth shaders'
@@ -1668,7 +1799,7 @@ mouse wheel (the flycam's speed, up faster and down slower, three notches to a d
 not while walking, and the UI takes it first while the pointer is over a widget) and the debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11, the
 digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/`, the backslash, Insert, Home, End, Page Up, Page Down, the
-keypad's digits, its `.`, `+` and `*` are taken already; the keypad's other operators are free. Leave F12 free:
+keypad's digits, its `.`, `+`, `*` and `/` are taken already; the keypad's `-`, Enter and `=` are free. Leave F12 free:
 raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
@@ -1703,6 +1834,8 @@ raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writi
   hours; each logged, every strike too (its distance and direction), and the I key's status adds the weather's line
   (the preset, its hours left, the values). At the 720x clock a storm lasts 1.5 to 7.5 real seconds: Home holds it,
   Page Up shows its lightning at once;
+- **the clouds (see "Clouds"):** keypad / steps their quality (off: the weather's clouds as one even deck, low, high;
+  logged: `WorldTest: clouds low (half the resolution).`), and the I key's status adds their line;
 - **the renderer and the sky:** O post effects, B bloom, G sun shafts, keypad . contact shadows, C crisp overlay, V
   night vision (logged), K
   sprite lighting (off draws every sprite unlit; logged), L light gizmos, N cycle the

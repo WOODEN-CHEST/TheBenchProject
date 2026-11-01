@@ -1024,6 +1024,49 @@ static void WeatherStartsCalmAndIsValidated(TestRun* run)
     WorldEnvironment_Deconstruct(&Environment);
 }
 
+static void TheCloudsStartWithOneLayerAndAreValidated(TestRun* run)
+{
+    WorldEnvironment Environment;
+    WorldEnvironment_SetDefaults(&Environment);
+    // Drawn, the weather's layer from 1500 m to 4000 m, the upper layers off.
+    TEST_CHECK(run, Environment.AreCloudsEnabled && (Environment.CloudBase == 1500.0f)
+        && (Environment.CloudThickness == 2500.0f) && (Environment.CloudScale == 1.0f) && (Environment.CloudDetail == 1.0f)
+        && (Environment.CloudWindScale == 2.0f) && (Environment.CloudEvolution == 1.0f));
+    TEST_CHECK(run, (Environment.CloudMidCoverage == 0.0f) && (Environment.CloudMidType == 1.0f)
+        && (Environment.CloudMidDensity == 0.4f) && (Environment.CloudMidBase == 5000.0f)
+        && (Environment.CloudMidThickness == 600.0f));
+    TEST_CHECK(run, (Environment.CloudHighCoverage == 0.0f) && (Environment.CloudHighType == 0.2f)
+        && (Environment.CloudHighDensity == 0.5f) && (Environment.CloudHighHeight == 9000.0f));
+    TEST_CHECK(run, (Environment.CloudForwardScattering == 0.8f) && (Environment.CloudTint.r == 255)
+        && (Environment.CloudTint.g == 255) && (Environment.CloudTint.b == 255) && (Environment.CloudLightPollution == 1.0f));
+    TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));
+
+    Environment.CloudForwardScattering = 0.96f; // a lobe this sharp is a spike
+    CheckRejected(run, &Environment, "cloud_forward_scattering");
+    ResetEnvironment(&Environment);
+    Environment.CloudDetail = 2.5f;
+    CheckRejected(run, &Environment, "cloud_detail");
+    ResetEnvironment(&Environment);
+    Environment.CloudThickness = 5.0f;
+    CheckRejected(run, &Environment, "cloud_thickness");
+    ResetEnvironment(&Environment);
+    Environment.CloudBase = -1.0f;
+    CheckRejected(run, &Environment, "cloud_base");
+    ResetEnvironment(&Environment);
+    Environment.CloudScale = 0.01f;
+    CheckRejected(run, &Environment, "cloud_scale");
+    ResetEnvironment(&Environment);
+    Environment.CloudLightPollution = 11.0f;
+    CheckRejected(run, &Environment, "cloud_light_pollution");
+    ResetEnvironment(&Environment);
+    Environment.CloudMidCoverage = 1.5f;
+    CheckRejected(run, &Environment, "cloud_mid_coverage");
+    ResetEnvironment(&Environment);
+    Environment.CloudHighHeight = NAN;
+    CheckRejected(run, &Environment, "cloud_high_height");
+    WorldEnvironment_Deconstruct(&Environment);
+}
+
 static void LightningValuesAreNeverSaved(TestRun* run)
 {
     const PropertyTable* Table = WorldEnvironment_GetPropertyTable();
@@ -1134,6 +1177,7 @@ void WorldEnvironmentTests_Run(TestRun* run)
         { "seasons_change_the_day_length", SeasonsChangeTheDayLength },
         { "light_ramps_follow_the_elevation", LightRampsFollowTheElevation },
         { "weather_starts_calm_and_is_validated", WeatherStartsCalmAndIsValidated },
+        { "the_clouds_start_with_one_layer_and_are_validated", TheCloudsStartWithOneLayerAndAreValidated },
         { "lightning_values_are_never_saved", LightningValuesAreNeverSaved },
         { "daylight_at_another_time_is_the_suns", DaylightAtAnotherTimeIsTheSuns },
     };

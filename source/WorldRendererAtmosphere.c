@@ -45,6 +45,9 @@ typedef struct SkyViewLightStruct
      *  give the air from all around (linear). */
     const float* CloudSkyIrradiance;
     const float* CloudAmbientRadiance;
+    /** The clouds' base (the air below it takes their light) and the share of the light drawn clouds leave below it. */
+    float CloudHeight;
+    float CloudLightShare;
 } SkyViewLight;
 
 
@@ -174,8 +177,8 @@ static void DrawSkyViewHalf(WorldRenderer* self, Shader builder, const SkyViewLi
     SetShaderValue(builder, State->_skyViewLocGroundNightLight, light->GroundNightLight, SHADER_UNIFORM_VEC3);
     SetShaderValue(builder, State->_skyViewLocCloudSkyIrradiance, light->CloudSkyIrradiance, SHADER_UNIFORM_VEC3);
     SetShaderValue(builder, State->_skyViewLocCloudAmbientRadiance, light->CloudAmbientRadiance, SHADER_UNIFORM_VEC3);
-    float CloudHeight = WORLD_WEATHER_CLOUD_HEIGHT;
-    SetShaderValue(builder, State->_skyViewLocCloudHeight, &CloudHeight, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(builder, State->_skyViewLocCloudHeight, &light->CloudHeight, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(builder, State->_skyViewLocCloudLightShare, &light->CloudLightShare, SHADER_UNIFORM_FLOAT);
     SetShaderValueTexture(builder, State->_skyViewLocations._locTransmittanceTable, State->_transmittance.texture);
     SetShaderValueTexture(builder, State->_skyViewLocations._locMultiscatterTable, State->_multiscatter.texture);
     SetShaderValueTexture(builder, State->_skyViewLocations._locIrradianceTable, State->_irradiance.texture);
@@ -214,7 +217,8 @@ static void BuildSkyView(WorldRenderer* self, const WorldRenderFrame* frame)
         .Half = WorldAtmosphereSkyViewHalf_Sun, .LightCosZenith = frame->SunDirection.y,
         .LightIntensity = frame->AirSunIntensity, .LightPollution = frame->LightPollutionRadiance,
         .GroundNightLight = frame->SkyLight.Night, .CloudSkyIrradiance = CloudSkyIrradiance,
-        .CloudAmbientRadiance = frame->Weather.AmbientRadiance
+        .CloudAmbientRadiance = frame->Weather.AmbientRadiance, .CloudHeight = frame->Clouds.Low.Base,
+        .CloudLightShare = frame->CloudLightShare
     };
     DrawSkyViewHalf(self, Builder, &Sun);
     if (frame->MoonSkyIntensity > 0.0f)
@@ -223,7 +227,8 @@ static void BuildSkyView(WorldRenderer* self, const WorldRenderFrame* frame)
         {
             .Half = WorldAtmosphereSkyViewHalf_Moon, .LightCosZenith = frame->MoonDirection.y,
             .LightIntensity = frame->AirMoonIntensity, .LightPollution = None, .GroundNightLight = None,
-            .CloudSkyIrradiance = None, .CloudAmbientRadiance = None
+            .CloudSkyIrradiance = None, .CloudAmbientRadiance = None, .CloudHeight = frame->Clouds.Low.Base,
+            .CloudLightShare = frame->CloudLightShare
         };
         DrawSkyViewHalf(self, Builder, &Moon);
     }
@@ -262,8 +267,15 @@ static void BuildVolume(WorldRenderer* self, const WorldRenderFrame* frame)
     GetCloudSkyIrradiance(frame, CloudSkyIrradiance);
     SetShaderValue(Builder, State->_volumeLocCloudSkyIrradiance, CloudSkyIrradiance, SHADER_UNIFORM_VEC3);
     SetShaderValue(Builder, State->_volumeLocCloudAmbientRadiance, frame->Weather.AmbientRadiance, SHADER_UNIFORM_VEC3);
-    float CloudHeight = WORLD_WEATHER_CLOUD_HEIGHT;
-    SetShaderValue(Builder, State->_volumeLocCloudHeight, &CloudHeight, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(Builder, State->_volumeLocCloudHeight, &frame->Clouds.Low.Base, SHADER_UNIFORM_FLOAT);
+    // Drawn clouds: their share below their base; the light on surfaces in full where their shadow map shades it.
+    SetShaderValue(Builder, State->_volumeLocCloudLightShare, &frame->CloudLightShare, SHADER_UNIFORM_FLOAT);
+    float DirectShares[2] =
+    {
+        (frame->IsCloudShadowActive && !frame->IsCloudLightMoon) ? 1.0f : frame->CloudLightShare,
+        (frame->IsCloudShadowActive && frame->IsCloudLightMoon) ? 1.0f : frame->CloudLightShare
+    };
+    SetShaderValue(Builder, State->_volumeLocDirectLightShares, DirectShares, SHADER_UNIFORM_VEC2);
 
     BeginTable(State->_volume);
     BeginShaderMode(Builder);
@@ -295,6 +307,8 @@ static void CacheVolumeLocations(WorldRendererAtmosphereState* state)
     state->_volumeLocCloudSkyIrradiance = GetShaderLocation(Volume, "cloudSkyIrradiance");
     state->_volumeLocCloudAmbientRadiance = GetShaderLocation(Volume, "cloudAmbientRadiance");
     state->_volumeLocCloudHeight = GetShaderLocation(Volume, "cloudHeight");
+    state->_volumeLocCloudLightShare = GetShaderLocation(Volume, "cloudLightShare");
+    state->_volumeLocDirectLightShares = GetShaderLocation(Volume, "directLightShares");
 }
 
 /* The sky-view builder's own uniform locations. */
@@ -315,6 +329,7 @@ static void CacheSkyViewLocations(WorldRendererAtmosphereState* state)
     state->_skyViewLocCloudSkyIrradiance = GetShaderLocation(SkyView, "cloudSkyIrradiance");
     state->_skyViewLocCloudAmbientRadiance = GetShaderLocation(SkyView, "cloudAmbientRadiance");
     state->_skyViewLocCloudHeight = GetShaderLocation(SkyView, "cloudHeight");
+    state->_skyViewLocCloudLightShare = GetShaderLocation(SkyView, "cloudLightShare");
 }
 
 

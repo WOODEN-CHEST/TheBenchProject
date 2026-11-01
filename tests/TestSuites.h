@@ -164,6 +164,14 @@ void WeatherSystemTests_Run(TestRun* run);
  *  haze (WorldWeatherLightTests.c). */
 void WorldWeatherLightTests_Run(TestRun* run);
 
+/** @brief The clouds' noise: tileable gradient and Worley noise, and the three textures (determinism, spread, seams)
+ *  (CloudNoiseTests.c; a private module of source/). */
+void CloudNoiseTests_Run(TestRun* run);
+
+/** @brief The clouds' frame: the layers from the environment, the patterns' drift and anchors, the ray's stretch through a
+ *  layer and the shadow map's frame (WorldCloudsTests.c; a private module of source/). */
+void WorldCloudsTests_Run(TestRun* run);
+
 /** @brief The night sky's maths: the star catalogue, limiting magnitude, air mass, star colours and the galaxy's
  *  orientation (NightSkyTests.c; a private module of source/). */
 void NightSkyTests_Run(TestRun* run);

@@ -253,6 +253,7 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
     WorldRendererAtmosphere_PrepareShader(shader, &outLocations->_atmosphere);
     WorldRendererAtmosphere_PrepareHazeShader(shader, true, &outLocations->_haze);
     WorldRendererInterior_PrepareShader(shader, &outLocations->_interior);
+    WorldRendererClouds_PrepareLitShader(shader, &outLocations->_cloudShadow);
 
     // The shader's point-light arrays must hold the WORLD_MAX_FORWARD_LIGHTS the culling may select; with fewer,
     // upload only as many as fit (the shader also clamps its loop to its own array size).
@@ -285,15 +286,21 @@ void WorldRendererLighting_PrepareSkyLight(WorldRenderer* self, WorldRenderFrame
         .MoonDirection = frame->MoonDirection, .MoonPhase = frame->MoonPhase, .MoonIllumination = frame->MoonIllumination,
         .MoonIntensity = frame->MoonSkyIntensity
     };
-    // The weather's clouds leave a share of the sun's and the moon's light above the air: everything they light (the
+    // The weather's clouds leave a share of the sun's and the moon's light above the air: what they light below them (the
     // surfaces, the air, the far ground) dims alike, and the clouds' deck sends down the light falling on its top (the
-    // clear sky's at the clouds' height: a whiter sun, less sky above) as diffuse light.
+    // clear sky's at the clouds' base: a whiter sun, less sky above) as diffuse light. Drawn clouds are lit by that light
+    // too.
     WorldWeatherLight* Weather = &frame->Weather;
-    if (WorldWeatherLight_HasClouds(Weather))
+    bool HasDeck = WorldWeatherLight_HasClouds(Weather);
+    WorldSkyLightFrame CloudTop;
+    Memory_Zero(&CloudTop, sizeof(CloudTop));
+    if (HasDeck || frame->AreCloudsActive)
     {
-        WorldSkyLightFrame CloudTop;
         WorldSkyLight_GetFrameLight(Atmosphere->_skyLight.Tables, &frame->AtmosphereMedium, Environment, &Lights,
-            frame->LightPollutionRadiance, (double)WORLD_WEATHER_CLOUD_HEIGHT, &CloudTop);
+            frame->LightPollutionRadiance, (double)frame->Clouds.Low.Base, &CloudTop);
+    }
+    if (HasDeck)
+    {
         Lights.SunIntensity *= Weather->DirectShare;
         Lights.MoonIntensity *= Weather->DirectShare;
         WorldSkyLight_GetFrameLight(Atmosphere->_skyLight.Tables, &frame->AtmosphereMedium, Environment, &Lights,
@@ -321,13 +328,25 @@ void WorldRendererLighting_PrepareSkyLight(WorldRenderer* self, WorldRenderFrame
     frame->LastExposure = Exposure;
     float SunColor[3];
     WorldRendererCommon_ColorToLinear(Environment->SunColor, SunColor);
+    // The light the air is lit by: the lights above the air, dimmed everywhere by the clouds' share while they are one even
+    // deck; in full while the clouds are drawn, the air below their base taking their share (CloudLightShare) and the
+    // clouds hiding the discs, the stars and the Milky Way per pixel instead of by their share (SkyObjectShare).
+    const float* SunAboveAir = frame->AreCloudsActive ? CloudTop.SunAboveAir : Light->SunAboveAir;
+    const float* MoonAboveAir = frame->AreCloudsActive ? CloudTop.MoonAboveAir : Light->MoonAboveAir;
+    frame->CloudLightShare = frame->AreCloudsActive ? Weather->DirectShare : 1.0f;
+    frame->SkyObjectShare = frame->AreCloudsActive ? 1.0f : Weather->DirectShare;
     for (int Channel = 0; Channel < 3; Channel++)
     {
-        frame->AirSunIntensity[Channel] = Light->SunAboveAir[Channel] / (float)WORLD_ATMOSPHERE_SUN_LIGHT;
-        frame->AirMoonIntensity[Channel] = Light->MoonAboveAir[Channel] / (float)WORLD_ATMOSPHERE_SUN_LIGHT;
+        frame->AirSunIntensity[Channel] = SunAboveAir[Channel] / (float)WORLD_ATMOSPHERE_SUN_LIGHT;
+        frame->AirMoonIntensity[Channel] = MoonAboveAir[Channel] / (float)WORLD_ATMOSPHERE_SUN_LIGHT;
         // fminf takes an absurd intensity's infinity to the most the disc holds; the clouds hide their share of it.
         frame->SunDiscIntensity[Channel] = fminf(SunColor[Channel] * fmaxf(frame->SunIntensity, 0.0f)
-            * SUN_DISC_SCREEN_EXPOSURE / Exposure, (float)SUN_DISC_MAX_INTENSITY) * Weather->DirectShare;
+            * SUN_DISC_SCREEN_EXPOSURE / Exposure, (float)SUN_DISC_MAX_INTENSITY) * frame->SkyObjectShare;
+    }
+    // The light that lights the drawn clouds, and their shadow map.
+    if (frame->AreCloudsActive)
+    {
+        WorldRendererClouds_PrepareLight(self, frame, &CloudTop);
     }
     // The lit shaders take it by height from the volume's last row while the atmosphere pass writes it there.
     frame->IsSkyLightPerHeight = frame->AreAtmosphereTablesActive && WorldRendererAtmosphere_IsVolumeAvailable(self);
@@ -451,6 +470,8 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     SetShaderValue(shader, lit->_locHazeMultiplier, &NoHazeChange, SHADER_UNIFORM_FLOAT);
     // Interior lighting: the sky's visibility map and the debug view.
     WorldRendererInterior_UploadFrame(self, frame, shader, &lit->_interior);
+    // The clouds' shadow on the sun (or the moon) at every surface.
+    WorldRendererClouds_UploadLitFrame(shader, &lit->_cloudShadow, frame);
 
     // The eye's night vision for the reflected light and the haze (strength 0 leaves every colour as it is), calibrated on
     // the frame's light scale.
@@ -524,6 +545,7 @@ static void BindFrameTextures(WorldRenderer* self, const WorldRenderFrame* frame
     WorldRendererAtmosphere_BindVolume(self, frame);
     WorldRendererSkyVisibility_BindMap(self, frame);
     WorldRendererShadows_BindLevels(self, frame);
+    WorldRendererClouds_BindShadow(self, frame);
     if (applyScreenAo && frame->IsAmbientPrepassActive)
     {
         rlActiveTextureSlot(WorldRendererTextureUnit_AmbientOcclusion);

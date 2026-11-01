@@ -177,8 +177,8 @@ static void PrepareMoon(WorldRenderFrame* frame)
     {
         Disc->Opacity = 0.0f;
     }
-    // The weather's clouds hide their share of it.
-    Disc->Radiance = MOON_DISC_BASE_RADIANCE * fmaxf(Environment->MoonBrightness, 0.0f) * frame->Weather.DirectShare;
+    // The weather's clouds hide their share of it when it is drawn (WorldRenderFrame.SkyObjectShare).
+    Disc->Radiance = MOON_DISC_BASE_RADIANCE * fmaxf(Environment->MoonBrightness, 0.0f);
     Disc->Earthshine = MOON_EARTHSHINE_SHARE * (1.0f - ClampUnit(frame->MoonIllumination));
 
     Vector3 Pole = { 0.0f, sinf(Environment->SunAngle), -cosf(Environment->SunAngle) };
@@ -236,6 +236,11 @@ void WorldRendererSky_LoadShader(WorldRenderer* self)
     self->_sky._locFlashIrradiance = GetShaderLocation(RayShader, "flashIrradiance");
     self->_sky._locFlashDirection = GetShaderLocation(RayShader, "flashDirection");
     self->_sky._locCloudHeight = GetShaderLocation(RayShader, "cloudHeight");
+    self->_sky._locCloudsActive = GetShaderLocation(RayShader, "cloudsActive");
+    self->_sky._locCloudLayer = GetShaderLocation(RayShader, "cloudLayer");
+    self->_sky._locCloudLayerResolution = GetShaderLocation(RayShader, "cloudLayerResolution");
+    int CloudLayerUnit = (int)WorldRendererTextureUnit_CloudLayer;
+    SetShaderValue(RayShader, self->_sky._locCloudLayer, &CloudLayerUnit, SHADER_UNIFORM_INT);
     self->_sky._locMoonEarthshine = GetShaderLocation(RayShader, "moonEarthshine");
     self->_sky._locMoonOpacity = GetShaderLocation(RayShader, "moonOpacity");
     self->_sky._locMoonSkyIntensity = GetShaderLocation(RayShader, "moonSkyIntensity");
@@ -290,9 +295,9 @@ void WorldRendererSky_PrepareNightSky(WorldRenderFrame* frame)
     // The twilight behind the stars: the sky's light from the sun as its mean luminance, on the real scale.
     frame->LimitingMagnitude = NightSky_GetLimitingMagnitude(Environment->LightPollution, MoonlitSky,
         WorldSkyLight_GetTwilightLuminance(&frame->SkyLight));
-    // The weather's clouds hide their share of it.
+    // The weather's even deck hides its share of it; drawn clouds hide it per pixel.
     frame->MilkyWayRadiance = MILKY_WAY_BASE_RADIANCE * fmaxf(Environment->MilkyWayBrightness, 0.0f)
-        * NightSky_GetMilkyWayVisibility(frame->LimitingMagnitude) * frame->Weather.DirectShare;
+        * NightSky_GetMilkyWayVisibility(frame->LimitingMagnitude) * frame->SkyObjectShare;
 }
 
 bool WorldRendererSky_IsMoonVisible(const WorldRenderFrame* frame)
@@ -343,8 +348,12 @@ void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     SetShaderValue(RayShader, self->_sky._locFlashIrradiance, Weather->FlashIrradiance, SHADER_UNIFORM_VEC3);
     float FlashDirection[3] = { Weather->FlashDirection.x, Weather->FlashDirection.y, Weather->FlashDirection.z };
     SetShaderValue(RayShader, self->_sky._locFlashDirection, FlashDirection, SHADER_UNIFORM_VEC3);
-    float CloudHeight = WORLD_WEATHER_CLOUD_HEIGHT;
-    SetShaderValue(RayShader, self->_sky._locCloudHeight, &CloudHeight, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, self->_sky._locCloudHeight, &frame->Clouds.Low.Base, SHADER_UNIFORM_FLOAT);
+    // The drawn clouds over the sky (their target bound on its unit below).
+    int CloudsActive = frame->AreCloudsActive ? 1 : 0;
+    SetShaderValue(RayShader, self->_sky._locCloudsActive, &CloudsActive, SHADER_UNIFORM_INT);
+    float CloudLayerResolution[2] = { (float)self->_clouds._width, (float)self->_clouds._height };
+    SetShaderValue(RayShader, self->_sky._locCloudLayerResolution, CloudLayerResolution, SHADER_UNIFORM_VEC2);
 
     // The moon: its direction (the moonlit sky needs it even without the disc), the moonlit sky's light (0 skips its
     // half), and the disc (an opacity of 0 draws none).
@@ -365,7 +374,9 @@ void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
         SetShaderValue(RayShader, self->_sky._locMoonCosRadius, &Disc->CosRadius, SHADER_UNIFORM_FLOAT);
         SetShaderValue(RayShader, self->_sky._locMoonSinRadius, &Disc->SinRadius, SHADER_UNIFORM_FLOAT);
         SetShaderValue(RayShader, self->_sky._locMoonColor, frame->MoonColor, SHADER_UNIFORM_VEC3);
-        SetShaderValue(RayShader, self->_sky._locMoonDiscRadiance, &Disc->Radiance, SHADER_UNIFORM_FLOAT);
+        // The weather's even deck hides its share of it; drawn clouds hide it per pixel.
+        float DiscRadiance = Disc->Radiance * frame->SkyObjectShare;
+        SetShaderValue(RayShader, self->_sky._locMoonDiscRadiance, &DiscRadiance, SHADER_UNIFORM_FLOAT);
         SetShaderValue(RayShader, self->_sky._locMoonEarthshine, &Disc->Earthshine, SHADER_UNIFORM_FLOAT);
         HasMoonTexture = (self->_sky._moon._texture != NULL);
         if (HasMoonTexture)
@@ -392,6 +403,7 @@ void WorldRendererSky_Draw(WorldRenderer* self, const WorldRenderFrame* frame)
     // The atmosphere's tables stay on their own units (above the 2D batch's), bound once more in case a pass since the
     // atmosphere's moved them.
     WorldRendererAtmosphere_BindTables(self, frame);
+    WorldRendererClouds_BindLayer(self, frame);
     BeginShaderMode(RayShader);
     // A 2D (batch) draw binds extra samplers through SetShaderValueTexture, after BeginShaderMode.
     if (frame->IsMilkyWayActive)
