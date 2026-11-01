@@ -784,8 +784,9 @@ time for this environment's sun (the weather's drying reads the sun ahead of the
 
 The clouds (category "Clouds"; [WorldRuntime.md](WorldRuntime.md), "Clouds"): how the weather's clouds look and the two
 layers above them. The weather's `cloud_coverage`, `cloud_type` and `cloud_density` are the low layer's; the mid and high
-layers have their own coverage and are off by default (coverage 0). Heights are above the atmosphere's ground (sea
-level, `horizon_ground_height`). The player's `cloud_quality` ([Config.md](Config.md)) decides whether they are drawn at
+layers have their own coverage and are off by default (coverage 0). A coverage is the share of the sky a layer covers:
+below about 0.45 its clouds gather in fields with clear sky between, above it they are everywhere, more in some regions
+than others. Heights are above the atmosphere's ground (sea level, `horizon_ground_height`). The player's `cloud_quality` ([Config.md](Config.md)) decides whether they are drawn at
 all.
 
 | Key | Wire id | Rule | Default | Meaning |

@@ -2,7 +2,10 @@
     "format_version": 3,
     "name": "test",
     "next_object_id": 66,
-    "environment": {},
+    "environment": {
+        "cloud_mid_coverage": 0.00,
+        "cloud_high_coverage": 0.05
+    },
     "objects": [
         {
             "id": 1,

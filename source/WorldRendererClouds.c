@@ -1,8 +1,9 @@
 // The clouds (shaders/common/clouds.glsl; their pure maths in WorldClouds.h, their noise in CloudNoise.h): the noise
 // made at load, each frame the patterns' drift and the layers, the light that lights them, their shadow map around the
-// camera, and their march over the sky's pixels into the cloud target, which the sky pass composites over the sky and the
-// stars read; the lit passes read the shadow map. Drawn after the atmosphere's tables, the haze's volume and the
-// G-buffer, before the scene.
+// camera, and their march over every pixel into the cloud target (up to the scene's surfaces, from the G-buffer's depth),
+// which the sky pass composites over the sky, the stars read, and the composite lays over the scene's surfaces after the
+// scene; the lit passes read the shadow map. Drawn after the atmosphere's tables, the haze's volume and the G-buffer,
+// before the scene.
 
 #include <math.h>
 #include <stdio.h>
@@ -19,6 +20,7 @@
 #define MARCH_SHADER_ASSET_NAME ((const unsigned char*)u8"world_clouds")
 #define SHADOW_SHADER_ASSET_NAME ((const unsigned char*)u8"world_clouds_shadow")
 #define RESOLVE_SHADER_ASSET_NAME ((const unsigned char*)u8"world_clouds_resolve")
+#define COMPOSITE_SHADER_ASSET_NAME ((const unsigned char*)u8"world_clouds_composite")
 /** The share of each frame's march in the accumulated result, per quality (low, high): about the last 1 / share frames
  *  are averaged. */
 #define LOW_QUALITY_CURRENT_SHARE 0.08f
@@ -199,9 +201,11 @@ static void PrepareMarch(WorldRendererCloudState* state)
     AssignSamplerUnit(March, state->_marchAtmosphere._locMultiscatterTable, WorldRendererTextureUnit_CloudIrradiance);
     state->_marchLocResolution = GetShaderLocation(March, "resolution");
     state->_marchLocInvViewProj = GetShaderLocation(March, "invViewProj");
-    state->_marchLocSkyMask = GetShaderLocation(March, "skyMask");
-    state->_marchLocHasSkyMask = GetShaderLocation(March, "hasSkyMask");
-    state->_marchLocSkyMaskResolution = GetShaderLocation(March, "skyMaskResolution");
+    state->_marchLocSceneDepth = GetShaderLocation(March, "sceneDepth");
+    state->_marchLocHasSceneDepth = GetShaderLocation(March, "hasSceneDepth");
+    state->_marchLocSceneDepthResolution = GetShaderLocation(March, "sceneDepthResolution");
+    state->_marchLocInvProjection = GetShaderLocation(March, "invProjection");
+    state->_marchLocDepthReversed = GetShaderLocation(March, "depthReversed");
     state->_marchLocSunDirection = GetShaderLocation(March, "sunDirection");
     state->_marchLocMoonDirection = GetShaderLocation(March, "moonDirection");
     state->_marchLocLightDirection = GetShaderLocation(March, "cloudLightDirection");
@@ -219,7 +223,7 @@ static void PrepareMarch(WorldRendererCloudState* state)
     state->_marchLocLightSteps = GetShaderLocation(March, "cloudLightSteps");
     state->_marchLocMidSteps = GetShaderLocation(March, "cloudMidSteps");
     state->_marchLocFrame = GetShaderLocation(March, "cloudFrame");
-    AssignSamplerUnit(March, state->_marchLocSkyMask, WorldRendererTextureUnit_CloudSkyMask);
+    AssignSamplerUnit(March, state->_marchLocSceneDepth, WorldRendererTextureUnit_CloudSceneDepth);
 }
 
 /* The shadow map builder's locations and samplers. */
@@ -236,6 +240,17 @@ static void PrepareShadow(WorldRendererCloudState* state)
     state->_shadowLocPlane = GetShaderLocation(Builder, "cloudShadowPlane");
     state->_shadowLocLightDirection = GetShaderLocation(Builder, "cloudLightDirection");
     state->_shadowLocSteps = GetShaderLocation(Builder, "cloudShadowSteps");
+}
+
+/* The composite's locations (its two images come through SetShaderValueTexture at the draw). */
+static void PrepareComposite(WorldRendererCloudState* state)
+{
+    Shader Composite = GameShader_GetRaylibShader(state->_compositeShader);
+    state->_compositeLocLayer = GetShaderLocation(Composite, "cloudLayer");
+    state->_compositeLocLayerResolution = GetShaderLocation(Composite, "cloudLayerResolution");
+    state->_compositeLocSceneDepth = GetShaderLocation(Composite, "sceneDepth");
+    state->_compositeLocResolution = GetShaderLocation(Composite, "resolution");
+    state->_compositeLocDepthReversed = GetShaderLocation(Composite, "depthReversed");
 }
 
 /* The accumulation's locations. */
@@ -321,12 +336,14 @@ static void RenderMarch(WorldRenderer* self, const WorldRenderFrame* frame)
     float Resolution[2] = { (float)State->_width, (float)State->_height };
     SetShaderValue(March, State->_marchLocResolution, Resolution, SHADER_UNIFORM_VEC2);
     SetShaderValueMatrix(March, State->_marchLocInvViewProj, frame->InvViewProjection);
-    // The G-buffer's flags, while it was drawn this frame: texels whose scene pixels all hold geometry are not marched.
-    bool HasSkyMask = (frame->IsAmbientPrepassActive || frame->AreOutlinesActive) && self->_gbuffer._hasTarget;
-    int HasSkyMaskValue = HasSkyMask ? 1 : 0;
-    SetShaderValue(March, State->_marchLocHasSkyMask, &HasSkyMaskValue, SHADER_UNIFORM_INT);
-    float MaskResolution[2] = { (float)frame->SceneWidth, (float)frame->SceneHeight };
-    SetShaderValue(March, State->_marchLocSkyMaskResolution, MaskResolution, SHADER_UNIFORM_VEC2);
+    // The G-buffer's depth, while it is drawn for the clouds: a texel whose scene pixels all hold surfaces is marched up to
+    // the nearest of them (the composite lays it over them); a texel with the sky in it, its whole ray.
+    int HasDepthValue = frame->IsCloudDepthActive ? 1 : 0;
+    SetShaderValue(March, State->_marchLocHasSceneDepth, &HasDepthValue, SHADER_UNIFORM_INT);
+    float DepthResolution[2] = { (float)frame->SceneWidth, (float)frame->SceneHeight };
+    SetShaderValue(March, State->_marchLocSceneDepthResolution, DepthResolution, SHADER_UNIFORM_VEC2);
+    SetShaderValueMatrix(March, State->_marchLocInvProjection, frame->InvProjection);
+    WorldRendererCommon_SetDepthConvention(March, State->_marchLocDepthReversed, frame);
     float Sun[3] = { frame->SunDirection.x, frame->SunDirection.y, frame->SunDirection.z };
     float Moon[3] = { frame->MoonDirection.x, frame->MoonDirection.y, frame->MoonDirection.z };
     SetShaderValue(March, State->_marchLocSunDirection, Sun, SHADER_UNIFORM_VEC3);
@@ -384,9 +401,9 @@ static void RenderMarch(WorldRenderer* self, const WorldRenderFrame* frame)
     BindTexture2D(WorldRendererTextureUnit_AtmosphereTransmittance, self->_atmosphere._transmittance.texture.id);
     BindTexture2D(WorldRendererTextureUnit_HazeVolume, self->_atmosphere._volume.texture.id);
     BindTexture2D(WorldRendererTextureUnit_CloudIrradiance, self->_atmosphere._irradiance.texture.id);
-    if (HasSkyMask)
+    if (frame->IsCloudDepthActive)
     {
-        BindTexture2D(WorldRendererTextureUnit_CloudSkyMask, self->_gbuffer._target.texture.id);
+        BindTexture2D(WorldRendererTextureUnit_CloudSceneDepth, self->_gbuffer._target.depth.id);
     }
     DrawRectangle(0, 0, State->_width, State->_height, WHITE);
     EndShaderMode();
@@ -442,6 +459,7 @@ void WorldRendererClouds_Load(WorldRenderer* self)
     State->_marchShader = WorldRendererCommon_LoadShader(self, MARCH_SHADER_ASSET_NAME);
     State->_shadowShader = WorldRendererCommon_LoadShader(self, SHADOW_SHADER_ASSET_NAME);
     State->_resolveShader = WorldRendererCommon_LoadShader(self, RESOLVE_SHADER_ASSET_NAME);
+    State->_compositeShader = WorldRendererCommon_LoadShader(self, COMPOSITE_SHADER_ASSET_NAME);
     if (State->_marchShader == NULL)
     {
         return;
@@ -463,6 +481,10 @@ void WorldRendererClouds_Load(WorldRenderer* self)
     if (State->_resolveShader != NULL)
     {
         PrepareResolve(State);
+    }
+    if (State->_compositeShader != NULL)
+    {
+        PrepareComposite(State);
     }
     if (State->_shadowShader != NULL)
     {
@@ -589,6 +611,9 @@ void WorldRendererClouds_PrepareFrame(WorldRenderer* self, WorldRenderFrame* fra
     frame->AreCloudsActive = WorldRendererClouds_IsAvailable(self) && State->_hasTarget
         && (State->_quality != CONFIG_CLOUD_QUALITY_OFF) && frame->Environment->AreCloudsEnabled && frame->AreAtmosphereTablesActive
         && WorldRendererAtmosphere_IsVolumeAvailable(self) && WorldClouds_HasAny(&frame->Clouds);
+    // Over the scene's surfaces too, with the G-buffer's depth (drawn for them then) and the composite.
+    frame->IsCloudDepthActive = frame->AreCloudsActive && (State->_compositeShader != NULL) && self->_gbuffer._hasTarget
+        && self->_gbuffer._isDepthSamplable;
     frame->CloudLightShare = 1.0f;
     frame->SkyObjectShare = 1.0f;
     frame->IsCloudShadowActive = false;
@@ -641,6 +666,34 @@ void WorldRendererClouds_Render(WorldRenderer* self, const WorldRenderFrame* fra
     State->_frameIndex = (State->_frameIndex + 1U) % FRAME_INDEX_WRAP;
     State->_lastMilliseconds = (double)Stopwatch_ElapsedNanoseconds(&Clock) * MILLISECONDS_PER_NANOSECOND;
     Stopwatch_Deconstruct(&Clock);
+}
+
+void WorldRendererClouds_Composite(WorldRenderer* self, const WorldRenderFrame* frame, RenderTexture2D target)
+{
+    if (!frame->IsCloudDepthActive)
+    {
+        return;
+    }
+    WorldRendererCloudState* State = &self->_clouds;
+    Shader Composite = GameShader_GetRaylibShader(State->_compositeShader);
+    Texture2D Layer = State->_isResolved ? State->_history[State->_newest].texture : State->_target.texture;
+    float LayerResolution[2] = { (float)State->_width, (float)State->_height };
+    float Resolution[2] = { (float)target.texture.width, (float)target.texture.height };
+    SetShaderValue(Composite, State->_compositeLocLayerResolution, LayerResolution, SHADER_UNIFORM_VEC2);
+    SetShaderValue(Composite, State->_compositeLocResolution, Resolution, SHADER_UNIFORM_VEC2);
+    WorldRendererCommon_SetDepthConvention(Composite, State->_compositeLocDepthReversed, frame);
+
+    // The picture x the clouds' transmittance + their light; its alpha kept.
+    BeginTextureMode(target);
+    rlSetBlendFactorsSeparate(RL_ONE, RL_SRC_ALPHA, RL_ZERO, RL_ONE, RL_FUNC_ADD, RL_FUNC_ADD);
+    BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+    BeginShaderMode(Composite);
+    SetShaderValueTexture(Composite, State->_compositeLocLayer, Layer);
+    SetShaderValueTexture(Composite, State->_compositeLocSceneDepth, self->_gbuffer._target.depth);
+    DrawRectangle(0, 0, target.texture.width, target.texture.height, WHITE);
+    EndShaderMode();
+    EndBlendMode();
+    EndTextureMode();
 }
 
 void WorldRendererClouds_BindLayer(const WorldRenderer* self, const WorldRenderFrame* frame)

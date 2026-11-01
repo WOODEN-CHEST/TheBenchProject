@@ -216,13 +216,14 @@ static void TheAnchorsWrapByTheirTiles(TestRun* run)
     WorldCloudsFrame Near;
     WorldCloudsFrame Far;
     WorldClouds_GetFrame(&Environment, &Drift, Vector3Double_Create(1000.0, 30.0, -2000.0), &Near);
-    // Whole tiles farther out (a camera 9 000 km away): the same anchors, and every anchor inside its tile.
-    double Shift = WORLD_CLOUDS_SHAPE_TILE * 1000.0;
+    // Whole wraps farther out (a camera 9 000 km away): the same anchors, and every anchor inside its wrap.
+    double Shift = WORLD_CLOUDS_SHAPE_TILE * WORLD_CLOUDS_TURNED_TILES * 250.0;
     WorldClouds_GetFrame(&Environment, &Drift, Vector3Double_Create(1000.0 + Shift, 30.0 + Shift, -2000.0 - Shift), &Far);
     TEST_CHECK(run, (Near.ShapeAnchor[0] == Far.ShapeAnchor[0]) && (Near.ShapeAnchor[1] == Far.ShapeAnchor[1])
         && (Near.ShapeAnchor[2] == Far.ShapeAnchor[2]));
     const float* Anchors[] = { Far.ShapeAnchor, Far.DetailAnchor, Far.MidAnchor };
-    const float Tiles[] = { Far.Tiles[0], Far.Tiles[1], Far.MapTiles[0] * (float)WORLD_CLOUDS_MID_ANCHOR_TILES };
+    const float Tiles[] = { Far.Tiles[0] * (float)WORLD_CLOUDS_TURNED_TILES, Far.Tiles[1] * (float)WORLD_CLOUDS_TURNED_TILES,
+        Far.MapTiles[0] * (float)WORLD_CLOUDS_MID_ANCHOR_TILES };
     bool AreInside = true;
     for (int Index = 0; Index < 3; Index++)
     {
@@ -235,18 +236,23 @@ static void TheAnchorsWrapByTheirTiles(TestRun* run)
         && (Far.HighAnchor[1] >= 0.0f)
         && (Far.HighAnchor[1] < Far.MapTiles[1] * (float)WORLD_CLOUDS_HIGH_ANCHOR_TILES);
     TEST_CHECK(run, AreInside);
-    // The origin less the drift, wrapped: 1000 - 123.25 of the shape's tile.
+    // The origin less the drift, wrapped: across by WORLD_CLOUDS_TURNED_TILES of the shape's tile (its two reads repeat
+    // there), up by one.
+    double ShapeAcross = WORLD_CLOUDS_SHAPE_TILE * WORLD_CLOUDS_TURNED_TILES;
     TEST_CHECK(run, Near.ShapeAnchor[0] == 876.75f);
-    TEST_CHECK(run, Near.ShapeAnchor[2] == (float)(WORLD_CLOUDS_SHAPE_TILE - 2000.0 - 6.75));
-    // Every pattern by its own drift and its own wrap: the erosion's and the coverage's by their tiles, the mid layer's
-    // across by WORLD_CLOUDS_MID_ANCHOR_TILES of its map and up by its shape's tile, the high layer's by
+    TEST_CHECK(run, Near.ShapeAnchor[2] == (float)(ShapeAcross - 2000.0 - 6.75));
+    // Every pattern by its own drift and its own wrap: the erosion's like the shape's, the coverage's by its tile, the
+    // mid layer's across by WORLD_CLOUDS_MID_ANCHOR_TILES of its map and up by its shape's tile, the high layer's by
     // WORLD_CLOUDS_HIGH_ANCHOR_TILES of its map.
+    double DetailAcross = WORLD_CLOUDS_DETAIL_TILE * WORLD_CLOUDS_TURNED_TILES;
     double MidAcross = WORLD_CLOUDS_MID_MAP_TILE * WORLD_CLOUDS_MID_ANCHOR_TILES;
     double HighAcross = WORLD_CLOUDS_HIGH_MAP_TILE * WORLD_CLOUDS_HIGH_ANCHOR_TILES;
     TEST_CHECK(run, IsWrappedTo(Near.ShapeAnchor[1], 30.0 + 45.5, WORLD_CLOUDS_SHAPE_TILE)
-        && IsWrappedTo(Near.DetailAnchor[0], 1000.0 + 310.5, WORLD_CLOUDS_DETAIL_TILE)
+        && IsWrappedTo(Near.DetailAnchor[0], 1000.0 + 310.5, DetailAcross)
         && IsWrappedTo(Near.DetailAnchor[1], 30.0 - 12.25, WORLD_CLOUDS_DETAIL_TILE)
-        && IsWrappedTo(Near.DetailAnchor[2], -2000.0 - 77.0, WORLD_CLOUDS_DETAIL_TILE));
+        && IsWrappedTo(Near.DetailAnchor[2], -2000.0 - 77.0, DetailAcross)
+        && IsWrappedTo(Far.ShapeAnchor[1], 30.0 + Shift + 45.5, WORLD_CLOUDS_SHAPE_TILE)
+        && (Far.ShapeAnchor[1] < (float)WORLD_CLOUDS_SHAPE_TILE));
     TEST_CHECK(run, IsWrappedTo(Near.CoverageAnchor[0], 1000.0 - 5000.5, WORLD_CLOUDS_COVERAGE_TILE)
         && IsWrappedTo(Near.CoverageAnchor[1], -2000.0 + 2500.25, WORLD_CLOUDS_COVERAGE_TILE));
     TEST_CHECK(run, IsWrappedTo(Near.MidAnchor[0], 1000.0 + 13000.0, MidAcross)
@@ -257,6 +263,11 @@ static void TheAnchorsWrapByTheirTiles(TestRun* run)
     // The mid layer's wrap across is a whole number of its shape's tiles too (its shape and map share the anchor).
     double ShapesAcross = MidAcross / WORLD_CLOUDS_MID_SHAPE_TILE;
     TEST_CHECK(run, fabs(ShapesAcross - round(ShapesAcross)) < 1e-9);
+    // Up, the shape's anchor wraps by one tile (its turn is about the vertical): a camera 6 km up.
+    WorldCloudsFrame High;
+    WorldClouds_GetFrame(&Environment, &Drift, Vector3Double_Create(1000.0, 6000.0, -2000.0), &High);
+    TEST_CHECK(run, IsWrappedTo(High.ShapeAnchor[1], 6000.0 + 45.5, WORLD_CLOUDS_SHAPE_TILE)
+        && (High.ShapeAnchor[1] < (float)WORLD_CLOUDS_SHAPE_TILE) && (High.DetailAnchor[1] < (float)WORLD_CLOUDS_DETAIL_TILE));
     // Up, the mid layer's anchor wraps by its shape's tile (far up too).
     TEST_CHECK(run, IsWrappedTo(Far.MidAnchor[1], 30.0 + Shift - 3.5, WORLD_CLOUDS_MID_SHAPE_TILE)
         && (Far.MidAnchor[1] < (float)WORLD_CLOUDS_MID_SHAPE_TILE));
@@ -313,7 +324,7 @@ static void TheDriftFollowsTheWind(TestRun* run)
         // A render-space point x reads the pattern at x + anchor: the later frame's x + 60 reads the earlier frame's x.
         TEST_CHECK(run, IsWrappedTo(Later.CoverageAnchor[0], (double)Earlier.CoverageAnchor[0] - 60.0,
             WORLD_CLOUDS_COVERAGE_TILE) && IsWrappedTo(Later.ShapeAnchor[0], (double)Earlier.ShapeAnchor[0] - 60.0,
-            WORLD_CLOUDS_SHAPE_TILE));
+            WORLD_CLOUDS_SHAPE_TILE * WORLD_CLOUDS_TURNED_TILES));
         Covered.CloudEvolution = 1.0f;
         After = Before;
         WorldCloudsDrift_Advance(&After, &Covered, 2.0);

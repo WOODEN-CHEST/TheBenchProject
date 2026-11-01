@@ -160,12 +160,12 @@ typedef enum
     // unit those programs leave free; bound manually like the tables.
     WorldRendererTextureUnit_CloudLayer = 9,
     // The cloud pass's own programs (the march and the shadow map: 2D batch draws, which bind only units 0 to 4): the
-    // noise volumes on the GL_TEXTURE_3D target, the weather map, the G-buffer's flags and the irradiance table; the
+    // noise volumes on the GL_TEXTURE_3D target, the weather map, the G-buffer's depth and the irradiance table; the
     // transmittance table on its readers' unit 7 and the haze's volume on 8.
     WorldRendererTextureUnit_CloudShape = 9,        // sampler3D cloudShapeNoise
     WorldRendererTextureUnit_CloudDetail = 10,      // sampler3D cloudDetailNoise
     WorldRendererTextureUnit_CloudWeather = 11,     // sampler2D cloudWeatherMap
-    WorldRendererTextureUnit_CloudSkyMask = 12,     // sampler2D skyMask
+    WorldRendererTextureUnit_CloudSceneDepth = 12,  // sampler2D sceneDepth
     WorldRendererTextureUnit_CloudIrradiance = 13,  // sampler2D atmosphereIrradianceTable
 } WorldRendererTextureUnit;
 
@@ -431,8 +431,10 @@ typedef struct WorldRenderFrameStruct
      *  they are drawn the air is lit by the lights above the air in full above the clouds' base and by CloudLightShare of
      *  them below it (the weather's DirectShare; 1 while they are not drawn, when the lights are dimmed by it everywhere),
      *  and SkyObjectShare dims the discs, the stars and the Milky Way (1 while the clouds hide them per pixel,
-     *  DirectShare otherwise). */
+     *  DirectShare otherwise). IsCloudDepthActive: the clouds in front of the scene's surfaces are drawn too (the
+     *  G-buffer, drawn then, gives the march its surfaces' distances; the composite lays the clouds over them). */
     bool AreCloudsActive;
+    bool IsCloudDepthActive;
     WorldCloudsFrame Clouds;
     bool IsCloudLightMoon;
     Vector3 CloudLightDirection;
@@ -1055,9 +1057,11 @@ typedef struct WorldRendererCloudStateStruct
     WorldRendererCloudLocations _marchClouds;
     int _marchLocResolution;
     int _marchLocInvViewProj;
-    int _marchLocSkyMask;
-    int _marchLocHasSkyMask;
-    int _marchLocSkyMaskResolution;
+    int _marchLocSceneDepth;
+    int _marchLocHasSceneDepth;
+    int _marchLocSceneDepthResolution;
+    int _marchLocInvProjection;
+    int _marchLocDepthReversed;
     int _marchLocSunDirection;
     int _marchLocMoonDirection;
     int _marchLocLightDirection;
@@ -1098,6 +1102,14 @@ typedef struct WorldRendererCloudStateStruct
     int _resolveLocOriginShift;
     int _resolveLocHasHistory;
     int _resolveLocCurrentShare;
+    /** @brief The clouds over the scene's surfaces (world_clouds_composite); NULL = the clouds lie behind every surface
+     *  (the march's texels are all the sky's). */
+    GameShader* _compositeShader;
+    int _compositeLocLayer;
+    int _compositeLocLayerResolution;
+    int _compositeLocSceneDepth;
+    int _compositeLocResolution;
+    int _compositeLocDepthReversed;
     /** @brief The GL functions for the 3D textures, the shape's and the erosion's volumes (GL names, 0 none) and the
      *  weather map; _hasNoise once all three are made. */
     GLTexture3DApi _api;
@@ -2678,8 +2690,10 @@ bool WorldRendererClouds_IsAvailable(const WorldRenderer* self);
 /**
  * @brief Moves the clouds' patterns with the wind for the frame's real seconds and decides whether they are drawn this
  *        frame (frame->AreCloudsActive: available, the player's quality above off, the world's AreCloudsEnabled, the
- *        atmosphere's tables running, a layer with coverage), with their layers and anchors (frame->Clouds). Before the
- *        sky's light (WorldRendererLighting_PrepareSkyLight takes the air's light from it).
+ *        atmosphere's tables running, a layer with coverage), with their layers and anchors (frame->Clouds), and
+ *        whether they are drawn over the scene's surfaces too (frame->IsCloudDepthActive: the composite's shader and a
+ *        G-buffer with samplable depth). Before the sky's light (WorldRendererLighting_PrepareSkyLight takes the air's
+ *        light from it) and before the G-buffer's decision (it is drawn for the clouds too).
  * @param self The renderer.
  * @param frame The frame (its origin and environment, the atmosphere's decisions).
  * @param deltaSeconds The frame's real seconds (none for a negative or non-finite one).
@@ -2705,6 +2719,17 @@ void WorldRendererClouds_PrepareLight(WorldRenderer* self, WorldRenderFrame* fra
  * @param frame The frame.
  */
 void WorldRendererClouds_Render(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Lays the clouds in front of the scene's surfaces over them (the cloud target's texels of the geometry, the
+ *        G-buffer's depth telling surfaces from the sky): target = target x their transmittance + their light, the
+ *        target's alpha kept. After the scene pass and its outlines, before bloom, the sun shafts and the eye; only while
+ *        frame->IsCloudDepthActive.
+ * @param self The renderer.
+ * @param frame The frame.
+ * @param target The scene's HDR picture (the scene target, or the outlines' copy of it while they run).
+ */
+void WorldRendererClouds_Composite(WorldRenderer* self, const WorldRenderFrame* frame, RenderTexture2D target);
 
 /**
  * @brief Binds the cloud target on WorldRendererTextureUnit_CloudLayer for the sky pass and the stars (manually, like the

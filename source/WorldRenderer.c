@@ -931,10 +931,11 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
         WorldRendererSkyVisibility_Render(self, &Frame);
     }
 
-    // The G-buffer feeds BOTH the ambient pre-pass (samplable depth + surface flag) and the outline pass; it is drawn
-    // ONCE, before the scene, whenever either runs. The pre-pass (the AO, the contact shadows) then runs before the
-    // scene pass, which samples it. Outlines still run AFTER the scene (they read the scene colour).
-    if (Frame.IsAmbientPrepassActive || Frame.AreOutlinesActive)
+    // The G-buffer feeds the ambient pre-pass (samplable depth + surface flag), the outline pass and the clouds (their
+    // march stops at its surfaces); it is drawn ONCE, before the scene, whenever any runs. The pre-pass (the AO, the
+    // contact shadows) then runs before the scene pass, which samples it. Outlines still run AFTER the scene (they read
+    // the scene colour).
+    if (Frame.IsAmbientPrepassActive || Frame.AreOutlinesActive || Frame.IsCloudDepthActive)
     {
         WorldRendererGBuffer_RenderNormals(self, &Frame);
     }
@@ -943,8 +944,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
         WorldRendererGBuffer_RenderAo(self, &Frame);
     }
 
-    // The clouds: their shadow map (the lit passes read it), then their march over the sky's pixels (the G-buffer says
-    // which hold geometry), which the sky pass composites and the stars read.
+    // The clouds: their shadow map (the lit passes read it), then their march (up to the G-buffer's surfaces), which the
+    // sky pass composites over the sky, the stars read, and the composite lays over the surfaces after the scene.
     WorldRendererClouds_Render(self, &Frame);
 
     // The 3D world into the scene target (pixel resolution when pixelating), and over it, when asked, the haze's debug
@@ -960,6 +961,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
         WorldRendererPost_RenderOutlines(self, &Frame);
         CompositeSource = self->_outline._target;
     }
+    // The clouds in front of the scene's surfaces, over them and their outlines.
+    WorldRendererClouds_Composite(self, &Frame, CompositeSource);
     if (Frame.IsBloomActive)
     {
         WorldRendererPost_RenderBloom(self, &Frame, CompositeSource);

@@ -148,15 +148,18 @@ void WorldClouds_GetFrame(const WorldEnvironment* environment, const WorldClouds
     outFrame->MapTiles[0] = (float)MidMapTile;
     outFrame->MapTiles[1] = (float)HighMapTile;
     // The anchors: the origin less the drift (a feature of a pattern stands at its place plus the drift: it moves with the
-    // wind), wrapped where every read of the pattern repeats (the low layer's at its tiles; the mid layer's shape and
+    // wind), wrapped where every read of the pattern repeats (the low layer's shape and erosion, read twice, across by
+    // WORLD_CLOUDS_TURNED_TILES of their tiles and up by one; its coverage map at its tile; the mid layer's shape and
     // map share one anchor, wrapped across by WORLD_CLOUDS_MID_ANCHOR_TILES of its map, up by its shape's tile; the high
     // layer's by WORLD_CLOUDS_HIGH_ANCHOR_TILES of its map).
-    outFrame->ShapeAnchor[0] = WrapAnchor(origin.X - drift->LowShape.X, ShapeTile);
+    double ShapeAcross = ShapeTile * (double)WORLD_CLOUDS_TURNED_TILES;
+    double DetailAcross = DetailTile * (double)WORLD_CLOUDS_TURNED_TILES;
+    outFrame->ShapeAnchor[0] = WrapAnchor(origin.X - drift->LowShape.X, ShapeAcross);
     outFrame->ShapeAnchor[1] = WrapAnchor(origin.Y - drift->LowShape.Y, ShapeTile);
-    outFrame->ShapeAnchor[2] = WrapAnchor(origin.Z - drift->LowShape.Z, ShapeTile);
-    outFrame->DetailAnchor[0] = WrapAnchor(origin.X - drift->LowDetail.X, DetailTile);
+    outFrame->ShapeAnchor[2] = WrapAnchor(origin.Z - drift->LowShape.Z, ShapeAcross);
+    outFrame->DetailAnchor[0] = WrapAnchor(origin.X - drift->LowDetail.X, DetailAcross);
     outFrame->DetailAnchor[1] = WrapAnchor(origin.Y - drift->LowDetail.Y, DetailTile);
-    outFrame->DetailAnchor[2] = WrapAnchor(origin.Z - drift->LowDetail.Z, DetailTile);
+    outFrame->DetailAnchor[2] = WrapAnchor(origin.Z - drift->LowDetail.Z, DetailAcross);
     outFrame->CoverageAnchor[0] = WrapAnchor(origin.X - drift->LowCoverage.X, CoverageTile);
     outFrame->CoverageAnchor[1] = WrapAnchor(origin.Z - drift->LowCoverage.Z, CoverageTile);
     double MidPeriod = MidMapTile * (double)WORLD_CLOUDS_MID_ANCHOR_TILES;

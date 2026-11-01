@@ -56,10 +56,14 @@
 #define WORLD_CLOUDS_MID_SHAPE_TILE 2400.0
 #define WORLD_CLOUDS_MID_MAP_TILE 12000.0
 #define WORLD_CLOUDS_HIGH_MAP_TILE 40000.0
-/** @brief The mid and the high layers' anchors wrap by this many of their maps' tiles: every scale at which the shaders read
- *  their patterns (shaders/common/clouds.glsl: the mid layer's patches at half its map's frequency, its cells at it, its
- *  shape at 5 times it; the high layer's fibres at CLOUD_HIGH_FIBRE_SCALE, 2.7 times it, its puffs at 3 times it) repeats
- *  a whole number of times over it (tests/ShaderSourceTests.c checks the shaders' scales against these). */
+/** @brief Where the anchors wrap, so that every read of their patterns repeats a whole number of times over the wrap
+ *  (shaders/common/clouds.glsl; tests/ShaderSourceTests.c checks the shaders' scales against these): the low layer's
+ *  shape and erosion, each read twice (the second read turned by cosine 4/5 and sine 3/5 and 5/4 as fine), across by
+ *  WORLD_CLOUDS_TURNED_TILES of their tiles (up by one, the turn being about the vertical); the mid and the high layers by
+ *  this many of their maps' tiles (the mid layer's regions at a quarter of its map's frequency, its patches at half, its
+ *  cells at it and turned, its shape at 5 times it and turned; the high layer's regions at half, its fibres at
+ *  CLOUD_HIGH_FIBRE_SCALE, 2.7 times it, its puffs at 3 times it). */
+#define WORLD_CLOUDS_TURNED_TILES 4
 #define WORLD_CLOUDS_MID_ANCHOR_TILES 4
 #define WORLD_CLOUDS_HIGH_ANCHOR_TILES 10
 /** @brief How much faster than the low layer the mid and the high layers drift. */

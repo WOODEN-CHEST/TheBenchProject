@@ -13,7 +13,7 @@
     "bloom_strength": 1.0,
 
     "are_sunshafts_enabled": true,
-    "sunshaft_strength": 1.0,
+    "sunshaft_strength": 0.3,
 
     "is_ambient_occlusion_enabled": true,
     "ambient_occlusion_strength": 1.0,

@@ -1,21 +1,26 @@
 #version 330
 
 // The clouds' march (common/clouds): per texel of the cloud target, the clouds along that pixel's ray, their three layers
-// front to back, each seen through the air in front of it (the haze volume's in-scatter and transmittance at its apparent
+// nearest first, each seen through the air in front of it (the haze volume's in-scatter and transmittance at its apparent
 // distance). Out: RGB the light the clouds add to what lies behind them (the clouds' own, hazed, plus the air in front of
-// them that now hides the sky behind), A the share of the sky behind them that still shows (their transmittance). The sky
-// pass composites the sky as sky x A + RGB, before the ground haze in front of it all and the eye's night vision. A texel
-// whose scene pixels are all covered by geometry (the G-buffer's flags) is not marched: A is -1 there.
-// Drawn after the atmosphere's tables and the haze volume (source/WorldRendererClouds.c).
+// them that now hides what lies behind), A the share of what lies behind them that still shows (their transmittance).
+// A texel with the sky in any of its scene pixels is the sky's: its whole ray is marched, A holds the transmittance, and
+// the sky pass composites the sky as sky x A + RGB, before the ground haze in front of it all and the eye's night vision.
+// A texel whose scene pixels all hold geometry (the G-buffer's depth) is the geometry's: its ray is marched up to the
+// nearest of its surfaces, A holds -1 - the transmittance (below -1: the sky pass and the stars leave it out), and the
+// composite over the geometry (shaders/clouds/composite.frag) lays it over the scene's surfaces.
+// Drawn after the atmosphere's tables, the haze volume and the G-buffer (source/WorldRendererClouds.c).
 
 in vec2 fragTexCoord;
 in vec4 fragColor;
 
 uniform vec2 resolution;           // the cloud target's size in texels
 uniform mat4 invViewProj;          // clip -> render space (a rotation and the projection): the rays
-uniform sampler2D skyMask;         // the G-buffer's normals and flags at the scene's size: alpha 0 where nothing is drawn
-uniform bool hasSkyMask;           // false: every texel is marched
-uniform vec2 skyMaskResolution;    // the G-buffer's size in pixels
+uniform sampler2D sceneDepth;      // the G-buffer's depth at the scene's size (common/depth's convention: the sky where
+                                   // nothing is drawn)
+uniform bool hasSceneDepth;        // false: no depth this frame, every texel is the sky's
+uniform vec2 sceneDepthResolution; // the G-buffer's size in pixels
+uniform mat4 invProjection;        // clip -> view space for the scene's depth (a view point's length is its distance)
 
 uniform vec3 sunDirection;         // unit directions to the sun and the moon (the haze's ground light; the shadow light)
 uniform vec3 moonDirection;
@@ -39,6 +44,7 @@ out vec4 finalColor;
 
 #include "common/clouds"
 #include "common/haze"
+#include "common/depth"
 
 // The light scattered many times (the diffuse light inside a cloud): a diffusing medium sends about this many times
 // 1 / (4 pi) of the light it takes in back out any way (a thick cloud's sunlit side reflects about three quarters of
@@ -308,6 +314,26 @@ CloudMarch cloudMarchMid(vec3 direction, float start, float end, float jitter, f
     return march;
 }
 
+// Where the ray crosses the high layer's height: from below, its far crossing (unless the ground comes first); from
+// above, its near one. false when it does not cross it in front of the camera.
+bool cloudHighDistance(vec3 direction, out float distanceToLayer)
+{
+    distanceToLayer = -1.0;
+    float nearDistance;
+    float farDistance;
+    if ((cloudHighLayer.w <= 0.0) || !cloudSphereDistances(direction.y, cloudHighLayer.x, nearDistance, farDistance))
+    {
+        return false;
+    }
+    if (atmosphereViewHeight < cloudHighLayer.x)
+    {
+        distanceToLayer = farDistance;
+        return (farDistance > 0.0) && (atmosphereDistanceToGround(atmosphereViewHeight, direction.y) < 0.0);
+    }
+    distanceToLayer = nearDistance;
+    return nearDistance > 0.0;
+}
+
 // The high layer where the ray crosses its height: thin, lit once (its light passes it nearly undimmed).
 CloudMarch cloudHigh(vec3 direction, float distanceToLayer, float cosAngle)
 {
@@ -337,24 +363,33 @@ float cloudJitter(vec2 pixel)
     return fract(noise + 0.6180339887*cloudFrame);
 }
 
-// Whether every scene pixel this texel covers holds drawn geometry.
-bool cloudIsCovered(vec2 texel)
+// Whether every scene pixel this texel covers holds a surface (the texel is the geometry's), and the nearest surface's
+// distance then; false when any of them shows the sky (the texel is the sky's) or there is no depth.
+bool cloudSurfaceDistance(vec2 texel, out float nearest)
 {
-    if (!hasSkyMask)
+    nearest = 0.0;
+    if (!hasSceneDepth)
     {
         return false;
     }
-    vec2 scale = skyMaskResolution/resolution;
+    vec2 scale = sceneDepthResolution/resolution;
     ivec2 first = ivec2(floor(texel*scale));
     ivec2 last = ivec2(ceil((texel + 1.0)*scale)) - 1;
+    ivec2 limit = ivec2(sceneDepthResolution) - 1;
+    nearest = 3.0e38;
     for (int y = first.y; y <= last.y; y++)
     {
         for (int x = first.x; x <= last.x; x++)
         {
-            if (texelFetch(skyMask, clamp(ivec2(x, y), ivec2(0), ivec2(skyMaskResolution) - 1), 0).a <= 0.0)
+            ivec2 pixel = clamp(ivec2(x, y), ivec2(0), limit);
+            float depth = texelFetch(sceneDepth, pixel, 0).r;
+            if (depthIsSky(depth))
             {
                 return false;
             }
+            vec2 pixelUv = (vec2(pixel) + 0.5)/sceneDepthResolution;
+            vec4 view = invProjection*vec4(pixelUv*2.0 - 1.0, depthToNdc(depth), 1.0);
+            nearest = min(nearest, length(view.xyz/view.w));
         }
     }
     return true;
@@ -384,63 +419,67 @@ void cloudComposite(inout vec3 light, inout float transmittance, CloudMarch marc
 void main()
 {
     vec2 texel = floor(gl_FragCoord.xy);
-    if (cloudIsCovered(texel))
-    {
-        finalColor = vec4(0.0, 0.0, 0.0, -1.0);
-        return;
-    }
     vec2 uv = gl_FragCoord.xy/resolution;
     vec4 world = invViewProj*vec4(uv*2.0 - 1.0, 1.0, 1.0);
     vec3 direction = normalize(world.xyz/world.w); // the camera sits at the origin of render space
-    float jitter = cloudJitter(texel);
-    float cosAngle = dot(direction, cloudLightDirection);
+    float surface;
+    bool isGeometry = cloudSurfaceDistance(texel, surface);
+    float limit = isGeometry ? surface : 3.0e38;
 
-    // The layers met along the ray, nearest first (from below: low, mid, high; from above the other way round).
-    CloudMarch low = CloudMarch(vec3(0.0), 1.0, 0.0, 0.0);
-    CloudMarch mid = CloudMarch(vec3(0.0), 1.0, 0.0, 0.0);
-    CloudMarch high = CloudMarch(vec3(0.0), 1.0, 0.0, 0.0);
+    // The layers met along the ray in front of what the texel shows: their stretches (the high layer one crossing).
     float lowStart = 0.0;
     float lowEnd = -1.0;
     float midStart = 0.0;
     float midEnd = -1.0;
-    float highNear = 0.0;
-    float highFar = -1.0;
+    float highDistance = -1.0;
     bool hasLow = (cloudLowExtinction > 0.0) && cloudShellSegment(direction, cloudLowLayer.x, cloudLowLayer.y,
-        lowStart, lowEnd);
+        lowStart, lowEnd) && (lowStart < limit);
     bool hasMid = (cloudMidExtinction > 0.0) && cloudShellSegment(direction, cloudMidLayer.x, cloudMidLayer.y,
-        midStart, midEnd);
-    bool hasHigh = (cloudHighLayer.w > 0.0) && cloudSphereDistances(direction.y, cloudHighLayer.x, highNear, highFar)
-        && (atmosphereViewHeight < cloudHighLayer.x) && (atmosphereDistanceToGround(atmosphereViewHeight,
-        direction.y) < 0.0);
-    if (hasLow)
-    {
-        low = cloudMarchLow(direction, lowStart, lowEnd, jitter, cosAngle);
-    }
-    if (hasMid && ((low.transmittance > CLOUD_OPAQUE) || (midStart < lowStart)))
-    {
-        mid = cloudMarchMid(direction, midStart, midEnd, jitter, cosAngle);
-    }
-    if (hasHigh && (low.transmittance*mid.transmittance > CLOUD_OPAQUE))
-    {
-        high = cloudHigh(direction, highFar, cosAngle);
-    }
+        midStart, midEnd) && (midStart < limit);
+    bool hasHigh = cloudHighDistance(direction, highDistance) && (highDistance < limit);
+    lowEnd = min(lowEnd, limit);
+    midEnd = min(midEnd, limit);
 
+    // Each layer's part, nearest first (from below: low, mid, high; from above the other way round), until the layers
+    // in front hide the rest.
+    float jitter = cloudJitter(texel);
+    float cosAngle = dot(direction, cloudLightDirection);
+    float starts[3] = float[3](lowStart, midStart, highDistance);
+    bool isLeft[3] = bool[3](hasLow, hasMid, hasHigh);
     vec3 light = vec3(0.0);
     float transmittance = 1.0;
-    vec2 screenUv = uv;
-    bool isLowFirst = !hasMid || (lowStart <= midStart);
-    if (isLowFirst)
+    for (int taken = 0; taken < 3; taken++)
     {
-        cloudComposite(light, transmittance, low, screenUv, direction, lowStart);
-        cloudComposite(light, transmittance, mid, screenUv, direction, midStart);
+        int nearest = -1;
+        for (int layer = 0; layer < 3; layer++)
+        {
+            if (isLeft[layer] && ((nearest < 0) || (starts[layer] < starts[nearest])))
+            {
+                nearest = layer;
+            }
+        }
+        if ((nearest < 0) || (transmittance < CLOUD_OPAQUE))
+        {
+            break;
+        }
+        isLeft[nearest] = false;
+        CloudMarch march;
+        if (nearest == 0)
+        {
+            march = cloudMarchLow(direction, lowStart, lowEnd, jitter, cosAngle);
+        }
+        else if (nearest == 1)
+        {
+            march = cloudMarchMid(direction, midStart, midEnd, jitter, cosAngle);
+        }
+        else
+        {
+            march = cloudHigh(direction, highDistance, cosAngle);
+        }
+        cloudComposite(light, transmittance, march, uv, direction, starts[nearest]);
     }
-    else
-    {
-        cloudComposite(light, transmittance, mid, screenUv, direction, midStart);
-        cloudComposite(light, transmittance, low, screenUv, direction, lowStart);
-    }
-    cloudComposite(light, transmittance, high, screenUv, direction, highFar);
     // A march that stopped as nearly opaque hides the rest.
     transmittance = (transmittance < CLOUD_OPAQUE) ? 0.0 : transmittance;
-    finalColor = vec4(min(light, vec3(65504.0)), transmittance);
+    vec3 added = min(light, vec3(65504.0));
+    finalColor = isGeometry ? vec4(added, -1.0 - transmittance) : vec4(added, transmittance);
 }

@@ -1405,9 +1405,11 @@ static bool IsWhole(double value)
 /* The clouds' shaders and their readers: the shadow map's least climb is the C side's in both of its readers, the diffuse
  * light's two-stream factor the weather deck's, every scale a pattern is read at repeats a whole number of times over its
  * anchor's wrap (WorldClouds.h: else the clouds jump when an anchor wraps), the erosion never carves everything, the
- * sky composites the clouds over what lies behind them (the discs too) and leaves the deck out while they are drawn,
- * the stars are hidden by them, and the lit shaders take their shadow on the light it was made for, by the share of the
- * low layer above a surface. */
+ * march keeps the geometry's texels apart (below -1), stops at their surfaces and meets the high layer from above too,
+ * the accumulation keeps the two kinds apart, the composite lays the geometry's over the surfaces, the sky composites
+ * the clouds over what lies behind them (the discs too) and leaves the deck out while they are drawn, the stars are
+ * hidden by them, and the lit shaders take their shadow on the light it was made for, by the share of the low layer
+ * above a surface. */
 static void ShippedShadersDrawTheClouds(TestRun* run)
 {
     ShaderFixture Fixture;
@@ -1435,18 +1437,50 @@ static void ShippedShadersDrawTheClouds(TestRun* run)
         {
             TEST_CHECK(run, fabs(GetConstValue(&Fixture.Text, "CLOUD_DIFFUSION")
                 - 0.75 * (1.0 - (double)WORLD_WEATHER_CLOUD_ASYMMETRY)) < 1.0e-6);
-            // The low layer's cells over its coverage map's tile; the mid layer's patches at half its map's frequency
-            // over its wrap of WORLD_CLOUDS_MID_ANCHOR_TILES; the high layer's fibres and puffs over its wrap.
+            // The low layer's ground plan over its coverage map's tile; its shape and erosion, read twice (the second
+            // read turned by cosine 4/5 and sine 3/5 and CLOUD_TURN_SCALE as fine), over WORLD_CLOUDS_TURNED_TILES of
+            // their tiles across and (the shape CLOUD_SHAPE_UPWARD as fine up) one up; the mid layer's regions and
+            // patches at a quarter and half its map's frequency, its cells at it and its shape at 5 times it (both also
+            // turned) over its wrap of WORLD_CLOUDS_MID_ANCHOR_TILES; the high layer's regions, fibres and puffs over its
+            // wrap.
+            double Turn = GetConstValue(&Fixture.Text, "CLOUD_TURN_SCALE");
+            double MidShapes = WORLD_CLOUDS_MID_ANCHOR_TILES * WORLD_CLOUDS_MID_MAP_TILE / WORLD_CLOUDS_MID_SHAPE_TILE;
             TEST_CHECK(run, IsWhole(GetConstValue(&Fixture.Text, "CLOUD_CELL_REPEATS"))
+                && (CountOccurrences(&Fixture.Text, "const mat2 CLOUD_TURN = mat2(0.8, 0.6, -0.6, 0.8);") == 1U)
+                && IsWhole(WORLD_CLOUDS_TURNED_TILES * Turn * 0.8) && IsWhole(WORLD_CLOUDS_TURNED_TILES * Turn * 0.6)
+                && IsWhole(GetConstValue(&Fixture.Text, "CLOUD_SHAPE_UPWARD")));
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "textureLod(cloudWeatherMap, q.xz/(cloudMapTiles.x*4.0), 0.0)")
+                    == 1U)
                 && (CountOccurrences(&Fixture.Text, "textureLod(cloudWeatherMap, q.xz/(cloudMapTiles.x*2.0), 0.0)") == 1U)
-                && IsWhole(0.5 * WORLD_CLOUDS_MID_ANCHOR_TILES)
+                && IsWhole(0.25 * WORLD_CLOUDS_MID_ANCHOR_TILES)
+                && IsWhole(WORLD_CLOUDS_MID_ANCHOR_TILES * Turn * 0.8) && IsWhole(WORLD_CLOUDS_MID_ANCHOR_TILES * Turn * 0.6)
+                && IsWhole(MidShapes) && IsWhole(MidShapes * Turn * 0.8) && IsWhole(MidShapes * Turn * 0.6));
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "textureLod(cloudWeatherMap, at/(cloudMapTiles.y*2.0), 0.0)")
+                    == 1U)
+                && IsWhole(0.5 * WORLD_CLOUDS_HIGH_ANCHOR_TILES)
                 && IsWhole(GetConstValue(&Fixture.Text, "CLOUD_HIGH_FIBRE_SCALE") * WORLD_CLOUDS_HIGH_ANCHOR_TILES)
                 && IsWhole(GetConstValue(&Fixture.Text, "CLOUD_HIGH_PUFF_SCALE") * WORLD_CLOUDS_HIGH_ANCHOR_TILES));
             TEST_CHECK(run, (GetConstValue(&Fixture.Text, "CLOUD_MAX_EROSION") < 1.0)
                 && (CountOccurrences(&Fixture.Text, "min(CLOUD_EROSION*cloudDetailStrength*modifier, CLOUD_MAX_EROSION)")
                     == 1U));
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "finalColor = isGeometry ? vec4(added, -1.0 - transmittance) "
+                    ": vec4(added, transmittance);") == 1U)
+                && (CountOccurrences(&Fixture.Text, "float limit = isGeometry ? surface : 3.0e38;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "    distanceToLayer = nearDistance;\n    return nearDistance > 0.0;")
+                    == 1U));
         }
-        TEST_CHECK(run, ExpandShippedStage(run, &Fixture, "clouds/resolve"));
+        if (ExpandShippedStage(run, &Fixture, "clouds/resolve"))
+        {
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "if (((value.a < 0.0) == isGeometry) && (weight > 0.0))")
+                    == 1U)
+                && (CountOccurrences(&Fixture.Text, "finalColor = isGeometry ? vec4(blended.rgb, -1.0 - blended.a) : "
+                    "blended;") == 1U));
+        }
+        if (ExpandShippedStage(run, &Fixture, "clouds/composite"))
+        {
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "if (depthIsSky(texelFetch(sceneDepth, pixel, 0).r))") == 1U)
+                && (CountOccurrences(&Fixture.Text, "sum += vec4(value.rgb, -1.0 - value.a)*weight;") == 1U));
+        }
         if (ExpandShippedStage(run, &Fixture, "sky/fragment"))
         {
             TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "sky = sky*clouds.a + clouds.rgb;") == 1U)

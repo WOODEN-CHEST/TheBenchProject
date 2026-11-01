@@ -3,13 +3,15 @@
 // The clouds' accumulation over frames: this frame's march (its steps jittered anew every frame) blended into the last
 // frame's result, reprojected to where the clouds stood then, so the march's noise averages out over a few frames. The
 // last result is clamped to what this frame's march shows around the texel (its neighbours' range), so clouds that moved
-// or changed leave no trails. Texels under geometry (alpha -1) take no history and give none.
+// or changed leave no trails. The sky's texels and the geometry's (alpha below 0: -1 - the transmittance) are kept
+// apart: each takes its range and its history from its own kind only.
 // Drawn after the march (source/WorldRendererClouds.c); the sky pass and the stars read the result.
 
 in vec2 fragTexCoord;
 in vec4 fragColor;
 
-uniform sampler2D currentClouds;      // this frame's march (RGB what the clouds add, A their transmittance; -1 skipped)
+uniform sampler2D currentClouds;      // this frame's march (RGB what the clouds add, A their transmittance; the geometry's
+                                      // texels -1 - it)
 uniform sampler2D historyClouds;      // the last frame's result, the same size
 uniform vec2 resolution;              // the targets' size in texels
 uniform mat4 invViewProj;             // this frame's clip -> render space
@@ -40,12 +42,24 @@ float cloudDistanceAlong(vec3 direction)
     {
         best = min(best, start);
     }
+    // The high layer's crossing: the far one from below, the near one from above.
+    if ((cloudHighLayer.w > 0.0) && cloudSphereDistances(direction.y, cloudHighLayer.x, start, end))
+    {
+        float crossing = (atmosphereViewHeight < cloudHighLayer.x) ? end : start;
+        best = (crossing > 0.0) ? min(best, crossing) : best;
+    }
     return max(best, CLOUD_REPROJECTION_NEAREST);
 }
 
-// The last result at a place on its target, its texels around it weighed bilinearly, those under geometry left out;
-// false when none is valid.
-bool historyAt(vec2 uv, out vec4 history)
+// A stored texel as what the clouds add and their transmittance, whichever kind it is.
+vec4 cloudDecoded(vec4 stored)
+{
+    return (stored.a < 0.0) ? vec4(stored.rgb, -1.0 - stored.a) : stored;
+}
+
+// The last result at a place on its target, its texels of the kind asked for around it weighed bilinearly (decoded);
+// false when none is of that kind.
+bool historyAt(vec2 uv, bool isGeometry, out vec4 history)
 {
     vec2 position = uv*resolution - 0.5;
     vec2 base = floor(position);
@@ -58,9 +72,9 @@ bool historyAt(vec2 uv, out vec4 history)
         ivec2 offset = ivec2(corner & 1, corner >> 1);
         vec4 value = texelFetch(historyClouds, clamp(ivec2(base) + offset, ivec2(0), last), 0);
         float weight = ((offset.x == 1) ? share.x : 1.0 - share.x)*((offset.y == 1) ? share.y : 1.0 - share.y);
-        if ((value.a >= 0.0) && (weight > 0.0))
+        if (((value.a < 0.0) == isGeometry) && (weight > 0.0))
         {
-            sum += value*weight;
+            sum += cloudDecoded(value)*weight;
             weightSum += weight;
         }
     }
@@ -71,13 +85,16 @@ bool historyAt(vec2 uv, out vec4 history)
 void main()
 {
     ivec2 texel = ivec2(gl_FragCoord.xy);
-    vec4 current = texelFetch(currentClouds, texel, 0);
-    if ((current.a < 0.0) || !hasHistory)
+    vec4 stored = texelFetch(currentClouds, texel, 0);
+    bool isGeometry = stored.a < 0.0;
+    // No history to take, or nothing in front of a surface (no clouds there: nothing to average).
+    if (!hasHistory || (stored.a <= -2.0))
     {
-        finalColor = current;
+        finalColor = stored;
         return;
     }
-    // This frame's range around the texel.
+    vec4 current = cloudDecoded(stored);
+    // This frame's range around the texel, among the texels of its kind.
     vec4 low = current;
     vec4 high = current;
     ivec2 last = ivec2(resolution) - 1;
@@ -86,10 +103,11 @@ void main()
         for (int x = -1; x <= 1; x++)
         {
             vec4 neighbour = texelFetch(currentClouds, clamp(texel + ivec2(x, y), ivec2(0), last), 0);
-            if (neighbour.a >= 0.0)
+            if ((neighbour.a < 0.0) == isGeometry)
             {
-                low = min(low, neighbour);
-                high = max(high, neighbour);
+                vec4 value = cloudDecoded(neighbour);
+                low = min(low, value);
+                high = max(high, value);
             }
         }
     }
@@ -101,10 +119,11 @@ void main()
     vec2 previousUv = clip.xy/max(clip.w, 1e-6)*0.5 + 0.5;
     vec4 history;
     if ((clip.w <= 0.0) || any(lessThan(previousUv, vec2(0.0))) || any(greaterThan(previousUv, vec2(1.0)))
-        || !historyAt(previousUv, history))
+        || !historyAt(previousUv, isGeometry, history))
     {
-        finalColor = current;
+        finalColor = stored;
         return;
     }
-    finalColor = mix(clamp(history, low, high), current, currentShare);
+    vec4 blended = mix(clamp(history, low, high), current, currentShare);
+    finalColor = isGeometry ? vec4(blended.rgb, -1.0 - blended.a) : blended;
 }
