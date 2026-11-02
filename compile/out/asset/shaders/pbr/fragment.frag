@@ -17,6 +17,8 @@ uniform float roughness;       // base roughness factor
 uniform float ao;              // base ambient-occlusion factor
 uniform vec3 emissiveColor;    // linear emissive colour
 uniform float emissiveIntensity;
+uniform float materialPorosity; // how much wetness darkens it (its metal never darkens), 0..1
+uniform float materialPuddles;  // how much water pools on it where it faces up, 0..1
 
 uniform sampler2D mraMap;      // packed ORM: R=occlusion, G=roughness, B=metallic; MULTIPLIES the scalars above
 uniform sampler2D normalMap;   // tangent-space normal map (RGB in 0..1 -> [-1,1])
@@ -86,9 +88,10 @@ void main()
     }
     vec3 v = normalize(-fragPosition); // render space: the camera at the origin
 
-    // The weather's wetness: darker and glossier, most on surfaces facing up (a metal's albedo is its reflectance: it
-    // only turns glossier).
-    ApplyWetness(albedo, rough, surfaceNormal, WET_DEFAULT_POROSITY*(1.0 - metal));
+    // The weather's wetness where the rain reaches: darker and glossier, most on surfaces facing up (a metal's albedo is
+    // its reflectance: it only turns glossier), and puddles where its material lets water pool.
+    float water;
+    ApplyWetness(albedo, rough, n, water, fragPosition, surfaceNormal, materialPorosity*(1.0 - metal), materialPuddles);
 
     // Base reflectance: 0.04 for dielectrics, the albedo for metals.
     vec3 f0 = mix(vec3(0.04), albedo, metal);
@@ -114,16 +117,18 @@ void main()
         emissive *= pow(max(em, vec3(0.0)), vec3(2.2)); // sRGB -> linear
     }
 
-    // The eye sees the reflected light through its night vision; emissive light is added after it and keeps its colour.
-    vec3 reflected = ambient + direct + pointTotal;
+    // The eye sees the reflected light through its night vision (the sky mirrored in water with it); emissive light is
+    // added after it and keeps its colour.
+    vec3 reflected = ambient + direct + pointTotal + WaterReflection(light, n, v, water);
     reflected = NightVisionOf(reflected);
     vec3 color = reflected + emissive;
 
-    // The haze in front of it (aerial perspective, the ground haze), then the debug views of interior lighting and the
-    // shadow levels while they are on.
+    // The haze in front of it (aerial perspective, the ground haze), then the debug views of interior lighting, the
+    // shadow levels and the rain while they are on.
     color = ApplyAerialPerspective(color, fragPosition);
     color = InteriorViewColor(color, fragPosition, surfaceNormal, skyVisibility);
     color = ShadowLevelViewColor(color, fragPosition);
+    color = RainViewColor(color, fragPosition, surfaceNormal, water);
 
     // The fade is tested last, after every derivative and mipmapped fetch above, so those stay defined for the pixels
     // that are drawn.

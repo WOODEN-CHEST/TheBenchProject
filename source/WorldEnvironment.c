@@ -142,6 +142,7 @@
 #define CATEGORY_HAZE ((const unsigned char*)u8"Haze")
 #define CATEGORY_WEATHER ((const unsigned char*)u8"Weather")
 #define CATEGORY_CLOUDS ((const unsigned char*)u8"Clouds")
+#define CATEGORY_RAIN ((const unsigned char*)u8"Rain")
 #define CATEGORY_EFFECTS ((const unsigned char*)u8"Effects")
 #define CATEGORY_PHYSICS ((const unsigned char*)u8"Physics")
 
@@ -818,6 +819,124 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .Category = CATEGORY_CLOUDS, .DisplayName = u8"Town light on clouds",
         .Description = u8"How much of the town's light (light pollution) lights the clouds' undersides, a multiplier: an "
             u8"overcast night over a town glows in the light pollution's colour. 0: none.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"rain_streak_density", .WireId = 98U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, RainStreakDensity), .Default.FloatValue = 1.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_RAIN, .DisplayName = u8"Rain streaks",
+        .Description = u8"How many rain streaks fall, a multiplier on the rain's own (0: none; the rain still wets, rings "
+            u8"the puddles and hazes the air).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"rain_streak_length", .WireId = 99U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, RainStreakLength), .Default.FloatValue = 1.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_RAIN, .DisplayName = u8"Rain streak length",
+        .Description = u8"How long the rain's streaks are, a multiplier (1: a drop's path over a thirtieth of a second, "
+            u8"25 cm for a middling drop).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"rain_streak_brightness", .WireId = 100U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, RainStreakBrightness), .Default.FloatValue = 1.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_RAIN, .DisplayName = u8"Rain brightness",
+        .Description = u8"How bright the rain's streaks and splashes are, a multiplier on the light they catch.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"rain_splash_density", .WireId = 101U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, RainSplashDensity), .Default.FloatValue = 1.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_RAIN, .DisplayName = u8"Rain splashes",
+        .Description = u8"How many splashes the rain makes where it lands, a multiplier (0: none).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"rain_fall_speed", .WireId = 102U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, RainFallSpeed), .Default.FloatValue = WORLD_ENVIRONMENT_DEFAULT_RAIN_FALL_SPEED,
+        .Rules = PROPERTY_RULES_BETWEEN(WORLD_ENVIRONMENT_MIN_RAIN_FALL_SPEED, WORLD_ENVIRONMENT_MAX_RAIN_FALL_SPEED),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RAIN, .DisplayName = u8"Rain fall speed",
+        .Description = u8"How fast the middling drops fall, metres per second (the small ones at 3/4 of it, the large ones "
+            u8"at 5/4): real rain falls at 2 (drizzle) to 9 (the largest drops).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"rain_color", .WireId = 103U, .Type = PropertyType_Color, PROPERTY_MEMBER(WorldEnvironment, RainColor),
+        .Default.ColorValue = { 255, 255, 255, 255 }, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RAIN,
+        .DisplayName = u8"Rain colour",
+        .Description = u8"The rain's own colour, multiplying the light its streaks and splashes catch (white: water).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"puddle_amount", .WireId = 104U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, PuddleAmount), .Default.FloatValue = 1.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_RAIN, .DisplayName = u8"Puddles",
+        .Description = u8"How much water pools on wet ground, a multiplier on every surface's own puddles (0: none).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"puddle_scale", .WireId = 105U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, PuddleScale), .Default.FloatValue = 1.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(WORLD_ENVIRONMENT_MIN_PUDDLE_SCALE, WORLD_ENVIRONMENT_MAX_PUDDLE_SCALE),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RAIN, .DisplayName = u8"Puddle size",
+        .Description = u8"How large the puddles are, a multiplier on the puddle mask's 16 m tile.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"rain_mist", .WireId = 106U, .Type = PropertyType_Float, PROPERTY_MEMBER(WorldEnvironment, RainMist),
+        .Default.FloatValue = 1.0f, .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE),
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_RAIN, .DisplayName = u8"Rain mist",
+        .Description = u8"How much the rain lowers the visibility, a multiplier on real rain's (1: about 8 km in light "
+            u8"rain, 700 m in a downpour; 0: the air stays as clear as without rain).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"lightning_bolt_brightness", .WireId = 107U, .Type = PropertyType_Float,
+        PROPERTY_MEMBER(WorldEnvironment, LightningBoltBrightness), .Default.FloatValue = 1.0f,
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_RAIN, .DisplayName = u8"Lightning bolts",
+        .Description = u8"How bright the lightning's bolts are and how strongly their channels light the world (0: no "
+            u8"bolts; the clouds still flash).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"rain_streak_texture", .WireId = 108U, .Type = PropertyType_AssetName,
+        PROPERTY_MEMBER(WorldEnvironment, RainStreakTexture), .Default.StringValue = u8"tbp:rain_streak",
+        .Rules = PROPERTY_RULES_STRING(WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH, false), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_RAIN, .DisplayName = u8"Rain streak texture",
+        .Description = u8"The texture a streak is drawn with: its alpha along its length (the top row at the drop, the "
+            u8"bottom at the end of its trail).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"rain_splash_texture", .WireId = 109U, .Type = PropertyType_AssetName,
+        PROPERTY_MEMBER(WorldEnvironment, RainSplashTexture), .Default.StringValue = u8"tbp:rain_splash",
+        .Rules = PROPERTY_RULES_STRING(WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH, false), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_RAIN, .DisplayName = u8"Rain splash texture",
+        .Description = u8"The splash's flipbook: its four frames side by side, from the drop's impact to its last spray.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"puddle_mask_texture", .WireId = 110U, .Type = PropertyType_AssetName,
+        PROPERTY_MEMBER(WorldEnvironment, PuddleMaskTexture), .Default.StringValue = u8"tbp:rain_puddle_mask",
+        .Rules = PROPERTY_RULES_STRING(WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH, false), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_RAIN, .DisplayName = u8"Puddle mask texture",
+        .Description = u8"Where water pools first: a tileable map whose red rises toward the puddles' middles, spread "
+            u8"evenly over 0 to 1 (the puddles' coverage means what it says).",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"lightning_bolt_texture", .WireId = 111U, .Type = PropertyType_AssetName,
+        PROPERTY_MEMBER(WorldEnvironment, LightningBoltTexture), .Default.StringValue = u8"tbp:lightning_bolts",
+        .Rules = PROPERTY_RULES_STRING(WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH, false), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_RAIN, .DisplayName = u8"Lightning bolt texture",
+        .Description = u8"The lightning's bolts: four of them side by side, each from the clouds (top) to the ground "
+            u8"(bottom), white on a clear background.",
         .SinceVersion = 1U
     },
     {

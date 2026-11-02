@@ -172,6 +172,11 @@ void CloudNoiseTests_Run(TestRun* run);
  *  layer and the shadow map's frame (WorldCloudsTests.c; a private module of source/). */
 void WorldCloudsTests_Run(TestRun* run);
 
+/** @brief The rain: its rate and mist, the streaks' drift and their copies around the camera, the rain map's box and
+ *  lookups, the splashes' landing and grid, the puddles' coverage and threshold, the bolt (WorldRainTests.c; a private
+ *  module of source/). */
+void WorldRainTests_Run(TestRun* run);
+
 /** @brief The night sky's maths: the star catalogue, limiting magnitude, air mass, star colours and the galaxy's
  *  orientation (NightSkyTests.c; a private module of source/). */
 void NightSkyTests_Run(TestRun* run);

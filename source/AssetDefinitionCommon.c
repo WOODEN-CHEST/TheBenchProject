@@ -667,6 +667,16 @@ Error AssetJSON_ReadMaterialFactors(JSONCompound* compound, GameMaterialFactors*
         Result = ReadFactorKey(compound, (const unsigned char*)u8"emissive_intensity", MATERIAL_FACTOR_MINIMUM,
             INFINITY, &outFactors->HasEmissiveIntensity, &outFactors->EmissiveIntensity);
     }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadFactorKey(compound, (const unsigned char*)u8"porosity", MATERIAL_FACTOR_MINIMUM,
+            MATERIAL_FACTOR_MAXIMUM, &outFactors->HasPorosity, &outFactors->Porosity);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadFactorKey(compound, (const unsigned char*)u8"puddles", MATERIAL_FACTOR_MINIMUM,
+            MATERIAL_FACTOR_MAXIMUM, &outFactors->HasPuddles, &outFactors->Puddles);
+    }
     return Result;
 }
 

@@ -1,6 +1,7 @@
 #include "TestSuites.h"
 #include "WorldWeatherLight.h"
 #include "WorldAtmosphere.h"
+#include "WorldRain.h"
 #include <math.h>
 #include <string.h>
 
@@ -292,6 +293,56 @@ static void TheWeathersFogJoinsTheGroundHaze(TestRun* run)
 }
 
 
+/* The rain's mist joins the ground haze too: its density what the rain takes from the light, times the world's RainMist,
+ * thinning from the ground haze's base to the clouds' base; with the fog and a ground haze, the densities add up and the
+ * thickness is their mean weighed by the densities. No rain, no mist; RainMist 0, none either. */
+static void TheRainsMistJoinsTheGroundHaze(TestRun* run)
+{
+    WorldEnvironment Environment;
+    WorldEnvironment_SetDefaults(&Environment);
+    WorldAtmosphereHaze Dry;
+    WorldAtmosphere_GetHaze(&Environment, 1.0f, &Dry);
+    Environment.RainMist = 3.0f; // a mist setting without rain changes nothing
+    WorldAtmosphereHaze NoRain;
+    WorldAtmosphere_GetHaze(&Environment, 1.0f, &NoRain);
+    TEST_CHECK(run, memcmp(&Dry, &NoRain, sizeof(NoRain)) == 0);
+
+    Environment.RainMist = 1.0f;
+    Environment.Precipitation = 0.7f;
+    Environment.CloudBase = 1200.0f;
+    Environment.HorizonGroundHeight = 10.0f;
+    Environment.GroundHazeBase = 5.0f;
+    WorldAtmosphereHaze Rain;
+    WorldAtmosphere_GetHaze(&Environment, 1.0f, &Rain);
+    float Extinction = WorldRain_GetMistExtinction(0.7f);
+    TEST_CHECK(run, IsClose(Rain.GroundHazeDensity, Extinction) && IsClose(Rain.GroundHazeThickness, 1205.0f));
+    Environment.RainMist = 2.5f;
+    WorldAtmosphere_GetHaze(&Environment, 1.0f, &Rain);
+    TEST_CHECK(run, IsClose(Rain.GroundHazeDensity, 2.5f * Extinction));
+    Environment.RainMist = 0.0f;
+    WorldAtmosphere_GetHaze(&Environment, 1.0f, &Rain);
+    TEST_CHECK(run, Rain.GroundHazeDensity == 0.0f);
+
+    // With the fog and a ground haze.
+    Environment.RainMist = 1.0f;
+    Environment.GroundHazeDensity = 0.01f;
+    Environment.GroundHazeThickness = 60.0f;
+    Environment.FogDensity = 0.02f;
+    Environment.FogHeight = 15.0f;
+    WorldAtmosphere_GetHaze(&Environment, 1.0f, &Rain);
+    float Total = 0.03f + Extinction;
+    TEST_CHECK(run, IsClose(Rain.GroundHazeDensity, Total));
+    TEST_CHECK(run, IsClose(Rain.GroundHazeThickness, (0.01f * 60.0f + 0.02f * 15.0f + Extinction * 1205.0f) / Total));
+    // Clouds based below the mist's base: the thinnest mist.
+    Environment.GroundHazeDensity = 0.0f;
+    Environment.FogDensity = 0.0f;
+    Environment.CloudBase = 0.0f;
+    Environment.GroundHazeBase = 400.0f;
+    WorldAtmosphere_GetHaze(&Environment, 1.0f, &Rain);
+    TEST_CHECK(run, Rain.GroundHazeThickness == WORLD_RAIN_MIN_MIST_THICKNESS);
+    WorldEnvironment_Deconstruct(&Environment);
+}
+
 // Public functions.
 void WorldWeatherLightTests_Run(TestRun* run)
 {
@@ -305,6 +356,7 @@ void WorldWeatherLightTests_Run(TestRun* run)
         { "broken_values_count_as_none", BrokenValuesCountAsNone },
         { "the_wind_points_where_it_blows", TheWindPointsWhereItBlows },
         { "the_weathers_fog_joins_the_ground_haze", TheWeathersFogJoinsTheGroundHaze },
+        { "the_rains_mist_joins_the_ground_haze", TheRainsMistJoinsTheGroundHaze },
     };
     TestRun_RunSuite(run, "WorldWeatherLight", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

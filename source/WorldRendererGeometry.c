@@ -81,10 +81,10 @@ Color WorldRendererGeometry_MultiplyColor(Color a, Color b)
     return Result;
 }
 
-/* The asset material's maps are copied, so the variant (its maps and factors for this material slot), the tint, the LOD
- * tinting's glow and the pass shader land on the copy and nothing is written to the shared assets (raylib's DrawModel
- * instead writes the tint into the asset's maps for the duration of the draw). DrawMesh still binds the maps' textures,
- * through the shader's location table. */
+/* The asset material and its maps are copied, so the variant (its maps and factors for this material slot), the tint,
+ * the LOD tinting's glow and the pass shader land on the copy and nothing is written to the shared assets (raylib's
+ * DrawModel instead writes the tint into the asset's maps for the duration of the draw). DrawMesh still binds the maps'
+ * textures, through the shader's location table. */
 Material WorldRendererGeometry_PrepareMaterial(const WorldRenderer* self, const WorldRenderModel* model, Model rayModel,
     int meshIndex, size_t lod, const Shader* passShader, const WorldRendererPbrProgram* litProgram,
     MaterialMap* outMaps)
@@ -93,9 +93,11 @@ Material WorldRendererGeometry_PrepareMaterial(const WorldRenderer* self, const 
     int MaterialIndex = rayModel.meshMaterial[meshIndex];
     const Material* AssetMaterial = &rayModel.materials[MaterialIndex];
     Memory_Copy(AssetMaterial->maps, outMaps, WORLD_RENDERER_MATERIAL_MAP_COUNT * sizeof(MaterialMap));
+    Material DrawMaterial = *AssetMaterial;
+    DrawMaterial.maps = outMaps;
     if (model->HasVariant)
     {
-        WorldModel_ApplyVariant(model->Asset, model->VariantIndex, MaterialIndex, outMaps);
+        WorldModel_ApplyVariant(model->Asset, model->VariantIndex, MaterialIndex, &DrawMaterial);
     }
     if (Look.HasGlow)
     {
@@ -104,8 +106,6 @@ Material WorldRendererGeometry_PrepareMaterial(const WorldRenderer* self, const 
         outMaps[MATERIAL_MAP_EMISSION].value = LOD_TINT_GLOW_INTENSITY;
     }
 
-    Material DrawMaterial = *AssetMaterial;
-    DrawMaterial.maps = outMaps;
     if (litProgram != NULL)
     {
         WorldRendererLighting_UploadMaterial(litProgram, &DrawMaterial);

@@ -74,15 +74,21 @@ one raylib (or audio-engine) object **by value**. Sprite sheets and sprite anima
     `MATERIAL_MAP_ALBEDO`, `normal` -> `MATERIAL_MAP_NORMAL`, `mra` (packed occlusion/roughness/metallic) ->
     `MATERIAL_MAP_METALNESS` (replacing a packed map), `emissive` -> `MATERIAL_MAP_EMISSION`, loaded from the models
     directory with the texture extensions, each with the override's `texture_properties`. Scalars: `tint`, `metallic`
-    and `roughness` (in [0, 1]), `emissive_color`, `emissive_intensity` (>= 0).
+    and `roughness` (in [0, 1]), `emissive_color`, `emissive_intensity` (>= 0), and the weather's two: `porosity` (in
+    [0, 1], default 0.5: how much wetness darkens the surface; metal never darkens) and `puddles` (in [0, 1], default 0:
+    how much rain's water pools on it when it faces up; asphalt and pavement 1). Those two live in the material's
+    `params` (`GAME_MATERIAL_PARAM_POROSITY` and `GAME_MATERIAL_PARAM_PUDDLES`, `GameModel.h`), which every model's
+    materials get with their defaults when it loads (`GameMaterialParams_SetDefaults`), and the PBR shader reads them
+    ([WorldRuntime.md](WorldRuntime.md), "Rain").
   - **The factors are shared with world model variants** ([WorldModels.md](WorldModels.md)): the slot and the
     scalars are read by `AssetJSON_ReadMaterialSlot` and `AssetJSON_ReadMaterialFactors`
     (`source/AssetDefinitionCommon.{h,c}`) into a `GameMaterialFactors` (`GameModel.h`: each factor with its own
-    `Has...` flag), and applied by `GameMaterialFactors_Apply(factors, hasEmissiveMap, maps)` (`source/GameModel.c`):
+    `Has...` flag), and applied by `GameMaterialFactors_Apply(factors, hasEmissiveMap, material)` (`source/GameModel.c`;
+    the maps and the params):
     here to the model's own materials while it loads, for a variant to the renderer's per-draw copy. An override with an
     emissive map but no emissive colour or intensity shows the map at white x 1. The shared parser enforces the
-    ranges the reference gives (metallic and roughness in [0, 1], a non-negative intensity, finite numbers that fit a
-    float).
+    ranges the reference gives (metallic, roughness, porosity and puddles in [0, 1], a non-negative intensity, finite
+    numbers that fit a float).
 - **glTF materials:** the loader reads the file's materials itself before raylib loads it: the private
   `source/ModelGltfMaterials.{h,c}` (pure, tested headless in `tests/ModelGltfMaterialsTests.c`) parses it with cgltf
   after `source/GltfChecks.h` checked it as hostile, so raylib's importer, which trusts every number, only reads files

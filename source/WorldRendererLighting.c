@@ -1,7 +1,7 @@
-// The PBR shader and the frame lighting every lit shader (models, sprites, terrain) gets through common/lighting (the sky's
-// light: the sun and the moon through the air and the sky's own light as the ambient; the haze, shadows, per-object
-// forward point lights and each draw's place: its haze and its ambient zones; the eye's night vision), and the PBR's
-// per-material factors. The eye's adaptation is WorldRendererExposure.c's; interior lighting's parts are
+// The PBR shader and the frame lighting every lit shader (models, sprites, terrain, the rain's) gets through
+// common/lighting (the sky's light: the sun and the moon through the air and the sky's own light as the ambient; the haze,
+// shadows, per-object forward point lights and each draw's place: its haze and its ambient zones; the eye's night vision;
+// the rain's: WorldRendererRain.c), and the PBR's per-material factors. The eye's adaptation is WorldRendererExposure.c's; interior lighting's parts are
 // WorldRendererInterior.c's and WorldRendererSkyVisibility.c's.
 
 #include <inttypes.h>
@@ -140,6 +140,8 @@ static void CacheMaterialLocations(WorldRendererPbrProgram* program, Shader shad
     program->_locHasMraMap = GetShaderLocation(shader, "hasMraMap");
     program->_locHasNormalMap = GetShaderLocation(shader, "hasNormalMap");
     program->_locHasEmissiveMap = GetShaderLocation(shader, "hasEmissiveMap");
+    program->_locMaterialPorosity = GetShaderLocation(shader, "materialPorosity");
+    program->_locMaterialPuddles = GetShaderLocation(shader, "materialPuddles");
 }
 
 /* Loads one PBR program and prepares it: its lit locations and constants, its material locations, its dither, its own
@@ -254,11 +256,17 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
     WorldRendererAtmosphere_PrepareHazeShader(shader, true, &outLocations->_haze);
     WorldRendererInterior_PrepareShader(shader, &outLocations->_interior);
     WorldRendererClouds_PrepareLitShader(shader, &outLocations->_cloudShadow);
+    // The rain (its map, the puddle mask), and the sky view the puddles mirror on a unit of its own: the lit programs
+    // read the haze's volume where the sky pass has the table.
+    WorldRendererRain_PrepareLitShader(shader, &outLocations->_rain);
+    AssignSamplerUnit(shader, outLocations->_atmosphere._locSkyViewTable, WorldRendererTextureUnit_RainSkyView);
 
     // The shader's point-light arrays must hold the WORLD_MAX_FORWARD_LIGHTS the culling may select; with fewer,
     // upload only as many as fit (the shader also clamps its loop to its own array size).
     outLocations->_maxPointLights = CountShaderPointLights(shader);
-    if ((outLocations->_maxPointLights < WORLD_MAX_FORWARD_LIGHTS) && (self->_logger != NULL))
+    // A program that reads no point lights at all (the lightning bolt's) has none to hold.
+    if ((outLocations->_maxPointLights > 0) && (outLocations->_maxPointLights < WORLD_MAX_FORWARD_LIGHTS)
+        && (self->_logger != NULL))
     {
         Error LogResult = Logger_LogWarningFormatted(self->_logger,
             (const unsigned char*)u8"WorldRenderer: \"%s\" holds %d point lights, fewer than the %d the renderer "
@@ -472,6 +480,8 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     WorldRendererInterior_UploadFrame(self, frame, shader, &lit->_interior);
     // The clouds' shadow on the sun (or the moon) at every surface.
     WorldRendererClouds_UploadLitFrame(shader, &lit->_cloudShadow, frame);
+    // The rain: what keeps it out, the puddles, the sky mirrored in water, a bolt's light.
+    WorldRendererRain_UploadLitFrame(self, frame, shader, &lit->_rain);
 
     // The eye's night vision for the reflected light and the haze (strength 0 leaves every colour as it is), calibrated on
     // the frame's light scale.
@@ -546,6 +556,7 @@ static void BindFrameTextures(WorldRenderer* self, const WorldRenderFrame* frame
     WorldRendererSkyVisibility_BindMap(self, frame);
     WorldRendererShadows_BindLevels(self, frame);
     WorldRendererClouds_BindShadow(self, frame);
+    WorldRendererRain_BindFrameTextures(self, frame);
     if (applyScreenAo && frame->IsAmbientPrepassActive)
     {
         rlActiveTextureSlot(WorldRendererTextureUnit_AmbientOcclusion);
@@ -596,6 +607,12 @@ void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFra
     {
         BindFrameTextures(self, frame, applyScreenAo);
     }
+}
+
+void WorldRendererLighting_UploadLitProgram(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
+    const WorldRendererLitLocations* locations, bool applyScreenAo)
+{
+    UploadLitUniforms(self, frame, shader, locations, applyScreenAo);
 }
 
 void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader,
@@ -651,7 +668,7 @@ void WorldRendererLighting_SetDrawPlace(const WorldRenderer* self, Shader shader
 }
 
 /* raylib's DrawMesh uploads colDiffuse and binds the material's textures (via the map-sampler locations of the
- * pass shader's table), but NOT the scalar factors or the has*Map guards, so this does that. A map flag is true
+ * pass shader's table), but NOT the scalar factors, the has*Map guards or the wetness params, so this does that. A map flag is true
  * only when the slot actually holds a texture; the shader must not sample an unbound map sampler (it would read
  * texture unit 0 = albedo — the silent-fallback bug seen across the post passes). */
 void WorldRendererLighting_UploadMaterial(const WorldRendererPbrProgram* program, const Material* material)
@@ -664,6 +681,8 @@ void WorldRendererLighting_UploadMaterial(const WorldRendererPbrProgram* program
     float EmissiveColor[3];
     WorldRendererCommon_ColorToLinear(material->maps[MATERIAL_MAP_EMISSION].color, EmissiveColor);
 
+    float Porosity = material->params[GAME_MATERIAL_PARAM_POROSITY];
+    float Puddles = material->params[GAME_MATERIAL_PARAM_PUDDLES];
     int HasMra = (material->maps[MATERIAL_MAP_METALNESS].texture.id > 0) ? 1 : 0;
     int HasNormal = (material->maps[MATERIAL_MAP_NORMAL].texture.id > 0) ? 1 : 0;
     int HasEmissive = (material->maps[MATERIAL_MAP_EMISSION].texture.id > 0) ? 1 : 0;
@@ -676,6 +695,8 @@ void WorldRendererLighting_UploadMaterial(const WorldRendererPbrProgram* program
     SetShaderValue(RayShader, program->_locHasMraMap, &HasMra, SHADER_UNIFORM_INT);
     SetShaderValue(RayShader, program->_locHasNormalMap, &HasNormal, SHADER_UNIFORM_INT);
     SetShaderValue(RayShader, program->_locHasEmissiveMap, &HasEmissive, SHADER_UNIFORM_INT);
+    SetShaderValue(RayShader, program->_locMaterialPorosity, &Porosity, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, program->_locMaterialPuddles, &Puddles, SHADER_UNIFORM_FLOAT);
 }
 
 void WorldRendererLighting_LogStatus(const WorldRenderer* self)

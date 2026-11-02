@@ -1,0 +1,5 @@
+{
+    "name": "tbp:world_rain_splashes",
+    "vertex_location": "rain/splashes_vertex",
+    "fragment_location": "rain/splashes_fragment"
+}

@@ -207,6 +207,14 @@ typedef enum WorldRendererFeatureEnum
      *  on every lit surface takes. Unavailable without its shader (world_clouds_shadow) or target; active while the clouds
      *  are drawn and their light is above the horizon. */
     WorldRendererFeature_CloudShadows,
+    /** @brief The rain: its streaks and splashes, puddles on wet ground and lightning's bolts. Unavailable without the
+     *  streaks' shader (world_rain_streaks, logged once); active while it rains or a bolt stands (and the rain is switched
+     *  on: WorldRenderer_SetRainEnabled), inactive otherwise. */
+    WorldRendererFeature_Rain,
+    /** @brief The rain map: what keeps the rain out around the camera, so no rain falls under roofs and covered surfaces
+     *  stay dry. Unavailable without the shadow levels' depth shader or the map's GL functions or storage (logged once):
+     *  then the rain falls everywhere and every surface is wet alike; active while it rains or surfaces are wet. */
+    WorldRendererFeature_RainMap,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -244,6 +252,21 @@ typedef enum WorldRendererHazeViewEnum
     /** @brief The number of views; not a view. */
     WorldRendererHazeView_Count = 3
 } WorldRendererHazeView;
+
+/**
+ * @brief What the rain's debug view shows over every lit surface (a debug aid: WorldRenderer_SetRainView).
+ */
+typedef enum WorldRendererRainViewEnum
+{
+    /** @brief No debug view: the scene (the default). */
+    WorldRendererRainView_Off = 0,
+    /** @brief How open each surface is to the rain: white where it falls, blue where the rain map covers it. */
+    WorldRendererRainView_Cover = 1,
+    /** @brief Where water mirrors the sky: cyan over the puddles (and a faint film where only wet), the rest darkened. */
+    WorldRendererRainView_Puddles = 2,
+    /** @brief The number of views; not a view. */
+    WorldRendererRainView_Count = 3
+} WorldRendererRainView;
 
 /**
  * @brief What interior lighting's debug view shows (a debug aid: WorldRenderer_SetInteriorView).
@@ -401,6 +424,19 @@ typedef struct WorldRendererStatusStruct
     int32_t CloudTargetHeight;
     bool IsCloudLightMoon;
     double CloudMilliseconds;
+    /** @brief The rain as drawn: whether it was on (WorldRenderer_SetRainEnabled), its precipitation and rain rate
+     *  (millimetres an hour), how many streaks fell, the share of the splash cells that splashed, the puddles' most
+     *  coverage, whether the rain map was in use (drawn this render or kept from one of the last few), whether a bolt
+     *  stood, and the debug view. */
+    bool IsRainEnabled;
+    float RainPrecipitation;
+    float RainRate;
+    uint32_t RainStreakCount;
+    float RainSplashShare;
+    float PuddleCoverage;
+    bool IsRainMapActive;
+    bool IsBoltVisible;
+    WorldRendererRainView RainView;
     /** @brief The eye: the luminance it was adapted to (the view's log-average in the game's light units: the sky
      *  light's anchor before the first measurement), the real luminance that stands for (cd/m^2, on night vision's scale
      *  at the camera's mix of daylight and the night's lights), and whether a measurement of the picture set it. */
@@ -645,6 +681,41 @@ WorldRendererInteriorView WorldRenderer_GetInteriorView(const WorldRenderer* sel
 
 /** @brief A name for an interior debug view, for logs ("off", "zones", "sky share"; "unknown" outside the enum). */
 const unsigned char* WorldRenderer_GetInteriorViewName(WorldRendererInteriorView view);
+
+/**
+ * @brief Switches the rain on or off (a debug A/B): off draws no streaks, splashes or bolts and no rain map, so every
+ *        surface is wet alike and grows no puddles, as without this pass. The weather's light, clouds, wetness and mist
+ *        stay. Default on. Applied on the next render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true for the rain.
+ */
+void WorldRenderer_SetRainEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether the rain is on (see WorldRenderer_SetRainEnabled).
+ * @param self The renderer; must not be NULL.
+ * @returns true when on.
+ */
+bool WorldRenderer_IsRainEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Chooses the rain's debug view over every lit surface: the scene, how open it is to the rain, or its puddles.
+ *
+ * A debug aid. Default WorldRendererRainView_Off. Applied on the next render. A view outside the enum is ignored.
+ * @param self The renderer; must not be NULL.
+ * @param view The view.
+ */
+void WorldRenderer_SetRainView(WorldRenderer* self, WorldRendererRainView view);
+
+/**
+ * @brief Reports the rain's debug view (see WorldRenderer_SetRainView).
+ * @param self The renderer; must not be NULL.
+ * @returns The view.
+ */
+WorldRendererRainView WorldRenderer_GetRainView(const WorldRenderer* self);
+
+/** @brief A name for a rain debug view, for logs ("off", "cover", "puddles"; "unknown" outside the enum). */
+const unsigned char* WorldRenderer_GetRainViewName(WorldRendererRainView view);
 
 /**
  * @brief Enables or disables the whole post-effects pass (screen-space AO + depth/normal-edge outlines).

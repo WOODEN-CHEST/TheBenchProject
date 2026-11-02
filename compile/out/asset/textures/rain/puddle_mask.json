@@ -1,0 +1,10 @@
+{
+    "name": "tbp:rain_puddle_mask",
+    "location": "rain/puddle_mask",
+    "texture_properties": {
+        "filtering": "trilinear",
+        "wrap": "repeat",
+        "mipmaps": true
+    },
+    "color_space": "linear"
+}

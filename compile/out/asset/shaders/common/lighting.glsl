@@ -1,9 +1,11 @@
 // The world's lighting, shared by the lit shaders (world_pbr and world_sprite), for #include "common/lighting": the
 // frame's lighting uniforms (the renderer uploads the same values to every shader that includes this file), the
-// Cook-Torrance BRDF, the sky's two directional lights (the sun and the moon) with the shadow levels' shadow, forward point
-// lights and the shadow-casting point light with its cube shadow, the sky's ambient light with the screen-space AO and
-// interior lighting (common/interior: what roofs keep out, rooms' own light), the eye's night vision and the haze in
-// front of every surface (the aerial perspective and the ground haze, common/haze).
+// Cook-Torrance BRDF, the sky's two directional lights (the sun and the moon) with the shadow levels' shadow and a
+// lightning bolt's light, forward point lights and the shadow-casting point light with its cube shadow, the sky's ambient
+// light with the screen-space AO and interior lighting (common/interior: what roofs keep out, rooms' own light), the
+// weather's wetness and puddles (common/rain: what keeps the rain out; common/puddles: the puddles, the sky mirrored in
+// water), the eye's night vision and the haze in front of every surface (the aerial perspective and the ground haze,
+// common/haze).
 //
 // THE SKY'S LIGHT (one light scale): the sun and the moon reach a surface through the air (their light above the air
 // times the transmittance toward them at the surface's own height: reddened low over the horizon, gone once the disc has
@@ -30,6 +32,7 @@
 #include "common/interior"
 #include "common/night_vision"
 #include "common/distance_packing"
+#include "common/puddles"
 
 // Lighting, set by WorldRenderer each frame. Light colours are LINEAR.
 uniform vec3 sunDirection;     // unit direction TO the sun, world space (also the ground haze's sun)
@@ -134,22 +137,53 @@ uniform vec3  nightVisionTint;           // the rods' grey, luminance 1 (the wor
 // ---- Wet surfaces ----------------------------------------------------------------------------------------------
 // How much a soaked surface of porosity 1 darkens (water fills its pores: the light it scatters is trapped and absorbed
 // before it gets out), how much smoother any soaked surface turns (a film of water reflects like a polished surface),
-// and the porosity of surfaces that give none of their own (models): half way.
+// and the porosity of surfaces that give none of their own (sprites): half way. A wet film mirrors the sky on
+// WET_FILM_REFLECTION of itself (its roughness blurs the rest into the light it already has); a puddle mirrors it whole
+// over a bottom PUDDLE_DARKENING darker still, with still water's smoothness.
 const float WET_DARKENING = 0.7;
 const float WET_SMOOTHING = 0.5;
 const float WET_DEFAULT_POROSITY = 0.5;
+const float WET_FILM_REFLECTION = 0.35;
+const float PUDDLE_DARKENING = 0.3;
+const float PUDDLE_ROUGHNESS = 0.045;
 
-// Wets a surface by the weather's wetness: most where it faces up, half where it is upright, none where it faces down
-// (`normal`: its geometric normal, unit), darker by its porosity (0..1) and smoother. Leaves it as it is while dry.
-void ApplyWetness(inout vec3 albedo, inout float roughness, vec3 normal, float porosity)
+// Wets a surface by the weather's wetness where the rain reaches it (common/rain's rain map: covered surfaces stay dry):
+// most where it faces up, half where it is upright, none where it faces down (surfaceNormal: its geometric normal, unit),
+// darker by its porosity (0..1) and smoother; on surfaces facing up, puddles by its puddles (0..1), still water over a
+// darker bottom whose normal n becomes the water's (rippled while it rains). `water` receives the share of the surface
+// that mirrors the sky (WaterReflection). Leaves it as it is while dry. Call it in uniform control flow (the puddle
+// mask's reads take their derivatives first).
+void ApplyWetness(inout vec3 albedo, inout float roughness, inout vec3 n, out float water, vec3 worldPos,
+    vec3 surfaceNormal, float porosity, float puddles)
 {
-    float wet = surfaceWetness*clamp(0.5 + 0.5*normal.y, 0.0, 1.0);
+    water = 0.0;
+    if (!(surfaceWetness > 0.0))
+    {
+        return; // a uniform: the same for every fragment, so what follows stays in uniform control flow
+    }
+    RainPuddlePlace place = RainPuddlePlaceAt(worldPos);
+    float wet = surfaceWetness*clamp(0.5 + 0.5*surfaceNormal.y, 0.0, 1.0);
+    if (!(wet > 0.0))
+    {
+        return;
+    }
+    float open = RainOpenness(worldPos, surfaceNormal);
+    wet *= open;
     if (!(wet > 0.0))
     {
         return;
     }
     albedo *= 1.0 - WET_DARKENING*clamp(porosity, 0.0, 1.0)*wet;
     roughness = max(roughness*(1.0 - WET_SMOOTHING*wet), 0.045);
+    water = WET_FILM_REFLECTION*wet;
+    float puddle = RainPuddleShare(place, surfaceNormal, puddles)*open;
+    if (puddle > 0.0)
+    {
+        albedo *= 1.0 - PUDDLE_DARKENING*puddle;
+        roughness = mix(roughness, PUDDLE_ROUGHNESS, puddle);
+        n = normalize(mix(n, RainWaterNormal(worldPos), puddle));
+        water = mix(water, 1.0, puddle);
+    }
 }
 
 
@@ -476,7 +510,8 @@ SkyLightValues SkyLightAt(vec3 worldPos)
 }
 
 // The sky's two lights through the plain BRDF: the sun, then (at night) the moon. The levels' shadow darkens the
-// direct term of the light that cast it (by its fade), never the ambient.
+// direct term of the light that cast it (by its fade), never the ambient. A lightning bolt's channel lights it too, while
+// one stands, unshadowed (common/rain's boltLight).
 vec3 SkyLight(SkyLightValues light, vec3 n, vec3 v, float shadowAmount, vec3 albedo, vec3 f0, float rough, float metal)
 {
     vec3 direct = DirectionalLight(n, v, normalize(sunDirection), light.sun, 1.0 - shadowAmount*sunShadowFade, albedo,
@@ -486,10 +521,14 @@ vec3 SkyLight(SkyLightValues light, vec3 n, vec3 v, float shadowAmount, vec3 alb
         direct += DirectionalLight(n, v, normalize(moonDirection), light.moon, 1.0 - shadowAmount*moonShadowFade, albedo,
             f0, rough, metal);
     }
+    if (any(greaterThan(boltLight, vec3(0.0))))
+    {
+        direct += DirectionalLight(n, v, boltDirection, boltLight, 1.0, albedo, f0, rough, metal);
+    }
     return direct;
 }
 
-// The sky's two lights with wrap lighting (WrappedLight), shadowed like SkyLight.
+// The sky's two lights with wrap lighting (WrappedLight), shadowed like SkyLight, and a bolt's like SkyLight's.
 vec3 SkyLightWrapped(SkyLightValues light, vec3 n, vec3 v, float shadowAmount, float wrap, vec3 albedo, vec3 f0,
     float rough, float metal)
 {
@@ -500,7 +539,19 @@ vec3 SkyLightWrapped(SkyLightValues light, vec3 n, vec3 v, float shadowAmount, f
         direct += WrappedLight(n, v, normalize(moonDirection), light.moon, wrap, albedo, f0, rough, metal)
             *(1.0 - shadowAmount*moonShadowFade);
     }
+    if (any(greaterThan(boltLight, vec3(0.0))))
+    {
+        direct += WrappedLight(n, v, boltDirection, boltLight, wrap, albedo, f0, rough, metal);
+    }
     return direct;
+}
+
+// The sky mirrored by the share `water` of a wet surface (ApplyWetness), as the sky's light on surfaces is (its tint
+// in): common/puddles' RainWaterReflection, with the even sky of the sky's light at the surface as the fallback.
+vec3 WaterReflection(SkyLightValues light, vec3 n, vec3 v, float water)
+{
+    return RainWaterReflection(n, v, water, normalize(sunDirection), normalize(moonDirection), light.sky/PI)
+        *ambientTint;
 }
 
 // The ambient light on a surface with the normal n at the point worldPos, per unit of its albedo (times its AO by the
@@ -560,9 +611,16 @@ float ComputePointShadow(vec3 fragPos, vec3 nrm)
     return shadow/20.0;
 }
 
-// One point light through the plain BRDF with a physical 1/d^2 falloff, smoothly windowed to exactly 0 at the light's
-// range so the shaded set agrees with what the CPU reach-culler decided affects this object (no hard popping at the
-// edge).
+// A point light's falloff at a distance: a physical 1/d^2, smoothly windowed to exactly 0 at the light's range so the
+// shaded set agrees with what the CPU reach-culler decided affects an object (no hard popping at the edge).
+float PointLightFalloff(float dist, float lightRange)
+{
+    float range = max(lightRange, 1e-3);
+    float window = clamp(1.0 - pow(dist/range, 4.0), 0.0, 1.0);
+    return (window*window)/(dist*dist + 1.0);
+}
+
+// One point light through the plain BRDF with PointLightFalloff.
 vec3 PointLight(vec3 n, vec3 v, vec3 worldPos, vec3 lightPos, vec3 radiance, float lightRange, vec3 albedo, vec3 f0,
     float rough, float metal)
 {
@@ -578,24 +636,17 @@ vec3 PointLight(vec3 n, vec3 v, vec3 worldPos, vec3 lightPos, vec3 radiance, flo
     vec3 kDp = (vec3(1.0) - fp)*(1.0 - metal);
     float ndlp = max(dot(n, lp), 0.0);
 
-    float range = max(lightRange, 1e-3);
-    float window = clamp(1.0 - pow(dist/range, 4.0), 0.0, 1.0);
-    float atten = (window*window)/(dist*dist + 1.0);
-
-    return (kDp*albedo/PI + specp)*radiance*ndlp*atten;
+    return (kDp*albedo/PI + specp)*radiance*ndlp*PointLightFalloff(dist, lightRange);
 }
 
-// One point light with wrap lighting (WrappedLight) and PointLight's falloff.
+// One point light with wrap lighting (WrappedLight) and PointLightFalloff.
 vec3 PointLightWrapped(vec3 n, vec3 v, vec3 worldPos, vec3 lightPos, vec3 radiance, float lightRange, float wrap,
     vec3 albedo, vec3 f0, float rough, float metal)
 {
     vec3 toLight = lightPos - worldPos;
     float dist = length(toLight);
     vec3 lp = toLight/max(dist, 1e-4);
-    float range = max(lightRange, 1e-3);
-    float window = clamp(1.0 - pow(dist/range, 4.0), 0.0, 1.0);
-    float atten = (window*window)/(dist*dist + 1.0);
-    return WrappedLight(n, v, lp, radiance, wrap, albedo, f0, rough, metal)*atten;
+    return WrappedLight(n, v, lp, radiance, wrap, albedo, f0, rough, metal)*PointLightFalloff(dist, lightRange);
 }
 
 // The point lights through the plain BRDF: the reach-culled set the renderer chose for this object (the count is
@@ -641,6 +692,33 @@ vec3 PointLightsWrapped(vec3 n, vec3 v, vec3 worldPos, vec3 shadowPos, vec3 shad
             pointShadowLightRange, wrap, albedo, f0, rough, metal)*visibility;
     }
     return pointTotal;
+}
+
+
+// The light a raindrop (a streak, a splash) at a render-space point sends toward the eye, per unit of its colour: a drop
+// refracts and reflects what lies around it, so it shows the mean of the sky's and the ground's light (as a surface
+// facing sideways takes them), and the sun's, the moon's, the point lights' and a bolt's light falling on it spread over
+// every direction.
+vec3 RainDropLight(vec3 worldPos)
+{
+    SkyLightValues light = SkyLightAt(worldPos);
+    vec3 around = (light.sky + light.ground)*(0.5/PI)*ambientTint + nightLight;
+    vec3 falling = light.sun + boltLight;
+    if (isMoonLit)
+    {
+        falling += light.moon;
+    }
+    int pointLightLimit = min(pointLightCount, MAX_POINT_LIGHTS);
+    for (int i = 0; i < pointLightLimit; i++)
+    {
+        falling += pointLightRadiances[i]*PointLightFalloff(length(pointLightPositions[i] - worldPos), pointLightRanges[i]);
+    }
+    if (pointShadowActive)
+    {
+        falling += pointShadowLightRadiance*PointLightFalloff(length(pointShadowLightPos - worldPos),
+            pointShadowLightRange);
+    }
+    return around + falling*(0.25/PI);
 }
 
 

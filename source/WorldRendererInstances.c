@@ -749,6 +749,8 @@ void WorldRendererInstances_DrawCasters(WorldRenderer* self, const WorldRenderFr
     const WorldRendererDitherLocations* dither, WorldVisibilityPass pass, const WorldRendererShadowLevelFrame* level)
 {
     WorldRendererInstanceState* State = &self->_instances;
+    // The rain map draws the copies' depth as the shadow levels do, by their fade (what keeps the sky out keeps the rain
+    // out); the sky's volume through its slices' twin.
     bool IsCube = (pass == WorldVisibilityPass_PointShadow);
     bool IsSky = (pass == WorldVisibilityPass_SkyVisibility);
     GameShader* TwinAsset = IsCube ? State->_cubeDepthShader : (IsSky ? State->_skySliceShader : State->_depthShader);
@@ -770,7 +772,7 @@ void WorldRendererInstances_DrawCasters(WorldRenderer* self, const WorldRenderFr
         .OrdinaryShaders = { .Rigid = &shader, .Skinned = NULL, .Palette = NULL, .IsCameraView = false },
         .OrdinaryDither = dither,
         .IsLit = false,
-        .IsCast = !IsSky,
+        .IsCast = WorldVisibility_IsShadowPass(pass),
         .Level = level
     };
     float DrawDistanceScale = WorldRendererCommon_ConfigDrawDistanceScale(self);

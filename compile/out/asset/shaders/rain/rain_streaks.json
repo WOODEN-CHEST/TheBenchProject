@@ -1,0 +1,5 @@
+{
+    "name": "tbp:world_rain_streaks",
+    "vertex_location": "rain/streaks_vertex",
+    "fragment_location": "rain/streaks_fragment"
+}

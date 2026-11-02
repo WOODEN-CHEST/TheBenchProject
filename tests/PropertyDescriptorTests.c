@@ -584,7 +584,8 @@ static void FillEnvironment(WorldEnvironment* environment)
 static const uint16_t LaterSettingWireIds[] =
     { 31U, 32U, 33U, 34U, 35U, 36U, 37U, 38U, 39U, 40U, 41U, 42U, 43U, 44U, 45U, 46U, 47U, 48U, 49U, 50U, 51U, 52U, 53U,
         54U, 55U, 56U, 57U, 58U, 59U, 60U, 61U, 62U, 63U, 64U, 65U, 66U, 67U, 68U, 69U, 70U, 71U, 72U, 73U, 74U, 75U,
-        79U, 80U, 81U, 82U, 83U, 84U, 85U, 86U, 87U, 88U, 89U, 90U, 91U, 92U, 93U, 94U, 95U, 96U, 97U };
+        79U, 80U, 81U, 82U, 83U, 84U, 85U, 86U, 87U, 88U, 89U, 90U, 91U, 92U, 93U, 94U, 95U, 96U, 97U, 98U, 99U, 100U,
+        101U, 102U, 103U, 104U, 105U, 106U, 107U, 108U, 109U, 110U, 111U };
 
 static void FillLaterSettings(TestRun* run, WorldEnvironment* environment)
 {
@@ -649,6 +650,16 @@ static void FillLaterSettings(TestRun* run, WorldEnvironment* environment)
     environment->CloudForwardScattering = 0.6f;
     environment->CloudTint = (Color){ 255, 230, 210, 255 };
     environment->CloudLightPollution = 2.5f;
+    environment->RainStreakDensity = 1.5f;
+    environment->RainStreakLength = 2.0f;
+    environment->RainStreakBrightness = 0.75f;
+    environment->RainSplashDensity = 0.5f;
+    environment->RainFallSpeed = 4.5f;
+    environment->RainColor = (Color){ 200, 255, 210, 255 };
+    environment->PuddleAmount = 1.25f;
+    environment->PuddleScale = 2.5f;
+    environment->RainMist = 0.375f;
+    environment->LightningBoltBrightness = 3.0f;
     const PropertyTable* Table = WorldEnvironment_GetPropertyTable();
     TEST_CHECK_SUCCESS(run, Properties_Set(Table, environment, u8"moon_texture",
         &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"pack.red_moon" }));
@@ -656,6 +667,14 @@ static void FillLaterSettings(TestRun* run, WorldEnvironment* environment)
         &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"alien_galaxy" }));
     TEST_CHECK_SUCCESS(run, Properties_Set(Table, environment, u8"climate",
         &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"pack.tropics" }));
+    TEST_CHECK_SUCCESS(run, Properties_Set(Table, environment, u8"rain_streak_texture",
+        &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"pack.long_streak" }));
+    TEST_CHECK_SUCCESS(run, Properties_Set(Table, environment, u8"rain_splash_texture",
+        &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"pack.splash" }));
+    TEST_CHECK_SUCCESS(run, Properties_Set(Table, environment, u8"puddle_mask_texture",
+        &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"pack.puddles" }));
+    TEST_CHECK_SUCCESS(run, Properties_Set(Table, environment, u8"lightning_bolt_texture",
+        &(PropertyValue){ .Type = PropertyType_AssetName, .Data.StringValue = u8"pack.bolts" }));
 }
 
 
@@ -2215,7 +2234,7 @@ static void EnvironmentGHDFMatchesTheOldEncoder(TestRun* run)
             TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Expected, 30U,
                 GHDF_CreateRegularType(GHDFValueType_EncodedInteger), &Date));
             TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(Table, &Environment, Pool, Actual, &Everything));
-            TEST_CHECK(run, GHDFCompound_GetEntryCount(Actual) == 92U);
+            TEST_CHECK(run, GHDFCompound_GetEntryCount(Actual) == 106U);
             for (size_t Index = 0U; Index < (sizeof(LaterSettingWireIds) / sizeof(LaterSettingWireIds[0])); Index++)
             {
                 TEST_CHECK_SUCCESS(run, GHDFCompound_Remove(Actual, LaterSettingWireIds[Index]));
@@ -2246,7 +2265,7 @@ static void EnvironmentJSONRoundTrip(TestRun* run)
     if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
     {
         TEST_CHECK_SUCCESS(run, WorldEnvironment_WriteJSON(&Source, Pool, Compound, NULL));
-        TEST_CHECK(run, JSONCompound_GetEntryCount(Compound) == 92U);
+        TEST_CHECK(run, JSONCompound_GetEntryCount(Compound) == 106U);
         JSONObjectValue Parsed;
         if (ReparseCompound(run, Pool, Compound, &Parsed))
         {
@@ -2375,7 +2394,7 @@ static void EnvironmentGHDFRoundTrip(TestRun* run)
     if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Pool, &Compound)))
     {
         TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(Table, &Source, Pool, Compound, NULL));
-        TEST_CHECK(run, GHDFCompound_GetEntryCount(Compound) == 92U);
+        TEST_CHECK(run, GHDFCompound_GetEntryCount(Compound) == 106U);
         TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(Table, Compound, &Restored, NULL));
         TEST_CHECK(run, Properties_Equals(Table, &Source, &Restored));
         TEST_CHECK(run, (Restored.MoonTexture != Source.MoonTexture) && AreStringsEqual(Restored.MoonTexture, u8"tbp:pack.red_moon"));

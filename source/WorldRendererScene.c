@@ -244,6 +244,9 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
     // the blended and additive ones back to front.
     WorldRendererSprites_DrawLit(self, frame->SceneFilter, true);
 
+    // The rain over everything: a lightning bolt, the splashes and the streaks (blended, writing no depth).
+    WorldRendererRain_DrawScene(self, frame);
+
     // Light gizmos: a debug authoring aid so light placement is visible (lights are otherwise invisible).
     // Independent of the debug grid; a real game leaves this off so lights have no visible sphere.
     if (self->_lightGizmosEnabled)

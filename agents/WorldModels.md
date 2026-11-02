@@ -87,12 +87,12 @@ first-person block,
 A variant is another look of the same meshes: a named list of material overrides, one per material slot (the
 material's index in each LOD's model: every LOD keeps the same slots). An override swaps in texture assets
 (albedo, normal, the packed occlusion/roughness/metallic map, emissive) and sets the PBR factors (tint, metallic,
-roughness, emissive colour and intensity).
+roughness, emissive colour and intensity) and the weather's (porosity, puddles: a paved variant pools rain water).
 - **Applied at draw time, never to an asset** (AGENTS.md rule 3): the renderer copies a mesh's material maps for every
-  draw (`WorldRendererGeometry.c`) and `WorldModel_ApplyVariant(model, variant, materialIndex, maps)` changes that copy:
+  draw (`WorldRendererGeometry.c`) and `WorldModel_ApplyVariant(model, variant, materialIndex, material)` changes that copy:
   the textures first, then the factors through `GameMaterialFactors_Apply` ([GameAssets.md](GameAssets.md)), the same
   function the model type's `material_overrides` use at load (an emissive map without a colour or intensity shows at
-  white x 1). The lit pass uploads the copy's factors and map flags, so the shader sees the variant.
+  white x 1). The lit pass uploads the copy's factors, params and map flags, so the shader sees the variant.
 - **The same parser:** a variant's overrides are read by `AssetJSON_ReadMaterialSlot` and `AssetJSON_ReadMaterialFactors`
   (`source/AssetDefinitionCommon.{h,c}`), which the model type's `material_overrides` use too. Only the maps differ: a
   model's are image files under `models/` with `texture_properties`, a variant's are texture asset names (shared between

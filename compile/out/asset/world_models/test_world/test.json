@@ -3,5 +3,8 @@
     "lods": [
         { "model": "tbp:test", "max_distance": 600 }
     ],
+    "variants": [
+        { "name": "pavement", "material_overrides": [ { "slot": 0, "puddles": 1, "porosity": 0.6 } ] }
+    ],
     "collision": "bounds"
 }

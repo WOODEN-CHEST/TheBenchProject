@@ -38,7 +38,7 @@ typedef struct AnimationGraphStruct AnimationGraph;
  * GameModel and GameTexture pointers in it are therefore valid exactly as long as the world model is. The asset
  * manager owns the world model; never keep its pointer past your asset user (AssetManager.md).
  *
- * VARIANTS apply at draw time, never to an asset: the renderer copies a mesh's material maps for each draw and
+ * VARIANTS apply at draw time, never to an asset: the renderer copies a mesh's material and its maps for each draw and
  * WorldModel_ApplyVariant changes that copy (textures, then the factors), the same rule as the object's tint.
  *
  * COLLISION. A world model may have collision sets (WorldModelCollision): named compounds of shapes in its own
@@ -609,18 +609,20 @@ static inline const unsigned char* WorldModel_GetVariantName(const WorldModel* s
 bool WorldModel_TryFindVariant(const WorldModel* self, const unsigned char* name, size_t* outIndex);
 
 /**
- * @brief Applies a variant to one material's maps: its override for that material slot, if it has one.
+ * @brief Applies a variant to one material: its override for that material slot, if it has one.
  *
  * The override's textures replace their maps' textures (albedo, normal, the packed occlusion/roughness/metallic map in
- * the metalness slot, emissive), then its factors apply (GameMaterialFactors_Apply). A slot the variant does not
- * override, and an index past the last variant, change nothing. Writes only to @p maps: pass the renderer's per-draw
- * copy, never a model asset's maps.
+ * the metalness slot, emissive), then its factors apply (GameMaterialFactors_Apply: the maps' values and the material's
+ * porosity and puddles params). A slot the variant does not override, and an index past the last variant, change
+ * nothing. Writes only to @p material's maps and params: pass the renderer's per-draw copy (its maps a copy too), never
+ * a model asset's material.
  * @param self The world model; must not be NULL.
  * @param variantIndex The variant (from WorldModel_TryFindVariant).
  * @param materialIndex The index of the material in the LOD's model (raylib's Model.meshMaterial of the mesh drawn).
- * @param maps [in,out] A copy of that material's maps (raylib's MAX_MATERIAL_MAPS entries); must not be NULL.
+ * @param material [in,out] A copy of that material, its maps a copy of its maps (raylib's MAX_MATERIAL_MAPS entries);
+ *        must not be NULL.
  */
-void WorldModel_ApplyVariant(const WorldModel* self, size_t variantIndex, int materialIndex, MaterialMap* maps);
+void WorldModel_ApplyVariant(const WorldModel* self, size_t variantIndex, int materialIndex, Material* material);
 
 /**
  * @brief Returns the world model's collision.

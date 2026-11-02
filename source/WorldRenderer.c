@@ -73,6 +73,9 @@ static void EnsureShaders(WorldRenderer* self)
     WorldRendererShadows_LoadShaders(self);
     WorldRendererSky_LoadShader(self);
     WorldRendererClouds_Load(self);
+    // The rain's programs are lit programs (after the lighting's) and the bolt draws with the sprites' quad; its map
+    // draws with the shadow levels' depth programs.
+    WorldRendererRain_Load(self);
     WorldRendererStars_LoadShader(self);
     WorldRendererTerrain_LoadShader(self);
     // The sky's occupancy volume, its programs before the instanced twins.
@@ -305,9 +308,9 @@ static void DecideShadows(WorldRenderer* self, WorldRenderFrame* frame)
 /* Builds the frame's visibility from the render cache: what the camera's passes draw (its frustum, the draw distances
  * under the quality setting and the camera's zoom, the opacities), which casters each shadow pass that runs draws
  * (each shadow level's box, ring and size cut within the shadow distances and the reach, the cube's reach) and what keeps the
- * sky out in the sky's occupancy volume (its map's box).
- * Needs the shadow decisions, WorldRendererShadows_PrepareFrame and WorldRendererSkyVisibility_PrepareFrame. In render
- * space: the camera at the origin. */
+ * sky out in the sky's occupancy volume (its map's box) and the rain out in the rain map (its box).
+ * Needs the shadow decisions, WorldRendererShadows_PrepareFrame, WorldRendererSkyVisibility_PrepareFrame and
+ * WorldRendererRain_PrepareFrame. In render space: the camera at the origin. */
 static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     WorldVisibilityView View =
@@ -323,6 +326,8 @@ static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
         .PointShadowReach = frame->PointShadowFar,
         .IsSkyVisibilityActive = frame->IsSkyVisibilityActive,
         .SkyVisibilityBox = frame->SkyMapBox,
+        .IsRainMapActive = frame->IsRainMapDrawn,
+        .RainMapBox = frame->RainMapBox,
         .DrawDistanceScale = WorldRendererCommon_ConfigDrawDistanceScale(self),
         .ZoomFactor = frame->ZoomFactor
     };
@@ -621,6 +626,7 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     // The terrain's and the sprites' shaders take the zones too, so they run without the PBR shader as well.
     Status->Features[WorldRendererFeature_AmbientZones] = StateOf(true,
         frame->IsInteriorActive && (Status->AmbientZoneCount > 0U));
+    WorldRendererRain_UpdateStatus(self, frame);
 }
 
 /* Appends the drawn models per LOD to the status line's LOD text, LOD 0 first, up to the coarsest LOD drawn: "9 / 3 / 1".
@@ -730,6 +736,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     WorldRendererTerrain_Construct(Renderer);
     WorldRendererInstances_Construct(Renderer);
     WorldRendererInterior_Construct(Renderer);
+    WorldRendererRain_Construct(Renderer);
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardLights, INITIAL_FORWARD_LIGHT_CAPACITY,
         sizeof(WorldCullingLight));
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardRadiances, INITIAL_FORWARD_LIGHT_CAPACITY,
@@ -759,6 +766,8 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     WorldRendererShadows_Unload(self);
     WorldRendererSkyVisibility_Unload(self);
     WorldRendererClouds_Unload(self);
+    WorldRendererRain_Unload(self);
+    WorldRendererRain_Deconstruct(self); // retires the rain textures' own asset users
     WorldRendererStars_Unload(self);
     WorldRendererSprites_Deconstruct(self);
     WorldRendererSky_Deconstruct(self); // retires the sky textures' own asset users
@@ -900,6 +909,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     DecideShadows(self, &Frame);
     WorldRendererShadows_PrepareFrame(self, &Frame);
     WorldRendererSkyVisibility_PrepareFrame(self, &Frame);
+    // The rain: its streaks, splashes and bolt, and the rain map's box along the rain's fall.
+    WorldRendererRain_PrepareFrame(self, &Frame, deltaSeconds);
     Error VisibilityResult = BuildVisibility(self, &Frame);
     if (VisibilityResult.Code != ErrorCode_Success)
     {
@@ -930,6 +941,8 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     {
         WorldRendererSkyVisibility_Render(self, &Frame);
     }
+    // The rain map: the lit passes read it for what the rain reaches, the rain's splashes for where it lands.
+    WorldRendererRain_RenderMap(self, &Frame);
 
     // The G-buffer feeds the ambient pre-pass (samplable depth + surface flag), the outline pass and the clouds (their
     // march stops at its surfaces); it is drawn ONCE, before the scene, whenever any runs. The pre-pass (the AO, the
@@ -1039,6 +1052,8 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_ContactShadows:   return (const unsigned char*)u8"contact shadows";
         case WorldRendererFeature_Clouds:           return (const unsigned char*)u8"clouds";
         case WorldRendererFeature_CloudShadows:     return (const unsigned char*)u8"cloud shadows";
+        case WorldRendererFeature_Rain:             return (const unsigned char*)u8"rain";
+        case WorldRendererFeature_RainMap:          return (const unsigned char*)u8"rain map";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -1099,6 +1114,7 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
     WorldRendererShadows_LogStatus(self);
     WorldRendererInterior_LogStatus(self);
     WorldRendererClouds_LogStatus(self);
+    WorldRendererRain_LogStatus(self);
 }
 
 void WorldRenderer_SetPixelationEnabled(WorldRenderer* self, bool enabled)
@@ -1195,6 +1211,41 @@ const unsigned char* WorldRenderer_GetInteriorViewName(WorldRendererInteriorView
         case WorldRendererInteriorView_Zones: return (const unsigned char*)u8"zones";
         case WorldRendererInteriorView_Sky:   return (const unsigned char*)u8"sky share";
         case WorldRendererInteriorView_Count: break;
+    }
+    return (const unsigned char*)u8"unknown";
+}
+
+void WorldRenderer_SetRainEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_rain._isEnabled = enabled;
+}
+
+bool WorldRenderer_IsRainEnabled(const WorldRenderer* self)
+{
+    return self->_rain._isEnabled;
+}
+
+void WorldRenderer_SetRainView(WorldRenderer* self, WorldRendererRainView view)
+{
+    if ((unsigned int)view < (unsigned int)WorldRendererRainView_Count)
+    {
+        self->_rain._view = view;
+    }
+}
+
+WorldRendererRainView WorldRenderer_GetRainView(const WorldRenderer* self)
+{
+    return self->_rain._view;
+}
+
+const unsigned char* WorldRenderer_GetRainViewName(WorldRendererRainView view)
+{
+    switch (view)
+    {
+        case WorldRendererRainView_Off:     return (const unsigned char*)u8"off";
+        case WorldRendererRainView_Cover:   return (const unsigned char*)u8"cover";
+        case WorldRendererRainView_Puddles: return (const unsigned char*)u8"puddles";
+        case WorldRendererRainView_Count:   break;
     }
     return (const unsigned char*)u8"unknown";
 }

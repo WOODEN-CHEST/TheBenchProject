@@ -141,7 +141,7 @@ static const unsigned char* const VariantKeys[] = { u8"name", u8"material_overri
 static const unsigned char* const OverrideKeys[] =
 {
     u8"slot", u8"albedo", u8"normal", u8"mra", u8"emissive", u8"tint", u8"metallic", u8"roughness", u8"emissive_color",
-    u8"emissive_intensity"
+    u8"emissive_intensity", u8"porosity", u8"puddles"
 };
 static const unsigned char* const BoundsKeys[] = { u8"center", u8"radius" };
 static const unsigned char* const OverrideTextureKeys[OVERRIDE_TEXTURE_KEY_COUNT] =

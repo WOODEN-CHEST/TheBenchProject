@@ -382,6 +382,10 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
             "\"emissive_intensity\" is -2; it must be at least 0" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"variants\": [{\"name\": "
             "\"dark\", "
+            "\"material_overrides\": [{\"slot\": 0, \"puddles\": 2}]}]}", ErrorCode_InvalidAssetDefinition,
+            "\"puddles\" is 2; it must be in [0, 1]" },
+        { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"variants\": [{\"name\": "
+            "\"dark\", "
             "\"material_overrides\": [{\"slot\": 0, \"tint\": \"#zzzzzz\"}]}]}", ErrorCode_InvalidJSON, "\"tint\"" },
         { "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"variants\": [{\"name\": "
             "\"dark\", "
@@ -758,6 +762,10 @@ static void TheModelTypeSharesTheFactorRules(TestRun* run)
             ErrorCode_InvalidAssetDefinition, "requires a \"slot\"" },
         { "{\"name\": \"m\", \"location\": \"m\", \"material_overrides\": [{\"slot\": 0, \"roughness\": "
             "\"rough\"}]}", ErrorCode_InvalidJSON, "\"roughness\"" },
+        { "{\"name\": \"m\", \"location\": \"m\", \"material_overrides\": [{\"slot\": 0, \"porosity\": 1.5}]}",
+            ErrorCode_InvalidAssetDefinition, "\"porosity\" is 1.5; it must be in [0, 1]" },
+        { "{\"name\": \"m\", \"location\": \"m\", \"material_overrides\": [{\"slot\": 0, \"puddles\": -0.1}]}",
+            ErrorCode_InvalidAssetDefinition, "\"puddles\" is -0.1; it must be in [0, 1]" },
     };
     TestAssetFixture Fixture;
     if (TestAssetFixture_Construct(run, &Fixture))
@@ -770,7 +778,7 @@ static void TheModelTypeSharesTheFactorRules(TestRun* run)
         }
         TEST_CHECK_SUCCESS(run, BuildDefinitionOfType(&Fixture, Fixture.Types.Model, "{\"name\": \"m\", \"location\": "
             "\"m\", \"material_overrides\": [{\"slot\": 0, \"metallic\": 1, \"roughness\": 0, "
-            "\"emissive_intensity\": 4}]}"));
+            "\"emissive_intensity\": 4, \"porosity\": 0, \"puddles\": 1}]}"));
     }
     TestAssetFixture_Deconstruct(run, &Fixture);
 }
@@ -790,7 +798,7 @@ static void VariantsAreFoundByNameAndChangeOnlyTheirSlots(TestRun* run)
         && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"desk\", \"lods\": [{\"model\": \"mesh\", "
             "\"max_distance\": 10}], \"variants\": ["
             "{\"name\": \"dark_wood\", \"material_overrides\": [{\"slot\": 0, \"albedo\": \"dark_albedo\", "
-            "\"tint\": \"#d0c0b0\", \"roughness\": 0.75}]},"
+            "\"tint\": \"#d0c0b0\", \"roughness\": 0.75, \"porosity\": 0.2, \"puddles\": 1}]},"
             "{\"name\": \"glowing\", \"material_overrides\": [{\"slot\": 1, \"emissive\": \"glow\", \"metallic\": "
                 "1}]}]}");
     WorldModel* Loaded = IsBuilt ? LoadWorldModel(run, &Fixture, "desk", &User) : NULL;
@@ -806,30 +814,42 @@ static void VariantsAreFoundByNameAndChangeOnlyTheirSlots(TestRun* run)
         MaterialMap Maps[MATERIAL_MAP_BRDF + 1];
         MaterialMap Untouched[MATERIAL_MAP_BRDF + 1];
         FillMaps(Untouched);
+        Material Draw = { .maps = Maps };
 
-        // dark_wood on material 0: the albedo texture, the tint and the roughness; nothing else.
+        // dark_wood on material 0: the albedo texture, the tint, the roughness, the porosity and the puddles; nothing
+        // else.
         FillMaps(Maps);
-        WorldModel_ApplyVariant(Loaded, 0U, 0, Maps);
+        GameMaterialParams_SetDefaults(&Draw);
+        WorldModel_ApplyVariant(Loaded, 0U, 0, &Draw);
         TEST_CHECK(run, (Maps[MATERIAL_MAP_ALBEDO].texture.id == DARK_ALBEDO_ID)
             && AreColorsEqual(Maps[MATERIAL_MAP_ALBEDO].color, (Color){ 0xd0, 0xc0, 0xb0, 0xff })
             && (Maps[MATERIAL_MAP_ROUGHNESS].value == 0.75f));
+        TEST_CHECK(run, (Draw.params[GAME_MATERIAL_PARAM_POROSITY] == 0.2f)
+            && (Draw.params[GAME_MATERIAL_PARAM_PUDDLES] == 1.0f));
         TEST_CHECK(run, (memcmp(&Maps[MATERIAL_MAP_NORMAL], &Untouched[MATERIAL_MAP_NORMAL], sizeof(MaterialMap)) == 0)
             && (memcmp(&Maps[MATERIAL_MAP_METALNESS], &Untouched[MATERIAL_MAP_METALNESS], sizeof(MaterialMap)) == 0)
             && (memcmp(&Maps[MATERIAL_MAP_EMISSION], &Untouched[MATERIAL_MAP_EMISSION], sizeof(MaterialMap)) == 0));
 
         // dark_wood on material 1 (a slot it does not override), and a variant past the last: nothing changes.
         FillMaps(Maps);
-        WorldModel_ApplyVariant(Loaded, 0U, 1, Maps);
-        WorldModel_ApplyVariant(Loaded, 7U, 0, Maps);
+        GameMaterialParams_SetDefaults(&Draw);
+        WorldModel_ApplyVariant(Loaded, 0U, 1, &Draw);
+        WorldModel_ApplyVariant(Loaded, 7U, 0, &Draw);
         TEST_CHECK(run, memcmp(Maps, Untouched, sizeof(Maps)) == 0);
+        TEST_CHECK(run, (Draw.params[GAME_MATERIAL_PARAM_POROSITY] == GAME_MATERIAL_DEFAULT_POROSITY)
+            && (Draw.params[GAME_MATERIAL_PARAM_PUDDLES] == GAME_MATERIAL_DEFAULT_PUDDLES));
 
-        // glowing on material 1: the emissive map without a colour or intensity of its own shows at white x 1.
+        // glowing on material 1: the emissive map without a colour or intensity of its own shows at white x 1; the
+        // wetness params it does not set stay.
         FillMaps(Maps);
-        WorldModel_ApplyVariant(Loaded, 1U, 1, Maps);
+        GameMaterialParams_SetDefaults(&Draw);
+        WorldModel_ApplyVariant(Loaded, 1U, 1, &Draw);
         TEST_CHECK(run, (Maps[MATERIAL_MAP_EMISSION].texture.id == GLOW_ID)
             && AreColorsEqual(Maps[MATERIAL_MAP_EMISSION].color, WHITE) && (Maps[MATERIAL_MAP_EMISSION].value == 1.0f)
             && (Maps[MATERIAL_MAP_METALNESS].value == 1.0f)
             && (Maps[MATERIAL_MAP_METALNESS].texture.id == Untouched[MATERIAL_MAP_METALNESS].texture.id));
+        TEST_CHECK(run, (Draw.params[GAME_MATERIAL_PARAM_POROSITY] == GAME_MATERIAL_DEFAULT_POROSITY)
+            && (Draw.params[GAME_MATERIAL_PARAM_PUDDLES] == GAME_MATERIAL_DEFAULT_PUDDLES));
     }
     TestAssetFixture_Deconstruct(run, &Fixture);
 }

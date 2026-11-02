@@ -150,9 +150,10 @@ adds the weather's line.
 
 ## Known limits
 
-- **No clouds are drawn yet**: the renderer shows the clouds as one even deck over the sky ([WorldRuntime.md](WorldRuntime.md),
-  "Weather"); a camera above the clouds' height still sees it.
-- **Wetness is global**: covered surfaces get wet too (the rain's own task keeps them dry through the sky's visibility).
+- **Wetness is one value**: every surface the rain reaches is as wet as the next (no patch dries first in the sun, no
+  water runs off). The renderer keeps covered surfaces dry through its rain map around the camera, which has no memory:
+  what moves under a roof is dry at once, and beyond the map's 48 m everything is wet ([WorldRuntime.md](WorldRuntime.md),
+  "Rain").
 - **Temperature** moves with the presets but nothing reads it yet (snow, breath).
 - **Fixed values and the rain**: the clouds' rule holds in every mode, so a fixed rain needs dense clouds too.
 - **The air's haze** (`sky_turbidity`, `haze_height`) is the world's; presets do not move it.

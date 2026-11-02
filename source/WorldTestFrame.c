@@ -888,6 +888,33 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         }
     }
 
+    // Keypad - switches the rain off and on (the A/B: off, no streaks, splashes, bolts or rain map, and every surface wet
+    // alike, as the weather's wetness alone); keypad Enter steps its debug view (off, how open every surface is to the
+    // rain, the puddles).
+    if (GameInput_IsKeyPressed(input, GameKey_KeypadSubtract))
+    {
+        bool Enabled = !WorldRenderer_IsRainEnabled(frame->_renderer);
+        WorldRenderer_SetRainEnabled(frame->_renderer, Enabled);
+        if (frame->_services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: rain %s.", Enabled ? "ON" : "OFF (every surface wet alike)");
+            Error_Deconstruct(&LogResult);
+        }
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_KeypadEnter))
+    {
+        WorldRendererRainView View = (WorldRendererRainView)(((int)WorldRenderer_GetRainView(frame->_renderer) + 1)
+            % (int)WorldRendererRainView_Count);
+        WorldRenderer_SetRainView(frame->_renderer, View);
+        if (frame->_services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: rain view %s.", (const char*)WorldRenderer_GetRainViewName(View));
+            Error_Deconstruct(&LogResult);
+        }
+    }
+
     // Keypad . toggles the contact shadows (the seam the shadow maps leave at a caster's foot, closed on screen), for
     // A/B-ing a lit seam or a shadow reaching too far.
     if (GameInput_IsKeyPressed(input, GameKey_KeypadDecimal))

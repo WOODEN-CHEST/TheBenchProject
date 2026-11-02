@@ -22,6 +22,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | NightVision | `source/NightVision.h`, `source/NightVision.c` (private) | The eye's dim-light vision as pure maths: its calibration on the game's light scale, the rods' share, the rods' grey (see "Night vision"). |
 | WorldWeatherLight | `source/WorldWeatherLight.h`, `source/WorldWeatherLight.c` (private) | The weather's look as pure maths (see "Weather"): the clouds' deck from the environment's weather values (their cover, the light they let through, their transmission), its light added to the sky's light at the camera, a lightning flash's light and direction, the wetness and the wind. |
 | WorldClouds | `source/WorldClouds.h`, `source/WorldClouds.c` (private) | The clouds as pure maths (see "Clouds"): the frame's three layers from the environment, the patterns' drift with the wind and their anchors (wrapped in double), the shadow map's frame on its texels, a ray's stretch through a layer's shell: the C mirror of `shaders/common/clouds.glsl`'s geometry. |
+| WorldRain | `source/WorldRain.h`, `source/WorldRain.c` (private) | The rain and the lightning's bolts as pure maths (see "Rain"): the rain rate and its mist, the streaks' drift and their copies around the camera (wrapped in double), the splashes' and the ripples' counted cycles, the rain map's box, lookups and keeping between draws, the splashes' grid and landing along the map's fall, the puddles' coverage and threshold, the bolt: the C mirror of `shaders/common/rain.glsl`, `common/puddles.glsl` and `shaders/rain/`. |
 | CloudNoise | `source/CloudNoise.h`, `source/CloudNoise.c` (private) | The clouds' noise (see "Clouds"): tileable gradient and Worley noise, and the three textures made from them at load (the shape volume, the erosion volume, the weather map), the same every time. |
 | WorldInterior | `source/WorldInterior.h`, `source/WorldInterior.c` (private) | Interior lighting as pure maths (see "Interior lighting"): ambient zones in render space, their weights, the draws' choice of zones and their composition, the haze inside them, the sky's occupancy volume (its map, slices and window) and the march through it, the camera's interior and the light the eye is in: the C mirror of `shaders/common/interior.glsl`. |
 | WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c`, `source/WorldTestCharacters.{h,c}` (private: walk mode and the test NPCs), `source/WorldTestAnimation.{h,c}` (private: the animation system and its keys), `source/WorldTestInstances.{h,c}` (private: the pebble field and the instancing A/B) | A concrete GameFrame: a WASD + mouse-look flycam over a test world, and walk mode (the player as a character) and test NPCs. |
@@ -472,7 +473,9 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    world's reach) and their light matrices (`WorldRendererShadows_PrepareFrame`: the levels' maps made for the config,
    the levels used, which render this frame, each one's view, projection and box, snapped to its texels, or kept from its
    last render; the cube shadow's lamp and far range) and the sky's
-   occupancy volume's map and window (`WorldRendererSkyVisibility_PrepareFrame`), then the frame's visibility (what every
+   occupancy volume's map and window (`WorldRendererSkyVisibility_PrepareFrame`), the rain (`WorldRendererRain_PrepareFrame`,
+   see "Rain": the textures the world names, the rain's values and drift, the streaks, the splashes and a bolt, the rain
+   map's box along the rain's mean fall), then the frame's visibility (what every
    pass draws, see "Visibility"), then the rest (`DecidePasses`; the crisp overlay runs only for crisp objects in view).
 3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the shadow strength and the forward-light
    candidates (every light except the cube-shadow light) with their linear radiance.
@@ -490,7 +493,8 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    level's, dithered by its own shadow fade, left out of a level they are too small for), terrain chunks (their back
    faces in the levels, as the models') and cutout sprites cast; sprites turned toward the light; each caster dithered
    by its shadow fade. Then the sky's occupancy volume (see "Interior lighting"): what keeps the sky out in its
-   map's box, drawn from above into height slices, and its pyramid.
+   map's box, drawn from above into height slices, and its pyramid. Then the rain map (see "Rain"), while it rains or
+   surfaces are wet: what keeps the rain out in its box, its depth along the rain.
 5. The normal/flag G-buffer (the camera's models, the LOD with the larger share, the copies the same way, terrain
    chunks and cutout sprites, solid below half their fade), when the AO, the contact shadows, the sky's visibility or
    the outlines run; then the ambient pre-pass and its blur (the AO, the contact shadows and the sky's visibility per
@@ -506,7 +510,8 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    instance cells (lit like the models, the lights per cell, both LODs of a copy's band), the camera's terrain
    chunks (the `world_terrain` shader, lit as the models, with up to `WORLD_MAX_FORWARD_LIGHTS` lights per chunk;
    before the sprites, so decals lie on it), the camera's lit sprites
-   (the cutout ones, then decals, then blended and additive ones back to front), light gizmos, the ambient zones'
+   (the cutout ones, then decals, then blended and additive ones back to front), the rain (a lightning bolt, the
+   splashes, the streaks: see "Rain"), light gizmos, the ambient zones'
    wireframes while that debug view is chosen, and collider wireframes and contact points while a collision world is
    set. The sky's glow and the models' and lit sprites' reflected light go through the
    eye's night vision; every lit surface is seen through the haze in front of it (and through interior lighting's debug
@@ -743,7 +748,7 @@ blue, bright ones warm.
   the Milky Way and the stars (`hazeGroundTransmittance`, per star) are dimmed by it. Off by default (density 0). The
   weather's ground fog joins it in the same layer (`fog_density` added to the density at the base, the thickness the
   mean of `ground_haze_thickness` and `fog_height` weighed by the two densities: either alone is exactly itself;
-  `WorldAtmosphere_GetHaze`); the rain's own mist is not built yet.
+  `WorldAtmosphere_GetHaze`), and so does the rain's mist ("Rain").
 - **The outlines** fade by the haze's transmittance per colour at the object's own multiplier: an outlined surface's
   G-buffer alpha holds its haze (`OUTLINE_HAZE_BASE` 0.76 at 0 to 1 at 1; above 1 counts as 1), and `world_postfx` reads
   the volume's transmittance and the ground haze's at the pixel ("G-buffer, AO and outlines").
@@ -898,20 +903,25 @@ cloud pass unavailable), the sky shows them as one even deck too, and their shar
   values row), the far ground's and the air's light with the deck's, and the sky glows with it, most in a broad lobe
   (power 6, three times the rest) toward the clouds over the strike (`FlashDirection`: the clouds' base over the
   strike's distance); drawn clouds glow near the strike themselves instead. The C mirror's frame light leaves it out, so the eye's anchor and night vision's field do not
-  follow it, and the meter, easing over seconds, barely does: a flash of a third of a second lights the scene.
+  follow it, and the meter, easing over seconds, barely does: a flash of a third of a second lights the scene. The bolt
+  itself, its channel standing toward the strike, and its channel's own light are the rain's ("Rain").
 - **Wetness** (`surfaceWetness`, `common/lighting`'s `ApplyWetness`): wet = `wetness` x clamp(0.5 + 0.5 n.y) by the
-  surface's own normal (most facing up, half upright, none facing down); the albedo x (1 - 0.7 x porosity x wet) (water
-  in the pores traps the light) and the roughness x (1 - 0.5 x wet), at least 0.045 (a film of water reflects like a
-  polished surface: wet slopes glint in the sun, wet ground mirrors lamps). Models take porosity 0.5 x (1 - metallic)
-  (`WET_DEFAULT_POROSITY`: a metal only turns glossier), terrain its materials' `porosity` blended as their other values
-  (not in the terrain's debug views), cards (decals among them: they lie on the wet surface) and cutout billboards 0.5,
-  a billboard as a thing standing upright (half wet, whatever the camera's pitch); blended billboards (smoke, glass) and
-  additive sprites (light) never. Dry, the shaders skip it. Every surface is wet alike, under roofs too.
+  surface's own normal (most facing up, half upright, none facing down), times how open it is to the rain (the rain
+  map: covered surfaces stay dry, "Rain"); the albedo x (1 - 0.7 x porosity x wet) (water in the pores traps the light)
+  and the roughness x (1 - 0.5 x wet), at least 0.045 (a film of water reflects like a polished surface: wet slopes
+  glint in the sun, wet ground mirrors lamps), and the film mirrors the sky ("Rain"). Models take their material's
+  porosity (its params: 0.5 by default, a model's or a variant's `material_overrides` set it) x (1 - metallic) (a metal
+  only turns glossier), terrain its materials' `porosity` blended as their other values (not in the terrain's debug
+  views), cards (decals among them: they lie on the wet surface) and cutout billboards 0.5 (`WET_DEFAULT_POROSITY`), a
+  billboard as a thing standing upright (half wet, whatever the camera's pitch); blended billboards (smoke, glass) and
+  additive sprites (light) never. Surfaces facing up grow puddles by their own `puddles` ("Rain"). Dry, the shaders
+  skip it.
 - **Fog** (`fog_density`, `fog_height`): the frame's haze (`WorldAtmosphere_GetHaze`) joins it with the world's ground
   haze in one layer: the densities add up at the layer's base, and its thickness is the mean of the two weighed by their
-  densities, so either alone is exactly itself (see "Haze").
+  densities, so either alone is exactly itself (see "Haze"); the rain's mist joins the same layer ("Rain").
 - **Wind** (`WindDirection`: the level unit direction it blows toward, (sin, 0, cos) of `wind_direction`;
-  `WindSpeed`; `WindGust`) is in the frame for what sways in it; nothing reads it yet.
+  `WindSpeed`; `WindGust`) is in the frame for what sways in it; the rain drifts with it, gusts in, and its map slants
+  along the mean wind ("Rain").
 - **Without weather** (no clouds, no flash, dry: the environment's defaults) the frame light is the clear sky's bit for
   bit and every weather term is 0 or skipped, so the picture is the clear sky's.
 - **Status**: `WorldRendererStatus.CloudCover`, `DirectShare`, `CloudTransmission`, `DeckIrradiance`,
@@ -1050,6 +1060,121 @@ Volumetric clouds over the curved planet, lit on the one light scale, in three l
   at high quality under cumulus, 1.65 under an overcast; 0.8 to 0.86 ms and 0.65 at low; the light's steps take most
   of it (the twice-read volumes about 0.4 ms of it), the marching of the geometry's texels and the composite about
   0.15 ms, the shadow map about 0.2 ms.
+
+**Rain** (the pure maths `source/WorldRain.{h,c}`, tested in `tests/WorldRainTests.c`; the pass
+`source/WorldRendererRain.c`; the GLSL `shaders/common/rain.glsl` (any stage), `shaders/common/puddles.glsl` (the
+lit programs' fragment stage) and `shaders/rain/`; the values are the weather's (`precipitation`, `wetness`, the wind,
+the lightning's) and the environment's "Rain" rows ([WorldData.md](WorldData.md))). Everything the weather does near
+the camera: streaks that slant with the wind and stop under roofs, splashes where the rain lands, puddles that ripple
+and mirror the sky, lightning's bolts and their light, and the rain's mist:
+- **The rain** (`WorldRain_GetFrame`): `precipitation` (0 .. 1) is a rain rate of 100 p^3 mm/h (a light rain's 0.3 is
+  2.7 mm/h, the rain preset's 0.7 34 mm/h, a downpour 100). Drops fall at `rain_fall_speed` (7.5 m/s) in three classes
+  (3/4, 1 and 5/4 of it) and drift with the wind, gusts in: at 8 m/s the rain slants about 47 degrees.
+- **The rain map** (`WorldRendererRain_RenderMap`; `common/rain`'s `RainOpenness`): a depth map, one layer of a
+  `GLShadowArray` (1024 x 1024 texels over 96 m: 9.4 cm), looking along the rain's mean fall (the wind without its
+  gusts) at a box around the camera whose centre is snapped to its texels in double (`WorldRenderSpace_StepCascade` with
+  the direction toward the rain as its light), so its edges stand still while the camera moves. After the shadows it
+  draws what keeps the sky out in its box (its visibility list, `WorldVisibilityPass_Rain`: models and instance cells
+  whose `occludes_sky` is on, every terrain chunk) through the shadow levels' depth programs, both faces (the first
+  surface along the rain, whichever way it faces: an open roof, the ground's one side), with depth clamping (a tower
+  above the box lands on its near plane). A point behind its first surface, seen from where the rain comes from, is
+  covered: no streak falls there, no splash lands there, and a surface there stays dry and grows no puddle. A surface's
+  lookup moves 1.5 texels off it along its geometric normal and keeps a texel of depth bias, and averages four lookups
+  16 cm apart along two diagonals (a dry patch's edge is soft, as spray and run-off make it); over the outer 15 % of the
+  map's half size everything fades to open, beyond its sides the rain falls everywhere, and so it does farther down the
+  rain than the map's depth reaches (500 m below its centre: the float depth map does not clamp the comparison, so the
+  lookup says open there itself). The lee of what stands in a slanting rain stays dry as it does in real rain. Used
+  while it rains or surfaces are wet (the lit programs read it on unit 16); without its GL functions or storage (logged
+  once) the rain falls everywhere and every surface is wet alike.
+- **Keeping the map** (`WorldRainMapKeep`, `WorldRain_IsMapDue`): it is drawn at most every fourth frame, and at once
+  when the camera has moved 4 m from the box it was drawn with, when the rain's mean fall has turned more than a degree,
+  or when it was not in use the frame before; the frames between read it through the box it was drawn with
+  (`WorldRenderSpace_GetCascadeAt`: a point of the world keeps its texel however the camera moves; the visibility builds
+  its list only on the frames that draw it). Only what moves under it lags, by up to three frames. A still picture is
+  the one drawn every frame, bit for bit; after a step of the camera only the fade at its far edge differs.
+- **The streaks** (`world_rain_streaks`, `shaders/rain/streaks_*`): 10 000 quads, a share of them drawn
+  (`precipitation` x `rain_streak_density`, at most 1), each one pixel wide on screen, from a drop's place back along its
+  motion over the eye's exposure (a thirtieth of a second x `rain_streak_length`: 25 cm at 7.5 m/s). A streak's seed is
+  a place in a lattice that repeats every 30 m box in the world; the vertex stage puts its copy in the box around the
+  camera: mod(seed x box - anchor + box / 2, box) - box / 2, the anchor the frame's origin less the rain's drift
+  (`WorldRainDrift`, the renderer's own state in double, advanced by each frame's real seconds), wrapped by the box (the
+  fall by four boxes, so each class's fall wraps by whole boxes), so the rain stands still in the world as the camera
+  moves and never jumps (`WorldRain_GetStreakPosition` is the C mirror). Streaks fade out over the last 3 m inside the
+  box's faces (where they wrap), are cut where the rain map covers them (per pixel: the rain stops at a roof's edge and
+  falls past a doorway), and their alpha falls as 1 / distance beyond 6 m (a drop covers less of its pixel).
+- **The splashes** (`world_rain_splashes`): a grid of 20 x 20 one-metre cells around the camera, fixed in the world
+  (hashed from their whole coordinates, wrapped in double every 4096 cells); each cell splashes now and then (a share
+  `precipitation` x `rain_splash_density` of its cycles; a cycle 0.6 s in a downpour, 1.2 s in a light rain) at a random
+  place in it, where a drop falling through there lands: the vertex stage bisects the line through it along the rain
+  map's own fall (`rainSlant`, `WorldRain_GetSlant`) between 12 m above and below the camera against the map (12
+  halvings: 6 mm of height; `WorldRain_FindLanding` is the C mirror). Along the map's axis the change from open to
+  covered is the first surface itself, so splashes sit on roofs, awnings, the street and the windward side of walls,
+  never under cover and never in the air of a wall's lee (a vertical line there would find the rain shadow's edge); a
+  quad of 22 to 34 cm facing the camera plays the flipbook's four frames over 0.2 s. The cycles are counted, not taken
+  from a clock: the renderer advances `WorldRainDrift.SplashCycles` by each frame's seconds over the cycle's length (in
+  double, wrapped by 4096 cycles, which the shader's hash takes modulo the same), so a rain that changes changes how fast
+  the splashes come, never where they are in their cycle.
+- **Their light** (`common/lighting`'s `RainDropLight`): a drop refracts and reflects what lies around it, so streaks
+  and splashes show the mean of the sky's and the ground's light at their place (as a surface facing sideways takes
+  them), plus the sun's, the moon's, the point lights' (the eight strongest around the camera) and a bolt's light
+  falling on them, times `rain_color` and `rain_streak_brightness`, through the eye's night vision and the haze;
+  blended premultiplied over the scene after the sprites, depth tested, writing no depth. So they show against dark
+  things and vanish against the bright sky, and glitter around lamps at night.
+- **Puddles** (`common/puddles`): on surfaces facing up (from a normal's y of 0.85, fully at 0.95), where the puddle
+  mask (`puddle_mask_texture`, a tileable texture spread evenly over 0 .. 1 on unit 17, its tile 16 m x `puddle_scale`,
+  read twice: the second read turned by cosine 4/5 and sine 3/5 and 5/4 as fine, so the mix repeats only every four
+  tiles) passes the threshold for a coverage (`RainPuddleThreshold`, the inverse of the two reads' mean's triangular
+  distribution: `WorldRain_GetPuddleThreshold`): none below a quarter of wetness, rising to 35 % of a surface whose
+  `puddles` is 1 when soaked, times the surface's own `puddles` (models' materials: 0 by default, their
+  `material_overrides`; terrain materials' blended as their other values; sprites none) and the world's
+  `puddle_amount`. So puddles grow while it rains and shrink as the wetness dries. A puddle is still water over a
+  bottom 30 % darker than wet ground, its normal the water's: straight up, rippled while it rains.
+- **Ripples** (`RainRippleSlope`): in each 25 cm cell around a puddle's point one ring at a time, at a random place,
+  starting again 0.5 + 2.5 x `precipitation` times a second at a random phase: a wave packet spreading to 30 cm and
+  fading; their slope by the square root of the precipitation. Procedural, no texture; the cells take the origin wrapped
+  by 64 m, and their cycles are counted as the splashes' are (`WorldRainDrift.RippleCycles`).
+- **The sky mirrored in water** (`WaterReflection`): water's Fresnel reflectance (0.02 head-on) times the sky's light
+  toward the reflected direction (kept above the horizon), on a puddle's whole surface and on a wet film's 35 %: the
+  sky view's clear sky (the lit programs read the table on unit 18; while the clouds are drawn, the gaps' share of it)
+  plus the clouds' deck as the sky shows it (an overcast sky's radiance falling to a third at the horizon, a flash's
+  glow in, tinted), times the ambient's tint; without the tables, the even sky of the sky's irradiance. Only the sky
+  is mirrored: no objects (that would need screen-space reflections). Lamps and the sun glint in water through the
+  BRDF's own specular at the water's smoothness.
+- **Lightning's bolt** (`world_lightning_bolt`, `WorldRain_GetBolt`): while a flash lasts (at least 0.01), its channel
+  stands toward the strike (`lightning_direction` and `lightning_distance` from the camera, at least 200 m) from the
+  atmosphere's ground to the clouds' base, a quad turned about the vertical to face the camera, a quarter as wide as it
+  is tall, showing one of the bolt texture's four bolts side by side (`lightning_bolt_texture`; picked and mirrored by
+  the strike's direction and distance, so its return strokes show the same bolt); its radiance 40 x the flash x
+  `lightning_bolt_brightness` against the eye's exposure (as the sun's disc: it stays white), dimmed by the air in front
+  of it (the haze's transmittance: a strike behind a downpour's mist is a glow in the clouds, not a bolt), added over
+  the scene, depth tested (a hill hides its foot). Its channel lights every lit surface from its middle, unshadowed,
+  with the flash's light on a level surface times `lightning_bolt_brightness` (`boltLight` in `SkyLight`), on top of
+  the clouds' flash ("Weather").
+- **The rain's mist** (`WorldAtmosphere_GetHaze`): light in rain is lost at about 0.248 R^0.67 per kilometre (the
+  optical links' measurements: a light rain's visibility about 8 km, the rain preset's 1.5 km, a downpour's 720 m)
+  times `rain_mist`; it joins the ground haze's layer ("Haze") from its base up to the clouds' base, so far things
+  grey out, the horizon greys into the deck, and a downpour hides the clouds' base overhead.
+- **On, off and debug**: `WorldRenderer_SetRainEnabled` (keypad - in the test frame; on at the start): off draws no
+  streaks, splashes or bolts and no rain map, and no water mirrors anything, so every surface is wet alike, as the
+  weather's wetness alone (bit for bit the look without this pass); the rain's mist stays (it is the environment's: its
+  `rain_mist` 0 clears it). `WorldRenderer_SetRainView` (keypad Enter) shows how open every lit surface is to the rain
+  (white open, blue covered) or its water (cyan where it pools, dark blue a wet film, the dry rest darkened).
+- **Far from the origin** the map's snapping in double and the anchors wrapped in double keep it exact: the test
+  world's rain 61 km and 123 km out (shifts of 61 440 m, where the streaks' box, the splashes' hash and the patterns all
+  repeat) is the origin's to the pixel.
+- **Without rain** (no precipitation and dry: the environment's defaults) the pass does nothing and the picture is the
+  one without it, bit for bit.
+- **Status**: the features "rain" and "rain map" (active while it is in use, drawn that frame or kept),
+  `WorldRendererStatus.IsRainEnabled`, `RainPrecipitation`, `RainRate`, `RainStreakCount`, `RainSplashShare`,
+  `PuddleCoverage`, `IsRainMapActive`, `IsBoltVisible`, `RainView`, and a log line (`WorldRenderer: rain on:
+  precipitation 0.7 (34.3 mm/h), 7000 streaks, 0.7 of the splash cells, puddles up to 0.35 of a surface, the rain map
+  in use, a bolt none; debug view off.`).
+- **Cost** (GTX 980 Ti, GL timer queries over 1500 renders of the test world at the start view, nothing else on the
+  GPU): drawing the rain map takes 0.18 ms straight down and 0.7 to 0.8 ms in the rain preset's slant beside the test
+  world's grove (the trees' cut-out canopies seen from the side; terrain and models take 0.05 ms of it); kept four
+  frames, 0.16 to 0.19 ms a frame on average in that slant (0.08 to 0.1 in a storm's). The streaks, the splashes and a
+  bolt take 0.005 to 0.01 ms. The lit programs' wetness, puddles and water add 0.5 to 0.7 ms to the scene pass while
+  surfaces are wet (2.0 ms without, 2.5 to 2.7 with).
 
 **Interior lighting** (the pure maths `source/WorldInterior.{h,c}`, tested in `tests/WorldInteriorTests.c`; the
 renderer's parts `source/WorldRendererSkyVisibility.c` and `source/WorldRendererInterior.c`; the lit shaders' part
@@ -1553,7 +1678,7 @@ get no AO and no outlines.
 |---|---|
 | `WorldRenderer.c` | Public API: create/destroy, `PrepareWorld`, `RenderToTarget` (frame context, pass decisions, the visibility build, pass order), status. Orchestration only. |
 | `WorldRendererInternal.h` | The renderer state (one state struct per pass), `WorldRenderFrame`, fixed texture units, shared constants, and every internal function, documented. |
-| `WorldRendererCommon.c` | Config multipliers, colour conversion, shader loading, one-time warnings, render-target constructors; the camera passes' depth (their depth buffers, the reversed state around them, the projection they load, the depth convention's uniform). |
+| `WorldRendererCommon.c` | Config multipliers, colour conversion, shader loading, the textures the world names (texture slots: one asset user each, loaded when the name changes, a failed name logged once), one-time warnings, render-target constructors; the camera passes' depth (their depth buffers, the reversed state around them, the projection they load, the depth convention's uniform). |
 | `WorldRendererScene.c` | Scene target size, HDR tiers and recreation on resize (asks each pass to recreate its targets); the scene pass. |
 | `WorldRendererGeometry.c` | Model meshes one LOD at a time with per-draw materials (both LODs of a cross-fade in the lit passes; `WorldRendererGeometry_PrepareMaterial` builds each, the instanced draws use it too), each mesh with its pass's rigid shader or, posed and skinned, its skinned twin after the pose's palette; the unlit fallback's skinned shader; the LOD tinting, light gizmos, the pixelation filter. |
 | `WorldRendererInstances.c` | The model instances' copies (see "Model instances"): each entry's records buffer, the G-buffer's and the shadows' instanced twins (the lit one is the lighting file's), the instanced draw that mirrors `DrawMesh`, each pass's cells instanced or one at a time (the A/B and every fallback), the status line. |
@@ -1577,6 +1702,8 @@ get no AO and no outlines.
 | `GLTexture3D.c` (not a pass) | 3D textures (`GL_TEXTURE_3D`, R8 or RGBA8, with mipmaps, repeating): direct OpenGL calls in `GLTextureArray`'s manner; private (`source/GLTexture3D.h`). |
 | `WorldClouds.c` (pure maths, not a pass) | The clouds' model: the frame's layers from the environment, the drift and the anchors, the shadow map's frame, a ray's stretch through a shell (the C mirror of `common/clouds`); see "Clouds". |
 | `CloudNoise.c` (not a pass) | The clouds' noise textures, made on the CPU at load; see "Clouds". |
+| `WorldRendererRain.c` | The rain (see "Rain"): the rain map (one layer of a `GLShadowArray`, its box along the rain's mean fall, its pass through the shadow levels' depth programs, kept between draws: drawn every fourth frame), the streaks' and the splashes' meshes and programs and the lightning bolt's, the textures the world names for them (texture slots), the lit programs' rain uniforms and frame textures (the rain map on 16, the puddle mask on 17, the sky view on 18), the draws in the scene pass after the sprites, the status line. |
+| `WorldRain.c` (pure maths, not a pass) | The rain's model: its rate and mist, the streaks' drift and their copies, the splashes' and the ripples' cycles, the rain map's box, lookups and keeping, the splashes' grid and landing, the puddles' coverage and threshold, the bolt (the C mirror of `common/rain`, `common/puddles` and `shaders/rain/`); see "Rain". |
 | `WorldRendererPost.c` | Outlines, bloom, sun shafts and the tonemap. |
 | `WorldRendererExposure.c` | The eye (see "Eye adaptation"): the meter's shader, target and readback, the meter pass after the sun shafts, the eye's update from the newest blocks (`EyeAdaptation`) and the exposure the tonemap takes. |
 | `WorldRendererCrisp.c` | The crisp overlay. |
@@ -1617,17 +1744,14 @@ The renderer keeps receiving features, so:
   | 9 | the sky pass and the stars | The cloud target (`sampler2D cloudLayer`, `WorldRendererTextureUnit_CloudLayer`: the clouds' newest result), bound before their draws while the clouds are drawn. |
   | 12–15 | every lit program | The frame's textures: 12 the shadow levels' maps (`sampler2DArrayShadow shadowLevels`, the array's `GL_TEXTURE_2D_ARRAY` target), 13 the clouds' shadow map (`sampler2D cloudShadowMap`), 14 the cube shadow, 15 the ambient pre-pass's map (the AO, the sky's visibility, the contact shadows). |
   | 7–13 | the cloud programs (`world_clouds`, `world_clouds_shadow`, `world_clouds_resolve`, `world_clouds_composite`) | 7 the transmittance table, 8 the haze's volume, 9 and 10 the shape and the erosion noise (`sampler3D`, the units' `GL_TEXTURE_3D` target), 11 the weather map, 12 the G-buffer's depth (the march's surfaces), 13 the irradiance table (the multiple scattering table's sampler, declared and unread, points there too). Full-screen passes without material maps; the resolve's two images and the composite's two come through `SetShaderValueTexture`. |
+  | 16–18 | every lit program and the rain's (`world_rain_streaks`, `world_rain_splashes`, `world_lightning_bolt`) | The rain's frame textures: 16 the rain map (`sampler2DArrayShadow rainMap`, the array's `GL_TEXTURE_2D_ARRAY` target), 17 the puddle mask (`sampler2D puddleMask`), 18 the sky view for what water mirrors (`sampler2D atmosphereSkyViewTable`, pointed there in the lit programs, which read the haze's volume where the sky pass has the table). Above every unit raylib binds, so no material map or 2D batch ever meets them; GL 3.3 guarantees 48 units in all (`GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS`; a stage's limit of 16, `GL_MAX_TEXTURE_IMAGE_UNITS`, counts the samplers it reads, not their units' numbers: the PBR program reads 13). Bound with the lit passes' frame textures. |
 
-  The wetness and puddle masks (rain and wetness) will need units in the lit programs too: 7, 8 and 12 to 15 are
-  taken, so a frame texture for the model programs takes a unit below 12 that no material map the models
-  use binds (the PBR materials use maps 0, 1, 2 and 5: albedo, the packed ORM, normal, emission; raylib's importers
-  also fill 3 (roughness) and 4 (occlusion) in some formats (a glTF file's are packed into 1 and emptied when the model
-  loads) and its OBJ import 6 (height) when the file has those maps, so 10 and 11 are the safe ones there), and the
-  terrain program keeps 9–11 for its arrays (units 0–6 are free in it). Beyond that,
-  units 16 and up exist on the hardware this runs on (32 a stage on the GTX 980 Ti and Mesa) but need a check of
-  `GL_MAX_TEXTURE_IMAGE_UNITS` and a fallback. A sampler type different from what a unit's
-  other users bind is safe only through a different target (2D, cube, 2D array); keep each new unit's users in this
-  table.
+  A new frame texture for the lit programs takes a unit from 19 up (16 to 18 are the rain's), or below 12 where no
+  material map the programs' materials use binds (the PBR materials use maps 0, 1, 2 and 5: albedo, the packed ORM,
+  normal, emission; raylib's importers also fill 3 (roughness) and 4 (occlusion) in some formats (a glTF file's are
+  packed into 1 and emptied when the model loads) and its OBJ import 6 (height) when the file has those maps), keeping
+  every lit stage within 16 samplers read. A sampler type different from what a unit's other users bind is safe only
+  through a different target (2D, cube, 2D array); keep each new unit's users in this table.
 - **Constants shared with GLSL.** `MAX_POINT_LIGHTS` in `pbr/fragment.frag` should equal
   `WORLD_MAX_FORWARD_LIGHTS`; the shader clamps its loop and the renderer checks the arrays at load (and logs if
   the shader holds fewer), so a mismatch costs lights, never memory safety. The bone palette's size
@@ -1827,7 +1951,7 @@ mouse wheel (the flycam's speed, up faster and down slower, three notches to a d
 not while walking, and the UI takes it first while the pointer is over a widget) and the debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11, the
 digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/`, the backslash, Insert, Home, End, Page Up, Page Down, the
-keypad's digits, its `.`, `+`, `*` and `/` are taken already; the keypad's `-`, Enter and `=` are free. Leave F12 free:
+keypad's digits, its `.`, `+`, `-`, `*`, `/` and Enter are taken already; the keypad's `=` is free. Leave F12 free:
 raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
@@ -1864,6 +1988,10 @@ raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writi
   Page Up shows its lightning at once;
 - **the clouds (see "Clouds"):** keypad / steps their quality (off: the weather's clouds as one even deck, low, high;
   logged: `WorldTest: clouds low (half the resolution).`), and the I key's status adds their line;
+- **the rain (see "Rain"):** keypad - switches it off and on (the A/B: off, no streaks, splashes, bolts or rain map, and
+  every surface wet alike, as the weather's wetness alone; logged), keypad Enter steps its debug view (off, how open
+  every surface is to the rain, the puddles; logged), and the I key's status adds its line. The weather's keys bring
+  the rain (Insert into the climate's rain or storm preset; Page Up a strike, whose bolt stands while its flash lasts);
 - **the renderer and the sky:** O post effects, B bloom, G sun shafts, keypad . contact shadows, C crisp overlay, V
   night vision (logged), K
   sprite lighting (off draws every sprite unlit; logged), L light gizmos, N cycle the

@@ -839,9 +839,9 @@ void WorldRendererTerrain_DrawCasters(WorldRenderer* self, Shader shader, const 
     const WorldRenderTerrainChunk* Chunks = WorldRenderCache_GetTerrainChunks(&self->_cache, &ChunkCount);
     size_t CasterCount = 0U;
     const size_t* Casters = WorldVisibility_GetTerrainChunks(&self->_visibility, &self->_cache, pass, &CasterCount);
-    // The shadow passes dither by the chunks' shadow fade (their shadow distance too), the sky's volume by their fade.
-    // One program for every chunk: bound once.
-    bool IsShadowPass = (pass != WorldVisibilityPass_SkyVisibility);
+    // The shadow passes dither by the chunks' shadow fade (their shadow distance too), the sky's volume and the rain map
+    // by their fade. One program for every chunk: bound once.
+    bool IsShadowPass = WorldVisibility_IsShadowPass(pass);
     WorldRendererDitherRun Run = { 0 };
     rlEnableShader(shader.id);
     for (size_t Position = 0U; Position < CasterCount; Position++)

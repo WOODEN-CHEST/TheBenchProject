@@ -82,14 +82,16 @@ void main()
         float shadowAmount = SkyShadowAmount(fragShadowPosition, shadowFace, dot(shadowFace, toShadowLight));
         vec3 pointShadowNormal = FacingNormal(fragPointShadowNormal, pointShadowLightPos - fragPointShadowPosition);
 
-        // The weather's wetness on what lies on a surface or stands in the rain (cards, decals among them, and cutout
-        // billboards; a blended billboard is smoke or glass, an additive sprite light): darker and glossier by its facing,
-        // a billboard's as a thing standing upright (its quad turns with the camera).
+        // The weather's wetness on what lies on a surface or stands in the rain where the rain reaches it (cards, decals
+        // among them, and cutout billboards; a blended billboard is smoke or glass, an additive sprite light): darker and
+        // glossier by its facing, a billboard's as a thing standing upright (its quad turns with the camera). No puddles.
         float rough = SPRITE_ROUGHNESS;
         if ((alphaMode != ALPHA_MODE_ADDITIVE) && (isCard || (alphaMode == ALPHA_MODE_CUTOUT)))
         {
             vec3 wetNormal = isCard ? n : vec3(0.0, 0.0, 1.0);
-            ApplyWetness(albedo, rough, wetNormal, WET_DEFAULT_POROSITY);
+            vec3 waterNormal = wetNormal;
+            float water;
+            ApplyWetness(albedo, rough, waterNormal, water, fragPosition, wetNormal, WET_DEFAULT_POROSITY, 0.0);
         }
 
         SkyLightValues light = SkyLightAt(fragPosition);

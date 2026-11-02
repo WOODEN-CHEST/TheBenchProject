@@ -1,0 +1,5 @@
+{
+    "name": "tbp:world_lightning_bolt",
+    "vertex_location": "rain/bolt_vertex",
+    "fragment_location": "rain/bolt_fragment"
+}

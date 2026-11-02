@@ -646,6 +646,8 @@ static void SeedMaterialDefaults(Material* material)
     {
         material->maps[MATERIAL_MAP_OCCLUSION].value = MODEL_DEFAULT_AO;
     }
+    // How wetness darkens it and how much water pools on it (raylib's importers leave the params at 0).
+    GameMaterialParams_SetDefaults(material);
 }
 
 /* Applies one material override to the model's material @p slot: rebinds albedo/normal/mra/emissive textures
@@ -680,8 +682,9 @@ static Error ApplyMaterialOverride(AssetManager* manager, AssetTypeID type, cons
         if (Result.Code != ErrorCode_Success) { return Result; }
     }
 
-    // Tint, metallic, roughness and emissive colour + intensity (an emissive map alone shows at white x 1).
-    GameMaterialFactors_Apply(&override->Factors, override->HasEmissiveMap, material->maps);
+    // Tint, metallic, roughness, emissive colour + intensity (an emissive map alone shows at white x 1), porosity and
+    // puddles.
+    GameMaterialFactors_Apply(&override->Factors, override->HasEmissiveMap, material);
     return Error_CreateSuccess();
 }
 

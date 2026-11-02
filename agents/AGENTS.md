@@ -64,7 +64,8 @@ Current module list:
 * Game asset wrappers (GameAssets.md) - GameFont, GameModel, GameShader, GameSound and GameTexture: the manager-owned
   wrappers for the standard font, model, shader, sound and texture types, with their ownership rules, accessors and
   pitfalls; a skinned model carries its GameSkeleton (Animation.md). GameModel.h also holds GameMaterialFactors
-  (source/GameModel.c): the PBR factors a material override sets,
+  (source/GameModel.c): the PBR factors a material override sets, and its porosity and puddles (how dark a surface
+  turns wet and how much water pools on it, in the material's params),
   shared by the model type's material_overrides and world model variants (one parser, one apply). A glTF model's
   file is read and checked as hostile before raylib loads it, for the material values raylib drops (factors, linear
   colours encoded as the game's sRGB ones, the emission's strength, the occlusion strength: the private
@@ -356,7 +357,11 @@ Current module list:
     ambient zones that light rooms, and the eye adapting to the light at the camera indoors; volumetric clouds
     (source/WorldRendererClouds.c and shaders/common/clouds.glsl): the weather's clouds and two layers above them
     marched over the sky's pixels on the curved planet, accumulated over frames, lit by the sun or the moon, the sky,
-    the ground and the town, seen through the haze, and casting shadows on every lit surface; the camera's passes in
+    the ground and the town, seen through the haze, and casting shadows on every lit surface; the rain
+    (source/WorldRendererRain.c, shaders/common/rain.glsl, shaders/common/puddles.glsl and shaders/rain/): a depth map
+    along the rain's fall of what keeps it out, streaks wrapping around the camera, splashes where drops land, wet
+    surfaces and puddles only where the rain reaches, ripples, the sky mirrored in water, lightning's bolt and its
+    light; the camera's passes in
     reversed 32-bit float
     depth with no far plane where the GPU has clip control (GLDepth), so whatever has the draw distance draws at any
     distance), in render space: the world's orientation with the camera at the origin, every position relative to the
@@ -444,6 +449,13 @@ Current module list:
   * CloudNoise - The clouds' noise (private, source/CloudNoise.h): tileable gradient and Worley noise in 2D and 3D, and
     the three textures the cloud pass uploads at load (the shape volume, the erosion volume, the weather map), each
     spread evenly over its range and the same every time.
+  * WorldRain - The rain and the lightning's bolts as pure maths (private, source/WorldRain.h): the frame's rain from
+    the environment (its rate, the streaks' and the splashes' shares, the slant, the wetness and the puddles' coverage),
+    its mist, the streaks' drift (in double) and their copies wrapped around the camera, the splashes' and the ripples'
+    counted cycles, the rain map's box, its lookups' offsets and edge and when a kept map is drawn again, the splashes'
+    grid and where a drop lands along the map's fall, the patterns' anchors, the puddles' threshold and the bolt standing
+    toward a strike: the C mirror of shaders/common/rain.glsl, shaders/common/puddles.glsl and
+    shaders/rain/ (WorldRuntime.md, "Rain").
   * WorldInterior - Interior lighting as pure maths (private, source/WorldInterior.h): ambient zones in render space
     (placed by their objects' world matrices), their weights (the fade from the surface, surfaces facing in), the at
     most four a draw takes and their composition by priority, the haze inside them, the sky's visibility map on its
@@ -472,7 +484,9 @@ Current module list:
     keypad's + shows a far field of towers out to 3 km on a 12 km plain (a runtime object) and * the shadow levels'
     debug view (the private source/WorldTestShadows.{h,c}). It runs the weather on its clock (the private
     source/WorldTestWeather.{h,c}): Insert the next preset, Home the lock, End the speed, Page Up a strike, Page Down the
-    mode, the backslash a forecast.
+    mode, the backslash a forecast. The keypad's - switches the rain (the A/B: every surface wet alike) and Enter steps
+    its debug view (how open surfaces are to the rain, the puddles); the test slab and the room's roof are pavement that
+    pools water (a world model variant).
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown

@@ -1,5 +1,5 @@
-// Shared helpers of the world renderer: config multipliers, colour conversion, shader loading, the depth passes' mesh
-// draw, one-time warnings and render-target constructors.
+// Shared helpers of the world renderer: config multipliers, colour conversion, shader loading, the textures the world
+// names (their slots), the depth passes' mesh draw, one-time warnings and render-target constructors.
 
 #include <math.h>
 #include <stdio.h>
@@ -10,6 +10,7 @@
 #include "SkeletalAnimation.h"
 #include "raylib/raymath.h"
 #include "raylib/rlgl.h"
+#include "wr/WRString.h"
 
 
 // Macros.
@@ -17,6 +18,8 @@
 #define PALETTE_UNIFORM_NAME_CAPACITY 32
 /** The palette rows a shader could hold at most: three per bone of the largest skeleton a model may have. */
 #define PALETTE_MAX_ROWS ((int)(GAME_SKELETON_MAX_BONES * 3U))
+/** Initial capacity of a texture slot's name buffer, in bytes (it grows for longer names). */
+#define TEXTURE_SLOT_NAME_CAPACITY 32U
 
 
 // Static functions.
@@ -27,6 +30,19 @@ static bool HasPaletteRow(Shader shader, int row)
     char Name[PALETTE_UNIFORM_NAME_CAPACITY];
     snprintf(Name, sizeof(Name), "bonePalette[%d]", row);
     return GetShaderLocation(shader, Name) >= 0;
+}
+
+/* Whether a slot already holds (or has failed) exactly @p name. */
+static bool IsSlotFor(const WorldRendererTextureSlot* slot, const unsigned char* name)
+{
+    if (!slot->_isSynced || (slot->_name._data == NULL))
+    {
+        return false;
+    }
+    bool IsEqual = false;
+    Error CompareResult = StringUTF8_EqualsExact(slot->_name._data, name, &IsEqual);
+    Error_Deconstruct(&CompareResult);
+    return IsEqual;
 }
 
 
@@ -252,6 +268,61 @@ GameTexture* WorldRendererCommon_LoadTexture(WorldRenderer* self, AssetUserID us
         return NULL;
     }
     return LoadedTexture;
+}
+
+void WorldRendererCommon_SyncTextureSlot(WorldRenderer* self, WorldRendererTextureSlot* slot, const unsigned char* name,
+    const unsigned char* featureName)
+{
+    if ((name == NULL) || IsSlotFor(slot, name))
+    {
+        return;
+    }
+    if (slot->_user != ASSET_USER_ID_INVALID)
+    {
+        Error ReleaseResult = AssetManager_ReleaseAllAssetsForUser(self->_assetManager, slot->_user);
+        Error_Deconstruct(&ReleaseResult); // fails only for an unknown user, which a minted one is not
+    }
+    slot->_texture = NULL;
+    slot->_isSynced = true;
+    GenericBuffer_Clear(&slot->_name);
+    if (!GenericBuffer_AppendString(&slot->_name, name) || !GenericBuffer_NullTerminate(&slot->_name))
+    {
+        slot->_isSynced = false; // cannot happen short of running out of memory; try again next frame
+        return;
+    }
+
+    if (slot->_user == ASSET_USER_ID_INVALID)
+    {
+        Error UserResult = AssetManager_GetNewUserID(self->_assetManager, &slot->_user);
+        if (UserResult.Code != ErrorCode_Success)
+        {
+            slot->_user = ASSET_USER_ID_INVALID;
+            WorldRendererCommon_Warn(self, (const unsigned char*)u8"WorldRenderer: no asset user for a texture the world names.");
+            Error_Deconstruct(&UserResult);
+            return;
+        }
+    }
+    slot->_texture = WorldRendererCommon_LoadTexture(self, slot->_user, name, featureName);
+}
+
+void WorldRendererCommon_ConstructTextureSlot(WorldRendererTextureSlot* slot)
+{
+    *slot = (WorldRendererTextureSlot){ ._texture = NULL, ._user = ASSET_USER_ID_INVALID, ._isSynced = false };
+    GenericBuffer_AllocateVariable(&slot->_name, TEXTURE_SLOT_NAME_CAPACITY, sizeof(unsigned char));
+}
+
+void WorldRendererCommon_DeconstructTextureSlot(WorldRenderer* self, WorldRendererTextureSlot* slot)
+{
+    if (slot->_user != ASSET_USER_ID_INVALID)
+    {
+        Error RetireResult = AssetManager_RetireUser(self->_assetManager, slot->_user);
+        Error_Deconstruct(&RetireResult);
+        slot->_user = ASSET_USER_ID_INVALID;
+    }
+    slot->_texture = NULL;
+    slot->_isSynced = false;
+    Memory_Free(slot->_name._data);
+    slot->_name = (GenericBuffer){ 0 };
 }
 
 void WorldRendererCommon_Warn(WorldRenderer* self, const unsigned char* message)

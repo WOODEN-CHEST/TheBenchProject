@@ -3,6 +3,7 @@
 
 #include <math.h>
 #include "WorldAtmosphere.h"
+#include "WorldRain.h"
 
 
 // Macros.
@@ -52,6 +53,16 @@ static void ColorToLinear(Color color, float outRgb[3])
     outRgb[0] = powf((float)color.r / 255.0f, ATMOSPHERE_SRGB_GAMMA);
     outRgb[1] = powf((float)color.g / 255.0f, ATMOSPHERE_SRGB_GAMMA);
     outRgb[2] = powf((float)color.b / 255.0f, ATMOSPHERE_SRGB_GAMMA);
+}
+
+/* Joins a layer of mist to the ground haze: the densities add up at its base, and it thins by the mean of their
+ * thicknesses weighed by their densities, so either alone is exactly itself. */
+static void JoinGroundHaze(WorldAtmosphereHaze* haze, float density, float thickness)
+{
+    float Total = haze->GroundHazeDensity + density;
+    haze->GroundHazeThickness = (haze->GroundHazeDensity > 0.0f)
+        ? (haze->GroundHazeDensity * haze->GroundHazeThickness + density * thickness) / Total : thickness;
+    haze->GroundHazeDensity = fminf(Total, (float)WORLD_ENVIRONMENT_MAX_GROUND_HAZE_DENSITY);
 }
 
 static bool AreColorsDifferent(const float a[3], const float b[3])
@@ -436,23 +447,29 @@ void WorldAtmosphere_GetHaze(const WorldEnvironment* environment, float configFo
     outHaze->GroundHazeThickness = ClampFinite(environment->GroundHazeThickness,
         (float)WORLD_ENVIRONMENT_MIN_GROUND_HAZE_THICKNESS, (float)WORLD_ENVIRONMENT_MAX_GROUND_HAZE_THICKNESS,
         ATMOSPHERE_FALLBACK_GROUND_HAZE_THICKNESS);
-    // The weather's ground fog joins the world's ground haze in one layer: their densities add up at the base, and the
-    // layer thins by the mean of their thicknesses weighed by their densities, so either alone is exactly itself.
+    outHaze->GroundHeight = ClampFinite(environment->HorizonGroundHeight, -(float)WORLD_ENVIRONMENT_MAX_DISTANCE,
+        (float)WORLD_ENVIRONMENT_MAX_DISTANCE, 0.0f);
+    // The weather's ground fog joins the world's ground haze in one layer.
     float FogDensity = ClampFinite(environment->FogDensity, 0.0f, (float)WORLD_ENVIRONMENT_MAX_GROUND_HAZE_DENSITY, 0.0f);
     if (FogDensity > 0.0f)
     {
         float FogHeight = ClampFinite(environment->FogHeight, (float)WORLD_ENVIRONMENT_MIN_GROUND_HAZE_THICKNESS,
             (float)WORLD_ENVIRONMENT_MAX_GROUND_HAZE_THICKNESS, ATMOSPHERE_FALLBACK_GROUND_HAZE_THICKNESS);
-        float Total = outHaze->GroundHazeDensity + FogDensity;
-        outHaze->GroundHazeThickness = (outHaze->GroundHazeDensity > 0.0f)
-            ? (outHaze->GroundHazeDensity * outHaze->GroundHazeThickness + FogDensity * FogHeight) / Total : FogHeight;
-        outHaze->GroundHazeDensity = fminf(Total, (float)WORLD_ENVIRONMENT_MAX_GROUND_HAZE_DENSITY);
+        JoinGroundHaze(outHaze, FogDensity, FogHeight);
+    }
+    // So does the rain's mist, from the ground haze's base up to the clouds' base: the light the rain takes (WorldRain.h)
+    // times the world's RainMist.
+    float RainDensity = WorldRain_GetMistExtinction(environment->Precipitation)
+        * ClampFinite(environment->RainMist, 0.0f, (float)WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE, 1.0f);
+    if (RainDensity > 0.0f)
+    {
+        float CloudBase = ClampFinite(environment->CloudBase, 0.0f, (float)WORLD_ENVIRONMENT_MAX_CLOUD_HEIGHT, 0.0f);
+        JoinGroundHaze(outHaze, fminf(RainDensity, (float)WORLD_ENVIRONMENT_MAX_GROUND_HAZE_DENSITY),
+            WorldRain_GetMistThickness(outHaze->GroundHeight + CloudBase, outHaze->GroundHazeBase));
     }
     ColorToLinear(environment->GroundHazeAlbedo, outHaze->GroundHazeAlbedo);
     outHaze->GroundHazeGlow = ClampFinite(environment->GroundHazeGlow, 0.0f, (float)WORLD_ENVIRONMENT_MAX_SUN_GLOW,
         ATMOSPHERE_FALLBACK_GROUND_HAZE_GLOW);
-    outHaze->GroundHeight = ClampFinite(environment->HorizonGroundHeight, -(float)WORLD_ENVIRONMENT_MAX_DISTANCE,
-        (float)WORLD_ENVIRONMENT_MAX_DISTANCE, 0.0f);
 }
 
 double WorldAtmosphere_GetVolumeSliceDistance(int slice)

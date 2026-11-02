@@ -9,6 +9,7 @@
 #include "WorldInstancing.h"
 #include "WorldInterior.h"
 #include "WorldLod.h"
+#include "WorldRain.h"
 #include "WorldShadowLevels.h"
 #include "WorldSkyLight.h"
 #include "WorldVisibility.h"
@@ -1341,9 +1342,11 @@ static void ShippedShadersShowTheWeather(TestRun* run)
     {
         const char* const Lit[][2] =
         {
-            { "pbr/fragment", "ApplyWetness(albedo, rough, surfaceNormal, WET_DEFAULT_POROSITY*(1.0 - metal));" },
-            { "terrain/fragment", "ApplyWetness(albedo, roughness, geometric, porosity);" },
-            { "sprite/fragment", "ApplyWetness(albedo, rough, wetNormal, WET_DEFAULT_POROSITY);" },
+            { "pbr/fragment", "ApplyWetness(albedo, rough, n, water, fragPosition, surfaceNormal, "
+                "materialPorosity*(1.0 - metal), materialPuddles);" },
+            { "terrain/fragment", "ApplyWetness(albedo, roughness, n, water, fragPosition, geometric, porosity, puddles);" },
+            { "sprite/fragment", "ApplyWetness(albedo, rough, waterNormal, water, fragPosition, wetNormal, "
+                "WET_DEFAULT_POROSITY, 0.0);" },
         };
         for (size_t Index = 0U; Index < (sizeof(Lit) / sizeof(Lit[0])); Index++)
         {
@@ -1496,6 +1499,88 @@ static void ShippedShadersDrawTheClouds(TestRun* run)
     ShaderFixture_Deconstruct(run, &Fixture);
 }
 
+/* The rain's shaders and their readers: the streaks' box, its fade and the speed classes are the C side's, and their copy
+ * in the box is WorldRain_GetStreakPosition's formula; the splashes' grid, hash, search along the map's fall and flipbook
+ * are the C side's, and they run by the cycles the renderer counts; the hash is WorldRain_Hash's; the rain map's edge
+ * fade and its far plane, the puddles' threshold and their mask's turned read (whole over the pattern's wrap), the
+ * ripples' cells (a whole number in their period) and their counted cycles are the C side's; every lit surface wets only
+ * where the rain map lets it, the models by their materials' porosity and puddles, the terrain by its materials', and
+ * mirrors the sky in its water. */
+static void ShippedShadersDrawTheRain(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        if (ExpandShippedStage(run, &Fixture, "rain/streaks_vertex"))
+        {
+            TEST_CHECK(run, (GetConstValue(&Fixture.Text, "RAIN_BOX") == WORLD_RAIN_BOX_SIZE)
+                && (GetConstValue(&Fixture.Text, "RAIN_BOX_FADE") == (double)WORLD_RAIN_BOX_FADE)
+                && (GetConstValue(&Fixture.Text, "RAIN_SLOWEST_QUARTERS") == (double)WORLD_RAIN_SLOWEST_QUARTERS));
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text,
+                    "vec3 anchor = vec3(rainAnchor.x, rainAnchor.y + speedFactor*rainFall, rainAnchor.z);") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "return mod(seed*RAIN_BOX - anchor + 0.5*RAIN_BOX, RAIN_BOX) - 0.5*RAIN_BOX;") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "float speedFactor = (RAIN_SLOWEST_QUARTERS + floor(vertexNormal.x + 0.5))/4.0;") == 1U));
+        }
+        if (ExpandShippedStage(run, &Fixture, "rain/splashes_vertex"))
+        {
+            TEST_CHECK(run, (GetConstValue(&Fixture.Text, "RAIN_SPLASH_CELL") == WORLD_RAIN_SPLASH_CELL)
+                && (GetConstValue(&Fixture.Text, "RAIN_SPLASH_HASH_PERIOD") == WORLD_RAIN_SPLASH_HASH_PERIOD)
+                && (GetConstValue(&Fixture.Text, "RAIN_SPLASH_REACH") == (double)WORLD_RAIN_SPLASH_REACH)
+                && (GetConstIntValue(&Fixture.Text, "RAIN_SPLASH_STEPS") == (long)WORLD_RAIN_SPLASH_STEPS)
+                && (fabs(GetConstValue(&Fixture.Text, "RAIN_SPLASH_LIFE") - (double)WORLD_RAIN_SPLASH_LIFE) < 1e-7)
+                && (GetConstValue(&Fixture.Text, "RAIN_SPLASH_FRAMES") == (double)WORLD_RAIN_SPLASH_FRAMES));
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text,
+                    "uint h = (v.x*0x8DA6B343u) ^ (v.y*0xD8163841u) ^ (v.z*0xCB1AB31Fu);") == 1U)
+                && (CountOccurrences(&Fixture.Text, "h *= 0x7FEB352Du;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "h *= 0x846CA68Bu;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "if (RainOpennessAt(RainLinePoint(x, z, middle)) >= 0.5)") == 1U)
+                && (CountOccurrences(&Fixture.Text, "return vec3(x + rainSlant.x*height, height, z + rainSlant.y*height);")
+                    == 1U));
+            TEST_CHECK(run, (GetConstValue(&Fixture.Text, "RAIN_CYCLE_WRAP") == WORLD_RAIN_CYCLE_WRAP)
+                && (CountOccurrences(&Fixture.Text, "float cycle = rainSplashCycles + phase;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "uint(mod(floor(cycle), RAIN_CYCLE_WRAP))") == 1U)
+                && (CountOccurrences(&Fixture.Text, "rainTime") == 0U));
+        }
+        if (ExpandShippedStage(run, &Fixture, "pbr/fragment"))
+        {
+            double Turn = GetConstValue(&Fixture.Text, "RAIN_PUDDLE_TURNED_SCALE");
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "if (!(edge < 1.0) || !(clip.z < 1.0))") == 1U)
+                && (CountOccurrences(&Fixture.Text, "float cycle = rainRippleFrame.z + phase;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "uint(mod(floor(cycle), RAIN_CYCLE_WRAP))") == 1U)
+                && (CountOccurrences(&Fixture.Text, "rainRippleRate") == 0U));
+            TEST_CHECK(run, (fabs(GetConstValue(&Fixture.Text, "RAIN_MAP_EDGE_FADE_START")
+                    - (double)WORLD_RAIN_MAP_EDGE_FADE_START) < 1e-7)
+                && (GetConstValue(&Fixture.Text, "RAIN_RIPPLE_CELL") == WORLD_RAIN_RIPPLE_CELL)
+                && (GetConstValue(&Fixture.Text, "RAIN_RIPPLE_CELLS") == WORLD_RAIN_RIPPLE_PERIOD / WORLD_RAIN_RIPPLE_CELL)
+                && IsWhole(WORLD_RAIN_RIPPLE_PERIOD / WORLD_RAIN_RIPPLE_CELL));
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "const vec2 RAIN_PUDDLE_TURN = vec2(0.8, 0.6);") == 1U)
+                && IsWhole(WORLD_RAIN_PATTERN_TILES * Turn * 0.8) && IsWhole(WORLD_RAIN_PATTERN_TILES * Turn * 0.6));
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text,
+                    "return (c <= 0.5) ? (1.0 - sqrt(0.5*c)) : sqrt(0.5*(1.0 - c));") == 1U)
+                && (CountOccurrences(&Fixture.Text, "    wet *= open;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "float puddle = RainPuddleShare(place, surfaceNormal, puddles)*open;")
+                    == 1U));
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "ApplyWetness(albedo, rough, n, water, fragPosition, "
+                    "surfaceNormal, materialPorosity*(1.0 - metal), materialPuddles);") == 1U)
+                && (CountOccurrences(&Fixture.Text, "+ WaterReflection(light, n, v, water);") == 1U));
+        }
+        if (ExpandShippedStage(run, &Fixture, "terrain/fragment"))
+        {
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "puddles = puddleSum/shareTotal;") == 2U)
+                && (CountOccurrences(&Fixture.Text, "puddleSum += share*materialProjection[i].z;") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "ApplyWetness(albedo, roughness, n, water, fragPosition, geometric, porosity, puddles);") == 1U)
+                && (CountOccurrences(&Fixture.Text, "WaterReflection(light, n, v, water)") == 1U));
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
+
 // Public functions.
 void ShaderSourceTests_Run(TestRun* run)
 {
@@ -1527,6 +1612,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "shipped_shadow_levels_are_read_off_the_surface", ShippedShadowLevelsAreReadOffTheSurface },
         { "shipped_shaders_show_the_weather", ShippedShadersShowTheWeather },
         { "shipped_shaders_draw_the_clouds", ShippedShadersDrawTheClouds },
+        { "shipped_shaders_draw_the_rain", ShippedShadersDrawTheRain },
     };
     TestRun_RunSuite(run, "ShaderSource", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

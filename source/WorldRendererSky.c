@@ -12,8 +12,6 @@
 // Macros.
 /** Asset name of the atmospheric sky shader (full-screen Rayleigh/Mie sky, sun disc, moon, Milky Way, skyglow). */
 #define SKY_SHADER_ASSET_NAME ((const unsigned char*)u8"world_sky")
-/** Initial capacity of a sky texture slot's name buffer, in bytes (it grows for longer names). */
-#define SKY_TEXTURE_NAME_CAPACITY 32U
 /** Linear radiance of a white Milky Way texel at MilkyWayBrightness 1, in full darkness without light pollution. At
  *  the night exposure the bright core reads as a soft glow and the outer band as a faint one. */
 #define MILKY_WAY_BASE_RADIANCE 0.005f
@@ -73,79 +71,6 @@ static float ComputeMilkyWayLod(const WorldRenderFrame* frame, Texture2D texture
     return fminf(fmaxf(log2f(PixelAngle / TexelAngle), 0.0f), MaxLod);
 }
 
-/* Whether a slot already holds (or has failed) exactly @p name. */
-static bool IsSlotFor(const WorldRendererSkyTexture* slot, const unsigned char* name)
-{
-    if (!slot->_isSynced || (slot->_name._data == NULL))
-    {
-        return false;
-    }
-    bool IsEqual = false;
-    Error CompareResult = StringUTF8_EqualsExact(slot->_name._data, name, &IsEqual);
-    Error_Deconstruct(&CompareResult);
-    return IsEqual;
-}
-
-/* Points a slot at @p name: releases what it held (its own user's holds only), remembers the name, and loads the
- * texture under the slot's user. A failure is logged by the loader once for this name, and the slot stays empty until
- * the environment names another texture. */
-static void SyncSkyTexture(WorldRenderer* self, WorldRendererSkyTexture* slot, const unsigned char* name,
-    const unsigned char* featureName)
-{
-    if ((name == NULL) || IsSlotFor(slot, name))
-    {
-        return;
-    }
-    if (slot->_user != ASSET_USER_ID_INVALID)
-    {
-        Error ReleaseResult = AssetManager_ReleaseAllAssetsForUser(self->_assetManager, slot->_user);
-        Error_Deconstruct(&ReleaseResult); // fails only for an unknown user, which a minted one is not
-    }
-    slot->_texture = NULL;
-    slot->_isSynced = true;
-    GenericBuffer_Clear(&slot->_name);
-    if (!GenericBuffer_AppendString(&slot->_name, name) || !GenericBuffer_NullTerminate(&slot->_name))
-    {
-        slot->_isSynced = false; // cannot happen short of running out of memory; try again next frame
-        return;
-    }
-
-    if (slot->_user == ASSET_USER_ID_INVALID)
-    {
-        Error UserResult = AssetManager_GetNewUserID(self->_assetManager, &slot->_user);
-        if (UserResult.Code != ErrorCode_Success)
-        {
-            slot->_user = ASSET_USER_ID_INVALID;
-            WorldRendererCommon_Warn(self, (const unsigned char*)u8"WorldRenderer: no asset user for a sky texture.");
-            Error_Deconstruct(&UserResult);
-            return;
-        }
-    }
-    slot->_texture = WorldRendererCommon_LoadTexture(self, slot->_user, name, featureName);
-}
-
-/* An empty slot: no texture, no user yet, an empty name buffer. */
-static void ConstructSkyTexture(WorldRendererSkyTexture* slot)
-{
-    *slot = (WorldRendererSkyTexture){ ._texture = NULL, ._user = ASSET_USER_ID_INVALID, ._isSynced = false };
-    GenericBuffer_AllocateVariable(&slot->_name, SKY_TEXTURE_NAME_CAPACITY, sizeof(unsigned char));
-}
-
-/* Retires a slot's asset user (releasing its texture) and frees its name. */
-static void DeconstructSkyTexture(WorldRenderer* self, WorldRendererSkyTexture* slot)
-{
-    if (slot->_user != ASSET_USER_ID_INVALID)
-    {
-        Error RetireResult = AssetManager_RetireUser(self->_assetManager, slot->_user);
-        Error_Deconstruct(&RetireResult);
-        slot->_user = ASSET_USER_ID_INVALID;
-    }
-    slot->_texture = NULL;
-    slot->_isSynced = false;
-    Memory_Free(slot->_name._data);
-    slot->_name = (GenericBuffer){ 0 };
-}
-
 /* The moon's light on the atmosphere (the moonlit sky) and its disc. The moonlit sky is lit by all of the moon's
  * light above the air (the frame's MoonIntensity: the phase's brightness and the daylight gate in), the surfaces by the
  * same. */
@@ -195,14 +120,14 @@ static void PrepareMoon(WorldRenderFrame* frame)
 // Internal functions (declared in WorldRendererInternal.h).
 void WorldRendererSky_Construct(WorldRenderer* self)
 {
-    ConstructSkyTexture(&self->_sky._milkyWay);
-    ConstructSkyTexture(&self->_sky._moon);
+    WorldRendererCommon_ConstructTextureSlot(&self->_sky._milkyWay);
+    WorldRendererCommon_ConstructTextureSlot(&self->_sky._moon);
 }
 
 void WorldRendererSky_Deconstruct(WorldRenderer* self)
 {
-    DeconstructSkyTexture(self, &self->_sky._milkyWay);
-    DeconstructSkyTexture(self, &self->_sky._moon);
+    WorldRendererCommon_DeconstructTextureSlot(self, &self->_sky._milkyWay);
+    WorldRendererCommon_DeconstructTextureSlot(self, &self->_sky._moon);
 }
 
 void WorldRendererSky_LoadShader(WorldRenderer* self)
@@ -261,9 +186,9 @@ void WorldRendererSky_SyncTextures(WorldRenderer* self, const WorldEnvironment* 
     {
         return; // nothing would draw them
     }
-    SyncSkyTexture(self, &self->_sky._milkyWay, environment->MilkyWayTexture,
+    WorldRendererCommon_SyncTextureSlot(self, &self->_sky._milkyWay, environment->MilkyWayTexture,
         (const unsigned char*)u8"the Milky Way is not drawn");
-    SyncSkyTexture(self, &self->_sky._moon, environment->MoonTexture,
+    WorldRendererCommon_SyncTextureSlot(self, &self->_sky._moon, environment->MoonTexture,
         (const unsigned char*)u8"the moon is drawn as a flat grey disc");
 }
 

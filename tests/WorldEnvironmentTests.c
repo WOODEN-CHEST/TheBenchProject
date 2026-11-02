@@ -1067,6 +1067,54 @@ static void TheCloudsStartWithOneLayerAndAreValidated(TestRun* run)
     WorldEnvironment_Deconstruct(&Environment);
 }
 
+/* The rain starts as real rain looks (every multiple 1, drops at 7.5 m/s, white, the shipped textures) and its rows keep
+ * their rules: the fall speed and the puddles' size within their ranges, every multiple in [0, 10]. */
+static void TheRainStartsAsRealRainAndIsValidated(TestRun* run)
+{
+    WorldEnvironment Environment;
+    WorldEnvironment_SetDefaults(&Environment);
+    TEST_CHECK(run, (Environment.RainStreakDensity == 1.0f) && (Environment.RainStreakLength == 1.0f)
+        && (Environment.RainStreakBrightness == 1.0f) && (Environment.RainSplashDensity == 1.0f)
+        && (Environment.RainFallSpeed == WORLD_ENVIRONMENT_DEFAULT_RAIN_FALL_SPEED) && (Environment.RainFallSpeed == 7.5f));
+    TEST_CHECK(run, (Environment.RainColor.r == 255) && (Environment.RainColor.g == 255) && (Environment.RainColor.b == 255)
+        && (Environment.PuddleAmount == 1.0f) && (Environment.PuddleScale == 1.0f) && (Environment.RainMist == 1.0f)
+        && (Environment.LightningBoltBrightness == 1.0f));
+    TEST_CHECK(run, (strcmp((const char*)Environment.RainStreakTexture, "tbp:rain_streak") == 0)
+        && (strcmp((const char*)Environment.RainSplashTexture, "tbp:rain_splash") == 0)
+        && (strcmp((const char*)Environment.PuddleMaskTexture, "tbp:rain_puddle_mask") == 0)
+        && (strcmp((const char*)Environment.LightningBoltTexture, "tbp:lightning_bolts") == 0));
+    TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));
+
+    Environment.RainFallSpeed = 0.4f;
+    CheckRejected(run, &Environment, "rain_fall_speed");
+    ResetEnvironment(&Environment);
+    Environment.RainFallSpeed = 51.0f;
+    CheckRejected(run, &Environment, "rain_fall_speed");
+    ResetEnvironment(&Environment);
+    Environment.PuddleScale = 0.05f;
+    CheckRejected(run, &Environment, "puddle_scale");
+    ResetEnvironment(&Environment);
+    Environment.PuddleScale = 10.5f;
+    CheckRejected(run, &Environment, "puddle_scale");
+    ResetEnvironment(&Environment);
+    Environment.RainStreakDensity = 10.5f;
+    CheckRejected(run, &Environment, "rain_streak_density");
+    ResetEnvironment(&Environment);
+    Environment.RainMist = -0.1f;
+    CheckRejected(run, &Environment, "rain_mist");
+    ResetEnvironment(&Environment);
+    Environment.LightningBoltBrightness = NAN;
+    CheckRejected(run, &Environment, "lightning_bolt_brightness");
+    ResetEnvironment(&Environment);
+    // The edges of the ranges pass.
+    Environment.RainFallSpeed = 0.5f;
+    Environment.PuddleScale = 0.1f;
+    Environment.PuddleAmount = 10.0f;
+    Environment.RainMist = 0.0f;
+    TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));
+    WorldEnvironment_Deconstruct(&Environment);
+}
+
 static void LightningValuesAreNeverSaved(TestRun* run)
 {
     const PropertyTable* Table = WorldEnvironment_GetPropertyTable();
@@ -1178,6 +1226,7 @@ void WorldEnvironmentTests_Run(TestRun* run)
         { "light_ramps_follow_the_elevation", LightRampsFollowTheElevation },
         { "weather_starts_calm_and_is_validated", WeatherStartsCalmAndIsValidated },
         { "the_clouds_start_with_one_layer_and_are_validated", TheCloudsStartWithOneLayerAndAreValidated },
+        { "the_rain_starts_as_real_rain_and_is_validated", TheRainStartsAsRealRainAndIsValidated },
         { "lightning_values_are_never_saved", LightningValuesAreNeverSaved },
         { "daylight_at_another_time_is_the_suns", DaylightAtAnotherTimeIsTheSuns },
     };

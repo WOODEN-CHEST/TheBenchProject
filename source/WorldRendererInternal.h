@@ -28,6 +28,7 @@
 #include "WorldSkyLight.h"
 #include "WorldWeatherLight.h"
 #include "WorldClouds.h"
+#include "WorldRain.h"
 #include "SpriteTransform.h"
 #include "WorldRenderSpace.h"
 #include "WorldShadowLevels.h"
@@ -69,6 +70,9 @@
  *   WorldRendererInterior.c  interior lighting's other parts (WorldInterior.h): the ambient zones each lit draw takes,
  *                            the camera's interior for the eye, the lit shaders' interior uniforms, the zones' debug
  *                            wireframes
+ *   WorldRendererRain.c      the rain (WorldRain.h): the rain map (what keeps the rain out, a one-layer shadow array
+ *                            through GLShadowArray.h), the lit shaders' rain uniforms (the map, the puddles, the sky
+ *                            mirrored in water, the bolt's light), the streaks, the splashes and the lightning's bolt
  * The camera's passes (the scene, the G-buffer, the crisp overlay) draw with reversed depth where the GPU has clip
  * control (GLDepth.h, direct GL calls; WorldRendererCommon_BeginCameraDepth and the rest): a 32-bit float depth
  * from 1 at the near plane to 0 at infinity and no far plane, so whatever has a long draw distance draws at any distance.
@@ -167,6 +171,12 @@ typedef enum
     WorldRendererTextureUnit_CloudWeather = 11,     // sampler2D cloudWeatherMap
     WorldRendererTextureUnit_CloudSceneDepth = 12,  // sampler2D sceneDepth
     WorldRendererTextureUnit_CloudIrradiance = 13,  // sampler2D atmosphereIrradianceTable
+    // The rain in every lit program and the rain's own programs, on units past raylib's, where no material map and no 2D
+    // batch binds: GL 3.3 guarantees 48 units in all (a stage's limit of 16 counts the samplers it reads, not their units'
+    // numbers). Bound with the lit passes' frame textures.
+    WorldRendererTextureUnit_RainMap = 16,      // sampler2DArrayShadow rainMap (the rain map: a one-layer shadow array)
+    WorldRendererTextureUnit_PuddleMask = 17,   // sampler2D puddleMask
+    WorldRendererTextureUnit_RainSkyView = 18,  // sampler2D atmosphereSkyViewTable in the lit programs (what water mirrors)
 } WorldRendererTextureUnit;
 
 _Static_assert(WorldRendererTextureUnit_ShadowLevels >= WORLD_RENDERER_MATERIAL_MAP_COUNT,
@@ -182,6 +192,9 @@ _Static_assert((WorldRendererTextureUnit_SkyVisibility != WorldRendererTextureUn
     "the sky's visibility map has a unit of its own in every lit program, the terrain's included");
 _Static_assert(WORLD_RENDERER_HAZE_SLICE_COUNT == WORLD_ATMOSPHERE_VOLUME_SLICE_COUNT,
     "the public haze slice count is the volume's");
+_Static_assert((WorldRendererTextureUnit_RainMap >= WORLD_RENDERER_MATERIAL_MAP_COUNT)
+    && (WorldRendererTextureUnit_RainMap > WorldRendererTextureUnit_AmbientOcclusion),
+    "the rain's units sit above raylib's material maps and every other frame texture");
 
 /* Which objects a draw pass should include, by their OmitPixelation flag. The pixelated scene pass draws only
  * pixelated objects (when the crisp overlay is active), the crisp overlay pass draws only the flagged ones, and
@@ -444,6 +457,26 @@ typedef struct WorldRenderFrameStruct
     float CloudLightShare;
     float SkyObjectShare;
     bool IsHazeActive;
+    /** @brief The rain this frame (WorldRendererRain_PrepareFrame): its values from the environment (WorldRain_GetFrame);
+     *  whether it is drawn at all (switched on; IsRainActive false draws no streaks, splashes, puddles or rain map, and
+     *  every surface is wet alike); whether the rain map is read this frame, with its view, projection and view-projection
+     *  (render space: the box it was drawn with, which may be a kept one) and the direction toward the rain it was drawn
+     *  along (valid while it is read); whether the frame draws it, with its box (the visibility's; valid while it is
+     *  drawn); whether the streaks and the splashes are drawn; the lightning's bolt, and whether it is drawn and lights
+     *  the world. */
+    WorldRainFrame Rain;
+    bool IsRainActive;
+    bool IsRainMapActive;
+    bool IsRainMapDrawn;
+    Vector3 RainMapTowardRain;
+    Matrix RainMapView;
+    Matrix RainMapProjection;
+    Matrix RainMapViewProjection;
+    WorldFrustum RainMapBox;
+    bool AreRainStreaksActive;
+    bool AreRainSplashesActive;
+    WorldRainBolt Bolt;
+    bool IsBoltActive;
     /** @brief The eye's night vision this frame, which the sky and PBR shaders apply: how strongly (the renderer toggle
      *  x the world's NightVisionStrength; 0 = off), the field luminance it compares with (NightVisionField: the sky's
      *  light, without nearby lamps), the rods' grey (linear, luminance 1, from the world's NightVisionBlueShift), and
@@ -650,6 +683,34 @@ typedef struct WorldRendererCloudShadowLocationsStruct
 } WorldRendererCloudShadowLocations;
 
 /**
+ * @brief The uniform locations of the rain in a shader that includes shaders/common/rain.glsl and common/puddles.glsl
+ *        (through common/lighting): the rain map (its switch, sampler, matrix and lookups' offsets), the puddles (their
+ *        switch, the mask's sampler and frame, the ripples' frame and rate), the sky mirrored in water (the clear share,
+ *        the deck, the moon's half), the bolt's light and the debug view. -1 for a uniform the shader lacks.
+ *
+ * Filled by WorldRendererRain_PrepareLitShader, which also points the samplers at their fixed units;
+ * WorldRendererRain_UploadLitFrame uploads a frame's values.
+ */
+typedef struct WorldRendererRainLocationsStruct
+{
+    int _locMapActive;
+    int _locMap;
+    int _locMapMatrix;
+    int _locMapOffsets;
+    int _locPuddleActive;
+    int _locPuddleMask;
+    int _locPuddleFrame;
+    int _locRippleFrame;
+    int _locWaterActive;
+    int _locReflectionClearShare;
+    int _locReflectionDeck;
+    int _locReflectionMoon;
+    int _locBoltLight;
+    int _locBoltDirection;
+    int _locView;
+} WorldRendererRainLocations;
+
+/**
  * @brief The uniform locations of a shader that includes shaders/common/lighting.glsl (the PBR and the sprite
  *        shaders): the frame's lights, shadows, AO, haze and night vision, and the per-object forward point lights and
  *        haze multiplier.
@@ -738,6 +799,10 @@ typedef struct WorldRendererLitLocationsStruct
      *  WorldRendererTextureUnit_CloudShadow, the map's frame, its light, its share beyond the map and whether it shades
      *  the moon. */
     WorldRendererCloudShadowLocations _cloudShadow;
+    /** @brief The rain (common/rain, common/puddles): the rain map on WorldRendererTextureUnit_RainMap, the puddle mask on
+     *  WorldRendererTextureUnit_PuddleMask, the sky view on WorldRendererTextureUnit_RainSkyView, the puddles, the sky
+     *  mirrored in water, the bolt's light and the debug view. */
+    WorldRendererRainLocations _rain;
 } WorldRendererLitLocations;
 
 /** @brief One PBR program that shades model objects, and its uniform locations: the rigid one (world_pbr) or the skinned
@@ -766,6 +831,9 @@ typedef struct WorldRendererPbrProgramStruct
     int _locHasMraMap;
     int _locHasNormalMap;
     int _locHasEmissiveMap;
+    /** @brief The material's porosity and puddles (its params, GameModel.h), uploaded per material too. */
+    int _locMaterialPorosity;
+    int _locMaterialPuddles;
     /** @brief The skinned program's bone palette (location -1 in the rigid program's). */
     WorldRendererPalette _palette;
 } WorldRendererPbrProgram;
@@ -853,13 +921,13 @@ typedef struct WorldRendererTonemapStateStruct
 } WorldRendererTonemapState;
 
 /**
- * @brief A sky texture the world's environment names (the Milky Way, the moon's face).
+ * @brief A texture the world's environment names (the Milky Way, the moon's face, the rain's textures).
  *
  * Each slot holds its texture under its own asset user, so replacing one slot's texture can never release another's
  * (two slots may name the same asset), and loads only when the environment names another texture: a failed name is
- * logged once and not retried until the name changes.
+ * logged once and not retried until the name changes (WorldRendererCommon_SyncTextureSlot).
  */
-typedef struct WorldRendererSkyTextureStruct
+typedef struct WorldRendererTextureSlotStruct
 {
     /** @brief The texture, held under _user; NULL = unavailable (not loaded yet, or the name failed). */
     GameTexture* _texture;
@@ -869,7 +937,7 @@ typedef struct WorldRendererSkyTextureStruct
     GenericBuffer _name;
     /** @brief Whether a name has been tried. */
     bool _isSynced;
-} WorldRendererSkyTexture;
+} WorldRendererTextureSlot;
 
 /** @brief The atmospheric sky pass, with the moon, the Milky Way and light pollution's skyglow. */
 typedef struct WorldRendererSkyStateStruct
@@ -877,9 +945,9 @@ typedef struct WorldRendererSkyStateStruct
     /** @brief The atmospheric sky shader drawn behind the geometry; NULL = fall back to the gradient clear. */
     GameShader* _shader;
     /** @brief The Milky Way panorama the world names (MilkyWayTexture); without it, no Milky Way. */
-    WorldRendererSkyTexture _milkyWay;
+    WorldRendererTextureSlot _milkyWay;
     /** @brief The moon's face the world names (MoonTexture); without it the disc is a flat grey. */
-    WorldRendererSkyTexture _moon;
+    WorldRendererTextureSlot _moon;
     /** @brief Cached world_sky uniform locations (-1 when absent). */
     int _locResolution;
     int _locInvViewProj;
@@ -1152,6 +1220,87 @@ typedef struct WorldRendererCloudStateStruct
     bool _isHistoryFailureReported;
     bool _isShadowMapFailureReported;
 } WorldRendererCloudState;
+
+/**
+ * @brief One of the rain's programs (the streaks, the splashes, the lightning's bolt): a lit program (common/lighting:
+ *        the frame's light, the haze, the night vision, the rain map) with its own uniforms. -1 for a location the
+ *        program lacks.
+ */
+typedef struct WorldRendererRainProgramStruct
+{
+    /** @brief The shader (held under the shader user); NULL = unavailable (that part of the rain is not drawn). */
+    GameShader* _shader;
+    /** @brief Its frame-lighting locations (WorldRendererLighting_PrepareLitShader). */
+    WorldRendererLitLocations _lit;
+    /** @brief The scene's view-projection, the target's size, the rain's colour (the streaks and the splashes). */
+    int _locViewProjection;
+    int _locResolution;
+    int _locColor;
+    /** @brief The streaks: the anchor, the fall's drift, the wind, the fall speed, the exposure, the share drawn. */
+    int _locAnchor;
+    int _locFall;
+    int _locWind;
+    int _locFallSpeed;
+    int _locExposure;
+    int _locStreakShare;
+    /** @brief The splashes: the grid's first cell and corner, the cycles run, the share and the cycle's length, the rain
+     *  map's fall (its slant), the camera's axes. */
+    int _locSplashCell;
+    int _locSplashCorner;
+    int _locSplashCycles;
+    int _locSplashShare;
+    int _locSplashPeriod;
+    int _locSlant;
+    int _locCameraRight;
+    int _locCameraUp;
+    /** @brief The bolt: its foot, top and width, its texture columns, its radiance. */
+    int _locBoltFoot;
+    int _locBoltTop;
+    int _locBoltWidth;
+    int _locBoltColumns;
+    int _locBoltRadiance;
+} WorldRendererRainProgram;
+
+/** @brief The rain (WorldRendererRain.c; the rain's model is WorldRain.h's). */
+typedef struct WorldRendererRainStateStruct
+{
+    /** @brief The rain map: its GL functions (loaded with the shaders), its one-layer array and whether it exists, its
+     *  box's grid from frame to frame (snapped to its texels), and whether a failure to make it was logged. */
+    GLShadowArrayApi _api;
+    GLShadowArray _map;
+    bool _hasMap;
+    bool _isMapFailureReported;
+    WorldRenderCascadeGrid _mapGrid;
+    /** @brief The streaks', the splashes' and the bolt's programs. */
+    WorldRendererRainProgram _streaks;
+    WorldRendererRainProgram _splashes;
+    WorldRendererRainProgram _bolt;
+    /** @brief The streaks' mesh (every streak's seed and corners), the splashes' (every cell's corners); valid while their
+     *  flags are set. The bolt draws with the sprites' quad. */
+    Mesh _streakMesh;
+    bool _hasStreakMesh;
+    Mesh _splashMesh;
+    bool _hasSplashMesh;
+    /** @brief The textures the world names: the streak, the splash's flipbook, the puddle mask, the bolts. */
+    WorldRendererTextureSlot _streakTexture;
+    WorldRendererTextureSlot _splashTexture;
+    WorldRendererTextureSlot _puddleMask;
+    WorldRendererTextureSlot _boltTexture;
+    /** @brief How far the rain has drifted (WorldRain.h), advanced by each frame's real seconds. */
+    WorldRainDrift _drift;
+    /** @brief The rain map kept between its draws (WorldRain.h): the box it was last drawn with; forgotten (zeroed) on
+     *  every frame that does not read it. */
+    WorldRainMapKeep _mapKeep;
+    /** @brief The A/B (on by default: off draws no rain and wets every surface alike) and the debug view. */
+    bool _isEnabled;
+    WorldRendererRainView _view;
+    /** @brief Whether the last render read the rain map (drawn then or kept), drew the streaks, the splashes and a bolt
+     *  (the status). */
+    bool _wasMapRead;
+    bool _wereStreaksDrawn;
+    bool _wereSplashesDrawn;
+    bool _wasBoltDrawn;
+} WorldRendererRainState;
 
 /** @brief The star field: the seeded star catalogue as one mesh of one-pixel quads, drawn right after the sky. */
 typedef struct WorldRendererStarStateStruct
@@ -1861,6 +2010,7 @@ struct WorldRendererStruct
     WorldRendererSkyVisibilityState _skyVisibility;
     WorldRendererInteriorState _interior;
     WorldRendererCloudState _clouds;
+    WorldRendererRainState _rain;
 };
 
 
@@ -2001,6 +2151,24 @@ GameShader* WorldRendererCommon_LoadShader(WorldRenderer* self, const unsigned c
  * @returns The texture (held until @p user releases it), or NULL when it is unavailable.
  */
 GameTexture* WorldRendererCommon_LoadTexture(WorldRenderer* self, AssetUserID user, const unsigned char* assetName,
+    const unsigned char* featureName);
+
+/** @brief An empty texture slot: no texture, no asset user yet, an empty name. */
+void WorldRendererCommon_ConstructTextureSlot(WorldRendererTextureSlot* slot);
+
+/** @brief Retires a slot's asset user (releasing its texture) and frees its name. */
+void WorldRendererCommon_DeconstructTextureSlot(WorldRenderer* self, WorldRendererTextureSlot* slot);
+
+/**
+ * @brief Makes a slot hold the texture the environment names: when the name differs from the one the slot was synced
+ *        for, its old texture is released and the new one loaded under the slot's own user (minted on the first load).
+ *        A failure is logged by the loader once for the name, and the slot stays empty until the name changes.
+ * @param self The renderer.
+ * @param slot The slot.
+ * @param name The texture's asset name (NULL changes nothing).
+ * @param featureName What goes without it, for the loader's warning.
+ */
+void WorldRendererCommon_SyncTextureSlot(WorldRenderer* self, WorldRendererTextureSlot* slot, const unsigned char* name,
     const unsigned char* featureName);
 
 /**
@@ -2332,6 +2500,18 @@ void WorldRendererLighting_PrepareFrame(WorldRenderer* self, WorldRenderFrame* f
  */
 void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo,
     Vector2 ditherPixelScale);
+
+/**
+ * @brief Uploads the frame's lighting uniforms to one more lit program (the rain's), as WorldRendererLighting_UploadFrame
+ *        does to the renderer's own; the frame textures are those it bound.
+ * @param self The renderer.
+ * @param frame The frame.
+ * @param shader The program.
+ * @param locations Its locations (WorldRendererLighting_PrepareLitShader).
+ * @param applyScreenAo Whether the pass reads the ambient pre-pass at the scene's pixels.
+ */
+void WorldRendererLighting_UploadLitProgram(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
+    const WorldRendererLitLocations* locations, bool applyScreenAo);
 
 /**
  * @brief Reach-culls the frame's forward lights against a bounding sphere in render space and uploads the strongest few
@@ -3126,3 +3306,63 @@ void WorldRendererCrisp_Render(WorldRenderer* self, const WorldRenderFrame* fram
  *        tonemapped at frame->Exposure and depth-tested against the scene so occlusion stays correct.
  */
 void WorldRendererCrisp_Composite(WorldRenderer* self, const WorldRenderFrame* frame, RenderTexture2D target);
+
+
+// WorldRendererRain.c
+/** @brief Starts the rain's state: no map, no meshes, empty texture slots, no drift; switched on, no debug view. */
+void WorldRendererRain_Construct(WorldRenderer* self);
+
+/** @brief Releases the rain's texture slots (the GL resources go with WorldRendererRain_Unload). */
+void WorldRendererRain_Deconstruct(WorldRenderer* self);
+
+/**
+ * @brief Loads the rain's programs (each optional: the streaks, the splashes, the bolt), builds the streaks' and the
+ *        splashes' meshes and loads the rain map's GL functions (the map itself is made at the first frame that needs
+ *        it). Needs a live GL context; each failure is logged once and switches its part off.
+ */
+void WorldRendererRain_Load(WorldRenderer* self);
+
+/** @brief Releases the rain map and the meshes (GL). */
+void WorldRendererRain_Unload(WorldRenderer* self);
+
+/**
+ * @brief Points a lit program's rain samplers at their fixed units and caches its rain locations (common/rain,
+ *        common/puddles).
+ * @param shader The program.
+ * @param outLocations [out] Its rain locations.
+ */
+void WorldRendererRain_PrepareLitShader(Shader shader, WorldRendererRainLocations* outLocations);
+
+/**
+ * @brief The frame's rain: syncs the textures the world names, takes its values from the environment, advances the
+ *        drift by the frame's real seconds, decides what is drawn (the streaks, the splashes, the bolt) and the rain map's
+ *        box (snapped to its texels; WorldRain_GetMapShape). Before the frame's visibility, which lists the map's
+ *        casters in its box. Needs the frame's weather (the flash) and its origin.
+ * @param self The renderer.
+ * @param frame The frame; its rain fields are set.
+ * @param deltaSeconds The frame's real seconds.
+ */
+void WorldRendererRain_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame, double deltaSeconds);
+
+/** @brief Draws the rain map while the frame needs it: the depth of what keeps the rain out in its box, both faces,
+ *  nearest first, with depth clamping. Opens and closes its own texture pass. */
+void WorldRendererRain_RenderMap(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief Uploads the frame's rain to a lit program: the map, the puddles, the sky mirrored in water, the bolt's light,
+ *  the debug view. */
+void WorldRendererRain_UploadLitFrame(const WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
+    const WorldRendererRainLocations* locations);
+
+/** @brief Binds the rain map, the puddle mask and the sky view on their fixed units, with the lit passes' frame
+ *  textures. */
+void WorldRendererRain_BindFrameTextures(const WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief Draws the rain in the scene pass, after the sprites: the bolt, the splashes and the streaks (blended, depth
+ *  tested, writing no depth), each while the frame draws it. Inside the scene's 3D mode. */
+void WorldRendererRain_DrawScene(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief The status's "rain" and "rain map" features and the rain's fields, from the last render. */
+void WorldRendererRain_UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief Logs one line about the rain (with the status, WorldRenderer_LogStatus). */
+void WorldRendererRain_LogStatus(const WorldRenderer* self);

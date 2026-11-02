@@ -23,9 +23,10 @@
  * by the camera (a caster off screen can still shadow what is on it): each shadow level that renders this frame culls its
  * casters against its own orthographic box (its sides and far plane: what lies nearer the light than the box is drawn
  * onto its near plane), keeps only those large enough for its texels (its size cut) and those within the world's shadow
- * reach, and the cube shadow keeps its reach test. The sky's visibility map (interior lighting) takes
- * what keeps the sky out within its box the same way, whether it casts shadows or not: models and instance cells whose
- * settings occlude the sky, and every terrain chunk.
+ * reach, and the cube shadow keeps its reach test. The sky's visibility map (interior lighting) and the rain map each
+ * take what keeps the sky out within their boxes the same way, whether it casts shadows or not: models and instance
+ * cells whose settings occlude the sky, and every terrain chunk (WorldVisibility_IsShadowPass: their entries dither by
+ * their fade, not their shadow fade).
  *
  * DRAW DISTANCE. Every entry has its own: a model's is its world model's, a sprite's its world sprite's or its kind's
  * default (sprites 150 m, decals 60 m), or the placement's own while that overrides it,
@@ -142,6 +143,8 @@ typedef enum WorldVisibilityPassEnum
     /** @brief What keeps the sky out in the sky's visibility map (its box): models and instance cells that occlude the
      *  sky, every terrain chunk. */
     WorldVisibilityPass_SkyVisibility,
+    /** @brief What keeps the rain out in the rain map (its box): the same entries as the sky's visibility map. */
+    WorldVisibilityPass_Rain,
     /** @brief The number of passes; not a pass. */
     WorldVisibilityPass_Count
 } WorldVisibilityPass;
@@ -208,6 +211,10 @@ typedef struct WorldVisibilityViewStruct
     /** @brief Whether the sky's visibility map is drawn, and its box. */
     bool IsSkyVisibilityActive;
     WorldFrustum SkyVisibilityBox;
+    /** @brief Whether the rain map is drawn, and its box (its four sides and its far plane: what lies nearer the rain is
+     *  drawn onto its near plane). */
+    bool IsRainMapActive;
+    WorldFrustum RainMapBox;
     /** @brief The draw distance scale (the config's draw_distance_scale; finite and >= 0). */
     float DrawDistanceScale;
     /** @brief The camera's zoom factor (WorldVisibility_GetZoomFactor): the entries' distances are multiplied by it
@@ -465,6 +472,18 @@ void WorldVisibility_Deconstruct(WorldVisibility* self);
  *          (the lists are then empty).
  */
 Error WorldVisibility_Build(WorldVisibility* self, const WorldRenderCache* cache, const WorldVisibilityView* view);
+
+/**
+ * @brief Whether a pass draws its entries as a light's shadow casters (a shadow level or the cube shadow), which dither by
+ *        their shadow fade; the camera's, the sky's visibility map and the rain map draw by their fade.
+ * @param pass The pass.
+ * @returns true for the shadow levels' passes and the cube shadow's.
+ */
+static inline bool WorldVisibility_IsShadowPass(WorldVisibilityPass pass)
+{
+    return ((pass >= WorldVisibilityPass_ShadowLevel0) && (pass <= WorldVisibilityPass_ShadowLevelLast))
+        || (pass == WorldVisibilityPass_PointShadow);
+}
 
 /**
  * @brief The pass of a shadow level's list.

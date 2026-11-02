@@ -4,6 +4,7 @@
 #include "TestWorld.h"
 #include "GameMath.h"
 #include "WorldInterior.h"
+#include "WorldRain.h"
 #include "WorldVisibility.h"
 #include "WorldRenderSpace.h"
 #include "WorldRenderCache.h"
@@ -1739,6 +1740,100 @@ static void SkyOccludersJoinTheMapsList(TestRun* run)
     TestTerrain_FreeGrid(&Grid);
 }
 
+// Tests: the rain map.
+/* What keeps the sky out keeps the rain out: the rain map's list holds the same kinds of entries as the sky's visibility
+ * map's, by the rain map's own box (along a slanted rain, around the camera), while the map is drawn, apart from whether
+ * the sky's map is; the shadow passes are the shadow levels' and the cube's alone. */
+static void RainOccludersJoinTheRainMapsList(TestRun* run)
+{
+    TEST_CHECK(run, WorldVisibility_IsShadowPass(WorldVisibilityPass_ShadowLevel0)
+        && WorldVisibility_IsShadowPass(WorldVisibilityPass_ShadowLevelLast)
+        && WorldVisibility_IsShadowPass(WorldVisibilityPass_PointShadow));
+    TEST_CHECK(run, !WorldVisibility_IsShadowPass(WorldVisibilityPass_Camera)
+        && !WorldVisibility_IsShadowPass(WorldVisibilityPass_SkyVisibility)
+        && !WorldVisibility_IsShadowPass(WorldVisibilityPass_Rain));
+
+    VisibilityFixture Fixture;
+    TestTerrainGrid Grid;
+    TestTerrain_BuildGrid(&Grid, 2U, 2U, 1.0f, 0.0f, 0.0f, NULL);
+    TerrainMesh* Ground = NULL;
+    const Vector3 One[1] = { { 0.0f, 0.0f, 0.0f } };
+    bool IsReady = VisibilityFixture_Construct(run, &Fixture)
+        && ((Ground = TestTerrain_CreateMesh(run, &Grid, 1U, 0U, 8.0f)) != NULL)
+        && TestAssets_AddTerrain(run, &Fixture.Assets, "patch", Ground, NULL, NULL);
+    WorldModelComponent* Roof = IsReady ? AddBox(run, &Fixture.World, (Vector3){ 0.0f, 3.0f, -10.0f }) : NULL;
+    WorldModelComponent* Shed = IsReady ? AddBox(run, &Fixture.World, (Vector3){ 60.0f, 37.0f, 0.0f }) : NULL;
+    WorldModelComponent* Awning = IsReady ? AddBox(run, &Fixture.World, (Vector3){ 2.0f, 2.0f, 8.0f }) : NULL;
+    WorldModelComponent* Outside = IsReady ? AddBox(run, &Fixture.World, (Vector3){ 70.0f, 2.0f, 0.0f }) : NULL;
+    WorldObject* Patch = IsReady ? AddTerrainObject(run, &Fixture.World, "patch", (Vector3){ -6.0f, 0.0f, -6.0f }) : NULL;
+    WorldObject* Canopy = IsReady ? AddInstancesObject(run, &Fixture.World, "box", (Vector3){ 8.0f, 4.0f, -8.0f }, One,
+        1U) : NULL;
+    WorldVisibilityView View = MakeView((Vector3){ 0.0f, 1.0f, 0.0f });
+    if ((Roof != NULL) && (Shed != NULL) && (Awning != NULL) && (Outside != NULL) && (Patch != NULL) && (Canopy != NULL))
+    {
+        // The shed casts no shadow, and stands high up the slant: inside the rain map's sides (33 m from the camera across
+        // its slanted side), outside the sky's map's (60 m along X); the awning keeps no sky out; the shed and the one
+        // outside keep their full draw distances (the latter 60 m from the camera across the rain map's slanted side:
+        // outside it).
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Shed, WorldModelSetting_CastsShadows, true));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetCastsShadows(Shed, false));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Shed, WorldModelSetting_IsDrawDistanceFixed, true));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsDrawDistanceFixed(Shed, true));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Awning, WorldModelSetting_OccludesSky, true));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOccludesSky(Awning, false));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Outside, WorldModelSetting_IsDrawDistanceFixed, true));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsDrawDistanceFixed(Outside, true));
+
+        // The rain map not drawn: its list stays empty.
+        if (VisibilityFixture_Build(run, &Fixture, &View))
+        {
+            size_t Count = 0U;
+            WorldVisibility_GetModels(&Fixture.Visibility, &Fixture.Cache, WorldVisibilityPass_Rain, &Count);
+            TEST_CHECK(run, (Count == 0U) && !HasChunkOf(&Fixture, WorldVisibilityPass_Rain, Patch)
+                && (CountCellsOf(&Fixture, WorldVisibilityPass_Rain, Canopy) == 0U));
+        }
+        // The rain slanting with a wind toward -X (so it comes from +X): the box around the camera along it.
+        WorldRenderCascadeGrid MapGrid = { 0 };
+        WorldRenderCascadeShape Shape = WorldRain_GetMapShape();
+        Vector3 TowardRain = Vector3Normalize((Vector3){ 0.6f, 1.0f, 0.0f });
+        WorldRenderCascade Map = WorldRenderSpace_StepCascade(&MapGrid, (Vector3Double){ 0.0, 1.0, 0.0 }, TowardRain,
+            &Shape);
+        View.IsRainMapActive = true;
+        View.RainMapBox = WorldVisibility_ExtractFrustum(Map.ViewProjection);
+        View.RainMapBox.Planes[WorldFrustumPlane_Near] = (WorldPlane){ .Normal = { 0.0f, 0.0f, 0.0f }, .Distance = 0.0f };
+        if (VisibilityFixture_Build(run, &Fixture, &View))
+        {
+            TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_Rain, Roof)
+                && HasModel(&Fixture, WorldVisibilityPass_Rain, Shed)
+                && !HasModel(&Fixture, WorldVisibilityPass_SkyVisibility, Roof));
+            TEST_CHECK(run, !HasModel(&Fixture, WorldVisibilityPass_Rain, Awning)
+                && HasModel(&Fixture, WorldVisibilityPass_Camera, Awning));
+            TEST_CHECK(run, !HasModel(&Fixture, WorldVisibilityPass_Rain, Outside)
+                && HasModel(&Fixture, WorldVisibility_GetShadowLevelPass(1U), Outside));
+            TEST_CHECK(run, HasChunkOf(&Fixture, WorldVisibilityPass_Rain, Patch)
+                && (CountCellsOf(&Fixture, WorldVisibilityPass_Rain, Canopy) == 1U));
+            size_t Count = 0U;
+            const size_t* List = WorldVisibility_GetModels(&Fixture.Visibility, &Fixture.Cache, WorldVisibilityPass_Rain,
+                &Count);
+            TEST_CHECK(run, (Count == 2U) && IsAscending(List, Count));
+        }
+        // Both maps at once: each by its own box.
+        WorldInteriorSkyMap SkyMap = WorldInterior_GetSkyMap((Vector3Double){ 0.0, 1.0, 0.0 });
+        View.IsSkyVisibilityActive = true;
+        View.SkyVisibilityBox = WorldVisibility_ExtractFrustum(SkyMap.ViewProjection);
+        if (VisibilityFixture_Build(run, &Fixture, &View))
+        {
+            TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_Rain, Roof)
+                && HasModel(&Fixture, WorldVisibilityPass_SkyVisibility, Roof));
+            TEST_CHECK(run, HasModel(&Fixture, WorldVisibilityPass_Rain, Shed)
+                && !HasModel(&Fixture, WorldVisibilityPass_SkyVisibility, Shed));
+        }
+    }
+    TerrainMesh_Destroy(Ground);
+    VisibilityFixture_Deconstruct(run, &Fixture);
+    TestTerrain_FreeGrid(&Grid);
+}
+
 // Public functions.
 void WorldVisibilityTests_Run(TestRun* run)
 {
@@ -1763,6 +1858,7 @@ void WorldVisibilityTests_Run(TestRun* run)
         { "drawn_models_are_counted_by_lod", DrawnModelsAreCountedByLod },
         { "lists_and_lods_hold_twenty_kilometres_out", ListsAndLodsHoldTwentyKilometresOut },
         { "sky_occluders_join_the_maps_list", SkyOccludersJoinTheMapsList },
+        { "rain_occluders_join_the_rain_maps_list", RainOccludersJoinTheRainMapsList },
         { "terrain_chunks_join_the_passes_as_models_do", TerrainChunksJoinThePassesAsModelsDo },
         { "instance_cells_join_the_passes_as_models_do", InstanceCellsJoinThePassesAsModelsDo },
         { "shadow_levels_take_their_rings_and_sizes", ShadowLevelsTakeTheirRingsAndSizes },

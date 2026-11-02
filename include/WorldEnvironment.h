@@ -41,9 +41,9 @@
  * the environment names (Climate.h), and in a world file they are the world's starting weather (and what the weather's
  * off mode leaves). The lightning's three values are runtime only, never saved.
  *
- * OWNERSHIP. The environment owns its asset names (MilkyWayTexture, MoonTexture, Climate): construct it with
- * WorldEnvironment_SetDefaults (which allocates them), copy it with WorldEnvironment_CopyTo, never by assignment (a
- * copied pointer would be freed twice), and release it with WorldEnvironment_Deconstruct.
+ * OWNERSHIP. The environment owns its asset names (MilkyWayTexture, MoonTexture, Climate, the rain's textures):
+ * construct it with WorldEnvironment_SetDefaults (which allocates them), copy it with WorldEnvironment_CopyTo, never by
+ * assignment (a copied pointer would be freed twice), and release it with WorldEnvironment_Deconstruct.
  *
  * Data from outside the program (a save, an editor, a downloaded story) must pass WorldEnvironment_Validate
  * before it is used (the readers do it themselves): the field comments below state the rules it enforces.
@@ -73,7 +73,8 @@
  *  the light, so a longer one would cost the nearest level its depth precision (about 2.5 mm here, against its 8 mm
  *  bias at the default 2048-texel maps; finer maps keep a floor of two of the depth's steps). */
 #define WORLD_ENVIRONMENT_MAX_SHADOW_REACH 20000.0
-/** @brief The most bytes a texture name (MilkyWayTexture, MoonTexture) may have in full, without the terminator. */
+/** @brief The most bytes a texture name (MilkyWayTexture, MoonTexture, the rain's) may have in full, without the
+ *  terminator. */
 #define WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH ((size_t)128)
 /** @brief The haze's scale height's limits (HazeHeight), in metres: below 10 m it would fall between the rows of the
  *  renderer's atmosphere tables, and 100 km is the top of the atmosphere. */
@@ -114,6 +115,16 @@
 #define WORLD_ENVIRONMENT_MIN_CLOUD_SCALE 0.05
 #define WORLD_ENVIRONMENT_MAX_CLOUD_SCALE 20.0
 #define WORLD_ENVIRONMENT_MAX_CLOUD_DRIFT 100.0
+/** @brief The largest multiplier the rain's settings take (RainStreakDensity and the others that multiply): a bound for
+ *  hostile content. */
+#define WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE 10.0
+/** @brief RainFallSpeed's limits and default, metres per second: drizzle falls at about 2, the largest drops at 9. */
+#define WORLD_ENVIRONMENT_MIN_RAIN_FALL_SPEED 0.5
+#define WORLD_ENVIRONMENT_MAX_RAIN_FALL_SPEED 50.0
+#define WORLD_ENVIRONMENT_DEFAULT_RAIN_FALL_SPEED 7.5f
+/** @brief PuddleScale's limits. */
+#define WORLD_ENVIRONMENT_MIN_PUDDLE_SCALE 0.1
+#define WORLD_ENVIRONMENT_MAX_PUDDLE_SCALE 10.0
 /** @brief The most bytes the climate's name (Climate) may have in full, without the terminator. */
 #define WORLD_ENVIRONMENT_CLIMATE_NAME_MAX_LENGTH ((size_t)128)
 /** @brief The climate a world uses unless it names another (Climate's default), in full. */
@@ -465,6 +476,45 @@ typedef struct WorldEnvironmentStruct
     /** @brief How much of the town's light (LightPollution) reaches the clouds' undersides, a multiplier (default 1; 0:
      *  none): an overcast night over a town glows in the light pollution's colour. Finite and in [0, 10]. */
     float CloudLightPollution;
+
+    // ---- Rain: how the weather's rain, puddles and lightning look (the renderer draws them) ----
+    /** @brief How many rain streaks fall, a multiplier on the precipitation's share (default 1; 0 none). Finite and in
+     *  [0, WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE]. */
+    float RainStreakDensity;
+    /** @brief How long the streaks are, a multiplier on the eye's exposure they span (default 1: a drop at 7.5 m/s draws
+     *  25 cm). Finite and in [0, WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE]. */
+    float RainStreakLength;
+    /** @brief How bright the streaks and splashes are, a multiplier on the light they catch (default 1). Finite and in
+     *  [0, WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE]. */
+    float RainStreakBrightness;
+    /** @brief How many splashes land, a multiplier on the precipitation's share (default 1; 0 none). Finite and in
+     *  [0, WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE]. */
+    float RainSplashDensity;
+    /** @brief How fast the middling drops fall, metres per second (default 7.5; the small ones at 3/4 of it, the large
+     *  ones at 5/4). Finite and in [WORLD_ENVIRONMENT_MIN_RAIN_FALL_SPEED, WORLD_ENVIRONMENT_MAX_RAIN_FALL_SPEED]. */
+    float RainFallSpeed;
+    /** @brief The rain's colour, multiplying the light its streaks and splashes catch (default white). */
+    Color RainColor;
+    /** @brief How much water pools, a multiplier on every surface's own puddles (default 1; 0 no puddles). Finite and in
+     *  [0, WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE]. */
+    float PuddleAmount;
+    /** @brief How large the puddles are, a multiplier on the puddle mask's 16 m tile (default 1). Finite and in
+     *  [WORLD_ENVIRONMENT_MIN_PUDDLE_SCALE, WORLD_ENVIRONMENT_MAX_PUDDLE_SCALE]. */
+    float PuddleScale;
+    /** @brief How much the rain lowers the visibility, a multiplier on real rain's (default 1: a downpour's 700 m; 0 none).
+     *  Finite and in [0, WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE]. */
+    float RainMist;
+    /** @brief How bright the lightning's bolts are, and how strongly their channels light the world (default 1; 0 no
+     *  bolts, only the clouds' flash). Finite and in [0, WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE]. */
+    float LightningBoltBrightness;
+    /** @brief Names of the textures the rain is drawn with (owned; valid asset names of at most
+     *  WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH bytes, kept in full; never NULL): a streak along its length (default
+     *  "tbp:rain_streak"), the splash's flipbook of frames side by side (default "tbp:rain_splash"), the tileable puddle
+     *  mask (default "tbp:rain_puddle_mask") and the bolts side by side (default "tbp:lightning_bolts"). */
+    unsigned char* RainStreakTexture;
+    unsigned char* RainSplashTexture;
+    unsigned char* PuddleMaskTexture;
+    unsigned char* LightningBoltTexture;
 
     // ---- Post-effect world multipliers (combined with the game config multipliers) ----
     /** @brief When false, this world suppresses bloom regardless of the config. */

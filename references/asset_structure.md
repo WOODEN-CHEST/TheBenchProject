@@ -494,6 +494,11 @@ with it; one that replaces a vertex stage should replace the twin's too.
             "emissive_color": color,     // emissive colour (default WHITE when an emissive map is present)
             "emissive_intensity": number,// >= 0: emissive multiplier (default 0; defaults to 1 when an emissive
                                          // map is present, so the map is visible without extra keys)
+            "porosity": number,          // in [0, 1]: how much the weather's wetness darkens it (default 0.5; a
+                                         // soaked surface of porosity 1 is 70 % darker, of 0 only glossier;
+                                         // metal never darkens)
+            "puddles": number,           // in [0, 1]: how much rain's water pools on it where it faces up
+                                         // (default 0: none; asphalt and pavement 1, grass and wood 0)
 
             "texture_properties": texture properties  // [OPTIONAL] filtering, wrap and mipmaps of the maps this
                                          // override loads; a key left out takes the model's texture_properties
@@ -656,8 +661,8 @@ variants or world models share loads once, and its filtering, wrap and mipmaps c
   nothing (logged once, when the world model loads).
 * `albedo`, `normal`, `mra` (the packed occlusion/roughness/metallic map), `emissive`: texture asset names; a map that is
   left out keeps the model's.
-* `tint`, `metallic` and `roughness` (in [0, 1]), `emissive_color`, `emissive_intensity` (>= 0): as for models; an
-  emissive map without a colour or intensity of its own shows at white x 1.
+* `tint`, `metallic`, `roughness`, `porosity` and `puddles` (in [0, 1]), `emissive_color`, `emissive_intensity` (>= 0):
+  as for models; an emissive map without a colour or intensity of its own shows at white x 1.
 A variant is applied when the object is drawn, to the renderer's copy of each material, never to the model asset, so
 the same model can show every variant at once.
 
@@ -1235,7 +1240,7 @@ name them. How the blend works is in `agents/Terrain.md`.
 | `triplanar` | `off`, `steep`, `always` (`steep`) | When the maps are laid from three sides instead of from above, so cliffs are not stretched: never, where the ground is steeper than `triplanar_slope` (blended in over 10 degrees), or everywhere. |
 | `triplanar_slope` | degrees, 0 to 90 (40) | With `steep`: where the three sides take over. |
 | `surface` | a namespaced key (`tbp:ground`; `grass` reads as `tbp:grass`) | What the ground is: footsteps, where scattering may place things, later systems (none built yet). |
-| `puddles` | 0 to 1 (0) | How much rain's puddles may form on it (asphalt 1, grass 0). For the rain's puddles (not built yet). |
+| `puddles` | 0 to 1 (0) | How much rain's water pools on it where it faces up (asphalt 1, grass 0), blended as the other values are. |
 | `porosity` | 0 to 1 (0.5) | How much the weather's wetness darkens it: a soaked surface of porosity 1 is 70 % darker, of 0 not at all (it still turns glossier). |
 
 * **Maps.** Each map's slot decides how it is read, whatever its texture's `color_space` says, and the texture's

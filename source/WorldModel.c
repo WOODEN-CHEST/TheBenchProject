@@ -118,7 +118,7 @@ bool WorldModelCollision_TryFindSet(const WorldModelCollision* self, const unsig
     return false;
 }
 
-void WorldModel_ApplyVariant(const WorldModel* self, size_t variantIndex, int materialIndex, MaterialMap* maps)
+void WorldModel_ApplyVariant(const WorldModel* self, size_t variantIndex, int materialIndex, Material* material)
 {
     if (variantIndex >= self->_variantCount)
     {
@@ -132,12 +132,12 @@ void WorldModel_ApplyVariant(const WorldModel* self, size_t variantIndex, int ma
         {
             continue;
         }
-        ApplyTexture(Override->_albedo, &maps[MATERIAL_MAP_ALBEDO]);
-        ApplyTexture(Override->_normal, &maps[MATERIAL_MAP_NORMAL]);
+        ApplyTexture(Override->_albedo, &material->maps[MATERIAL_MAP_ALBEDO]);
+        ApplyTexture(Override->_normal, &material->maps[MATERIAL_MAP_NORMAL]);
         // The metalness slot carries the packed occlusion/roughness/metallic map, as in the model type.
-        ApplyTexture(Override->_mra, &maps[MATERIAL_MAP_METALNESS]);
-        ApplyTexture(Override->_emissive, &maps[MATERIAL_MAP_EMISSION]);
-        GameMaterialFactors_Apply(&Override->_factors, Override->_emissive != NULL, maps);
+        ApplyTexture(Override->_mra, &material->maps[MATERIAL_MAP_METALNESS]);
+        ApplyTexture(Override->_emissive, &material->maps[MATERIAL_MAP_EMISSION]);
+        GameMaterialFactors_Apply(&Override->_factors, Override->_emissive != NULL, material);
         return; // one override per slot (the definition refuses a slot twice)
     }
 }

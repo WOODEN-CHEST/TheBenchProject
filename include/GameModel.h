@@ -21,6 +21,11 @@
  * the model's own materials while it loads, and world model variants (WorldModel.h) to the renderer's per-draw copy of
  * a material. Both read them with one parser and apply them with GameMaterialFactors_Apply.
  *
+ * WETNESS. A material's porosity and puddles (how much wetness darkens it, how much water pools on it) are kept in its
+ * params (raylib's generic material parameters): params[GAME_MATERIAL_PARAM_POROSITY] and
+ * params[GAME_MATERIAL_PARAM_PUDDLES]. The model type sets every material's to their defaults when the model loads
+ * (GameMaterialParams_SetDefaults), before its overrides apply.
+ *
  * OWNERSHIP. The asset manager owns everything the asset loaded: the meshes, each material's map array, and
  * every GPU texture referenced by a material map at load time (textures the OBJ/MTL or glTF importer loaded,
  * plus the "material_overrides" maps from the definition). When the asset unloads, the manager unloads those
@@ -31,6 +36,13 @@
  * shared by two materials twice). The asset is shared and read-only: draw with copies (a Material built on
  * the stack) instead of writing tints, shaders or maps into its materials.
  */
+
+
+/** @brief Where a material's params hold its porosity and its puddles, and their defaults: half way, and no puddles. */
+#define GAME_MATERIAL_PARAM_POROSITY 0
+#define GAME_MATERIAL_PARAM_PUDDLES 1
+#define GAME_MATERIAL_DEFAULT_POROSITY 0.5f
+#define GAME_MATERIAL_DEFAULT_PUDDLES 0.0f
 
 
 /**
@@ -91,6 +103,15 @@ typedef struct GameMaterialFactorsStruct
     bool HasEmissiveIntensity;
     /** @brief The emissive intensity, >= 0. */
     float EmissiveIntensity;
+    /** @brief Whether Porosity replaces the material's porosity. */
+    bool HasPorosity;
+    /** @brief How much wetness darkens the material, in [0, 1] (water in its pores traps the light; a metal's part never
+     *  darkens). */
+    float Porosity;
+    /** @brief Whether Puddles replaces the material's puddles. */
+    bool HasPuddles;
+    /** @brief How much water may pool on the material where it faces up, in [0, 1] (asphalt 1, grass 0). */
+    float Puddles;
 } GameMaterialFactors;
 
 
@@ -132,16 +153,24 @@ static inline const GameSkeleton* GameModel_GetSkeleton(const GameModel* self)
 }
 
 /**
- * @brief Applies material factors to a material's maps: each factor whose flag is set replaces its map's value.
+ * @brief Applies material factors to a material: each factor whose flag is set replaces its value.
  *
  * Tint goes to the albedo map's colour, Metallic and Roughness to the metalness and roughness maps' values,
- * EmissiveColor and EmissiveIntensity to the emission map's colour and value. An override that brings an emissive map
- * (@p hasEmissiveMap) but no emissive colour or intensity of its own shows that map at white x 1, since the importer's
- * default intensity of 0 would hide it. Writes only to @p maps: give it the model's own materials while the model
- * loads, or the renderer's per-draw copy, never a loaded asset's maps.
+ * EmissiveColor and EmissiveIntensity to the emission map's colour and value, Porosity and Puddles to the material's
+ * params. An override that brings an emissive map (@p hasEmissiveMap) but no emissive colour or intensity of its own
+ * shows that map at white x 1, since the importer's default intensity of 0 would hide it. Writes only to the material's
+ * maps and params: give it the model's own materials while the model loads, or the renderer's per-draw copy (its maps a
+ * copy too), never a loaded asset's material.
  * @param self The factors; must not be NULL.
  * @param hasEmissiveMap Whether the same override set an emissive map.
- * @param maps [in,out] A material's maps, indexed by MaterialMapIndex (raylib's MAX_MATERIAL_MAPS entries); must not be
- *        NULL.
+ * @param material [in,out] The material (its maps indexed by MaterialMapIndex, raylib's MAX_MATERIAL_MAPS entries); must
+ *        not be NULL.
  */
-void GameMaterialFactors_Apply(const GameMaterialFactors* self, bool hasEmissiveMap, MaterialMap* maps);
+void GameMaterialFactors_Apply(const GameMaterialFactors* self, bool hasEmissiveMap, Material* material);
+
+/**
+ * @brief Sets a material's porosity and puddles params to their defaults (GAME_MATERIAL_DEFAULT_POROSITY,
+ *        GAME_MATERIAL_DEFAULT_PUDDLES): the model type does it for every material it loads.
+ * @param material [in,out] The material; must not be NULL.
+ */
+void GameMaterialParams_SetDefaults(Material* material);

@@ -304,7 +304,8 @@ Error AssetJSON_ReadMaterialSlot(JSONCompound* compound, int32_t* outSlot);
 
 /**
  * @brief Reads the factor keys of a material override, each optional: "tint" and "emissive_color" (colours, any
- *        AssetJSON_ParseColor form), "metallic" and "roughness" (in [0, 1]) and "emissive_intensity" (>= 0).
+ *        AssetJSON_ParseColor form), "metallic", "roughness", "porosity" and "puddles" (in [0, 1]) and
+ *        "emissive_intensity" (>= 0).
  *
  * The one parser the model type's "material_overrides" and world model variants share. A key that is absent leaves its
  * factor's flag false.
