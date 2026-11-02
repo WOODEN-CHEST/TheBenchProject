@@ -40,6 +40,7 @@ int main(void)
     WorldModelTests_Run(&Run);
     WorldColliderTests_Run(&Run);
     WorldScreenTests_Run(&Run);
+    CrtScreenTests_Run(&Run);
     WorldCollisionTests_Run(&Run);
     WorldCollisionMotionTests_Run(&Run);
     WorldTerrainCollisionTests_Run(&Run);

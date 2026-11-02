@@ -1,0 +1,5 @@
+{
+    "name": "tbp:world_crt_skinned",
+    "vertex_location": "pbr/skinned",
+    "fragment_location": "crt/fragment"
+}

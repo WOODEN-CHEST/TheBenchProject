@@ -1436,8 +1436,8 @@ static Error WorldModelDefinition_LoadAsset(void* self, AssetManager* manager, A
         }
     }
     void* SurfaceBlock = NULL;
-    Result = WorldModelSurfaceDefinition_Load(Definition->Surfaces, Definition->Base.Name, Built._lods[0]._model, &Built,
-        &SurfaceBlock);
+    Result = WorldModelSurfaceDefinition_Load(Definition->Surfaces, Definition->Base.Name, manager, dependencyUser,
+        Built._lods[0]._model, &Built, &SurfaceBlock);
     if (Result.Code != ErrorCode_Success)
     {
         WorldModelCollision_DestroyBlock(CollisionBlock);

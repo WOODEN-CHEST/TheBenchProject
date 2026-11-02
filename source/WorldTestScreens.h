@@ -24,7 +24,10 @@
  *
  * The UI is a full-screen "desk" widget (focusable: a click anywhere on the picture focuses it) that counts the clicks
  * on it and keeps a line of what is typed while it has the keyboard, with labels over it (input-disabled, so every
- * click reaches the desk): a title, the game clock, where the player points, the clicks, the typed line and a hint.
+ * click reaches the desk): a title, the game clock, where the player points, the clicks, the typed line and a hint. Each
+ * click also steps the picture's background (blue, green, amber, white), so the monitor's light on the table changes
+ * colour. The monitor is a CRT: the grave key (`) turns it off and on (its power animation), Shift and the grave key
+ * step every CRT's mask (its own, the aperture grille, the shadow mask, none).
  *
  * The player points at the monitor with the camera's aim (walk mode: the eyes, out to the character's reach, the
  * player's own body left out; fly mode: the flycam, out to WORLD_TEST_SCREEN_FLY_REACH) or, while the mouse is free (M),
@@ -110,6 +113,10 @@ void WorldTestScreens_Deconstruct(WorldTestScreens* self);
  *  focus kept with the screen's, the labels. The use and the letting go are logged. */
 Error WorldTestScreens_Update(WorldTestScreens* self, ProgramTime time, const GameCamera* camera, uint64_t playerId,
     bool isCursorCaptured, const GameClock* clock);
+
+/** The monitor's keys, while it is not in use (the frame's debug keys' slot): the grave key turns it off and on, Shift
+ *  with it steps every CRT's mask through @p renderer's override. Each logged. */
+void WorldTestScreens_HandleInput(WorldTestScreens* self, GameInput* input, WorldRenderer* renderer);
 
 /** Draws the UI into the monitor's picture and hands it to the renderer for its next render (call it right before the
  *  world renders). */

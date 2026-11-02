@@ -66,6 +66,8 @@ static void EnsureShaders(WorldRenderer* self)
     // The atmosphere's tables first: the sky and every lit shader read them.
     WorldRendererAtmosphere_LoadShaders(self);
     WorldRendererLighting_LoadShader(self);
+    // A CRT's glass shades as the PBR program does, so after it.
+    WorldRendererCrt_LoadShaders(self);
     WorldRendererGeometry_LoadShaders(self);
     WorldRendererPost_LoadShaders(self);
     WorldRendererExposure_Load(self);
@@ -480,7 +482,11 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
             Status->PosedModelCount++;
         }
     }
-    WorldRendererSurfaces_Count(self, &Status->ScreenCount, &Status->ScreenPictureCount);
+    WorldRendererSurfaces_Count(self, &Status->ScreenCount, &Status->ScreenPictureCount, &Status->CrtScreenCount);
+    Status->ScreenLightCount = (uint32_t)self->_surfaces._lights._count;
+    Status->Features[WorldRendererFeature_CrtScreens] = StateOf(self->_crt._rigid._shader != NULL, HasPbr
+        && (self->_crt._rigid._shader != NULL) && (Status->CrtScreenCount > 0U));
+    Status->Features[WorldRendererFeature_ScreenLight] = StateOf(HasPbr, HasPbr && (Status->ScreenLightCount > 0U));
     // Skinning needs the skinned twin of the shader models draw with: the PBR one, or the unlit one without PBR.
     bool HasSkinning = HasPbr
         ? ((self->_pbr._skinned._shader != NULL) && (self->_pbr._skinned._palette._location >= 0))
@@ -748,6 +754,8 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     GenericBuffer_AllocateVariable(&Renderer->_skyVisibility._modelBoxes, 0U, sizeof(BoundingBox));
     GenericBuffer_AllocateVariable(&Renderer->_surfaces._bindings, INITIAL_SURFACE_BINDING_CAPACITY,
         sizeof(WorldRendererSurfaceBinding));
+    GenericBuffer_AllocateVariable(&Renderer->_surfaces._lights, INITIAL_SURFACE_BINDING_CAPACITY,
+        sizeof(WorldRendererScreenLight));
     for (int Feature = 0; Feature < (int)WorldRendererFeature_Count; Feature++)
     {
         Renderer->_status.Features[Feature] = WorldRendererFeatureState_Inactive;
@@ -787,6 +795,7 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     Memory_Free(self->_skyVisibility._modelBoxes._data);
     Memory_Free(self->_pbr._forwardRadiances._data);
     Memory_Free(self->_surfaces._bindings._data);
+    Memory_Free(self->_surfaces._lights._data);
 
     Error Result = AssetManager_RetireUser(self->_assetManager, self->_modelUser);
     Error ShaderResult = AssetManager_RetireUser(self->_assetManager, self->_shaderUser);
@@ -921,6 +930,8 @@ static Error RenderFrame(WorldRenderer* self, World* world, const GameCamera* ca
     }
     DecidePasses(self, &Frame);
     WorldRendererLighting_PrepareFrame(self, &Frame);
+    // The screens' light from the pictures handed over for this render.
+    WorldRendererSurfaces_PrepareFrame(self, &Frame);
     DecideNightVision(self, &Frame);
     // Every sprite's matrices for the camera and the shadow lights, and the transparent ones' draw order.
     WorldRendererSprites_PrepareFrame(self, &Frame);
@@ -1074,6 +1085,8 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_CloudShadows:     return (const unsigned char*)u8"cloud shadows";
         case WorldRendererFeature_Rain:             return (const unsigned char*)u8"rain";
         case WorldRendererFeature_RainMap:          return (const unsigned char*)u8"rain map";
+        case WorldRendererFeature_CrtScreens:       return (const unsigned char*)u8"CRT screens";
+        case WorldRendererFeature_ScreenLight:      return (const unsigned char*)u8"screen light";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -1103,14 +1116,16 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
         : (Status->IsSceneDepthSamplable ? "HDR with samplable depth" : "HDR without samplable depth");
     Error LogResult = Logger_LogInfoFormatted(self->_logger,
         (const unsigned char*)u8"WorldRenderer: %s scene; %" PRIu64 u8" models (%" PRIu64 u8" without a world model, %"
-        PRIu64 u8" posed, %" PRIu32 u8" screens, %" PRIu32 u8" showing a picture), %" PRIu64 u8" sprites (%" PRIu64
+        PRIu64 u8" posed, %" PRIu32 u8" screens (%" PRIu32 u8" CRTs), %" PRIu32 u8" showing a picture, %" PRIu32
+        u8" lighting their surroundings), %" PRIu64 u8" sprites (%" PRIu64
         u8" decals, %" PRIu64 u8" blended or additive), %" PRIu64
         u8" lights, %" PRIu64 u8" stars; drawn %" PRIu64 u8" models and %" PRIu64 u8" sprites (%" PRIu64 u8" fading; "
         u8"models by LOD %s, %" PRIu64 u8" cross-fading%s), culled %" PRIu64 u8" outside the view%s and %" PRIu64
         u8" faded out (draw distance, opacity); terrain: %" PRIu64 u8" placed (%" PRIu64 u8" without a terrain), "
         u8"%" PRIu64 u8" of %" PRIu64 u8" chunks drawn, %" PRIu64 u8" triangles%s%s%s; %s.",
         Tier, (uint64_t)Status->ModelCount, (uint64_t)Status->ModelWithoutAssetCount, (uint64_t)Status->PosedModelCount,
-        Status->ScreenCount, Status->ScreenPictureCount, (uint64_t)Status->SpriteCount, (uint64_t)Status->DecalCount, (uint64_t)Status->TransparentSpriteCount,
+        Status->ScreenCount, Status->CrtScreenCount, Status->ScreenPictureCount, Status->ScreenLightCount,
+        (uint64_t)Status->SpriteCount, (uint64_t)Status->DecalCount, (uint64_t)Status->TransparentSpriteCount,
         (uint64_t)Status->LightCount,
         (uint64_t)Status->StarCount, (uint64_t)Status->DrawnModelCount, (uint64_t)Status->DrawnSpriteCount,
         (uint64_t)Status->FadingCount, AreLodsBuilt ? (const char*)Lods._data : "?",
@@ -1351,6 +1366,23 @@ void WorldRenderer_SetLodTintingEnabled(WorldRenderer* self, bool enabled)
 bool WorldRenderer_IsLodTintingEnabled(const WorldRenderer* self)
 {
     return self->_isLodTintingEnabled;
+}
+
+void WorldRenderer_SetCrtMaskOverride(WorldRenderer* self, bool isOverridden, CrtMaskKind mask)
+{
+    bool IsKind = ((int32_t)mask >= 0) && ((int32_t)mask < (int32_t)CrtMaskKind_Count);
+    self->_crt._isMaskOverridden = isOverridden && IsKind;
+    self->_crt._maskOverride = IsKind ? mask : CrtMaskKind_None;
+}
+
+bool WorldRenderer_IsCrtMaskOverridden(const WorldRenderer* self)
+{
+    return self->_crt._isMaskOverridden;
+}
+
+CrtMaskKind WorldRenderer_GetCrtMaskOverride(const WorldRenderer* self)
+{
+    return self->_crt._maskOverride;
 }
 
 void WorldRenderer_SetTerrainKeyEnabled(WorldRenderer* self, bool enabled)

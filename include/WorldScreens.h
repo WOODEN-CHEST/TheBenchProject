@@ -34,11 +34,17 @@ typedef struct LoggerStruct Logger;
  * since is not there yet.
  *
  * POINTING. WorldScreens_Raycast finds the nearest screen a ray meets from the front (WorldModelSurface_Raycast on
- * every enabled, visible screen's surface: LOD 0's triangles of its slot) and where on its picture: the texture
- * coordinates, (0, 0) the picture's top-left, the position a UI on it takes as its pointer. With a collision world it
+ * every enabled, visible screen's surface: LOD 0's triangles of its slot) and where on its picture: (0, 0) the picture's
+ * top-left, a CRT's through its curvature (the point of its bulging picture the glass shows there), the position a UI
+ * on it takes as its pointer. With a collision world it
  * also asks whether anything else is in front of it: a collider of another object between the ray's origin and the
  * screen hides it (the screen's own colliders never do, so a monitor whose box encloses its glass is pointed at
  * through its box).
+ *
+ * POWER. WorldScreens_Advance, once a tick, moves every screen component's power transition toward its power state
+ * (WorldScreenComponent.h, "POWER"): a CRT's over its surface's power-on and power-off times, any other screen's (and
+ * one that shows on no surface) at once. A screen the sync meets for the first time starts settled at its power state,
+ * so one added and switched off before it was ever shown does not play its power-off animation.
  *
  * THREADS AND LIFETIME. Not thread-safe. The screens borrow their world, which must outlive them. Pointers they return
  * (surfaces, world models) are valid until the next WorldScreens_Sync.
@@ -79,9 +85,13 @@ typedef struct WorldScreenHitStruct
     /** @brief The surface met, and its index in the object's world model. */
     const WorldModelSurface* Surface;
     uint32_t SurfaceIndex;
-    /** @brief Where on the surface: its texture coordinates, (0, 0) the picture's top-left, (1, 1) its bottom-right. */
+    /** @brief Where on the surface: its texture coordinates, (0, 0) the glass's top-left, (1, 1) its bottom-right. */
     Vector2 Uv;
-    /** @brief Whether Uv lies on the picture ([0, 1] on both axes): the ray may meet the slot's triangles beyond it. */
+    /** @brief Where on the picture: (0, 0) its top-left, (1, 1) its bottom-right; Uv itself, but a CRT's through its
+     *  curvature (WorldModelSurface_GetPicturePosition). The pointer a UI on the screen takes. */
+    Vector2 Picture;
+    /** @brief Whether Picture lies on the picture ([0, 1] on both axes): the ray may meet the slot's triangles beyond it
+     *  (a CRT's glass beyond its curved picture). */
     bool IsOnPicture;
     /** @brief The point met, in the world (double). */
     Vector3Double Point;
@@ -114,6 +124,14 @@ void WorldScreens_Destroy(WorldScreens* self);
  * @param self The screens; must not be NULL.
  */
 void WorldScreens_Sync(WorldScreens* self);
+
+/**
+ * @brief Moves every screen's power transition toward its power state by one step of time (see the file comment,
+ *        "POWER"); call it once a tick, after WorldScreens_Sync.
+ * @param self The screens; must not be NULL.
+ * @param seconds The tick's real seconds (0, negative or NaN: only screens that change at once change).
+ */
+void WorldScreens_Advance(WorldScreens* self, float seconds);
 
 /**
  * @brief Returns how one object's screen resolved.

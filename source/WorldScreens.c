@@ -20,10 +20,10 @@
 /* One screen component and what it resolved to. */
 typedef struct WorldScreenEntryStruct
 {
-    /** The component (borrowed: refreshed by every sync and read only during it, since the world may remove it
-     *  between syncs), its serial and the hash of the surface name it was resolved for (its other settings change
-     *  nothing here). */
-    const WorldScreenComponent* Component;
+    /** The component (borrowed: refreshed by every sync and used only during it, which also settles a new screen's
+     *  power transition, since the world may remove it between syncs), its serial and the hash of the surface name it
+     *  was resolved for (its other settings change nothing here). */
+    WorldScreenComponent* Component;
     uint64_t Serial;
     uint64_t SurfaceNameHash;
     /** Its object's id. */
@@ -199,6 +199,28 @@ static WorldObject* FindOwner(const WorldScreens* self, const WorldScreenEntry* 
     return ((Screen != NULL) && (WorldComponent_GetSerial(Screen) == entry->Serial)) ? Owner : NULL;
 }
 
+/* The surface an entry's screen shows on, or NULL. */
+static const WorldModelSurface* GetSurface(const WorldScreenEntry* entry)
+{
+    return entry->HasSurface ? WorldModel_GetSurface(entry->Asset, entry->SurfaceIndex) : NULL;
+}
+
+/* Moves a screen's power transition by @p seconds toward its power state: a CRT's over its power times, any other's at
+ * once (a value that does not change is not written, so the component's revision stays). */
+static void AdvancePower(WorldScreenComponent* screen, const WorldModelSurface* surface, float seconds)
+{
+    const CrtScreenSettings* Crt = ((surface != NULL) && (WorldModelSurface_GetKind(surface) == WorldModelSurfaceKind_Crt))
+        ? WorldModelSurface_GetCrt(surface) : NULL;
+    float Now = WorldScreenComponent_GetPowerTransition(screen);
+    float Next = CrtScreen_AdvancePower(Now, WorldScreenComponent_IsPowered(screen),
+        (Crt != NULL) ? Crt->PowerOnSeconds : 0.0f, (Crt != NULL) ? Crt->PowerOffSeconds : 0.0f, seconds);
+    if (Next != Now)
+    {
+        Error Result = WorldScreenComponent_SetPowerTransition(screen, Next);
+        Error_Deconstruct(&Result); // Next is within 0..1 by construction
+    }
+}
+
 /* Whether anything but the screen's own object lies in front of a screen hit: a collider the ray meets before it. */
 static bool IsHidden(WorldScreens* self, WorldCollision* collision, Vector3Double origin, Vector3 direction,
     float distance, const WorldCollisionFilter* filter, uint64_t screenObjectId)
@@ -277,9 +299,31 @@ void WorldScreens_Sync(WorldScreens* self)
     WorldScreenEntry* Entries = (WorldScreenEntry*)(void*)self->_entries._data;
     for (size_t Index = 0U; Index < self->_entries._count; Index++)
     {
-        if (IsStale(&Entries[Index]))
+        WorldScreenEntry* Entry = &Entries[Index];
+        bool IsNew = !Entry->IsResolved;
+        if (IsStale(Entry))
         {
-            Resolve(self, &Entries[Index]);
+            Resolve(self, Entry);
+        }
+        if (IsNew)
+        {
+            // Met for the first time: settled at its power state (nothing showed it turning).
+            AdvancePower(Entry->Component, NULL, 0.0f);
+        }
+    }
+}
+
+void WorldScreens_Advance(WorldScreens* self, float seconds)
+{
+    const WorldScreenEntry* Entries = (const WorldScreenEntry*)(void*)self->_entries._data;
+    for (size_t Index = 0U; Index < self->_entries._count; Index++)
+    {
+        const WorldScreenEntry* Entry = &Entries[Index];
+        WorldObject* Owner = FindOwner(self, Entry);
+        if (Owner != NULL)
+        {
+            AdvancePower(WorldScreenComponent_FromComponent(WorldObject_GetComponent(Owner, WorldComponentType_Screen)),
+                GetSurface(Entry), seconds);
         }
     }
 }
@@ -337,7 +381,8 @@ bool WorldScreens_Raycast(WorldScreens* self, Vector3Double origin, Vector3 dire
     *outHit = (WorldScreenHit)
     {
         .ObjectId = Nearest->ObjectId, .Surface = WorldModel_GetSurface(Nearest->Asset, Nearest->SurfaceIndex),
-        .SurfaceIndex = Nearest->SurfaceIndex, .Uv = NearestHit.Uv, .IsOnPicture = NearestHit.IsOnPicture,
+        .SurfaceIndex = Nearest->SurfaceIndex, .Uv = NearestHit.Uv, .Picture = NearestHit.Picture,
+        .IsOnPicture = NearestHit.IsOnPicture,
         .Point = Vector3Double_AddScaled(origin, Unit, (double)NearestHit.Distance), .Distance = NearestHit.Distance
     };
     return true;

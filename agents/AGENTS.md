@@ -90,9 +90,18 @@ Current module list:
   checks every rule when it is read. Variants apply to the renderer's per-draw material copies, never to an asset. The
   model component names a world model and overrides its settings per placement with explicit flags. Its surfaces
   (source/WorldModelSurface.c, the section in source/WorldModelSurfaceDefinition.c) are material slots that show a
-  picture made while the game runs (a screen's UI that glows, a paper's page lit like the rest): each a name, a slot, the
-  picture's resolution, its kind and a screen's emission, with LOD 0's triangles of the slot and their texture
-  coordinates, which the pure WorldModelSurface_Raycast meets a ray on, giving where on the picture it points.
+  picture made while the game runs (a screen's UI that glows, a CRT's behind its tube's glass, a paper's page lit like the
+  rest): each a name, a slot, the picture's resolution, its kind, a glowing surface's emission and light (its intensity
+  and reach), a CRT's look (its "crt" block: CrtScreen.h, a texture mask loaded as a dependency), with LOD 0's triangles
+  of the slot and their texture coordinates, which the pure WorldModelSurface_Raycast meets a ray on, giving where on the
+  picture it points (WorldModelSurface_GetPicturePosition: through a CRT's curvature), and the glass's frame for its
+  light (its centre, its front, its width and height).
+  * CrtScreen - A CRT screen's look as pure maths (include/CrtScreen.h, source/CrtScreen.c): the settings of a world
+    model's "crt" surface, the curvature that maps a point of the glass to the picture shown there (the one function the
+    CRT shader and pointing share), the power animation's timing (CrtScreen_AdvancePower), shapes (a line opening
+    into the picture; the picture collapsing into a line and a dot that fades) and turning around when switched half
+    way (CrtScreen_GetSwitchedTransition), the scanlines' levels without moiré, the detail's fade by the picture's size,
+    the flicker and a mask tile's mean (CrtScreen_GetMaskTileMean): the C twin of shaders/common/crt.glsl.
 * World collision (WorldCollision.md) - Collision for the 3D world: shapes, layers, the collider component
   and the collision world with its step (moving and pushing). Covers:
   * CollisionShape - Collision shapes as plain values (sphere, capsule, box, cylinder, convex hull, plane bounded or
@@ -308,10 +317,13 @@ Current module list:
     settings in effect (the draw distance from the placement, the world sprite or the kind).
   * WorldLightComponent - A point light (colour, intensity, range, casts shadows).
   * WorldScreenComponent - Component type 9 (`screen`): which surface of its object's world model shows a picture made
-    while the game runs, whether the screen is on, and its brightness (WorldData.md, "Screen component").
+    while the game runs, whether the screen is on, its brightness, and how far it is on (its runtime power transition,
+    settled at its power state when read from a file) (WorldData.md, "Screen component").
   * WorldScreens - The screens system: every screen component's surface resolved on its object's world model (under its
-    own asset user, failures logged once), synced once a tick, and the ray that finds the nearest screen a player points
-    at and where on its picture, hidden by other objects' colliders in front of it (WorldData.md, "Screen component").
+    own asset user, failures logged once), synced once a tick, the ray that finds the nearest screen a player points at
+    and where on its picture (a CRT's through its curvature), hidden by other objects' colliders in front of it, and each
+    screen's power transition moved toward its power state once a tick (a CRT's over its power times)
+    (WorldData.md, "Screen component").
   * WorldAmbientZoneComponent - Component type 8 (`ambient_zone`): a box or a sphere around its object that sets a
     room's own light (its colour and intensity, the sky's share inside, the eye's exposure bias, its priority where
     zones overlap, its air's haze), fading in from its surface (WorldData.md; the renderer's side in WorldRuntime.md,
@@ -373,7 +385,11 @@ Current module list:
     mirrored in water, lightning's bolt (a frame of a sprite animation) and its light; the surfaces' pictures
     (source/WorldRendererSurfaces.c): what the code that owns a screen's content hands over for one render
     (WorldRenderer_SetSurfaceTexture), put into the surface's per-draw material copy (a screen's glowing emissive map, a
-    paper's albedo map, a render target's rows read bottom-up); the camera's passes in
+    paper's albedo map, a render target's rows read bottom-up); CRT screens (source/WorldRendererCrt.c,
+    shaders/crt/ and shaders/common/crt.glsl): a CRT's glass drawn with its own program, its picture through the tube's
+    curvature with scanlines, a mask, a glow, a vignette, a flicker and the power animation, behind glossy glass that
+    mirrors the sky; the screens' light: every shown glowing screen lights what is in front of it in its picture's
+    colour, one per lit draw (common/lighting's ScreenLight); the camera's passes in
     reversed 32-bit float
     depth with no far plane where the GPU has clip control (GLDepth), so whatever has the draw distance draws at any
     distance), in render space: the world's orientation with the camera at the origin, every position relative to the
@@ -500,8 +516,9 @@ Current module list:
     mode, the backslash a forecast. The keypad's - switches the rain (the A/B: every surface wet alike) and Enter steps
     its debug view (how open surfaces are to the rain, the puddles); the test slab and the room's roof are pavement that
     pools water (a world model variant). A monitor on a small table in the start view shows a UI (the private
-    source/WorldTestScreens.{h,c}): pointing at its picture (the aim, or the free cursor) moves a pointer on it, E or a
-    click uses it (typing and clicks show on it), Escape or pointing away lets go.
+    source/WorldTestScreens.{h,c}): a CRT; pointing at its picture (the aim, or the free cursor) moves a pointer on it, E
+    or a click uses it (typing and clicks show on it, each click steps its background colour), Escape or pointing away
+    lets go; the grave key turns it off and on, Shift with it steps every CRT's mask.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown

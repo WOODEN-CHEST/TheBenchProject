@@ -482,7 +482,8 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    map's box along the rain's mean fall), then the frame's visibility (what every
    pass draws, see "Visibility"), then the rest (`DecidePasses`; the crisp overlay runs only for crisp objects in view).
 3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the shadow strength and the forward-light
-   candidates (every light except the cube-shadow light) with their linear radiance.
+   candidates (every light except the cube-shadow light) with their linear radiance; then the screens' lights
+   (`WorldRendererSurfaces_PrepareFrame`, see "Screen light").
    Then the eye's night vision for the frame (`DecideNightVision`: its strength, the field luminance, the rods' grey),
    and each sprite's matrices (`WorldRendererSprites_PrepareFrame`: facing the camera, facing the shadow levels' light
    and the cube shadow's lamp while those run) with the blended and additive sprites sorted back to front.
@@ -510,7 +511,8 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    a lightning flash's glow above it; the ground haze in front of it all; the moon's disc, the Milky Way), the
    stars (none behind the moon, dimmed by the drawn clouds in front of them), debug grid, the camera's PBR models (each dithered by its fade, both LODs
    of a cross-fade with complementary dithers; the sun and the moon; per object: up to
-   `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights; per material: PBR factors and map flags), the camera's
+   `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights and the nearest screen's light; per material: PBR factors and map
+   flags; a CRT's glass with the CRT program: "CRT screens"), the camera's
    instance cells (lit like the models, the lights per cell, both LODs of a copy's band), the camera's terrain
    chunks (the `world_terrain` shader, lit as the models, with up to `WORLD_MAX_FORWARD_LIGHTS` lights per chunk;
    before the sprites, so decals lie on it), the camera's lit sprites
@@ -1653,7 +1655,8 @@ component shows on a surface of its object's world model what the code that owns
   surface's material slot of an entry with a surface, after the variant and before the LOD tinting's glow: a screen's
   picture becomes the copy's emissive map, white at the entry's `SurfaceEmission` (its own emission's colour, intensity
   and map replaced), while the screen is on; off, or without a picture, it gives off no light at all (its material's own
-  emission too), so its own surface shows: author a screen's slot as its dark glass. A paper's picture becomes the
+  emission too), so its own surface shows: author a screen's slot as its dark glass. A CRT's the same while it is on or
+  still turning off (its power transition above 0: the CRT program plays the animation on the picture; "CRT screens"). A paper's picture becomes the
   copy's albedo map (lit like the rest, its material's albedo colour tinting it: author a paper's slot white to show the
   picture as it is; without one its material's own albedo shows). Every LOD's meshes of the slot
   take it; the crisp overlay's draws too, so a crisp monitor reads at window resolution. Only the surface the object's
@@ -1662,10 +1665,96 @@ component shows on a surface of its object's world model what the code that owns
   model's texture coordinates read an image top row first. `isBottomUp` says which: the lit shaders read that map with v
   flipped (`isAlbedoMapBottomUp`, `isEmissiveMapBottomUp` in `pbr/fragment.frag`, uploaded per material with its
   factors: `WorldRendererMapOrientation`; false for every map a model brings, so the shader reads those as they are).
-- **Status.** The status line counts the shown models with a screen and those a picture was handed over for (`... 1
-  screens, 1 showing a picture`; `WorldRendererStatus.ScreenCount`, `ScreenPictureCount`).
-- **Not built yet**: the screen's light spilling into the room, the glass's own reflection and a CRT's look (its
-  curvature, scanlines, shadow mask and power animation).
+- **Status.** The status line counts the shown models with a screen, the CRTs among them, those a picture was handed
+  over for and those lighting their surroundings (`... 1 screens (1 CRTs), 1 showing a picture, 1 lighting their
+  surroundings`; `WorldRendererStatus.ScreenCount`, `CrtScreenCount`, `ScreenPictureCount`, `ScreenLightCount`), and the
+  features "CRT screens" and "screen light".
+- **The picture's mipmaps**: a CRT's glow and a screen's light read the picture's coarse mipmap levels. The code that
+  owns a picture makes them after each draw into it (`GenTextureMipmaps`, a trilinear filter: the test monitor does);
+  without them the glow reads the picture itself (a sharper glow) and the light's colour comes from sixteen points of it.
+
+**CRT screens** (`source/WorldRendererCrt.c`, `shaders/crt/fragment.frag`, `shaders/common/crt.glsl`; the C twin
+`include/CrtScreen.h`, `source/CrtScreen.c`; the settings are the surface's `crt` block, [WorldModels.md](WorldModels.md),
+"Surfaces"). A CRT's glass (its surface's material slot) draws in the camera's lit passes (the scene, the crisp overlay)
+with `world_crt` instead of the PBR program, and its skinned twin `world_crt_skinned` for a posed object's skinned
+meshes (the same fragment stage over the PBR's skinned vertex stage, the camera's pose's palette); the object's other
+meshes draw with the PBR program, the G-buffer and the shadow passes as for any mesh. The program is a PBR program
+(`WorldRendererLighting_LoadPbrProgram`: the material's uniforms, `common/lighting`, the dither, the frame's uniforms
+with every lit program) with uniforms of its own, set per CRT draw (`WorldRendererCrt_UploadDraw`, with the object's
+lights, place and dither, which the geometry pass gives every program an entry draws with):
+- **The glass** is a dielectric over the phosphor (the slot's material: its albedo the phosphor's colour, its roughness
+  the glass's; author it dark and glossy): the sun's, the moon's, the point lights' and a screen's light give their
+  highlights through the PBR BRDF with the glass's reflectance, `0.04 x reflection` (an anti-glare coating's share);
+  what the glass mirrors all around is the Fresnel (`FresnelSchlickRoughness`) times `EnvironmentRadiance`
+  (`common/lighting`: the sky view's sky above, as water mirrors it, the ground's bounce below, joined at the horizon,
+  tinted as the ambient, with the night's own light; under a roof the share of the sky the surface sees and its zones'
+  light, so a room mirrors little sky); the sky's ambient lights the phosphor through what the glass lets in. The picture
+  is seen through the glass: its light times 1 minus the Fresnel. Wetness, the haze, night vision (the reflected light
+  only) and the debug views as in the PBR shader. No real room reflections.
+- **The picture** (`CrtGlow`): a point of the glass shows the picture at `CrtDistort(uv, curvature, aspect)`, the C
+  twin of `CrtScreen_Distort` (pinned by `tests/ShaderSourceTests.c`) that pointing uses, so a click lands where the
+  shader shows it; beyond 0..1 the glass is dark, the edge drawn over a pixel's footprint. Its light: the picture (sRGB,
+  its rows flipped for a render target) times the scanlines and the mask, plus the glow, over 1 plus the glow's share
+  (`(sharp x lines x mask + blurred x glow) / (1 + glow)`: a white field keeps its light); the glow is five taps a texel
+  apart at the mipmap level where the picture spans about 48 texels across. Then the vignette (`1 - vignette (1 -
+  (16 x y (1 - x) (1 - y))^0.25)`), the power animation's brightness with the flicker and the open part.
+- **Scanlines**: cosines around 1 (the picture's mean light kept) every 1, 2, 4 ... rows: the fewest rows whose lines
+  span at least 2.5 of the pass's pixels (`CRT_SCREEN_SCANLINE_MIN_PIXELS`, from the picture coordinates' screen
+  derivatives), the next coarser lines blending in over the last 0.35 of each level's range, so a screen seen small never
+  shows moiré and the lines never jump while the camera moves (`CrtScreen_GetScanlineLevels`). From about three of the
+  pass's pixels a row (close up) they are the picture's own rows; farther away one line covers 2, 4, ... rows.
+- **The mask**: a pattern of window pixels (`gl_FragCoord` times the pass's window pixels per pixel): the aperture
+  grille (red, green and blue columns, each 3 x one channel), the shadow mask (the same in rows of 1.5 and 0.5, staggered
+  every three columns) or the surface's tile (repeated, its linear colours divided by its mean), each mixed with white by
+  the mask strength and keeping the picture's mean light. It shows whole while a pass's pixel is at most a third of
+  its period (a window pixel) and fades out to none at half of it (`CRT_MASK_MIN_PIXELS`, 2 pass pixels a period): in
+  the crisp overlay at the window's resolution, never in the pixelated scene (a CRT drawn pixelated shows the
+  scanlines, no mask).
+- **Detail**: the scanlines and the mask fade out while the picture spans fewer than 160 window pixels from top to
+  bottom, to none at 64 (`CRT_SCREEN_DETAIL_FADE_START`, `_END`): from across a room a CRT just glows.
+- **Power** (`WorldRendererCrt_GetPowerShape`: `CrtScreen_GetPowerShape` on the entry's power state and transition,
+  its flicker `CrtScreen_GetFlicker` by the render clock and its object's id): the open part's half width and height
+  (`crtPower.xy`), the brightness (`.z`) and the beam's whiteness (`.w`); the picture is squeezed into the open part (a
+  bright line opening into the picture turning on; the picture collapsing into a line, the line into a round dot, the dot
+  fading turning off; the squeezed beam brighter, up to 5, and white), its light the shape's (`Light`). The screens
+  system advances the transition, and a switch half way turns it around to the other animation's point that carries on
+  the shape ([WorldData.md](WorldData.md), "Screen component"; `CrtScreen_GetSwitchedTransition`).
+- **The mask override** (`WorldRenderer_SetCrtMaskOverride`, Shift + grave in the test frame): every CRT shows one mask
+  (a texture mask: each one's own tile, none on a CRT without one), to compare them.
+- **Without the program** (`world_crt` missing, logged once by the loader; the feature "CRT screens" unavailable) a
+  CRT draws as a plain screen with the PBR program (no curvature, so pointing is off near its corners). Model instances
+  never show a picture, so their copies of a CRT draw its glass with the PBR program.
+- **Cost** (GTX 980 Ti, 1280 x 720, GL timer queries over 1500 renders, the test monitor close at night, about 300 x 220
+  window pixels of glass): the crisp pass 0.094 ms with the CRT against 0.074 ms with the same monitor drawn as a plain
+  screen (`world_crt` removed): about 0.02 ms for the CRT's look.
+
+**Screen light** (`source/WorldRendererSurfaces.c`, `common/lighting`'s `ScreenLight`). Every shown screen or CRT that
+glows with a picture lights what is in front of it like a small window, in its picture's mean colour:
+- **The render's lights** (`WorldRendererSurfaces_PrepareFrame`, after the forward lights): every shown entry (in view
+  or not) whose surface glows, with a picture handed over, on (a CRT: its power shape's `Light` above 0, its flicker in)
+  and a light intensity above 0: its glass's centre through the entry's render-space matrix, its two axes as directions
+  (their cross product the area, under any scale), its front through the inverse transpose, its reach (the surface's
+  `light_range`), its glow (`SurfaceEmission` x `light_intensity` x the power) and whiteness (a CRT's squeezed beam), and
+  the picture's mipmap level where it spans about four texels a side.
+- **Per draw** (`WorldRendererSurfaces_UploadScreenLight`, from `WorldRendererLighting_UploadObjectLights`, so every lit
+  draw that takes forward lights takes it: models, CRTs, model instances' cells, terrain chunks, lit sprites): the nearest
+  of the render's lights (by its glass's centre) whose reach meets the draw's bounding sphere and which the sphere is not
+  wholly behind (`WorldRendererSurfaces_FindScreenLight`); its picture bound on unit 19
+  (`WorldRendererTextureUnit_ScreenLight`), none (`screenLightActive` false) without one. One screen per draw.
+- **In the shader**: the picture's mean colour from 4 x 4 taps at that level (decoded from sRGB after averaging, as its
+  mipmaps average it; whitened by the whiteness), times the glow: the glass's radiance; at a point it gives a surface
+  facing it `radiance x area x cos(at the glass) / (distance^2 + area / pi)` (a disc of that area's exact light on its
+  axis: it never blows up at the glass), windowed to 0 at the reach as the point lights are, nothing behind the glass;
+  through the plain BRDF (sprites: the wrapped one), its highlight's roughness widened by the glass's half size over the
+  distance, so a glossy desk shows a soft patch. No shadow: it lights through what stands in front of it. Reflected light,
+  so the eye's night vision takes it.
+- **Its strength** follows the picture's: a white picture at the default emission 0.2 on a 44 x 33 cm glass gives a
+  white surface 0.5 m in front of it a radiance of about 0.031 (its irradiance 0.098 over pi): lost in daylight, a clear
+  pool on the desk at night in the picture's colour; a dark blue picture (the test monitor's first background) sends too
+  little to see, as a real one does.
+- **Cost** (as "CRT screens" measured it): about 0.014 ms in the scene pass's lit draws and 0.007 ms in the crisp pass
+  with the test monitor's light on the table (against its `light_intensity` 0); with no screen in the world the lit draws
+  measure no slower than without the feature (the shader's branch is uniform).
 
 **Crisp overlay.** OmitPixelation models and cutout sprites render lit at window resolution and are composited over the
 pixelated image, depth-tested against the scene so they are occluded correctly (e.g. a readable in-world
@@ -1754,7 +1843,8 @@ get no AO and no outlines.
 | `WorldRendererPost.c` | Outlines, bloom, sun shafts and the tonemap. |
 | `WorldRendererExposure.c` | The eye (see "Eye adaptation"): the meter's shader, target and readback, the meter pass after the sun shafts, the eye's update from the newest blocks (`EyeAdaptation`) and the exposure the tonemap takes. |
 | `WorldRendererCrisp.c` | The crisp overlay. |
-| `WorldRendererSurfaces.c` | The surfaces' pictures (see "Surfaces' pictures"): the list handed over for one render, each put into its surface's material copy (a screen's emissive map, a paper's albedo map) with its rows' orientation, the status's counts. Not a pass: the lit passes' material copies call it. |
+| `WorldRendererSurfaces.c` | The surfaces' pictures (see "Surfaces' pictures"): the list handed over for one render, each put into its surface's material copy (a screen's or a CRT's emissive map, a paper's albedo map) with its rows' orientation, the status's counts; the screens' light (see "Screen light"): the render's lights from the shown glowing screens, each lit draw's nearest one and its upload. Not a pass: the lit passes' material copies and light uploads call it. |
+| `WorldRendererCrt.c` | The CRT programs (see "CRT screens"): `world_crt` and its skinned twin loaded as PBR programs, their own uniforms (the pass's window pixel scale, a CRT draw's shape, look, power with its flicker, mask and tile, the glass's reflection), the mask override. Not a pass: the lit passes draw a CRT's glass with it. |
 | `WorldRendererCollision.c` | Debug wireframes of a collision world's shapes and its contact points (`WorldRenderer_SetCollisionDebug`), drawn in the scene pass after the light gizmos from its read-only debug lists ([WorldCollision.md](WorldCollision.md)). |
 | `WorldVisibility.c` (with the cache, not a pass) | The frame's visibility lists (per pass, the entries it draws, and every entry's fades) and the dither's C mirror; see "Visibility". |
 | `WorldLod.c` (with the cache, not a pass) | LOD selection and the cross-fade's state; the cache's `WorldRenderCache_UpdateLods` runs it per entry; see "LODs". |
@@ -1792,9 +1882,12 @@ The renderer keeps receiving features, so:
   | 9 | the sky pass and the stars | The cloud target (`sampler2D cloudLayer`, `WorldRendererTextureUnit_CloudLayer`: the clouds' newest result), bound before their draws while the clouds are drawn. |
   | 12–15 | every lit program | The frame's textures: 12 the shadow levels' maps (`sampler2DArrayShadow shadowLevels`, the array's `GL_TEXTURE_2D_ARRAY` target), 13 the clouds' shadow map (`sampler2D cloudShadowMap`), 14 the cube shadow, 15 the ambient pre-pass's map (the AO, the sky's visibility, the contact shadows). |
   | 7–13 | the cloud programs (`world_clouds`, `world_clouds_shadow`, `world_clouds_resolve`, `world_clouds_composite`) | 7 the transmittance table, 8 the haze's volume, 9 and 10 the shape and the erosion noise (`sampler3D`, the units' `GL_TEXTURE_3D` target), 11 the weather map, 12 the G-buffer's depth (the march's surfaces), 13 the irradiance table (the multiple scattering table's sampler, declared and unread, points there too). Full-screen passes without material maps; the resolve's two images and the composite's two come through `SetShaderValueTexture`. |
-  | 16–18 | every lit program and the rain's (`world_rain_streaks`, `world_rain_splashes`, `world_lightning_bolt`) | The rain's frame textures: 16 the rain map (`sampler2DArrayShadow rainMap`, the array's `GL_TEXTURE_2D_ARRAY` target), 17 the puddle mask (`sampler2D puddleMask`), 18 the sky view for what water mirrors (`sampler2D atmosphereSkyViewTable`, pointed there in the lit programs, which read the haze's volume where the sky pass has the table). Above every unit raylib binds, so no material map or 2D batch ever meets them; GL 3.3 guarantees 48 units in all (`GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS`; a stage's limit of 16, `GL_MAX_TEXTURE_IMAGE_UNITS`, counts the samplers it reads, not their units' numbers: the PBR program reads 13). Bound with the lit passes' frame textures. |
+  | 16–18 | every lit program and the rain's (`world_rain_streaks`, `world_rain_splashes`, `world_lightning_bolt`) | The rain's frame textures: 16 the rain map (`sampler2DArrayShadow rainMap`, the array's `GL_TEXTURE_2D_ARRAY` target), 17 the puddle mask (`sampler2D puddleMask`), 18 the sky view for what water mirrors (`sampler2D atmosphereSkyViewTable`, pointed there in the lit programs, which read the haze's volume where the sky pass has the table). Above every unit raylib binds, so no material map or 2D batch ever meets them; GL 3.3 guarantees 48 units in all (`GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS`; a stage's limit of 16, `GL_MAX_TEXTURE_IMAGE_UNITS`, counts the samplers it reads, not their units' numbers: the PBR program reads 14, the CRT program 14, the terrain's 13). Bound with the lit passes' frame textures. |
 
-  A new frame texture for the lit programs takes a unit from 19 up (16 to 18 are the rain's), or below 12 where no
+  | 19 | every lit program | The draw's screen light's picture (`sampler2D screenLightPicture`, `WorldRendererTextureUnit_ScreenLight`), bound per draw with the light (`WorldRendererSurfaces_UploadScreenLight`); read only while a screen lights the draw. |
+  | 20 | the CRT programs (`world_crt`, `world_crt_skinned`) | A CRT's mask tile (`sampler2D crtMaskTile`, `WorldRendererTextureUnit_CrtMask`), bound per CRT draw while its mask is a texture. The CRT programs read 14 samplers (no normal map). |
+
+  A new frame texture for the lit programs takes a unit from 21 up (16 to 20 are the rain's and the screens'), or below 12 where no
   material map the programs' materials use binds (the PBR materials use maps 0, 1, 2 and 5: albedo, the packed ORM,
   normal, emission; raylib's importers also fill 3 (roughness) and 4 (occlusion) in some formats (a glTF file's are
   packed into 1 and emptied when the model loads) and its OBJ import 6 (height) when the file has those maps), keeping
@@ -1876,8 +1969,9 @@ compositing, see "Haze"; used by `common/lighting`, `world_sky`, `world_stars` a
 and the blend into their grey; used by `world_sky` and `common/lighting`), `common/lighting` (the frame's lighting: its
 uniforms, the BRDF and its wrapped variant, the shadow levels' shadow off the face with the contact shadows, point lights
 and the cube shadow, the pre-pass's AO and sky visibility, the
-night vision, the haze through `common/haze`: `ApplyAerialPerspective`, and interior lighting through
-`common/interior`; used by `world_pbr`, `world_terrain` and `world_sprite`), `common/interior` (interior lighting: the
+night vision, the haze through `common/haze`: `ApplyAerialPerspective`, interior lighting through
+`common/interior`, a screen's light (`ScreenLight`, `ScreenLightWrapped`) and what a glossy surface mirrors
+(`EnvironmentRadiance`, `FresnelSchlickRoughness`); used by `world_pbr`, `world_crt`, `world_terrain` and `world_sprite`), `common/interior` (interior lighting: the
 ambient zones a draw takes, the occupancy volume's march and the read straight above, the haze inside zones and the
 debug view, see "Interior lighting"; used by `common/lighting` and `world_ao`), `common/distance_packing` (the cube shadow's
 packed distance; used by `world_cube_depth`, `world_sprite_cube_depth` and `common/lighting`), `common/dither` (the
@@ -1898,6 +1992,11 @@ accumulation) and `world_clouds_composite` (the clouds over the surfaces): `shad
 `clouds_shadow.json`, `clouds_resolve.json`, `clouds_composite.json` with the fragment stages `march`, `shadow`,
 `resolve` and `composite` over raylib's default vertex stage), full-screen passes into the cloud pass's targets and,
 the composite, into the scene's picture.
+
+A CRT's glass draws with `world_crt` (`shaders/crt/crt.json`: the PBR's `pbr/vertex` with `crt/fragment`) and its
+skinned twin `world_crt_skinned` (`crt/crt_skinned.json`: `pbr/skinned` with the same fragment stage), which includes
+`common/lighting`, `common/dither` and `common/crt` (the CRT's picture: the curvature, the scanlines' levels, the masks,
+the vignette and the glow, and its uniforms; the C twin is `include/CrtScreen.h`, see "CRT screens").
 
 The sky's occupancy volume draws with `world_sky_slices` (`shaders/sky_slices/`: its fragment stage over raylib's
 default vertex stage; its twins `world_sky_slices_skinned` and `world_sky_slices_instanced` take the depth shaders'
@@ -1959,8 +2058,9 @@ casts nothing (it has no face turned away) and the second a square shadow.
 An asset made in Blender: a `trash_can` (id 65, the `trash_can_lined` world model: a slatted steel bin with a black
 liner, four LODs from .glb files with their own maps, [WorldModels.md](WorldModels.md)) stands in the start view at
 (0.3, 0.05, -2.7), in front of the crates; it is movable and pushable (30 kg).
-A screen: a `monitor` (id 70, the `test_monitor` world model: a flat screen on a stand whose surface `screen` is
-640 x 480, crisp, emission 0.2; with a collider and a screen component) on a small table (`monitor_table`, id 66, a pivot
+A screen: a `monitor` (id 70, the `test_monitor` world model: a flat screen on a stand whose surface `screen` is a
+CRT of 640 x 480 with the placeholder slot mask, crisp, emission 0.2; with a collider and a screen component) on a small
+table (`monitor_table`, id 66, a pivot
 at (-1.6, 0.05, -3.3) turned 155 degrees so the screen faces the start view, with its top and two sides, ids 67 to 69),
 on the right of the start view (see "The test monitor" below).
 Edit the file and restart to change the test world.
@@ -1989,11 +2089,16 @@ the renderer's first-person object (`WorldRenderer_SetFirstPersonObject`; 0 out 
 camera's surroundings are to the sky (`WorldCollision_GetSkyOpenness`, 30 m against the world and prop layers,
 triggers left out) for interior lighting (`WorldRenderer_SetCameraOpenness`).
 **The test monitor** (the private `source/WorldTestScreens.{h,c}`): the frame keeps a `WorldScreens` (created after the
-world, synced at the end of every `Update`, after the look target) and the monitor's UI: a `UIScreen` of its own (its own
+world, synced at the end of every `Update`, after the look target, then advanced by the tick's real seconds:
+`WorldScreens_Advance`, the CRT's power animation) and the monitor's UI: a `UIScreen` of its own (its own
 widget and text factories, like the UI test frame's) at the surface's resolution, a full-screen focusable "desk" widget
 (it counts the left clicks on the picture and keeps a line of what is typed, Backspace deleting; it draws a small cross
 where the player points) and input-disabled labels over it: a title, the game clock, the pointer's position, the clicks
-(and where the last one was), the typed line and a hint. `Update` runs it first, before the frame's own controls: the
+(and where the last one was), the typed line and a hint. Each click also steps the picture's background (blue, green,
+amber, white), so the CRT's light on the table changes colour. While the monitor is not in use, the grave key (`)
+turns it off and on (`WorldScreenComponent_SetIsPowered`: its power animation plays; logged) and Shift with the grave
+key steps every CRT's mask (its own, the aperture grille, the shadow mask, none: `WorldRenderer_SetCrtMaskOverride`;
+logged). `Update` runs it first, before the frame's own controls: the
 pointing ray is the camera's aim as last shown (walk mode: from the eyes, out to the player's character's reach, its own
 body ignored; fly mode: 4 m, `WORLD_TEST_SCREEN_FLY_REACH`) or, while the mouse is free (M), the cursor's ray through the
 camera; then its `WorldScreenHost` (E or a click on the picture uses the monitor; Escape or pointing away lets go;
@@ -2170,9 +2275,11 @@ raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writi
   shaders, and the picture must not change (it may round differently by a level here and there). Q's LOD tinting
   colours the copies' LODs too, and the status line (I) gives the copies by LOD;
 - T toggles the text sample;
-- **the monitor** (see "The test monitor" above; no keys of its own): pointing at its picture (the aim within reach, or
-  the free cursor) shows a cross there; E (`use`) or a click on the picture uses it, and then every key is the
-  monitor's (typing shows on it; the debug keys and the movement wait) until Escape or pointing away lets go.
+- **the monitor** (see "The test monitor" above): pointing at its picture (the aim within reach, or the free cursor)
+  shows a cross there; E (`use`) or a click on the picture uses it, and then every key is the monitor's (typing shows on
+  it; the debug keys and the movement wait) until Escape or pointing away lets go; each click steps its background
+  (blue, green, amber, white). The grave key (`) turns it off and on (the CRT's power animation), Shift with the grave key
+  steps every CRT's mask (its own, the aperture grille, the shadow mask, none); both logged.
 
 M frees the cursor for the UI (and captures it again); a left click the UI did not take captures it again, unless it
 landed on the monitor's picture (the monitor's). An unconsumed `pause` (Escape once neither the UI nor the monitor is

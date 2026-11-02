@@ -376,6 +376,15 @@ static void FillObject(TestRun* run, World* world, WorldObject* object)
             FillTable(run, World_GetComponentTypeInfo(world, (WorldComponentType)Type)->Table, Component);
         }
     }
+    // A screen read from a file starts settled at its power state (its power transition is runtime state, not saved):
+    // switched off by the fill, it comes back dark.
+    WorldScreenComponent* Screen = WorldScreenComponent_FromComponent(WorldObject_GetComponent(object,
+        WorldComponentType_Screen));
+    if (Screen != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetPowerTransition(Screen,
+            WorldScreenComponent_IsPowered(Screen) ? 1.0f : 0.0f));
+    }
 }
 
 static WorldObject* CreateObject(TestRun* run, World* world)

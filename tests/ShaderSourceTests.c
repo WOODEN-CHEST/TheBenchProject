@@ -1,5 +1,6 @@
 #include "TestSuites.h"
 #include "AssetManager.h"
+#include "CrtScreen.h"
 #include "EyeAdaptation.h"
 #include "GameSkeleton.h"
 #include "ShaderSource.h"
@@ -1601,6 +1602,79 @@ static void ShippedShadersDrawTheRain(TestRun* run)
 }
 
 
+/* The CRT: its program's two definitions share one fragment stage (the skinned one over the PBR's skinned vertex stage),
+ * which reads the lighting, the dither and the CRT's include, whose constants and curvature are its C twin's
+ * (CrtScreen.h: the one function pointing uses); the glass's reflectance is a dielectric's. Every lit stage adds a
+ * screen's light, the sprites' with wrap lighting. */
+static void ShippedShadersDrawTheCrt(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        const char* const Definitions[][3] =
+        {
+            { "crt/crt.json", "pbr/vertex", "crt/fragment" }, { "crt/crt_skinned.json", "pbr/skinned", "crt/fragment" }
+        };
+        for (size_t Index = 0U; Index < (sizeof(Definitions) / sizeof(Definitions[0])); Index++)
+        {
+            GenericBuffer Text;
+            GenericBuffer_AllocateVariable(&Text, 0U, sizeof(unsigned char));
+            if (ReadShippedText(run, Definitions[Index][0], &Text))
+            {
+                char Vertex[64];
+                char Fragment[64];
+                snprintf(Vertex, sizeof(Vertex), "\"vertex_location\": \"%s\"", Definitions[Index][1]);
+                snprintf(Fragment, sizeof(Fragment), "\"fragment_location\": \"%s\"", Definitions[Index][2]);
+                TEST_CHECK(run, BufferContains(&Text, Vertex) && BufferContains(&Text, Fragment));
+            }
+            Memory_Free(Text._data);
+        }
+        if (ExpandShippedStage(run, &Fixture, "crt/fragment"))
+        {
+            TEST_CHECK(run, BufferContains(&Fixture.SourceList, "\"common/crt\"")
+                && BufferContains(&Fixture.SourceList, "\"common/lighting\"")
+                && BufferContains(&Fixture.SourceList, "\"common/dither\""));
+            TEST_CHECK(run, (GetConstValue(&Fixture.Text, "CRT_SCANLINE_MIN_PIXELS") == (double)CRT_SCREEN_SCANLINE_MIN_PIXELS)
+                && (fabs(GetConstValue(&Fixture.Text, "CRT_SCANLINE_BLEND") - (double)CRT_SCREEN_SCANLINE_BLEND) < 1e-7)
+                && (GetConstValue(&Fixture.Text, "CRT_DETAIL_FADE_START") == (double)CRT_SCREEN_DETAIL_FADE_START)
+                && (GetConstValue(&Fixture.Text, "CRT_DETAIL_FADE_END") == (double)CRT_SCREEN_DETAIL_FADE_END)
+                && (GetConstValue(&Fixture.Text, "CRT_MASK_PERIOD") == (double)CRT_SCREEN_MASK_PERIOD));
+            TEST_CHECK(run, (GetConstIntValue(&Fixture.Text, "CRT_MASK_APERTURE_GRILLE") == (long)CrtMaskKind_ApertureGrille)
+                && (GetConstIntValue(&Fixture.Text, "CRT_MASK_SHADOW_MASK") == (long)CrtMaskKind_ShadowMask)
+                && (GetConstIntValue(&Fixture.Text, "CRT_MASK_TEXTURE") == (long)CrtMaskKind_Texture));
+            // The curvature, line for line as CrtScreen_Distort computes it, and the lines' levels as
+            // CrtScreen_GetScanlineLevels chooses them.
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "vec2 c = uv*2.0 - 1.0;") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "vec2 bent = vec2(c.x*(1.0 + curvature*c.y*c.y), c.y*(1.0 + curvature*aspect*c.x*c.x));") == 1U)
+                && (CountOccurrences(&Fixture.Text, "vec2 position = CrtDistort(uv, crtShape.x, crtShape.y);") == 1U));
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text,
+                    "float level = log2(max(rowsPerPixel*CRT_SCANLINE_MIN_PIXELS, 1e-6));") == 1U)
+                && (CountOccurrences(&Fixture.Text, "float drawn = max(ceil(level), 0.0);") == 1U)
+                && (CountOccurrences(&Fixture.Text, "float coarse = smoothstep(drawn - CRT_SCANLINE_BLEND, drawn, level);")
+                    == 1U));
+            TEST_CHECK(run, (GetConstValue(&Fixture.Text, "CRT_GLASS_F0") == 0.04)
+                && (CountOccurrences(&Fixture.Text, "+ ScreenLight(n, v, fragPosition, albedo, f0, rough, metal);") == 1U));
+        }
+        const char* const LitStages[] = { "pbr/fragment", "terrain/fragment" };
+        for (size_t Index = 0U; Index < (sizeof(LitStages) / sizeof(LitStages[0])); Index++)
+        {
+            if (ExpandShippedStage(run, &Fixture, LitStages[Index]))
+            {
+                TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "+ ScreenLight(n, v, fragPosition, albedo, f0, ") == 1U)
+                    && (CountOccurrences(&Fixture.Text, "uniform sampler2D screenLightPicture;") == 1U));
+            }
+        }
+        if (ExpandShippedStage(run, &Fixture, "sprite/fragment"))
+        {
+            TEST_CHECK(run, CountOccurrences(&Fixture.Text, "+ ScreenLightWrapped(n, v, fragPosition, lightWrap, ") == 1U);
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
 // Public functions.
 void ShaderSourceTests_Run(TestRun* run)
 {
@@ -1633,6 +1707,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "shipped_shaders_show_the_weather", ShippedShadersShowTheWeather },
         { "shipped_shaders_draw_the_clouds", ShippedShadersDrawTheClouds },
         { "shipped_shaders_draw_the_rain", ShippedShadersDrawTheRain },
+        { "shipped_shaders_draw_the_crt", ShippedShadersDrawTheCrt },
     };
     TestRun_RunSuite(run, "ShaderSource", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

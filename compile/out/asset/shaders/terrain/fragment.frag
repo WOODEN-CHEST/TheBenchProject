@@ -485,11 +485,12 @@ void main()
     vec3 f0 = vec3(0.04);
 
     // The sun and the moon, darkened by the shadow levels' shadow, read off the triangle's own face (what the shadow map
-    // holds); then the point lights, the cube-shadow light read at the fragment itself.
+    // holds); then the point lights, the cube-shadow light read at the fragment itself, and a screen's light.
     SkyLightValues light = SkyLightAt(fragPosition);
     float shadowAmount = FaceShadowAmount(fragPosition, FaceNormal(fragPosition, geometric));
     vec3 direct = SkyLight(light, n, v, shadowAmount, albedo, f0, roughness, 0.0);
-    vec3 pointTotal = PointLights(n, v, fragPosition, fragPosition, geometric, albedo, f0, roughness, 0.0);
+    vec3 pointTotal = PointLights(n, v, fragPosition, fragPosition, geometric, albedo, f0, roughness, 0.0)
+        + ScreenLight(n, v, fragPosition, albedo, f0, roughness, 0.0);
     float skyVisibility = SkyVisibilityAt(fragPosition, geometric);
     vec3 ambient = AmbientLight(light, n, fragPosition, geometric, skyVisibility)*albedo*occlusion*ScreenAo();
 

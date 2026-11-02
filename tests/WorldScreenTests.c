@@ -66,6 +66,12 @@ static const float NotFinite[] = { 0.0f, 1.0f, NAN, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f
 static const char* const ScreenBoxJson =
     "{\"name\": \"screen_box\", \"lods\": [{\"model\": \"screen_box\", \"max_distance\": 40}], \"collision\": \"bounds\", "
     "\"surfaces\": [{\"name\": \"screen\", \"material_slot\": 1, \"resolution\": [320, 240]}]}";
+/* The screen box as a CRT: its look's defaults (its curvature, its power times) but a strong flicker, so a light that
+ * forgets it shows. */
+static const char* const CrtBoxJson =
+    "{\"name\": \"crt_box\", \"lods\": [{\"model\": \"screen_box\", \"max_distance\": 40}], \"collision\": \"bounds\", "
+    "\"surfaces\": [{\"name\": \"screen\", \"material_slot\": 1, \"resolution\": [320, 240], \"kind\": \"crt\", "
+    "\"crt\": {\"flicker\": 0.5}}]}";
 
 
 // Types.
@@ -377,7 +383,7 @@ static void SurfaceRulesAreRefusedWithClearMessages(TestRun* run)
             ErrorCode_InvalidAssetDefinition, "surfaces[0].emission must be a number" },
         { WM "\"surfaces\": [{\"name\": \"s\", \"material_slot\": 1, \"resolution\": [64, 64], \"slot\": 1}]}",
             ErrorCode_InvalidAssetDefinition, "Unknown key \"slot\" in world model \"tbp:m\", surfaces[0]; the keys "
-                "allowed there are: name, material_slot, resolution, kind, emission" },
+                "allowed there are: name, material_slot, resolution, kind, emission, light_intensity, light_range, crt" },
         { WM "\"surfaces\": [{\"name\": \"a\", \"material_slot\": 0, \"resolution\": [64, 64]}, {\"name\": \"b\", "
             "\"material_slot\": 1, \"resolution\": [64, 64]}, {\"name\": \"c\", \"material_slot\": 2, \"resolution\": "
             "[64, 64]}, {\"name\": \"d\", \"material_slot\": 3, \"resolution\": [64, 64]}, {\"name\": \"e\", "
@@ -767,10 +773,51 @@ static void TheScreenComponentStartsAtItsDefaultsAndChecksItsValues(TestRun* run
         TEST_CHECK_ERROR(run, WorldScreenComponent_SetSurface(Screen, (const unsigned char*)
             u8"a1234567890123456789012345678901234567890123456789012345678901234"), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK(run, strcmp((const char*)WorldScreenComponent_GetSurface(Screen), "glass.front") == 0);
+        // The power transition: 1 at first (on), any value from 0 to 1 (the screens system moves it). A switch while it
+        // is under way turns it around (switched on while its dot fades, the tube starts over at 0); a switch at rest, or
+        // to the state it has, leaves it.
+        TEST_CHECK(run, WorldScreenComponent_GetPowerTransition(Screen) == 1.0f);
+        Revision = WorldComponent_GetRevision(Component);
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetPowerTransition(Screen, 0.0f));
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetPowerTransition(Screen, 0.25f));
+        TEST_CHECK(run, (WorldScreenComponent_GetPowerTransition(Screen) == 0.25f)
+            && (WorldComponent_GetRevision(Component) == (Revision + 2U)));
+        TEST_CHECK_ERROR(run, WorldScreenComponent_SetPowerTransition(Screen, -0.01f), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldScreenComponent_SetPowerTransition(Screen, 1.01f), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldScreenComponent_SetPowerTransition(Screen, NAN), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, WorldScreenComponent_SetPowerTransition(NULL, 0.5f), ErrorCode_IllegalArgument);
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(Screen, true));
+        TEST_CHECK(run, WorldScreenComponent_GetPowerTransition(Screen) == 0.0f);
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetPowerTransition(Screen, 0.25f));
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(Screen, true));
+        TEST_CHECK(run, WorldScreenComponent_GetPowerTransition(Screen) == 0.25f);
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetPowerTransition(Screen, 1.0f));
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(Screen, false));
+        TEST_CHECK(run, WorldScreenComponent_GetPowerTransition(Screen) == 1.0f);
+        const PropertyDescriptor* Row = PropertyTable_FindByKey(WorldScreenComponent_GetPropertyTable(),
+            (const unsigned char*)u8"power_transition");
+        TEST_CHECK(run, (Row != NULL) && ((Row->Flags & PropertyFlags_Persistent) == 0U)
+            && ((Row->Flags & PropertyFlags_Script) != 0U));
         TEST_CHECK_ERROR(run, WorldScreenComponent_SetIsPowered(NULL, true), ErrorCode_IllegalArgument);
         TEST_CHECK_ERROR(run, WorldScreenComponent_SetBrightness(NULL, 1.0f), ErrorCode_IllegalArgument);
         TEST_CHECK_ERROR(run, WorldScreenComponent_SetSurface(NULL, (const unsigned char*)u8"a"),
             ErrorCode_IllegalArgument);
+
+        // A screen just added (on) knows its transition is the power-on animation's: set half way and switched off
+        // before any other switch, it turns around.
+        WorldObject* Fresh = NULL;
+        WorldComponent* FreshComponent = NULL;
+        if (TEST_CHECK_SUCCESS(run, World_CreateObject(&TestWorld, (const unsigned char*)u8"tv2", &Fresh))
+            && TEST_CHECK_SUCCESS(run, World_AddComponent(&TestWorld, WorldObject_GetId(Fresh),
+                WorldComponentType_Screen, &FreshComponent)))
+        {
+            WorldScreenComponent* FreshScreen = WorldScreenComponent_FromComponent(FreshComponent);
+            TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetPowerTransition(FreshScreen, 0.4f));
+            TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(FreshScreen, false));
+            TEST_CHECK(run, WorldScreenComponent_GetPowerTransition(FreshScreen)
+                == CrtScreen_GetSwitchedTransition(false, 0.4f));
+            TEST_CHECK(run, WorldScreenComponent_GetPowerTransition(FreshScreen) > 0.8f);
+        }
     }
     TestWorld_Deconstruct(run, &TestWorld, &Keys);
 }
@@ -797,11 +844,16 @@ static void TheScreenComponentIsSavedWithTheWorld(TestRun* run)
             (const unsigned char*)u8"glass"))
         && TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(WorldScreenComponent_FromComponent(Component), false))
         && TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetBrightness(WorldScreenComponent_FromComponent(Component), 2.5f))
+        && TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetPowerTransition(WorldScreenComponent_FromComponent(Component),
+            0.5f))
         && TEST_CHECK_SUCCESS(run, WorldFile_WriteJSON(&Source, &Json))
         && TEST_CHECK_SUCCESS(run, WorldFile_WriteGHDF(&Source, &Ghdf)))
     {
         TEST_CHECK(run, GenericBuffer_NullTerminate(&Json) && (strstr((const char*)Json._data, "\"screen\": {") != NULL)
             && (strstr((const char*)Json._data, "\"surface\": \"glass\"") != NULL));
+        // Half way through turning off when saved: the power transition is runtime state, never written, and the screen
+        // comes back settled, dark.
+        TEST_CHECK(run, strstr((const char*)Json._data, "power_transition") == NULL);
         for (int Format = 0; Format < 2; Format++)
         {
             World Loaded;
@@ -816,7 +868,14 @@ static void TheScreenComponentIsSavedWithTheWorld(TestRun* run)
             TEST_CHECK(run, World_TryGetComponent(&Loaded, WorldObject_GetId(Object), WorldComponentType_Screen, &Read));
             const WorldScreenComponent* Screen = WorldScreenComponent_FromComponent(Read);
             TEST_CHECK(run, (Screen != NULL) && (strcmp((const char*)WorldScreenComponent_GetSurface(Screen), "glass") == 0)
-                && !WorldScreenComponent_IsPowered(Screen) && (WorldScreenComponent_GetBrightness(Screen) == 2.5f));
+                && !WorldScreenComponent_IsPowered(Screen) && (WorldScreenComponent_GetBrightness(Screen) == 2.5f)
+                && (WorldScreenComponent_GetPowerTransition(Screen) == 0.0f));
+            // Read off, it knows its transition is the power-off animation's: set where its dot fades and switched on,
+            // it turns around (the tube starts over).
+            WorldScreenComponent* Switched = WorldScreenComponent_FromComponent(Read);
+            TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetPowerTransition(Switched, 0.3f));
+            TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(Switched, true));
+            TEST_CHECK(run, WorldScreenComponent_GetPowerTransition(Switched) == 0.0f);
             TEST_CHECK_SUCCESS(run, World_Deconstruct(&Loaded));
         }
     }
@@ -856,10 +915,18 @@ static bool ScreensFixture_Construct(TestRun* run, ScreensFixture* self, Logger*
             "\"screen_box\", \"max_distance\": 40}], \"collision\": {\"sets\": [{\"name\": \"case\", \"shapes\": "
             "[{\"type\": \"box\", \"half_extents\": [1, 1, 0.2]}]}]}, \"surfaces\": [{\"name\": \"screen\", "
             "\"material_slot\": 1, \"resolution\": [320, 240]}]}")
+        || !TestAssets_AddWorldModel(run, &self->Assets, CrtBoxJson)
+        || !TestAssets_AddWorldModel(run, &self->Assets, "{\"name\": \"dim_box\", \"lods\": [{\"model\": "
+            "\"screen_box\", \"max_distance\": 40}], \"collision\": \"bounds\", \"surfaces\": [{\"name\": \"screen\", "
+            "\"material_slot\": 1, \"resolution\": [320, 240], \"light_intensity\": 0}]}")
         || !AddScreenModel(run, &self->Assets, "bordered_box", MatrixIdentity(), BorderedTexcoords)
         || !TestAssets_AddWorldModel(run, &self->Assets, "{\"name\": \"bordered_box\", \"lods\": [{\"model\": "
             "\"bordered_box\", \"max_distance\": 40}], \"collision\": \"bounds\", \"surfaces\": [{\"name\": "
-            "\"screen\", \"material_slot\": 1, \"resolution\": [64, 64]}]}"))
+            "\"screen\", \"material_slot\": 1, \"resolution\": [64, 64]}]}")
+        || !AddScreenModel(run, &self->Assets, "tilted_box", MatrixRotateX(-PI / 6.0f), ScreenTexcoords)
+        || !TestAssets_AddWorldModel(run, &self->Assets, "{\"name\": \"tilted_box\", \"lods\": [{\"model\": "
+            "\"tilted_box\", \"max_distance\": 40}], \"collision\": \"bounds\", \"surfaces\": [{\"name\": "
+            "\"screen\", \"material_slot\": 1, \"resolution\": [320, 240]}]}"))
     {
         return false;
     }
@@ -1273,7 +1340,7 @@ static void Press(HostFixture* self, GameKey key)
 /* A hit on the hosted screen at @p uv. */
 static WorldScreenHit HitAt(uint64_t objectId, Vector2 uv, bool isOnPicture)
 {
-    return (WorldScreenHit){ .ObjectId = objectId, .Surface = NULL, .SurfaceIndex = 0U, .Uv = uv,
+    return (WorldScreenHit){ .ObjectId = objectId, .Surface = NULL, .SurfaceIndex = 0U, .Uv = uv, .Picture = uv,
         .IsOnPicture = isOnPicture, .Point = Vector3Double_Zero(), .Distance = 1.0f };
 }
 
@@ -1889,6 +1956,7 @@ static void TheStatusCountsTheDrawnScreensAndTheirPictures(TestRun* run)
         uint64_t Shown = AddObject(run, &Fixture, "screen_box", (Vector3){ 0.0f, 0.0f, 0.0f }, true);
         uint64_t Hidden = AddObject(run, &Fixture, "screen_box", (Vector3){ 3.0f, 0.0f, 0.0f }, true);
         TEST_CHECK(run, AddObject(run, &Fixture, "screen_box", (Vector3){ 6.0f, 0.0f, 0.0f }, false) != 0U);
+        uint64_t Tube = AddObject(run, &Fixture, "crt_box", (Vector3){ 9.0f, 0.0f, 0.0f }, true);
         WorldObject* Object = NULL;
         TEST_CHECK(run, World_TryGetObject(&Fixture.World, Hidden, &Object));
         TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(Object, false));
@@ -1896,19 +1964,24 @@ static void TheStatusCountsTheDrawnScreensAndTheirPictures(TestRun* run)
         Texture2D Picture = { .id = PICTURE_TEXTURE_ID, .width = 320, .height = 240, .mipmaps = 1, .format = 7 };
         uint32_t Screens = 9U;
         uint32_t Pictures = 9U;
+        uint32_t Crts = 9U;
         if (TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Renderer->_cache, &Fixture.World, Vector3Double_Zero(),
             Fixture.Assets.Manager, User, NULL)))
         {
-            WorldRendererSurfaces_Count(Renderer, &Screens, &Pictures);
-            TEST_CHECK(run, (Screens == 1U) && (Pictures == 0U));
+            WorldRendererSurfaces_Count(Renderer, &Screens, &Pictures, &Crts);
+            TEST_CHECK(run, (Screens == 2U) && (Pictures == 0U) && (Crts == 1U));
             TEST_CHECK_SUCCESS(run, WorldRenderer_SetSurfaceTexture(Renderer, Hidden, (const unsigned char*)u8"screen",
                 Picture, true));
-            WorldRendererSurfaces_Count(Renderer, &Screens, &Pictures);
-            TEST_CHECK(run, (Screens == 1U) && (Pictures == 0U));
+            WorldRendererSurfaces_Count(Renderer, &Screens, &Pictures, &Crts);
+            TEST_CHECK(run, (Screens == 2U) && (Pictures == 0U));
             TEST_CHECK_SUCCESS(run, WorldRenderer_SetSurfaceTexture(Renderer, Shown, (const unsigned char*)u8"screen",
                 Picture, true));
-            WorldRendererSurfaces_Count(Renderer, &Screens, &Pictures);
-            TEST_CHECK(run, (Screens == 1U) && (Pictures == 1U));
+            WorldRendererSurfaces_Count(Renderer, &Screens, &Pictures, &Crts);
+            TEST_CHECK(run, (Screens == 2U) && (Pictures == 1U) && (Crts == 1U));
+            TEST_CHECK_SUCCESS(run, WorldRenderer_SetSurfaceTexture(Renderer, Tube, (const unsigned char*)u8"screen",
+                Picture, true));
+            WorldRendererSurfaces_Count(Renderer, &Screens, &Pictures, &Crts);
+            TEST_CHECK(run, (Screens == 2U) && (Pictures == 2U) && (Crts == 1U));
         }
     }
     ScreensFixture_Deconstruct(run, &Fixture);
@@ -1917,6 +1990,615 @@ static void TheStatusCountsTheDrawnScreensAndTheirPictures(TestRun* run)
     Memory_Free(Renderer);
 }
 
+
+// Static functions: CRTs and the screens' light.
+static bool IsNearVector3(Vector3 a, Vector3 b)
+{
+    return IsNear(a.x, b.x) && IsNear(a.y, b.y) && IsNear(a.z, b.z);
+}
+
+/* A crt surface reads every key of its "crt" block (the defaults without one), every glowing surface its light (the
+ * defaults without its keys; a paper gives none), and each surface takes the frame of its glass for its light after
+ * LOD 0's import transform: the point at its coordinates' centre, the way it faces, how far a step of u and v goes. */
+static void CrtSurfacesReadTheirLookAndTheirLight(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    if (TestAssetFixture_Construct(run, &Fixture)
+        && AddScreenModel(run, &Fixture, "tube", MatrixScale(2.0f, 3.0f, 1.0f), ScreenTexcoords)
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"tube\", \"lods\": [{\"model\": \"tube\", "
+            "\"max_distance\": 40}], \"surfaces\": [{\"name\": \"glass\", \"material_slot\": 1, \"resolution\": [640, 480], "
+            "\"kind\": \"crt\", \"emission\": 0.3, \"light_intensity\": 2.5, \"light_range\": 4, \"crt\": {\"curvature\": "
+            "0.2, \"scanlines\": false, \"scanline_strength\": 0.5, \"mask\": \"shadow_mask\", \"mask_strength\": 0.7, "
+            "\"glow\": 0.1, \"reflection\": 0.9, \"flicker\": 0.05, \"vignette\": 0.4, \"power_on_seconds\": 1.5, "
+            "\"power_off_seconds\": 0}}]}")
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"plain_tube\", \"lods\": [{\"model\": \"tube\", "
+            "\"max_distance\": 40}], \"surfaces\": [{\"name\": \"glass\", \"material_slot\": 1, \"resolution\": [64, 32], "
+            "\"kind\": \"crt\", \"crt\": {\"mask\": \"none\"}}, {\"name\": \"page\", \"material_slot\": 0, \"resolution\": "
+            "[64, 64], \"kind\": \"paper\"}]}")
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"bare_tube\", \"lods\": [{\"model\": \"tube\", "
+            "\"max_distance\": 40}], \"surfaces\": [{\"name\": \"glass\", \"material_slot\": 1, \"resolution\": [64, 32]}]}"))
+    {
+        const WorldModel* Loaded = LoadWorldModel(run, &Fixture, "tube", &User);
+        const WorldModelSurface* Glass = (Loaded != NULL) ? WorldModel_GetSurface(Loaded, 0U) : NULL;
+        if (Glass != NULL)
+        {
+            const CrtScreenSettings* Crt = WorldModelSurface_GetCrt(Glass);
+            TEST_CHECK(run, (WorldModelSurface_GetKind(Glass) == WorldModelSurfaceKind_Crt) && WorldModelSurface_IsGlowing(Glass)
+                && (WorldModelSurface_GetEmission(Glass) == 0.3f));
+            TEST_CHECK(run, (WorldModelSurface_GetLightIntensity(Glass) == 2.5f)
+                && (WorldModelSurface_GetLightRange(Glass) == 4.0f));
+            TEST_CHECK(run, (Crt->Curvature == 0.2f) && !Crt->AreScanlinesEnabled && (Crt->ScanlineStrength == 0.5f)
+                && (Crt->Mask == CrtMaskKind_ShadowMask) && (Crt->MaskStrength == 0.7f) && (Crt->Glow == 0.1f)
+                && (Crt->Reflection == 0.9f) && (Crt->Flicker == 0.05f) && (Crt->Vignette == 0.4f)
+                && (Crt->PowerOnSeconds == 1.5f) && (Crt->PowerOffSeconds == 0.0f));
+            const float* Mean = WorldModelSurface_GetMaskMean(Glass);
+            TEST_CHECK(run, (WorldModelSurface_GetMaskTexture(Glass) == NULL) && (Mean[0] == 1.0f) && (Mean[1] == 1.0f)
+                && (Mean[2] == 1.0f));
+            // The glass (x -1..1, y -1.2..1.2 after the scale) at z 0.01, facing +Z; u across to the right, v down.
+            TEST_CHECK(run, IsNearVector3(WorldModelSurface_GetCenter(Glass), (Vector3){ 0.0f, 0.0f, 0.01f }));
+            TEST_CHECK(run, IsNearVector3(WorldModelSurface_GetNormal(Glass), (Vector3){ 0.0f, 0.0f, 1.0f }));
+            TEST_CHECK(run, IsNearVector3(WorldModelSurface_GetAxisU(Glass), (Vector3){ 2.0f, 0.0f, 0.0f }));
+            TEST_CHECK(run, IsNearVector3(WorldModelSurface_GetAxisV(Glass), (Vector3){ 0.0f, -2.4f, 0.0f }));
+        }
+        const WorldModel* Plain = LoadWorldModel(run, &Fixture, "plain_tube", &User);
+        if ((Plain != NULL) && TEST_CHECK(run, WorldModel_GetSurfaceCount(Plain) == 2U))
+        {
+            const WorldModelSurface* PlainGlass = WorldModel_GetSurface(Plain, 0U);
+            const WorldModelSurface* Page = WorldModel_GetSurface(Plain, 1U);
+            CrtScreenSettings Defaults = CrtScreenSettings_CreateDefault();
+            const CrtScreenSettings* Read = WorldModelSurface_GetCrt(PlainGlass);
+            TEST_CHECK(run, (Read->Curvature == Defaults.Curvature)
+                && (Read->AreScanlinesEnabled == Defaults.AreScanlinesEnabled)
+                && (Read->ScanlineStrength == Defaults.ScanlineStrength) && (Read->Mask == CrtMaskKind_None)
+                && (Read->MaskStrength == Defaults.MaskStrength) && (Read->Glow == Defaults.Glow)
+                && (Read->Reflection == Defaults.Reflection) && (Read->Flicker == Defaults.Flicker)
+                && (Read->Vignette == Defaults.Vignette) && (Read->PowerOnSeconds == Defaults.PowerOnSeconds)
+                && (Read->PowerOffSeconds == Defaults.PowerOffSeconds));
+            TEST_CHECK(run, (WorldModelSurface_GetLightIntensity(PlainGlass) == WORLD_MODEL_DEFAULT_SURFACE_LIGHT_INTENSITY)
+                && (WorldModelSurface_GetLightRange(PlainGlass) == WORLD_MODEL_DEFAULT_SURFACE_LIGHT_RANGE));
+            TEST_CHECK(run, !WorldModelSurface_IsGlowing(Page) && (WorldModelSurface_GetLightIntensity(Page) == 0.0f));
+        }
+        const WorldModel* Bare = LoadWorldModel(run, &Fixture, "bare_tube", &User);
+        if (Bare != NULL)
+        {
+            const WorldModelSurface* Screen = WorldModel_GetSurface(Bare, 0U);
+            TEST_CHECK(run, (WorldModelSurface_GetKind(Screen) == WorldModelSurfaceKind_Screen)
+                && WorldModelSurface_IsGlowing(Screen)
+                && (WorldModelSurface_GetLightIntensity(Screen) == WORLD_MODEL_DEFAULT_SURFACE_LIGHT_INTENSITY));
+            // Only a CRT's picture bends.
+            Vector2 Position = { 0.0f, 0.0f };
+            TEST_CHECK(run, WorldModelSurface_GetPicturePosition(Screen, (Vector2){ 0.99f, 0.01f }, &Position)
+                && (Position.x == 0.99f) && (Position.y == 0.01f));
+        }
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+
+    // A curved glass faces where its triangles face on average; its centre is on its middle.
+    float CurveVertices[(CURVE_COLUMNS + 1) * 2 * 3];
+    float CurveTexcoords[(CURVE_COLUMNS + 1) * 2 * 2];
+    unsigned short CurveIndices[CURVE_COLUMNS * 6];
+    BuildCurve(CurveVertices, CurveTexcoords, CurveIndices);
+    TestModelPart Parts[] =
+    {
+        { .Vertices = CurveVertices, .Texcoords = CurveTexcoords, .VertexCount = (CURVE_COLUMNS + 1) * 2,
+            .Indices = CurveIndices, .TriangleCount = CURVE_COLUMNS * 2, .Material = 0 },
+    };
+    if (TestAssetFixture_Construct(run, &Fixture)
+        && TestAssets_AddPartsModel(run, &Fixture, "curve", Parts, 1, 1, MatrixIdentity(), NULL)
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"curve\", \"lods\": [{\"model\": \"curve\", "
+            "\"max_distance\": 40}], \"surfaces\": [{\"name\": \"glass\", \"material_slot\": 0, \"resolution\": [64, 64], "
+            "\"kind\": \"crt\"}]}"))
+    {
+        const WorldModel* Loaded = LoadWorldModel(run, &Fixture, "curve", &User);
+        const WorldModelSurface* Glass = (Loaded != NULL) ? WorldModel_GetSurface(Loaded, 0U) : NULL;
+        if (Glass != NULL)
+        {
+            TEST_CHECK(run, IsNearVector3(WorldModelSurface_GetNormal(Glass), (Vector3){ 0.0f, 0.0f, 1.0f }));
+            TEST_CHECK(run, IsNear(WorldModelSurface_GetCenter(Glass).x, 0.0f)
+                && IsNear(WorldModelSurface_GetCenter(Glass).y, 0.0f) && (WorldModelSurface_GetCenter(Glass).z <= 0.0f)
+                && (WorldModelSurface_GetCenter(Glass).z > -0.01f));
+            TEST_CHECK(run, WorldModelSurface_GetAxisU(Glass).x > 1.9f);
+        }
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+/* Every rule of a CRT's look and of a screen's light is refused when the definition is read, naming the place; a mask
+ * that names a texture is a dependency whose failure fails the load, naming the surface and the mask. */
+static void CrtRulesAreRefusedWithClearMessages(TestRun* run)
+{
+#define WM "{\"name\": \"m\", \"lods\": [{\"model\": \"box\", \"max_distance\": 40}], \"surfaces\": [{\"name\": \"s\", " \
+    "\"material_slot\": 1, \"resolution\": [64, 64], "
+#define CRT WM "\"kind\": \"crt\", \"crt\": "
+    static const RefusedDefinition Cases[] =
+    {
+        { WM "\"crt\": {}}]}", ErrorCode_InvalidAssetDefinition,
+            "surfaces[0].crt is a CRT's look; give the surface \"kind\": \"crt\"" },
+        { WM "\"kind\": \"paper\", \"crt\": {}}]}", ErrorCode_InvalidAssetDefinition, "surfaces[0].crt is a CRT's look" },
+        { CRT "3}]}", ErrorCode_InvalidAssetDefinition, "surfaces[0].crt must be a JSON object" },
+        { CRT "{\"bend\": 1}}]}", ErrorCode_InvalidAssetDefinition, "Unknown key \"bend\" in world model \"tbp:m\", "
+            "surfaces[0].crt; the keys allowed there are: curvature, scanlines, scanline_strength, mask, mask_strength, "
+            "glow, reflection, flicker, vignette, power_on_seconds, power_off_seconds" },
+        { CRT "{\"curvature\": -0.1}}]}", ErrorCode_InvalidAssetDefinition,
+            "surfaces[0].crt.curvature is -0.1; it must be at least 0 and at most 0.5" },
+        { CRT "{\"curvature\": 0.51}}]}", ErrorCode_InvalidAssetDefinition, "surfaces[0].crt.curvature is 0.51" },
+        { CRT "{\"curvature\": \"x\"}}]}", ErrorCode_InvalidAssetDefinition, "surfaces[0].crt.curvature must be a number" },
+        { CRT "{\"scanlines\": 3}}]}", ErrorCode_InvalidAssetDefinition, "surfaces[0].crt.scanlines must be true or false" },
+        { CRT "{\"scanline_strength\": 1.5}}]}", ErrorCode_InvalidAssetDefinition,
+            "surfaces[0].crt.scanline_strength is 1.5; it must be at least 0 and at most 1" },
+        { CRT "{\"mask_strength\": -1}}]}", ErrorCode_InvalidAssetDefinition, "surfaces[0].crt.mask_strength is -1" },
+        { CRT "{\"glow\": 2}}]}", ErrorCode_InvalidAssetDefinition, "surfaces[0].crt.glow is 2" },
+        { CRT "{\"reflection\": 1.01}}]}", ErrorCode_InvalidAssetDefinition, "surfaces[0].crt.reflection is 1.01" },
+        { CRT "{\"flicker\": 0.6}}]}", ErrorCode_InvalidAssetDefinition,
+            "surfaces[0].crt.flicker is 0.6; it must be at least 0 and at most 0.5" },
+        { CRT "{\"vignette\": -0.2}}]}", ErrorCode_InvalidAssetDefinition, "surfaces[0].crt.vignette is -0.2" },
+        { CRT "{\"power_on_seconds\": 11}}]}", ErrorCode_InvalidAssetDefinition,
+            "surfaces[0].crt.power_on_seconds is 11; it must be at least 0 and at most 10" },
+        { CRT "{\"power_off_seconds\": -1}}]}", ErrorCode_InvalidAssetDefinition,
+            "surfaces[0].crt.power_off_seconds is -1" },
+        { CRT "{\"mask\": 4}}]}", ErrorCode_InvalidAssetDefinition, "surfaces[0].crt.mask must be a string" },
+        { CRT "{\"mask\": \"Bad Mask\"}}]}", ErrorCode_InvalidAssetDefinition, "surfaces[0].crt.mask \"Bad Mask\" is not "
+            "\"aperture_grille\", \"shadow_mask\" or \"none\", and not a valid texture name" },
+        { WM "\"kind\": \"paper\", \"light_intensity\": 1}]}", ErrorCode_InvalidAssetDefinition,
+            "surfaces[0].light_intensity is a glowing surface's; a paper is lit like the surface it is on" },
+        { WM "\"kind\": \"paper\", \"light_range\": 2}]}", ErrorCode_InvalidAssetDefinition,
+            "surfaces[0].light_range is a glowing surface's" },
+        { WM "\"light_intensity\": -1}]}", ErrorCode_InvalidAssetDefinition,
+            "surfaces[0].light_intensity is -1; it must be at least 0 and at most 1000" },
+        { WM "\"light_intensity\": 1001}]}", ErrorCode_InvalidAssetDefinition, "surfaces[0].light_intensity is 1001" },
+        { WM "\"light_intensity\": true}]}", ErrorCode_InvalidAssetDefinition,
+            "surfaces[0].light_intensity must be a number" },
+        { WM "\"light_range\": 0.05}]}", ErrorCode_InvalidAssetDefinition,
+            "surfaces[0].light_range is 0.05; it must be at least 0.1 and at most 100" },
+        { WM "\"kind\": \"crt\", \"light_range\": 101}]}", ErrorCode_InvalidAssetDefinition,
+            "surfaces[0].light_range is 101" },
+    };
+    TestAssetFixture Fixture;
+    if (TestAssetFixture_Construct(run, &Fixture))
+    {
+        for (size_t Index = 0U; Index < (sizeof(Cases) / sizeof(Cases[0])); Index++)
+        {
+            const char* const Fragments[] = { Cases[Index].Fragment, NULL };
+            if (!TestText_CheckErrorMessage(run, BuildWorldModelDefinition(&Fixture, Cases[Index].Json), Cases[Index].Code,
+                Fragments))
+            {
+                printf("      (case %u: %s)\n", (unsigned int)Index, Cases[Index].Json);
+            }
+        }
+        // At the limits, every mask name, a texture's name in any namespace.
+        TEST_CHECK_SUCCESS(run, BuildWorldModelDefinition(&Fixture, CRT "{\"curvature\": 0, \"scanline_strength\": 0, "
+            "\"mask\": \"aperture_grille\", \"mask_strength\": 1, \"glow\": 0, \"reflection\": 1, \"flicker\": 0.5, "
+            "\"vignette\": 1, \"power_on_seconds\": 10, \"power_off_seconds\": 0}, \"light_intensity\": 0, "
+            "\"light_range\": 0.1}]}"));
+        TEST_CHECK_SUCCESS(run, BuildWorldModelDefinition(&Fixture, CRT "{\"curvature\": 0.5, \"mask\": \"none\"}, "
+            "\"light_intensity\": 1000, \"light_range\": 100}]}"));
+        TEST_CHECK_SUCCESS(run, BuildWorldModelDefinition(&Fixture, CRT "{\"mask\": \"shadow_mask\"}}]}"));
+        TEST_CHECK_SUCCESS(run, BuildWorldModelDefinition(&Fixture, CRT "{\"mask\": \"mymod:tile\"}}]}"));
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+#undef CRT
+#undef WM
+
+    // A tile that is not there, and one that has no image file (built in code): the load fails naming the surface and the
+    // mask, and holds nothing.
+    TestAssetCounters PaintCounters = { 0 };
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    if (TestAssetFixture_Construct(run, &Fixture)
+        && AddScreenModel(run, &Fixture, "tube", MatrixIdentity(), ScreenTexcoords)
+        && TestAssets_AddTexture(run, &Fixture, "paint", 9U, &PaintCounters)
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"missing_tile\", \"lods\": [{\"model\": \"tube\", "
+            "\"max_distance\": 40}], \"surfaces\": [{\"name\": \"glass\", \"material_slot\": 1, \"resolution\": [64, 64], "
+            "\"kind\": \"crt\", \"crt\": {\"mask\": \"no_such_tile\"}}]}")
+        && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"code_tile\", \"lods\": [{\"model\": \"tube\", "
+            "\"max_distance\": 40}], \"surfaces\": [{\"name\": \"glass\", \"material_slot\": 1, \"resolution\": [64, 64], "
+            "\"kind\": \"crt\", \"crt\": {\"mask\": \"paint\"}}]}")
+        && TEST_CHECK_SUCCESS(run, AssetManager_GetNewUserID(Fixture.Manager, &User)))
+    {
+        WorldModel* Loaded = NULL;
+        const char* const Missing[] = { "World model \"tbp:missing_tile\": surface \"glass\": mask \"tbp:no_such_tile\"",
+            NULL };
+        TestText_CheckErrorMessage(run, AssetManager_LoadWorldModel(Fixture.Manager, (const unsigned char*)u8"missing_tile",
+            User, &Loaded), ErrorCode_InvalidOperation, Missing);
+        const char* const CodeBuilt[] = { "World model \"tbp:code_tile\": surface \"glass\": mask \"tbp:paint\"", NULL };
+        TestText_CheckErrorMessage(run, AssetManager_LoadWorldModel(Fixture.Manager, (const unsigned char*)u8"code_tile",
+            User, &Loaded), ErrorCode_InvalidOperation, CodeBuilt);
+        TEST_CHECK(run, (Loaded == NULL) && (PaintCounters.LoadCount == 0U));
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+
+    // A tile one pixel wider than the largest, read from its image file: refused before anything loads, naming the
+    // surface, the mask and the sizes.
+    GenericBuffer Root;
+    GenericBuffer_AllocateVariable(&Root, SCREEN_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    GenericBuffer ImagePath;
+    GenericBuffer_AllocateVariable(&ImagePath, SCREEN_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    if (TestAssetFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "crt_wide_tile", &Root))
+        && TEST_CHECK_SUCCESS(run, Test_WriteTextFile(Root._data, "textures/wide_tile.json",
+            "{\"name\": \"wide_tile\", \"location\": \"wide_tile\"}")))
+    {
+        // raylib's file messages are muted meanwhile (LOG_INFO is its default level).
+        SetTraceLogLevel(LOG_WARNING);
+        GenericBuffer_AppendString(&ImagePath, Root._data);
+        GenericBuffer_AppendString(&ImagePath, (const unsigned char*)u8"/textures/wide_tile.png");
+        GenericBuffer_NullTerminate(&ImagePath);
+        Image Wide = GenImageColor(CRT_SCREEN_MAX_MASK_TILE_SIDE + 1, 4, RED);
+        bool IsExported = TEST_CHECK(run, ExportImage(Wide, (const char*)ImagePath._data));
+        UnloadImage(Wide);
+        if (IsExported && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Root._data))
+            && TEST_CHECK_SUCCESS(run, AssetManager_ReadDefinitions(Fixture.Manager, NULL))
+            && AddScreenModel(run, &Fixture, "tube", MatrixIdentity(), ScreenTexcoords)
+            && TestAssets_AddWorldModel(run, &Fixture, "{\"name\": \"wide\", \"lods\": [{\"model\": \"tube\", "
+                "\"max_distance\": 40}], \"surfaces\": [{\"name\": \"glass\", \"material_slot\": 1, \"resolution\": [64, "
+                "64], \"kind\": \"crt\", \"crt\": {\"mask\": \"wide_tile\"}}]}")
+            && TEST_CHECK_SUCCESS(run, AssetManager_GetNewUserID(Fixture.Manager, &User)))
+        {
+            WorldModel* Loaded = NULL;
+            const char* const TooWide[] = { "World model \"tbp:wide\": surface \"glass\": mask \"tbp:wide_tile\"",
+                "is 65 x 4 pixels; at most 64 per side", NULL };
+            TestText_CheckErrorMessage(run, AssetManager_LoadWorldModel(Fixture.Manager, (const unsigned char*)u8"wide",
+                User, &Loaded), ErrorCode_InvalidAssetData, TooWide);
+            TEST_CHECK(run, Loaded == NULL);
+        }
+        SetTraceLogLevel(LOG_INFO);
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+    Memory_Free(Root._data);
+    Memory_Free(ImagePath._data);
+}
+
+/* The shipped mask tile (the test monitor's), read from its image file within the largest tile: divided by the mean a
+ * surface takes from it (CrtScreen_GetMaskTileMean), it keeps the picture's mean light in every channel, decoded as the
+ * shader decodes it. */
+static void TheShippedMaskTileKeepsThePicturesLight(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    GenericBuffer Root;
+    GenericBuffer_AllocateVariable(&Root, SCREEN_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    TexturePixels Pixels;
+    Memory_Zero(&Pixels, sizeof(Pixels));
+    SetTraceLogLevel(LOG_WARNING);
+    if (TestAssetFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, "compile/out/asset", &Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Root._data))
+        && TEST_CHECK_SUCCESS(run, AssetManager_ReadDefinitions(Fixture.Manager, NULL))
+        && TEST_CHECK_SUCCESS(run, AssetManager_LoadTexturePixels(Fixture.Manager, (const unsigned char*)u8"crt_mask",
+            CRT_SCREEN_MAX_MASK_TILE_SIDE, &Pixels)))
+    {
+        size_t Count = (size_t)Pixels.Width * (size_t)Pixels.Height;
+        Vector3 Mean = CrtScreen_GetMaskTileMean(Pixels.Pixels, Count, Pixels.IsSrgb);
+        const float Means[3] = { Mean.x, Mean.y, Mean.z };
+        TEST_CHECK(run, Pixels.IsSrgb && (Count > 1U) && (Mean.x < 0.9f) && (Mean.y < 0.9f) && (Mean.z < 0.9f));
+        for (size_t Channel = 0U; Channel < 3U; Channel++)
+        {
+            double Sum = 0.0;
+            for (size_t Pixel = 0U; Pixel < Count; Pixel++)
+            {
+                Sum += pow((double)Pixels.Pixels[(Pixel * 4U) + Channel] / 255.0, 2.2) / (double)Means[Channel];
+            }
+            TEST_CHECK(run, fabs((Sum / (double)Count) - 1.0) < 1e-5);
+        }
+    }
+    SetTraceLogLevel(LOG_INFO);
+    TexturePixels_Deconstruct(&Pixels);
+    Memory_Free(Root._data);
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+/* Pointing at a CRT lands where its curved picture shows: the hit's coordinates through the one curvature the shader
+ * draws with (CrtScreen_Distort, its curvature and its picture's aspect), off the picture on the glass beyond its
+ * curved edge (a plain screen's picture reaches its corners), and the UI's pointer is that place, not the glass's. */
+static void PointingAtACrtLandsWhereItsCurvedPictureShows(TestRun* run)
+{
+    ScreensFixture Fixture;
+    if (ScreensFixture_Construct(run, &Fixture, NULL))
+    {
+        uint64_t Crt = AddObject(run, &Fixture, "crt_box", (Vector3){ 0.0f, 0.0f, 0.0f }, true);
+        uint64_t Plain = AddObject(run, &Fixture, "screen_box", (Vector3){ 3.0f, 0.0f, 0.0f }, true);
+        ScreensFixture_Sync(&Fixture);
+        const float Aspect = (float)TEST_PICTURE_WIDTH / (float)TEST_PICTURE_HEIGHT;
+        // Inside the picture, off its centre: the picture's place differs from the glass's.
+        WorldScreenHit Hit;
+        if (TEST_CHECK(run, PointFrom(&Fixture, (Vector3){ 0.4f, 0.3f, 2.0f }, true, &Hit)) && (Hit.ObjectId == Crt))
+        {
+            Vector2 Expected = CrtScreen_Distort(Hit.Uv, CRT_SCREEN_DEFAULT_CURVATURE, Aspect);
+            TEST_CHECK(run, IsNear(Hit.Uv.x, 0.9f) && IsNear(Hit.Uv.y, 0.125f));
+            TEST_CHECK(run, (Hit.Picture.x == Expected.x) && (Hit.Picture.y == Expected.y) && Hit.IsOnPicture);
+            TEST_CHECK(run, (Hit.Picture.x > (Hit.Uv.x + 0.01f)) && (Hit.Picture.y < (Hit.Uv.y - 0.01f)));
+        }
+        // Near the glass's corner the CRT shows nothing; the middle of its edge still shows the picture's edge.
+        TEST_CHECK(run, PointFrom(&Fixture, (Vector3){ 0.49f, 0.39f, 2.0f }, true, &Hit) && (Hit.ObjectId == Crt)
+            && !Hit.IsOnPicture && (Hit.Picture.x > 1.0f));
+        TEST_CHECK(run, PointFrom(&Fixture, (Vector3){ 0.49f, 0.0f, 2.0f }, true, &Hit) && (Hit.ObjectId == Crt)
+            && Hit.IsOnPicture);
+        TEST_CHECK(run, PointFrom(&Fixture, (Vector3){ 3.49f, 0.39f, 2.0f }, true, &Hit) && (Hit.ObjectId == Plain)
+            && Hit.IsOnPicture && (Hit.Picture.x == Hit.Uv.x) && (Hit.Picture.y == Hit.Uv.y));
+    }
+    ScreensFixture_Deconstruct(run, &Fixture);
+
+    // The host hands the UI the picture's place.
+    HostFixture Host;
+    if (HostFixture_Construct(run, &Host, 7U))
+    {
+        WorldScreenHit Hit = HitAt(7U, (Vector2){ 0.9f, 0.1f }, true);
+        Hit.Picture = (Vector2){ 0.3f, 0.6f };
+        HostTick(run, &Host, &Hit);
+        TEST_CHECK(run, WorldScreenHost_IsPointed(&Host.Host) && IsNear(WorldScreenHost_GetPointer(&Host.Host).x, 0.3f)
+            && IsNear(WorldScreenHost_GetPointer(&Host.Host).y, 0.6f));
+    }
+    HostFixture_Deconstruct(run, &Host);
+}
+
+/* The screens move each screen's power transition toward its power state: a CRT's over its power-on and power-off times,
+ * a plain screen's (and one on no surface) at once; a screen met for the first time starts settled, and one removed
+ * between syncs is left alone. */
+static void ScreensTurnOnAndOffOverTheirTimes(TestRun* run)
+{
+    ScreensFixture Fixture;
+    if (ScreensFixture_Construct(run, &Fixture, NULL))
+    {
+        uint64_t Crt = AddObject(run, &Fixture, "crt_box", (Vector3){ 0.0f, 0.0f, 0.0f }, true);
+        uint64_t Plain = AddObject(run, &Fixture, "screen_box", (Vector3){ 3.0f, 0.0f, 0.0f }, true);
+        uint64_t Lost = AddObject(run, &Fixture, "box", (Vector3){ 6.0f, 0.0f, 0.0f }, true);
+        WorldComponent* Component = NULL;
+        TEST_CHECK(run, World_TryGetComponent(&Fixture.World, Crt, WorldComponentType_Screen, &Component));
+        WorldScreenComponent* CrtScreen = WorldScreenComponent_FromComponent(Component);
+        TEST_CHECK(run, World_TryGetComponent(&Fixture.World, Plain, WorldComponentType_Screen, &Component));
+        WorldScreenComponent* PlainScreen = WorldScreenComponent_FromComponent(Component);
+        TEST_CHECK(run, World_TryGetComponent(&Fixture.World, Lost, WorldComponentType_Screen, &Component));
+        WorldScreenComponent* LostScreen = WorldScreenComponent_FromComponent(Component);
+        // Switched off before the screens ever met it: settled dark at the first sync, no power-off played.
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(LostScreen, false));
+        ScreensFixture_Sync(&Fixture);
+        TEST_CHECK(run, (WorldScreenComponent_GetPowerTransition(CrtScreen) == 1.0f)
+            && (WorldScreenComponent_GetPowerTransition(LostScreen) == 0.0f));
+
+        // The CRT turns off over its 0.6 s and on over its 0.8 s; the plain screen at once.
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(CrtScreen, false));
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(PlainScreen, false));
+        WorldScreens_Advance(Fixture.Screens, 0.3f);
+        TEST_CHECK(run, IsNear(WorldScreenComponent_GetPowerTransition(CrtScreen), 0.5f)
+            && (WorldScreenComponent_GetPowerTransition(PlainScreen) == 0.0f));
+        WorldScreens_Advance(Fixture.Screens, 0.3f);
+        TEST_CHECK(run, IsNear(WorldScreenComponent_GetPowerTransition(CrtScreen), 0.0f));
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(CrtScreen, true));
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(LostScreen, true));
+        WorldScreens_Advance(Fixture.Screens, 0.4f);
+        TEST_CHECK(run, IsNear(WorldScreenComponent_GetPowerTransition(CrtScreen), 0.5f)
+            && (WorldScreenComponent_GetPowerTransition(LostScreen) == 1.0f));
+        // A step of no time changes nothing turning, and a settled screen's revision stays.
+        uint32_t Revision = WorldComponent_GetRevision(&PlainScreen->Base);
+        WorldScreens_Advance(Fixture.Screens, 0.0f);
+        TEST_CHECK(run, IsNear(WorldScreenComponent_GetPowerTransition(CrtScreen), 0.5f)
+            && (WorldComponent_GetRevision(&PlainScreen->Base) == Revision));
+        // Removed between syncs: the others still turn.
+        TEST_CHECK_SUCCESS(run, World_RemoveObject(&Fixture.World, Plain));
+        WorldScreens_Advance(Fixture.Screens, 0.4f);
+        TEST_CHECK(run, IsNear(WorldScreenComponent_GetPowerTransition(CrtScreen), 1.0f));
+
+        // Switched off half way through opening, the CRT collapses from the height its picture had (not from the start
+        // of the collapse, nor skipping it); switched on again through the table (an inspector, a script) while it
+        // collapses, it opens from there; switched to the state it has, nothing moves.
+        const float Aspect = (float)TEST_PICTURE_WIDTH / (float)TEST_PICTURE_HEIGHT;
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(CrtScreen, false));
+        WorldScreens_Advance(Fixture.Screens, CRT_SCREEN_DEFAULT_POWER_OFF_SECONDS);
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(CrtScreen, true));
+        WorldScreens_Advance(Fixture.Screens, 0.4f * CRT_SCREEN_DEFAULT_POWER_ON_SECONDS);
+        float Opening = WorldScreenComponent_GetPowerTransition(CrtScreen);
+        CrtPowerShape Open = CrtScreen_GetPowerShape(true, Opening, Aspect);
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(CrtScreen, false));
+        float Collapsing = WorldScreenComponent_GetPowerTransition(CrtScreen);
+        CrtPowerShape Collapse = CrtScreen_GetPowerShape(false, Collapsing, Aspect);
+        TEST_CHECK(run, IsNear(Opening, 0.4f) && IsNear(Collapsing, 0.875f) && IsNear(Collapse.OpenY, Open.OpenY)
+            && (Collapse.OpenX == 1.0f) && (Open.OpenY < 0.9f));
+        WorldScreens_Advance(Fixture.Screens, 0.03f);
+        Collapsing = WorldScreenComponent_GetPowerTransition(CrtScreen);
+        Collapse = CrtScreen_GetPowerShape(false, Collapsing, Aspect);
+        TEST_CHECK(run, Collapse.OpenY < (Open.OpenY - 0.01f));
+        PropertyValue On = PropertyValue_FromBool(true);
+        TEST_CHECK_SUCCESS(run, Properties_Set(WorldScreenComponent_GetPropertyTable(), CrtScreen,
+            (const unsigned char*)u8"is_powered", &On));
+        float Reopening = WorldScreenComponent_GetPowerTransition(CrtScreen);
+        TEST_CHECK(run, (Reopening > 0.2f) && (Reopening < 0.6f)
+            && IsNear(CrtScreen_GetPowerShape(true, Reopening, Aspect).OpenY, Collapse.OpenY));
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(CrtScreen, true));
+        TEST_CHECK(run, WorldScreenComponent_GetPowerTransition(CrtScreen) == Reopening);
+    }
+    ScreensFixture_Deconstruct(run, &Fixture);
+}
+
+/* A CRT's picture shows while it is on and while it turns off (the program plays the power animation on it), and none once
+ * it is dark. */
+static void ACrtsPictureShowsWhileItTurnsOff(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    WorldRenderer* Renderer = Memory_Allocate(sizeof(WorldRenderer));
+    Memory_Zero(Renderer, sizeof(*Renderer));
+    GenericBuffer_AllocateVariable(&Renderer->_surfaces._bindings, 1U, sizeof(WorldRendererSurfaceBinding));
+    if (TestAssetFixture_Construct(run, &Fixture) && AddScreenModel(run, &Fixture, "screen_box", MatrixIdentity(),
+        ScreenTexcoords) && TestAssets_AddWorldModel(run, &Fixture, CrtBoxJson))
+    {
+        const WorldModel* Loaded = LoadWorldModel(run, &Fixture, "crt_box", &User);
+        Texture2D Picture = { .id = PICTURE_TEXTURE_ID, .width = 320, .height = 240, .mipmaps = 1, .format = 7 };
+        if ((Loaded != NULL) && TEST_CHECK_SUCCESS(run, WorldRenderer_SetSurfaceTexture(Renderer, 7U,
+            (const unsigned char*)u8"screen", Picture, true)))
+        {
+            WorldRenderModel Entry;
+            Memory_Zero(&Entry, sizeof(Entry));
+            Entry.ObjectId = 7U;
+            Entry.Surface = WorldModel_GetSurface(Loaded, 0U);
+            Entry.SurfaceEmission = 0.25f;
+            MaterialMap Maps[WORLD_RENDERER_MATERIAL_MAP_COUNT];
+            Memory_Zero(Maps, sizeof(Maps));
+            Material Copy = { .maps = Maps };
+            const bool Powered[] = { true, false, false, true };
+            const float Power[] = { 1.0f, 0.4f, 0.0f, 0.0f };
+            const bool Shows[] = { true, true, false, true };
+            for (size_t Case = 0U; Case < (sizeof(Powered) / sizeof(Powered[0])); Case++)
+            {
+                Entry.IsSurfacePowered = Powered[Case];
+                Entry.SurfacePower = Power[Case];
+                Maps[MATERIAL_MAP_EMISSION].texture.id = 55U;
+                WorldRendererMapOrientation Orientation = WorldRendererSurfaces_Apply(Renderer, &Entry, &Copy);
+                TEST_CHECK(run, (Maps[MATERIAL_MAP_EMISSION].texture.id == (Shows[Case] ? PICTURE_TEXTURE_ID : 0U))
+                    && (Orientation.IsEmissiveBottomUp == Shows[Case])
+                    && (Maps[MATERIAL_MAP_EMISSION].value == (Shows[Case] ? 0.25f : 0.0f)));
+            }
+        }
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+    Memory_Free(Renderer->_surfaces._bindings._data);
+    Memory_Free(Renderer);
+}
+
+/* Every shown screen that glows with a picture lights what is in front of it: its glass's centre, facing and area in
+ * render space (turned and scaled with its object), its reach, its glow (emission, light intensity, a CRT's power and
+ * flicker) and its picture's mean level; none off, hidden, without a picture or with no light intensity. A draw takes
+ * the nearest that reaches it, never one it lies wholly behind. */
+static void ScreensLightWhatIsInFrontOfThem(TestRun* run)
+{
+    ScreensFixture Fixture;
+    WorldRenderer* Renderer = Memory_Allocate(sizeof(WorldRenderer));
+    Memory_Zero(Renderer, sizeof(*Renderer));
+    GenericBuffer_AllocateVariable(&Renderer->_surfaces._bindings, 1U, sizeof(WorldRendererSurfaceBinding));
+    GenericBuffer_AllocateVariable(&Renderer->_surfaces._lights, 1U, sizeof(WorldRendererScreenLight));
+    WorldRenderCache_Construct(&Renderer->_cache);
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    WorldRenderFrame Frame;
+    Memory_Zero(&Frame, sizeof(Frame));
+    Frame.TimeSeconds = 2.5f;
+    if (ScreensFixture_Construct(run, &Fixture, NULL)
+        && TEST_CHECK_SUCCESS(run, AssetManager_GetNewUserID(Fixture.Assets.Manager, &User)))
+    {
+        uint64_t Lit = AddObject(run, &Fixture, "screen_box", (Vector3){ 0.0f, 0.0f, 0.0f }, true);
+        uint64_t Turned = AddObject(run, &Fixture, "screen_box", (Vector3){ 10.0f, 0.0f, 0.0f }, true);
+        uint64_t Dim = AddObject(run, &Fixture, "dim_box", (Vector3){ 20.0f, 0.0f, 0.0f }, true);
+        uint64_t Crt = AddObject(run, &Fixture, "crt_box", (Vector3){ 30.0f, 0.0f, 0.0f }, true);
+        uint64_t Unlit = AddObject(run, &Fixture, "screen_box", (Vector3){ 40.0f, 0.0f, 0.0f }, true);
+        WorldObject* Object = NULL;
+        TEST_CHECK(run, World_TryGetObject(&Fixture.World, Turned, &Object));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Object, (Vector3){ 0.0f, PI / 2.0f, 0.0f }));
+        TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Object, (Vector3){ 2.0f, 2.0f, 2.0f }));
+        WorldComponent* Component = NULL;
+        TEST_CHECK(run, World_TryGetComponent(&Fixture.World, Crt, WorldComponentType_Screen, &Component));
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(WorldScreenComponent_FromComponent(Component), false));
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetPowerTransition(WorldScreenComponent_FromComponent(Component),
+            0.6f));
+        World_UpdateTransforms(&Fixture.World);
+        Texture2D Picture = { .id = PICTURE_TEXTURE_ID, .width = 640, .height = 480, .mipmaps = 10, .format = 7 };
+        Texture2D Flat = { .id = OTHER_TEXTURE_ID, .width = 320, .height = 240, .mipmaps = 1, .format = 7 };
+        const unsigned char* Name = (const unsigned char*)u8"screen";
+        TEST_CHECK_SUCCESS(run, WorldRenderer_SetSurfaceTexture(Renderer, Lit, Name, Picture, true));
+        TEST_CHECK_SUCCESS(run, WorldRenderer_SetSurfaceTexture(Renderer, Turned, Name, Flat, true));
+        TEST_CHECK_SUCCESS(run, WorldRenderer_SetSurfaceTexture(Renderer, Dim, Name, Picture, true));
+        TEST_CHECK_SUCCESS(run, WorldRenderer_SetSurfaceTexture(Renderer, Crt, Name, Picture, true));
+        if (TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Renderer->_cache, &Fixture.World, TestWorld_At((Vector3){ 0 }),
+            Fixture.Assets.Manager, User, NULL)))
+        {
+            WorldRendererSurfaces_PrepareFrame(Renderer, &Frame);
+            const WorldRendererScreenLight* Lights = (const WorldRendererScreenLight*)(const void*)
+                Renderer->_surfaces._lights._data;
+            // The lit screen, the turned one and the CRT turning off: not the dim one (no light) nor the one without a
+            // picture.
+            if (TEST_CHECK(run, Renderer->_surfaces._lights._count == 3U))
+            {
+                TEST_CHECK(run, (Lights[0].ObjectId == Lit) && (Lights[1].ObjectId == Turned) && (Lights[2].ObjectId == Crt));
+                TEST_CHECK(run, IsNearVector3(Lights[0].Position, (Vector3){ 0.0f, 0.0f, 0.01f })
+                    && IsNearVector3(Lights[0].Normal, (Vector3){ 0.0f, 0.0f, 1.0f }) && IsNear(Lights[0].Area, 0.8f)
+                    && (Lights[0].Range == WORLD_MODEL_DEFAULT_SURFACE_LIGHT_RANGE)
+                    && IsNear(Lights[0].Glow, WORLD_MODEL_DEFAULT_SURFACE_EMISSION) && (Lights[0].Whiteness == 0.0f)
+                    && (Lights[0].Picture.id == PICTURE_TEXTURE_ID) && (Lights[0].Level == 7.0f));
+                // Turned a quarter about y and twice as large: it faces +X, four times the area; no mipmaps, level 0.
+                TEST_CHECK(run, IsNearVector3(Lights[1].Position, (Vector3){ 10.02f, 0.0f, 0.0f })
+                    && IsNearVector3(Lights[1].Normal, (Vector3){ 1.0f, 0.0f, 0.0f }) && IsNear(Lights[1].Area, 3.2f)
+                    && (Lights[1].Level == 0.0f));
+                // The CRT 0.4 of the way through turning off, its line collapsing toward the dot: its light the shape's
+                // (the white line's), flickering.
+                // Its aspect (the dot's width) and its flicker (0.5 here, away from 1 at this moment) both count.
+                CrtPowerShape Shape = CrtScreen_GetPowerShape(false, 0.6f, 4.0f / 3.0f);
+                float Flicker = CrtScreen_GetFlicker(0.5f, 2.5, Crt);
+                float Expected = WORLD_MODEL_DEFAULT_SURFACE_EMISSION * Shape.Light * Flicker;
+                TEST_CHECK(run, fabsf(Flicker - 1.0f) > 0.01f);
+                TEST_CHECK(run, (fabsf(Lights[2].Glow - Expected) <= (1e-5f * Expected))
+                    && (Lights[2].Glow < (0.1f * WORLD_MODEL_DEFAULT_SURFACE_EMISSION)) && (Lights[2].Whiteness == 1.0f));
+            }
+            // A draw takes the nearest that reaches it, not one behind its glass or beyond its reach.
+            TEST_CHECK(run, WorldRendererSurfaces_FindScreenLight(Renderer, (Vector3){ 0.5f, 0.0f, 1.0f }, 0.2f) == &Lights[0]);
+            TEST_CHECK(run, WorldRendererSurfaces_FindScreenLight(Renderer, (Vector3){ 0.0f, 0.0f, -1.0f }, 0.2f) == NULL);
+            TEST_CHECK(run, WorldRendererSurfaces_FindScreenLight(Renderer, (Vector3){ 0.0f, 0.0f, 3.5f }, 0.2f) == NULL);
+            TEST_CHECK(run, WorldRendererSurfaces_FindScreenLight(Renderer, (Vector3){ 0.0f, 0.0f, 3.5f }, 1.0f) == &Lights[0]);
+            TEST_CHECK(run, WorldRendererSurfaces_FindScreenLight(Renderer, (Vector3){ 0.0f, 0.0f, -1.0f }, 1.5f) == &Lights[0]);
+            TEST_CHECK(run, WorldRendererSurfaces_FindScreenLight(Renderer, (Vector3){ 11.0f, 0.0f, 0.0f }, 0.1f) == &Lights[1]);
+            TEST_CHECK(run, WorldRendererSurfaces_FindScreenLight(Renderer, (Vector3){ 9.0f, 0.0f, 0.0f }, 0.1f) == NULL);
+            TEST_CHECK(run, WorldRendererSurfaces_FindScreenLight(Renderer, (Vector3){ 5.0f, 0.0f, 0.5f }, 3.0f) == &Lights[0]);
+            TEST_CHECK(run, WorldRendererSurfaces_FindScreenLight(Renderer, (Vector3){ 8.0f, 0.0f, 0.5f }, 3.0f) == &Lights[1]);
+            // A sphere ending just behind the turned glass (at x 10.02, facing +X) is wholly behind it.
+            TEST_CHECK(run, WorldRendererSurfaces_FindScreenLight(Renderer, (Vector3){ 7.0f, 0.0f, 0.5f }, 3.0f) == NULL);
+
+            // Of several in reach and in front, the nearest, wherever it stands in the list.
+            WorldRendererScreenLight Saved[3];
+            Memory_Copy(Lights, Saved, sizeof(Saved));
+            WorldRendererScreenLight* Edit = (WorldRendererScreenLight*)(void*)Renderer->_surfaces._lights._data;
+            Edit[0].Position = (Vector3){ 0.0f, 0.0f, 0.0f };
+            Edit[1].Position = (Vector3){ 0.0f, 0.0f, 2.0f };
+            Edit[2].Position = (Vector3){ 0.0f, 0.0f, 1.5f };
+            Edit[0].Normal = (Vector3){ 0.0f, 0.0f, 1.0f };
+            Edit[1].Normal = (Vector3){ 0.0f, 0.0f, 1.0f };
+            Edit[2].Normal = (Vector3){ 0.0f, 0.0f, -1.0f };
+            TEST_CHECK(run, WorldRendererSurfaces_FindScreenLight(Renderer, (Vector3){ 0.0f, 0.0f, 2.5f }, 0.1f) == &Lights[1]);
+            TEST_CHECK(run, WorldRendererSurfaces_FindScreenLight(Renderer, (Vector3){ 0.0f, 0.0f, 0.4f }, 0.1f) == &Lights[0]);
+            TEST_CHECK(run, WorldRendererSurfaces_FindScreenLight(Renderer, (Vector3){ 0.0f, 0.0f, 1.2f }, 0.1f) == &Lights[2]);
+            Memory_Copy(Saved, Edit, sizeof(Saved));
+
+            // Off (the plain screen), hidden, or its picture forgotten: no light; the list is built again each frame.
+            TEST_CHECK(run, World_TryGetComponent(&Fixture.World, Lit, WorldComponentType_Screen, &Component));
+            TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetIsPowered(WorldScreenComponent_FromComponent(Component),
+                false));
+            TEST_CHECK(run, World_TryGetObject(&Fixture.World, Turned, &Object));
+            TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(Object, false));
+            World_UpdateTransforms(&Fixture.World);
+            TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Renderer->_cache, &Fixture.World,
+                TestWorld_At((Vector3){ 0 }), Fixture.Assets.Manager, User, NULL));
+            WorldRendererSurfaces_PrepareFrame(Renderer, &Frame);
+            TEST_CHECK(run, (Renderer->_surfaces._lights._count == 1U) && (Lights[0].ObjectId == Crt));
+            WorldRendererSurfaces_ForgetTextures(Renderer);
+            WorldRendererSurfaces_PrepareFrame(Renderer, &Frame);
+            TEST_CHECK(run, Renderer->_surfaces._lights._count == 0U);
+
+            // A glass tilted up a twelfth of a turn in its own model, its object stretched twice along z: its front is
+            // the tilt's normal through the inverse transpose (the stretch lays it down), across its stretched axes as
+            // their cross is, and a draw is in front of it or behind it by that front.
+            uint64_t Tilted = AddObject(run, &Fixture, "tilted_box", (Vector3){ 50.0f, 0.0f, 0.0f }, true);
+            TEST_CHECK(run, World_TryGetObject(&Fixture.World, Tilted, &Object));
+            TEST_CHECK_SUCCESS(run, WorldObject_SetScale(Object, (Vector3){ 1.0f, 1.0f, 2.0f }));
+            World_UpdateTransforms(&Fixture.World);
+            TEST_CHECK_SUCCESS(run, WorldRenderer_SetSurfaceTexture(Renderer, Tilted, Name, Picture, true));
+            TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Renderer->_cache, &Fixture.World,
+                TestWorld_At((Vector3){ 0 }), Fixture.Assets.Manager, User, NULL));
+            WorldRendererSurfaces_PrepareFrame(Renderer, &Frame);
+            Lights = (const WorldRendererScreenLight*)(const void*)Renderer->_surfaces._lights._data;
+            if (TEST_CHECK(run, (Renderer->_surfaces._lights._count == 1U) && (Lights[0].ObjectId == Tilted)))
+            {
+                Vector3 Front = Vector3Normalize((Vector3){ 0.0f, 0.5f, 0.25f * sqrtf(3.0f) });
+                TEST_CHECK(run, IsNearVector3(Lights[0].Normal, Front) && IsNear(Lights[0].Area, sqrtf(1.12f))
+                    && IsNearVector3(Lights[0].Position, (Vector3){ 50.0f, 0.005f, 0.01f * sqrtf(3.0f) }));
+                Vector3 Glass = Lights[0].Position;
+                TEST_CHECK(run, WorldRendererSurfaces_FindScreenLight(Renderer,
+                    Vector3Add(Glass, (Vector3){ 0.0f, 1.0f, -0.5f }), 0.1f) == &Lights[0]);
+                TEST_CHECK(run, WorldRendererSurfaces_FindScreenLight(Renderer,
+                    Vector3Add(Glass, (Vector3){ 0.0f, -1.0f, 0.7f }), 0.1f) == NULL);
+            }
+        }
+        TEST_CHECK(run, Unlit != 0U);
+    }
+    ScreensFixture_Deconstruct(run, &Fixture);
+    WorldRenderCache_Deconstruct(&Renderer->_cache);
+    Memory_Free(Renderer->_surfaces._bindings._data);
+    Memory_Free(Renderer->_surfaces._lights._data);
+    Memory_Free(Renderer);
+}
 
 // Public functions.
 void WorldScreenTests_Run(TestRun* run)
@@ -1947,6 +2629,13 @@ void WorldScreenTests_Run(TestRun* run)
         { "the_picture_reaches_only_its_slots_draws_before_the_lod_glow",
             ThePictureReachesOnlyItsSlotsDrawsBeforeTheLodGlow },
         { "the_status_counts_the_drawn_screens_and_their_pictures", TheStatusCountsTheDrawnScreensAndTheirPictures },
+        { "crt_surfaces_read_their_look_and_their_light", CrtSurfacesReadTheirLookAndTheirLight },
+        { "crt_rules_are_refused_with_clear_messages", CrtRulesAreRefusedWithClearMessages },
+        { "the_shipped_mask_tile_keeps_the_pictures_light", TheShippedMaskTileKeepsThePicturesLight },
+        { "pointing_at_a_crt_lands_where_its_curved_picture_shows", PointingAtACrtLandsWhereItsCurvedPictureShows },
+        { "screens_turn_on_and_off_over_their_times", ScreensTurnOnAndOffOverTheirTimes },
+        { "a_crts_picture_shows_while_it_turns_off", ACrtsPictureShowsWhileItTurnsOff },
+        { "screens_light_what_is_in_front_of_them", ScreensLightWhatIsInFrontOfThem },
     };
     TestRun_RunSuite(run, "WorldScreen", Cases, sizeof(Cases) / sizeof(Cases[0]));
     static const TestCase WorldCases[] =

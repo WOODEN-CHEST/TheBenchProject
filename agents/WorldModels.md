@@ -2,7 +2,7 @@
 
 `include/WorldModel.h`, `source/WorldModel.c` (the asset's data functions: the default settings, variants by name and
 on one material), `source/WorldModelSurface.c` (the surfaces' data functions: by name, the texture coordinates at a
-point, the ray that meets a placed surface) and `source/WorldModelDefinition.c` (the `world_model` asset type: the
+point, where on the picture a point of the glass is, the ray that meets a placed surface) and `source/WorldModelDefinition.c` (the `world_model` asset type: the
 definition's parser and the loader; the `surfaces` section's in `source/WorldModelSurfaceDefinition.c`). The placements' side is the model component, `include/WorldModelComponent.h` and
 `source/WorldModelComponent.c` ([WorldData.md](WorldData.md)), and the model instances component, many copies
 of one world model with the model component's settings (`include/WorldModelInstancesComponent.h`; its LODs change in
@@ -10,7 +10,7 @@ distance bands per copy, [WorldRuntime.md](WorldRuntime.md), "Model instances").
 `references/asset_structure.md`, "World models". Tests: `tests/WorldModelTests.c`, the renderer's side in
 `tests/WorldRenderCacheTests.c` and `tests/WorldVisibilityTests.c`; the LOD maths in `tests/WorldLodTests.c`; the
 `collision` section ("Collision" below) in `tests/WorldColliderTests.c`; the `surfaces` section ("Surfaces" below) and
-pointing at a surface in `tests/WorldScreenTests.c`.
+pointing at a surface in `tests/WorldScreenTests.c`, a CRT's maths (`include/CrtScreen.h`) in `tests/CrtScreenTests.c`.
 
 A **world model** is everything that is the same for every placement of a thing: which model to draw at which distance
 (its LODs), how far it is seen, the default render settings of its placements, and its material variants. A **world
@@ -250,25 +250,51 @@ them and the collision world are in [WorldCollision.md](WorldCollision.md).
 ## Surfaces
 
 A world model may name **surfaces**: material slots that show a picture made while the game runs. A **screen** (a
-monitor, a TV) shows a UI drawn into a render target, glowing in the dark; a **paper** shows its picture as the
-surface's own colour (tinted by its material's albedo colour: author it white), lit like everything around it. The office computer is the first: its content is a `UIScreen` the
-code that owns it draws each frame ([UIFramework.md](UIFramework.md), "World screens").
+monitor, a TV) shows a UI drawn into a render target, glowing in the dark; a **CRT** is a screen behind a tube's glass:
+its picture bulges with rounded corners, with scanlines, a mask, a soft glow, a vignette and a faint flicker, plays the
+tube's power-on and power-off animation, and its glossy glass shows the lights' highlights and mirrors the sky; a
+**paper** shows its picture as the surface's own colour (tinted by its material's albedo colour: author it white), lit
+like everything around it. A screen and a CRT also light what is in front of them in their picture's colour. The office
+computer is the first: its content is a `UIScreen` the code that owns it draws each frame
+([UIFramework.md](UIFramework.md), "World screens").
 ```json
 "surfaces": [
-    { "name": "screen", "material_slot": 1, "resolution": [640, 480], "kind": "screen", "emission": 0.2 }
+    { "name": "screen", "material_slot": 1, "resolution": [640, 480], "kind": "crt", "emission": 0.2,
+      "light_intensity": 1, "light_range": 3,
+      "crt": { "curvature": 0.08, "scanlines": true, "scanline_strength": 0.35, "mask": "aperture_grille",
+               "mask_strength": 0.3, "glow": 0.35, "reflection": 0.6, "flicker": 0.01, "vignette": 0.25,
+               "power_on_seconds": 0.8, "power_off_seconds": 0.6 } }
 ]
 ```
 - **The definition** (`source/WorldModelSurfaceDefinition.c`, unknown keys refused, every message naming the place):
   at most `WORLD_MODEL_MAX_SURFACES` (16); `name` (required, `[a-z][a-z0-9_.-]*`, at most 64 bytes, unique);
   `material_slot` (required, 0 to 2147483647, one surface a slot); `resolution` (required, `[width, height]`, each 16 to
-  2048 pixels: the content's render target is made at it); `kind` (`screen`, the default, or `paper`); `emission` (a
-  screen's only: its picture's white on the game's light scale, 1 a white surface in full sun, 0 to 1000, default
+  2048 pixels: the content's render target is made at it); `kind` (`screen`, the default, `crt` or `paper`); `emission`
+  (a glowing surface's: its picture's white on the game's light scale, 1 a white surface in full sun, 0 to 1000, default
   `WORLD_MODEL_DEFAULT_SURFACE_EMISSION`, 0.2: readable under the noon sun, a glow at night without glare; a paper gives
-  off no light, so the key is refused there).
-- **The slot's texture coordinates place the picture**: they cover 0..1 over it. As raylib loads them v grows toward
-  the image's bottom (it flips an OBJ's, a glTF file's are so already), so (0, 0) is the picture's top-left, the UI's
-  convention: a hit's coordinates are the UI's pointer as they are. Authored in Blender (V up) the screen's top edge is
-  V 1. Coordinates beyond 0..1 (a rounded border in the same slot) are met but off the picture.
+  off no light, so the key is refused there); `light_intensity` (a glowing surface's: the factor on the light its picture
+  gives off around it, 0 to 1000, default 1: as much as the glowing picture really sends out; 0 lights nothing) and
+  `light_range` (how far that light reaches, 0.1 to 100 m, default 3; both refused on a paper); `crt` (a CRT's only,
+  refused on the other kinds; every key optional, the defaults `CRT_SCREEN_DEFAULT_*` of `include/CrtScreen.h`):
+  - `curvature` (0 to 0.5, 0.08): how far the picture's corners come in, about that share of its half width, as far
+    across as down; the middles of its edges reach the glass's;
+  - `scanlines` (true) and `scanline_strength` (0 to 1, 0.35): lines across the picture, their light swinging by the
+    strength around the picture's (its mean light kept);
+  - `mask` (`aperture_grille`, the default: red, green and blue columns; `shadow_mask`: the same in staggered bright and
+    dim rows; `none`; or a texture asset's name: a tile, at most `CRT_SCREEN_MAX_MASK_TILE_SIDE` (64) pixels a side,
+    repeated over the window's pixels) and `mask_strength` (0 to 1, 0.3: mixed with white by it);
+  - `glow` (0 to 1, 0.35): the share of the picture's light spread into a soft glow around its bright parts;
+  - `reflection` (0 to 1, 0.6): the glass's reflectance facing it, as a share of a bare glass's 4 % (an anti-glare
+    coating takes the rest): its highlights and what it mirrors. Toward grazing angles any glass mirrors more (the
+    Fresnel), so even 0 mirrors nearly edge-on; a rougher glass material blurs what it mirrors;
+  - `flicker` (0 to 0.5, 0.01): how much its brightness wobbles (a few slow sines, each screen its own);
+  - `vignette` (0 to 1, 0.25): how much the picture darkens toward its edges and corners;
+  - `power_on_seconds` and `power_off_seconds` (0 to 10, 0.8 and 0.6; 0 at once): its power animation's lengths.
+- **The slot's texture coordinates place the picture**: they cover 0..1 over the glass (a CRT's curved picture lies
+  inside it). As raylib loads them v grows toward the image's bottom (it flips an OBJ's, a glTF file's are so already),
+  so (0, 0) is the picture's top-left, the UI's convention: a hit's coordinates are the UI's pointer as they are (a
+  CRT's through its curvature). Authored in Blender (V up) the screen's top edge is V 1. Coordinates beyond 0..1 (a
+  rounded border in the same slot) are met but off the picture.
 - **Loaded with the world model** (`WorldModelSurfaceDefinition_Load`): LOD 0's meshes of the slot (each must have finite
   texture coordinates; a slot no mesh of LOD 0 uses fails the load, naming the surface) are built into a collision
   mesh (`CollisionMesh_Create`: welded, degenerate triangles skipped, a BVH) in the object's own space, after LOD 0's
@@ -276,8 +302,22 @@ code that owns it draws each frame ([UIFramework.md](UIFramework.md), "World scr
   triangle it came from (`_part`, `_sourceIndex`), in the corners' order. One block the asset owns holds the surfaces,
   the coordinates and the names; the meshes are its own too (`WorldModelSurfaces_DestroyBlock`). Every LOD should keep
   the surface's slot and coordinates: the renderer puts the picture into whichever LOD is drawn, a ray meets LOD 0's.
+  From the same triangles comes the glass's frame for its light: the point at texture coordinates (0.5, 0.5) (on the
+  triangle whose coordinates hold it; else the triangles' centre by area), the way its front faces (the triangles'
+  counter-clockwise normals summed by area) and how far a step of 1 in u and in v goes across it (each triangle's, by
+  area: the glass's width to the right and its height downward). A CRT's texture mask loads as the world model's
+  dependency, its tile's mean linear colour read from its image file (`AssetManager_LoadTexturePixels`), by which the
+  renderer divides the tile so any tile keeps the picture's mean light; a tile that does not load (or is not read from
+  an image file, or is larger than 64 pixels a side) fails the world model, naming the surface and the mask.
 - **Accessors**: `WorldModelSurface_GetName`, `_GetMaterialSlot`, `_GetWidth`, `_GetHeight`, `_GetKind`
-  (`WorldModelSurfaceKind_GetName`), `_GetEmission`, `_GetMesh`.
+  (`WorldModelSurfaceKind_GetName`), `_IsGlowing` (a screen or a CRT), `_GetEmission`, `_GetLightIntensity`,
+  `_GetLightRange`, `_GetCrt` (a `CrtScreenSettings`), `_GetMaskTexture`, `_GetMaskMean`, `_GetCenter`, `_GetNormal`,
+  `_GetAxisU`, `_GetAxisV`, `_GetMesh`.
+- **Where on the picture** (pure, tested): `WorldModelSurface_GetPicturePosition(surface, uv, &picture)` is the point of
+  the picture a point of the glass shows: the point itself, but for a CRT `CrtScreen_Distort(uv, curvature, width /
+  height)`, the one curvature the renderer draws the CRT with ([WorldRuntime.md](WorldRuntime.md), "CRT screens"), so a
+  click lands on exactly what is under the pointer; it returns whether that lies on the picture (0..1 both ways: the glass
+  beyond a CRT's curved edge shows none).
 - **Pointing at one** (pure, tested): `WorldModelSurface_Raycast(surface, objectToWorld, origin, direction,
   maxDistance, &hit)` takes the ray into the object's own space (its origin relative to the object's position in
   double, then the inverse of the placement's turn and scale, so a placement 10 000 km out is met as exactly as one at
@@ -285,10 +325,12 @@ code that owns it draws each frame ([UIFramework.md](UIFramework.md), "World scr
   front (counter-clockwise; a mirrored placement keeps the side the slot faces, although the renderer, which does not
   flip its culling for a mirrored placement, draws such a model inside out: its screen shows from behind) and gives the
   distance, the triangle, its barycentrics, the texture coordinates there (`WorldModelSurface_GetUv`: the corners'
-  weighted) and whether they lie on the picture. The screens system runs it for every screen of a world ([WorldData.md](WorldData.md), "Screen
-  component"; `include/WorldScreens.h`).
+  weighted), where on the picture that is (`Picture`, through a CRT's curvature) and whether it lies on the picture. The
+  screens system runs it for every screen of a world ([WorldData.md](WorldData.md), "Screen component";
+  `include/WorldScreens.h`).
 - **The renderer** puts the picture handed over for a placement's surface into that slot's per-draw material copy
-  ([WorldRuntime.md](WorldRuntime.md), "Surfaces' pictures"), never into the asset.
+  ([WorldRuntime.md](WorldRuntime.md), "Surfaces' pictures"), never into the asset; a CRT's slot draws with the CRT
+  program, and every glowing surface lights its surroundings ("CRT screens", "Screen light" there).
 
 ## Hot reload (designed in, built later)
 
@@ -326,12 +368,14 @@ and have the sockets `hand_r` and `hand_l` (in the palm, turned so a held cup st
 the floor 0.55 m in front of it, where a sitter's feet go) and `test_cup` (its `grip` on its side, its `reach` 0.52 m
 in front, facing it) both collide by `"bounds"`; `test_door` has an `opener` socket.
 
-A screen: `test_monitor`, a flat screen on a stand (the placeholder model `test_monitor`,
+A CRT: `test_monitor`, a flat screen on a stand (the placeholder model `test_monitor`,
 `models/placeholder_monitor/monitor.obj` and `.mtl`, written by `asset_source/scripts/placeholder_monitor.py`: a 48 x 37 cm
-panel 4 cm deep, its 44 x 33 cm screen the material slot 1 with its texture coordinates 0..1, the bezel, back, neck and
-foot slot 0), drawn crisp (`render.omit_pixelation`), colliding by its bounds, with the surface `screen` (slot 1, 640 x 480,
-emission 0.2). The test world stands it on a small table in the start view (objects 66 to 70) with a screen component;
-the test frame shows a UI on it ([WorldRuntime.md](WorldRuntime.md), "WorldTestFrame").
+panel 4 cm deep, its 44 x 33 cm screen the material slot 1 with its texture coordinates 0..1 and a glossy glass
+(roughness 0.15), the bezel, back, neck and foot slot 0), drawn crisp (`render.omit_pixelation`), colliding by its
+bounds, with the surface `screen` (slot 1, 640 x 480, emission 0.2), a CRT whose mask is the placeholder slot mask
+`tbp:crt_mask` (`textures/crt/crt_mask.png`, 6 x 4 pixels, written by `asset_source/scripts/placeholder_crt_mask.py`),
+its other settings the defaults. The test world stands it on a small table in the start view (objects 66 to 70) with a
+screen component; the test frame shows a UI on it ([WorldRuntime.md](WorldRuntime.md), "WorldTestFrame").
 
 An asset made in Blender: `trash_can_lined` (`world_models/trash_cans/`), a slatted steel bin with a black liner, its
 four LODs the models `world.trash_can_lined.lod0` to `lod3` (`models/world/trash_can_lined/`: each .glb brings its own
@@ -342,7 +386,8 @@ one, pushable, in the start view.
 ## Known limits
 
 - **A surface is pointed at on LOD 0's triangles in their bind pose**: a skinned screen (a laptop whose lid an animation
-  opens) is met where its rest pose has it.
+  opens) is met where its rest pose has it, and its light comes from where its rest pose holds its glass.
+- **A CRT's mask tile needs an image file** for its mean colour: a texture built in code cannot be a mask.
 - **A missing dependency fails the whole world model** (every LOD and texture must load), so its objects draw nothing;
   a variant texture typo costs the model, not just the variant.
 - **The unknown-variant warning** comes again after `WorldRenderer_PrepareWorld` (the cache resolves everything again).

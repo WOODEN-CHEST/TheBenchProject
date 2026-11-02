@@ -1,7 +1,7 @@
-// The PBR shader and the frame lighting every lit shader (models, sprites, terrain, the rain's) gets through
-// common/lighting (the sky's light: the sun and the moon through the air and the sky's own light as the ambient; the haze,
-// shadows, per-object forward point lights and each draw's place: its haze and its ambient zones; the eye's night vision;
-// the rain's: WorldRendererRain.c), and the PBR's per-material factors. The eye's adaptation is WorldRendererExposure.c's; interior lighting's parts are
+// The PBR shader and the frame lighting every lit shader (models, a CRT's glass, sprites, terrain, the rain's) gets
+// through common/lighting (the sky's light: the sun and the moon through the air and the sky's own light as the ambient;
+// the haze, shadows, per-object forward point lights and a screen's light, and each draw's place: its haze and its
+// ambient zones; the eye's night vision; the rain's: WorldRendererRain.c), and the PBR's per-material factors. The eye's adaptation is WorldRendererExposure.c's; interior lighting's parts are
 // WorldRendererInterior.c's and WorldRendererSkyVisibility.c's.
 
 #include <inttypes.h>
@@ -146,33 +146,6 @@ static void CacheMaterialLocations(WorldRendererPbrProgram* program, Shader shad
     program->_locIsEmissiveMapBottomUp = GetShaderLocation(shader, "isEmissiveMapBottomUp");
 }
 
-/* Loads one PBR program and prepares it: its lit locations and constants, its material locations, its dither, its own
- * location table and pass shader, and its palette (none in the rigid program). */
-static void LoadPbrProgram(WorldRenderer* self, WorldRendererPbrProgram* program, const unsigned char* assetName)
-{
-    program->_shader = WorldRendererCommon_LoadShader(self, assetName);
-    program->_palette = (WorldRendererPalette){ ._location = -1 };
-    if (program->_shader == NULL)
-    {
-        return;
-    }
-    Shader RayShader = GameShader_GetRaylibShader(program->_shader);
-    WorldRendererLighting_PrepareLitShader(self, RayShader, assetName, &program->_lit);
-    CacheMaterialLocations(program, RayShader);
-    WorldRendererCommon_PrepareDither(RayShader, &program->_dither);
-    WorldRendererCommon_PreparePalette(RayShader, &program->_palette);
-
-    // The renderer's own location table: the asset's, with the material map samplers pointed at the PBR
-    // shader's sampler names, so DrawMesh binds each material's textures to their conventional units (albedo
-    // -> 0 is already raylib's default "texture0"). The METALNESS slot carries the packed ORM map, matching where
-    // ModelDefinition stores the mra texture. Patching a copy leaves the shared shader asset's table untouched.
-    Memory_Copy(RayShader.locs, program->_locs, sizeof(program->_locs));
-    program->_locs[SHADER_LOC_MAP_METALNESS] = GetShaderLocation(RayShader, "mraMap");
-    program->_locs[SHADER_LOC_MAP_NORMAL] = GetShaderLocation(RayShader, "normalMap");
-    program->_locs[SHADER_LOC_MAP_EMISSION] = GetShaderLocation(RayShader, "emissiveMap");
-    program->_passShader = (Shader){ .id = RayShader.id, .locs = program->_locs };
-}
-
 /* Builds this render's forward-light candidates and their linear radiance (colour -> linear x intensity, once
  * per light per frame): every light of the render cache that can light anything, except the cube-shadow light,
  * which the shader shades separately with its shadow. In render space, like the spheres they are culled against. */
@@ -227,20 +200,46 @@ static void ChooseShadowLight(WorldRenderFrame* frame, float sunLuminance, float
 
 
 // Internal functions (declared in WorldRendererInternal.h).
+void WorldRendererLighting_LoadPbrProgram(WorldRenderer* self, WorldRendererPbrProgram* program,
+    const unsigned char* assetName)
+{
+    program->_shader = WorldRendererCommon_LoadShader(self, assetName);
+    program->_palette = (WorldRendererPalette){ ._location = -1 };
+    if (program->_shader == NULL)
+    {
+        return;
+    }
+    Shader RayShader = GameShader_GetRaylibShader(program->_shader);
+    WorldRendererLighting_PrepareLitShader(self, RayShader, assetName, &program->_lit);
+    CacheMaterialLocations(program, RayShader);
+    WorldRendererCommon_PrepareDither(RayShader, &program->_dither);
+    WorldRendererCommon_PreparePalette(RayShader, &program->_palette);
+
+    // The renderer's own location table: the asset's, with the material map samplers pointed at the PBR
+    // shader's sampler names, so DrawMesh binds each material's textures to their conventional units (albedo
+    // -> 0 is already raylib's default "texture0"). The METALNESS slot carries the packed ORM map, matching where
+    // ModelDefinition stores the mra texture. Patching a copy leaves the shared shader asset's table untouched.
+    Memory_Copy(RayShader.locs, program->_locs, sizeof(program->_locs));
+    program->_locs[SHADER_LOC_MAP_METALNESS] = GetShaderLocation(RayShader, "mraMap");
+    program->_locs[SHADER_LOC_MAP_NORMAL] = GetShaderLocation(RayShader, "normalMap");
+    program->_locs[SHADER_LOC_MAP_EMISSION] = GetShaderLocation(RayShader, "emissiveMap");
+    program->_passShader = (Shader){ .id = RayShader.id, .locs = program->_locs };
+}
+
 void WorldRendererLighting_LoadShader(WorldRenderer* self)
 {
-    LoadPbrProgram(self, &self->_pbr._rigid, PBR_SHADER_ASSET_NAME);
+    WorldRendererLighting_LoadPbrProgram(self, &self->_pbr._rigid, PBR_SHADER_ASSET_NAME);
     if (self->_pbr._rigid._shader == NULL)
     {
         return; // skinned meshes need the lit pass too
     }
-    LoadPbrProgram(self, &self->_pbr._skinned, PBR_SKINNED_SHADER_ASSET_NAME);
+    WorldRendererLighting_LoadPbrProgram(self, &self->_pbr._skinned, PBR_SKINNED_SHADER_ASSET_NAME);
     if ((self->_pbr._skinned._shader != NULL) && (self->_pbr._skinned._palette._location < 0))
     {
         WorldRendererCommon_Warn(self, (const unsigned char*)u8"WorldRenderer: \"world_pbr_skinned\" has no bone "
             u8"palette (bonePalette); skinned models draw in their bind pose.");
     }
-    LoadPbrProgram(self, &self->_pbr._instanced, PBR_INSTANCED_SHADER_ASSET_NAME);
+    WorldRendererLighting_LoadPbrProgram(self, &self->_pbr._instanced, PBR_INSTANCED_SHADER_ASSET_NAME);
 }
 
 void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, const unsigned char* assetName,
@@ -262,6 +261,8 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
     // read the haze's volume where the sky pass has the table.
     WorldRendererRain_PrepareLitShader(shader, &outLocations->_rain);
     AssignSamplerUnit(shader, outLocations->_atmosphere._locSkyViewTable, WorldRendererTextureUnit_RainSkyView);
+    // A screen's light, its picture on a unit of its own.
+    WorldRendererSurfaces_PrepareLitShader(shader, &outLocations->_screenLight);
 
     // The shader's point-light arrays must hold the WORLD_MAX_FORWARD_LIGHTS the culling may select; with fewer,
     // upload only as many as fit (the shader also clamps its loop to its own array size).
@@ -585,7 +586,7 @@ static void UploadPbrFrame(WorldRenderer* self, const WorldRenderFrame* frame, c
 }
 
 void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo,
-    Vector2 ditherPixelScale)
+    Vector2 ditherPixelScale, float windowPixelScale)
 {
     bool HasPbr = (self->_pbr._rigid._shader != NULL);
     bool HasSprites = (self->_sprites._shader != NULL);
@@ -593,6 +594,9 @@ void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFra
     UploadPbrFrame(self, frame, &self->_pbr._rigid, applyScreenAo, ditherPixelScale);
     UploadPbrFrame(self, frame, &self->_pbr._skinned, applyScreenAo, ditherPixelScale);
     UploadPbrFrame(self, frame, &self->_pbr._instanced, applyScreenAo, ditherPixelScale);
+    UploadPbrFrame(self, frame, &self->_crt._rigid, applyScreenAo, ditherPixelScale);
+    UploadPbrFrame(self, frame, &self->_crt._skinned, applyScreenAo, ditherPixelScale);
+    WorldRendererCrt_UploadPass(self, frame, windowPixelScale);
     if (HasSprites)
     {
         Shader SpriteShader = GameShader_GetRaylibShader(self->_sprites._shader);
@@ -620,6 +624,7 @@ void WorldRendererLighting_UploadLitProgram(WorldRenderer* self, const WorldRend
 void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader,
     const WorldRendererLitLocations* locations, Vector3 center, float radius)
 {
+    WorldRendererSurfaces_UploadScreenLight(self, shader, &locations->_screenLight, center, radius);
     if (locations->_locPointLightCount < 0)
     {
         return;

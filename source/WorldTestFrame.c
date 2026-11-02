@@ -1760,6 +1760,7 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
     WorldTestInstances_HandleInput(&frame->_testInstances, input);
     WorldTestShadows_HandleInput(&frame->_testShadows, input);
     WorldTestWeather_HandleInput(&frame->_testWeather, input, &frame->_clock);
+    WorldTestScreens_HandleInput(&frame->_testScreens, input, frame->_renderer);
 }
 
 
@@ -1787,7 +1788,8 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"bench, pick up the coffee cup, open the door, E again to stand up; 9 put down, 0 wave), F2 the test NPCs "
             u8"(a human, a dog, a pigeon), 8 the NPC human sits on the bench and gets up, F3 fly, F4 the player's kind; "
             u8"5 the showcase's next clip, 6 the crowd, 7 slow motion; ' the pebble field (20 000 instanced copies), ; "
-            u8"instanced drawing (off: every copy on its own, the same picture); I renderer, game "
+            u8"instanced drawing (off: every copy on its own, the same picture); ` the monitor's power (a CRT's "
+            u8"animation), SHIFT+` every CRT's mask; I renderer, game "
             u8"time, collision and camera status, T text sample, F5 save the world (worlds/test.saved.world.json and "
             u8".ghdf); M frees the mouse for the UI (click the world to capture it again); ESC quits (once the UI lets "
             u8"go of it).");
@@ -1866,6 +1868,8 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     World_UpdateTransforms(&Frame->_world);
     WorldTestCharacters_AfterStep(&Frame->_testCharacters);
     WorldScreens_Sync(Frame->_screens);
+    // The screens turning on or off (a CRT's power animation) by the tick's real time.
+    WorldScreens_Advance(Frame->_screens, Delta);
 
     // The text sample animates its sprite and is laid out here (laying out loads its fonts); Render only draws it.
     Error TextResult = TextDocument_Update(&Frame->_textSample, time);

@@ -13,6 +13,7 @@
 #include "UIWidget.h"
 #include "WorldCharacterComponent.h"
 #include "WorldObject.h"
+#include "WorldScreenComponent.h"
 #include "wr/WRChar.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
@@ -45,6 +46,8 @@
  *  pixels thick. */
 #define POINTER_MARK_HALF_WIDTH 0.02f
 #define POINTER_MARK_THICKNESS 2.0f
+/** How many backgrounds the picture steps through, one per click (the screen's light takes their colour). */
+#define BACKGROUND_COUNT 4U
 
 
 // Types.
@@ -57,6 +60,16 @@ typedef struct WorldTestDeskStruct
     /** The module that owns the screen (borrowed: it outlives the screen). */
     WorldTestScreens* Owner;
 } WorldTestDesk;
+
+
+// Fields.
+/* The picture's backgrounds, one per click in turn: the starting blue, a green, an amber and a white. */
+static const Color Backgrounds[BACKGROUND_COUNT] =
+{
+    { 14, 26, 52, 255 }, { 16, 70, 30, 255 }, { 110, 64, 10, 255 }, { 210, 210, 205, 255 }
+};
+/* The masks the mask key steps through after the monitor's own: every CRT showing one, then its own again. */
+static const CrtMaskKind MaskSteps[] = { CrtMaskKind_ApertureGrille, CrtMaskKind_ShadowMask, CrtMaskKind_None };
 
 
 // Static functions: the desk widget.
@@ -614,7 +627,7 @@ Error WorldTestScreens_Render(WorldTestScreens* self, WorldRenderer* renderer)
     RenderContext Context;
     RenderContext_Create(&Context, &self->_target, (float)Width / (float)Height, (Vector2){ 0.5f, 0.5f });
     RenderContext_BeginRendering(&Context);
-    ClearBackground((Color){ 14, 26, 52, 255 });
+    ClearBackground(Backgrounds[self->_clickCount % BACKGROUND_COUNT]);
     Error Result = UIScreen_Render(&self->_screen, &Context);
     RenderContext_EndRendering(&Context);
     RenderContext_Deconstruct(&Context);
@@ -627,4 +640,45 @@ Error WorldTestScreens_Render(WorldTestScreens* self, WorldRenderer* renderer)
     SetTextureFilter(self->_target.texture, TEXTURE_FILTER_TRILINEAR);
     return WorldRenderer_SetSurfaceTexture(renderer, self->_monitorId, WorldModelSurface_GetName(Info.Surface),
         self->_target.texture, true);
+}
+
+void WorldTestScreens_HandleInput(WorldTestScreens* self, GameInput* input, WorldRenderer* renderer)
+{
+    if ((self->_monitorId == 0U) || !GameInput_IsKeyPressed(input, GameKey_Grave))
+    {
+        return;
+    }
+    char Text[LINE_CAPACITY];
+    if (GameInput_IsKeyDown(input, GameKey_LeftShift) || GameInput_IsKeyDown(input, GameKey_RightShift))
+    {
+        // The next mask for every CRT, then each one's own again.
+        size_t StepCount = sizeof(MaskSteps) / sizeof(MaskSteps[0]);
+        size_t Next = 0U;
+        if (WorldRenderer_IsCrtMaskOverridden(renderer))
+        {
+            CrtMaskKind Shown = WorldRenderer_GetCrtMaskOverride(renderer);
+            while ((Next < StepCount) && (MaskSteps[Next] != Shown))
+            {
+                Next++;
+            }
+            Next++;
+        }
+        bool IsOverridden = Next < StepCount;
+        WorldRenderer_SetCrtMaskOverride(renderer, IsOverridden, IsOverridden ? MaskSteps[Next] : CrtMaskKind_None);
+        snprintf(Text, sizeof(Text), "every CRT shows %s%s.", IsOverridden ? "the mask " : "its own mask",
+            IsOverridden ? (const char*)CrtMaskKind_GetName(MaskSteps[Next]) : "");
+        Log(self, Text);
+        return;
+    }
+    WorldObject* Monitor = NULL;
+    WorldScreenComponent* Screen = World_TryGetObject(self->_world, self->_monitorId, &Monitor)
+        ? WorldScreenComponent_FromComponent(WorldObject_GetComponent(Monitor, WorldComponentType_Screen)) : NULL;
+    if (Screen == NULL)
+    {
+        return;
+    }
+    bool IsPowered = !WorldScreenComponent_IsPowered(Screen);
+    Error Result = WorldScreenComponent_SetIsPowered(Screen, IsPowered);
+    Error_Deconstruct(&Result);
+    Log(self, IsPowered ? "the monitor turns on." : "the monitor turns off.");
 }

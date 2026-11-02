@@ -19,8 +19,9 @@
  * target the renderer shows on the screen's surface (WorldRenderer_SetSurfaceTexture), and drives it through a host,
  * once a tick in its Update, before the game's own controls (the screen reads first, as a UI above the game does):
  * - THE POINTER is where the player points at the screen's picture this tick (WorldScreens_Raycast: the aim from the
- *   eyes or the camera, or the free cursor's ray): the hit's texture coordinates are the UI's own [0;1] position,
- *   (0, 0) the picture's top-left. Off the picture, at another screen or hidden, there is no pointer (and none while UI
+ *   eyes or the camera, or the free cursor's ray): where on the picture the hit is (a CRT's through its curvature, the
+ *   point of its picture the glass shows there) is the UI's own [0;1] position, (0, 0) the picture's top-left. Off the
+ *   picture, at another screen or hidden, there is no pointer (and none while UI
  *   above claimed the pointer). Buttons go to the UI under the pointer, and a press on the picture is the screen's even
  *   where no widget takes it: the game below never sees it.
  * - USING IT: the use action (default E) or a click on the picture gives the screen the keyboard (it is FOCUSED). The

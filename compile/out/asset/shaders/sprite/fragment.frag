@@ -97,7 +97,8 @@ void main()
         SkyLightValues light = SkyLightAt(fragPosition);
         vec3 direct = SkyLightWrapped(light, n, v, shadowAmount, lightWrap, albedo, SPRITE_F0, rough, SPRITE_METALLIC);
         vec3 pointTotal = PointLightsWrapped(n, v, fragPosition, fragPointShadowPosition, pointShadowNormal, lightWrap,
-            albedo, SPRITE_F0, rough, SPRITE_METALLIC);
+            albedo, SPRITE_F0, rough, SPRITE_METALLIC)
+            + ScreenLightWrapped(n, v, fragPosition, lightWrap, albedo, SPRITE_F0, rough, SPRITE_METALLIC);
         // A card the pre-pass saw (a cutout card, a decal on its surface) takes its sky visibility; a billboard stands for
         // a thing seen from all round (the pre-pass saw its quad facing the camera) and a blended sprite is not in it:
         // they read what lies straight above them.

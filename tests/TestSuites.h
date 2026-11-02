@@ -95,6 +95,11 @@ void WorldModelTests_Run(TestRun* run);
  *  on their slot's draws, before the LOD glow) and its status's counts (WorldScreenTests.c). */
 void WorldScreenTests_Run(TestRun* run);
 
+/** @brief A CRT screen's maths: the curvature (the centre and the edges' middles kept, the corners in, the identity at
+ *  0), the power transition's timing both ways, the power animation's shapes and their smoothness, the scanlines'
+ *  levels, the detail's fade, the flicker and the defaults (CrtScreenTests.c). */
+void CrtScreenTests_Run(TestRun* run);
+
 /** @brief Colliders: the world model's collision section (every key, the "bounds" box under the import transform,
  *  each rule and its message, the limits, hulls and meshes from models as dependencies, a model that cannot give
  *  them), the collider component's defaults, the settings it resolves to from its override flags over the world

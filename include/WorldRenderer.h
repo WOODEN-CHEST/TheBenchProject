@@ -6,6 +6,8 @@
 // so the Raylib include is unavoidable here (as in the other rendering headers).
 #include "raylib/raylib.h"
 #include "wr/WRError.h"
+// CrtMaskKind (the CRTs' mask override).
+#include "CrtScreen.h"
 
 
 /**
@@ -215,6 +217,13 @@ typedef enum WorldRendererFeatureEnum
      *  stay dry. Unavailable without the shadow levels' depth shader or the map's GL functions or storage (logged once):
      *  then the rain falls everywhere and every surface is wet alike; active while it rains or surfaces are wet. */
     WorldRendererFeature_RainMap,
+    /** @brief CRT screens: a CRT surface's glass drawn with its picture curved, its scanlines, mask, glow and power
+     *  animation behind glossy glass. Unavailable without their shader (world_crt, logged once by the loader), when a CRT
+     *  draws as a plain screen; active while a shown model has a CRT surface. */
+    WorldRendererFeature_CrtScreens,
+    /** @brief The screens' light: a glowing screen lights what is in front of it in its picture's colour. Unavailable
+     *  without PBR lighting; active while a shown screen with a picture gives off light. */
+    WorldRendererFeature_ScreenLight,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -318,10 +327,13 @@ typedef struct WorldRendererStatusStruct
     size_t ModelWithoutAssetCount;
     /** @brief Of the shown models, those with a pose: their skinned meshes bend with their animators. */
     size_t PosedModelCount;
-    /** @brief Of the shown models, those whose screen component shows on a surface of their world model, and of those
-     *  the ones a picture was handed over for (WorldRenderer_SetSurfaceTexture). */
+    /** @brief Of the shown models, those whose screen component shows on a surface of their world model, of those the
+     *  ones a picture was handed over for (WorldRenderer_SetSurfaceTexture), the CRTs among them, and the screens that
+     *  light their surroundings (a picture, on or turning, a light intensity above 0). */
     uint32_t ScreenCount;
     uint32_t ScreenPictureCount;
+    uint32_t CrtScreenCount;
+    uint32_t ScreenLightCount;
     /** @brief Sprite components with a frame to draw, on enabled and visible objects. */
     size_t SpriteCount;
     /** @brief Of those, the decals. */
@@ -860,6 +872,30 @@ void WorldRenderer_SetLodTintingEnabled(WorldRenderer* self, bool enabled);
  * @returns true if enabled.
  */
 bool WorldRenderer_IsLodTintingEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Shows every CRT with one mask instead of its own (a debug aid to compare the masks), or gives each its own back.
+ *
+ * CrtMaskKind_Texture shows each CRT's own tile, and none on a CRT that has no tile.
+ * @param self The renderer; must not be NULL.
+ * @param isOverridden Whether every CRT shows @p mask.
+ * @param mask The mask they show; a value that is not a kind turns the override off.
+ */
+void WorldRenderer_SetCrtMaskOverride(WorldRenderer* self, bool isOverridden, CrtMaskKind mask);
+
+/**
+ * @brief Reports whether every CRT shows one mask (WorldRenderer_SetCrtMaskOverride).
+ * @param self The renderer; must not be NULL.
+ * @returns true while the override is on.
+ */
+bool WorldRenderer_IsCrtMaskOverridden(const WorldRenderer* self);
+
+/**
+ * @brief Returns the mask every CRT shows while the override is on (WorldRenderer_SetCrtMaskOverride).
+ * @param self The renderer; must not be NULL.
+ * @returns The mask (meaningful while WorldRenderer_IsCrtMaskOverridden).
+ */
+CrtMaskKind WorldRenderer_GetCrtMaskOverride(const WorldRenderer* self);
 
 /**
  * @brief Enables or disables the terrain's chunk key: every terrain chunk tinted by its cell (neighbouring chunks

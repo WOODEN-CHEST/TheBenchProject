@@ -70,7 +70,7 @@ void WorldRendererCrisp_Render(WorldRenderer* self, const WorldRenderFrame* fram
         (frame->SceneWidth > 0) ? ((float)frame->WindowWidth / (float)frame->SceneWidth) : 1.0f,
         (frame->SceneHeight > 0) ? ((float)frame->WindowHeight / (float)frame->SceneHeight) : 1.0f
     };
-    WorldRendererLighting_UploadFrame(self, frame, false, DitherPixelScale);
+    WorldRendererLighting_UploadFrame(self, frame, false, DitherPixelScale, 1.0f);
     BeginMode3D(frame->RenderCamera);
     WorldRendererCommon_LoadCameraProjection(frame);
     WorldRendererGeometry_DrawModels(self, WorldRendererPixelFilter_CrispOnly);

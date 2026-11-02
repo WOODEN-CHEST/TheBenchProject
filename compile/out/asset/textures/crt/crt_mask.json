@@ -1,0 +1,10 @@
+{
+    "name": "tbp:crt_mask",
+    "location": "crt/crt_mask",
+    "texture_properties": {
+        "filtering": "point",
+        "wrap": "repeat",
+        "mipmaps": false
+    },
+    "color_space": "srgb"
+}

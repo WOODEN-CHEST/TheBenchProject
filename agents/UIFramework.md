@@ -84,8 +84,9 @@ resolution (`WorldScreens_TryGetScreen`) and a `WorldScreenHost` (`include/World
    only.
 
 What the host does each tick:
-- **The pointer** is where the player points on the hosted screen's picture: the hit's texture coordinates are the UI's
-  own [0;1] position as they are, (0, 0) the picture's top-left. Off the picture, at another screen, nowhere, or while
+- **The pointer** is where the player points on the hosted screen's picture: the hit's place on the picture
+  (`WorldScreenHit.Picture`: its texture coordinates as they are, a CRT's through its curvature, the point of its bulging
+  picture the glass shows there) is the UI's own [0;1] position, (0, 0) the picture's top-left. Off the picture, at another screen, nowhere, or while
   UI above claimed the pointer (`GameInput_IsPointerConsumed`), there is none. Buttons go to the UI under the pointer; a
   press on the picture that no widget takes is consumed anyway: the game below never sees a click on the screen.
 - **Using it.** The use action (`tbp:use`, E) or a left click on the picture **focuses** the screen: it gets the

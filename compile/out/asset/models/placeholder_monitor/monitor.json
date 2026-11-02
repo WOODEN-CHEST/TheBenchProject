@@ -3,6 +3,6 @@
     "location": "placeholder_monitor/monitor",
     "material_overrides": [
         { "slot": 0, "roughness": 0.6 },
-        { "slot": 1, "roughness": 0.35 }
+        { "slot": 1, "roughness": 0.15 }
     ]
 }

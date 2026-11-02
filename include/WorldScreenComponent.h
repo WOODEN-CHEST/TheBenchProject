@@ -20,9 +20,18 @@
  * glows at the surface's emission times the component's brightness; a paper surface's picture is lit like the rest and
  * takes neither.
  *
+ * POWER. Its power transition (runtime, never saved) says how far the screen is on: 0 dark, 1 its whole picture. The
+ * screens system (WorldScreens_Advance) moves it toward is_powered once a tick: a CRT over its power-on and power-off
+ * times, which play its tube's animation (CrtScreen.h), any other screen at once. Switching is_powered (the setter or
+ * the table) while it is between 0 and 1 turns it around to the point of the other animation that carries on what the
+ * glass shows (CrtScreen_GetSwitchedTransition): a CRT switched off while still opening collapses from where it is. A
+ * component read from a file or copied (the table's whole reads) starts settled at its power state, so a world loads
+ * with its screens on or off, not turning so.
+ *
  * Added with World_AddComponent(world, id, WorldComponentType_Screen, &component); reach its fields with
  * WorldScreenComponent_FromComponent. Its properties are the rows of its table ("screen_component"): surface,
- * is_powered and brightness. Every change advances the component's revision (WorldComponent_GetRevision).
+ * is_powered, brightness and the runtime power_transition. Every change advances the component's revision
+ * (WorldComponent_GetRevision).
  */
 
 
@@ -48,6 +57,10 @@ typedef struct WorldScreenComponentStruct
     bool _isPowered;
     /** @brief Times the surface's emission, 0 to WORLD_SCREEN_COMPONENT_MAX_BRIGHTNESS (default 1). */
     float _brightness;
+    /** @brief How far the screen is on, 0 (dark) to 1 (its whole picture); runtime, never saved (default 1). */
+    float _powerTransition;
+    /** @brief The power state whose animation _powerTransition is: _isPowered once each switch turned it around. */
+    bool _transitionIsPowered;
 } WorldScreenComponent;
 
 
@@ -115,7 +128,8 @@ static inline bool WorldScreenComponent_IsPowered(const WorldScreenComponent* se
 }
 
 /**
- * @brief Turns the screen on or off (off, it shows no picture).
+ * @brief Turns the screen on or off (off, it shows no picture); a switch turns a transition under way around (see the
+ *        file comment, "POWER").
  * @param self The screen component; must not be NULL.
  * @param isPowered Whether it is on.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
@@ -140,3 +154,23 @@ static inline float WorldScreenComponent_GetBrightness(const WorldScreenComponen
  *          range or not finite.
  */
 Error WorldScreenComponent_SetBrightness(WorldScreenComponent* self, float brightness);
+
+/**
+ * @brief Returns how far the screen is on (see the file comment, "POWER").
+ * @param self The screen component; must not be NULL.
+ * @returns 0 (dark) to 1 (its whole picture).
+ */
+static inline float WorldScreenComponent_GetPowerTransition(const WorldScreenComponent* self)
+{
+    return self->_powerTransition;
+}
+
+/**
+ * @brief Sets how far the screen is on: the screens system's step (WorldScreens_Advance), or a script that wants a
+ *        screen half way through its animation.
+ * @param self The screen component; must not be NULL.
+ * @param transition 0 (dark) to 1 (its whole picture), finite.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for a value outside 0..1
+ *          or not finite.
+ */
+Error WorldScreenComponent_SetPowerTransition(WorldScreenComponent* self, float transition);

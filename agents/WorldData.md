@@ -20,7 +20,7 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point light (colour, intensity, range, casts shadows). |
 | WorldAmbientZoneComponent | `include/WorldAmbientZoneComponent.h`, `source/WorldAmbientZoneComponent.c` | A volume that sets a room's own light (a box or a sphere: its light, the sky's share in it, the eye's exposure bias, its priority and its air's haze). |
 | WorldScreenComponent | `include/WorldScreenComponent.h`, `source/WorldScreenComponent.c` | Which surface of the object's world model shows a picture made while the game runs ([WorldModels.md](WorldModels.md), "Surfaces"), whether the screen is on and how bright it is. |
-| WorldScreens | `include/WorldScreens.h`, `source/WorldScreens.c` | The screens system: every screen component's surface resolved on its object's world model (under its own asset user), and the ray that finds which screen the player points at and where on its picture (below, "Screen component"). |
+| WorldScreens | `include/WorldScreens.h`, `source/WorldScreens.c` | The screens system: every screen component's surface resolved on its object's world model (under its own asset user), the ray that finds which screen the player points at and where on its picture (through a CRT's curvature), and each screen's power transition moved toward its power state (below, "Screen component"). |
 | WorldColliderComponent | `include/WorldColliderComponent.h`, `source/WorldColliderComponent.c` | How the object collides ([WorldCollision.md](WorldCollision.md)): its world model's collision set (or one primitive of its own), its layer, mask and trigger flag (each overriding the world model's default with an explicit flag), a local offset, rotation and scale, and a rotation mode, with the pure function that resolves the settings in effect. |
 | WorldCharacterComponent | `include/WorldCharacterComponent.h`, `source/WorldCharacterComponent.c` | The player or an NPC ([Characters.md](Characters.md)): a character asset by name and every setting this placement overrides (explicit flags next to its own values), the input its driver gives it and the state it is in; the first transform driver. |
 | WorldAnimatorComponent | `include/WorldAnimatorComponent.h`, `source/WorldAnimatorComponent.c` | What plays the object's skeletal animation ([Animation.md](Animation.md)): the clip row and how it plays, the placement's own libraries, and the pose the animation system publishes. |
@@ -427,7 +427,17 @@ A surface of the object's world model that shows a picture made while the game r
 most 64 bytes, never NULL; default `screen`: `WORLD_SCREEN_COMPONENT_DEFAULT_SURFACE`) names the surface, `_isPowered`
 (true) turns the screen on and off (off it shows no picture: its material's own surface, a screen's dark glass), and
 `_brightness` (0 to `WORLD_SCREEN_COMPONENT_MAX_BRIGHTNESS`, 1000; default 1) multiplies a screen surface's emission (a
-paper takes neither). The object also needs a model component naming that world model. The content is game state, not
+paper takes neither). `_powerTransition` (`power_transition`, a runtime row: shown and scriptable, never saved; 0 to 1,
+default 1) is how far the screen is on, 0 dark to 1 its whole picture: the screens system moves it toward `_isPowered`
+each tick (below), a CRT over its surface's power-on and power-off times while the renderer plays the tube's animation
+by it ([WorldRuntime.md](WorldRuntime.md), "CRT screens"), any other screen at once. A component read whole (a JSON or
+GHDF read, a copy: the type's `OnPropertySet` hook without a property) starts settled at its power state, so a world
+loads with its screens on or off, not turning so; switching `_isPowered` (`WorldScreenComponent_SetIsPowered` or the
+table) leaves the transition to the screens system, turned around first while it is under way (between 0 and 1): to
+the point of the other animation that carries on what the glass shows (`CrtScreen_GetSwitchedTransition`; the
+private `_transitionIsPowered` remembers which animation the transition is), so a CRT switched off while its picture
+still opens collapses from that height. `WorldScreenComponent_SetPowerTransition` sets it (0 to 1). The
+object also needs a model component naming that world model. The content is game state, not
 world data: the code that owns it (the virtual PC, the test frame's monitor) keeps a `UIScreen` and its render target,
 draws it each frame and hands it to the renderer (`WorldRenderer_SetSurfaceTexture`, [WorldRuntime.md](WorldRuntime.md),
 "Surfaces' pictures"), and drives its input through a `WorldScreenHost` ([UIFramework.md](UIFramework.md), "World
@@ -442,10 +452,15 @@ does not load or one without the surface it names, is logged once, `WorldScreens
 pointed at: ...`, and points at nothing; between syncs the queries find each screen's object by id and skip one whose
 object or screen component the world removed, so they never read a removed component, and a screen added since is not
 there yet), `WorldScreens_TryGetScreen(objectId, &info)` (its world model and surface: what the content owner makes its
-render target at) and `WorldScreens_Raycast(origin, direction, maxDistance, collision, filter, &hit)`: the nearest
+render target at), `WorldScreens_Advance(seconds)` once a tick after the sync (the tick's real seconds: each screen's
+power transition toward its power state, `CrtScreen_AdvancePower` over its surface's CRT power times, at once for any
+other kind and for a screen on no surface; a value that does not change is not written; a screen the sync meets for the
+first time is settled at its power state there, so one added and switched off before it was ever shown plays no
+power-off) and `WorldScreens_Raycast(origin, direction, maxDistance, collision, filter, &hit)`: the nearest
 enabled, visible screen the ray meets from the front (`WorldModelSurface_Raycast` on each, at its object's world matrix,
-in double), with the object, the surface, the texture coordinates (the UI's position: (0, 0) the picture's top-left),
-whether they lie on the picture, the point and the distance. With a collision world, a collider of another object
+in double), with the object, the surface, the texture coordinates, where on the picture that is (`Picture`, the UI's
+position: (0, 0) the picture's top-left; a CRT's through its curvature, `WorldModelSurface_GetPicturePosition`),
+whether that lies on the picture, the point and the distance. With a collision world, a collider of another object
 between the ray's origin and the screen (more than `WORLD_SCREENS_OCCLUSION_TOLERANCE`, 1 cm, in front of it) hides it;
 the screen's own colliders never do (a monitor's box encloses its glass), and the filter's ignored object (the one
 pointing) never does. Pointers it returns are valid until the next sync; it borrows the world and holds the world models
@@ -957,5 +972,6 @@ models and the model component's overrides ([WorldModels.md](WorldModels.md)), `
 sprites and the sprite component's overrides ([WorldSprites.md](WorldSprites.md)), `tests/WorldColliderTests.c` the
 collider component and the world models' collision, `tests/WorldCollisionTests.c` the collision world and
 `tests/WorldCollisionMotionTests.c` its step ([WorldCollision.md](WorldCollision.md)); `tests/WorldScreenTests.c` the
-screen component, the screens system (also 100 km out) and the surfaces they point at ([WorldModels.md](WorldModels.md),
-"Surfaces").
+screen component (its power transition too), the screens system (also 100 km out; their power), the surfaces they point
+at (a CRT's curvature) and the screens' light ([WorldModels.md](WorldModels.md), "Surfaces"), `tests/CrtScreenTests.c`
+a CRT's maths.

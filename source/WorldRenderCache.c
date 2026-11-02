@@ -180,6 +180,7 @@ static void UpdateScreen(WorldRenderModel* entry, const WorldObject* owner, Logg
         }
     }
     entry->IsSurfacePowered = WorldScreenComponent_IsPowered(Screen);
+    entry->SurfacePower = WorldScreenComponent_GetPowerTransition(Screen);
     entry->SurfaceEmission = (entry->Surface != NULL)
         ? (WorldModelSurface_GetEmission(entry->Surface) * WorldScreenComponent_GetBrightness(Screen)) : 0.0f;
 }

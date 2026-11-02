@@ -410,8 +410,11 @@ also needs a `model` block naming that world model; the picture itself is the ga
 | Key | Value (default) | |
 |---|---|---|
 | `surface` | a name, `[a-z][a-z0-9_.-]*`, at most 64 bytes (`screen`) | Which of the world model's surfaces shows the picture. |
-| `is_powered` | boolean (true) | Off, the screen shows no picture: its material's own surface. |
+| `is_powered` | boolean (true) | Off, the screen shows no picture: its material's own surface. A CRT turns on and off with its tube's animation. |
 | `brightness` | in [0, 1000] (1) | Times the surface's `emission`: how brightly a screen's picture glows (a paper takes none). |
+
+How far a screen is through turning on or off (its `power_transition`) is runtime state, never written: a world is read
+with its screens settled at `is_powered`.
 
 The test world's monitor (object 70, a child of its table's pivot) takes every default:
 ```

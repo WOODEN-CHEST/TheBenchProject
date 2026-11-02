@@ -80,7 +80,7 @@ Error WorldScreenHost_Update(WorldScreenHost* self, UIScreen* screen, ProgramTim
     self->_isPointed = IsPointedAt(self, input, pointed);
     if (self->_isPointed)
     {
-        self->_pointer = pointed->Uv;
+        self->_pointer = pointed->Picture;
     }
     if (self->_isFocused && !self->_isPointed)
     {

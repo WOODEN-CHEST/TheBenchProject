@@ -218,7 +218,9 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
     // Feed the sun/ambient/camera into the lit shaders (models, sprites) before drawing any lit geometry. The scene pass
     // applies the screen-space AO map (occludes the ambient term); it is the scene's own pixel grid, so the dither's
     // pixel scale is 1.
-    WorldRendererLighting_UploadFrame(self, frame, true, (Vector2){ 1.0f, 1.0f });
+    // Each of its pixels spans window / scene window pixels (1 without pixelation).
+    float WindowPixelScale = (frame->SceneWidth > 0) ? ((float)frame->WindowWidth / (float)frame->SceneWidth) : 1.0f;
+    WorldRendererLighting_UploadFrame(self, frame, true, (Vector2){ 1.0f, 1.0f }, WindowPixelScale);
 
     // Render space: the camera at the origin, every position relative to it (the render cache's); with reversed depth the
     // frame's infinite projection in place of raylib's.

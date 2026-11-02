@@ -1,11 +1,11 @@
-// The world's lighting, shared by the lit shaders (world_pbr and world_sprite), for #include "common/lighting": the
-// frame's lighting uniforms (the renderer uploads the same values to every shader that includes this file), the
-// Cook-Torrance BRDF, the sky's two directional lights (the sun and the moon) with the shadow levels' shadow and a
-// lightning bolt's light, forward point lights and the shadow-casting point light with its cube shadow, the sky's ambient
-// light with the screen-space AO and interior lighting (common/interior: what roofs keep out, rooms' own light), the
-// weather's wetness and puddles (common/rain: what keeps the rain out; common/puddles: the puddles, the sky mirrored in
-// water), the eye's night vision and the haze in front of every surface (the aerial perspective and the ground haze,
-// common/haze).
+// The world's lighting, shared by the lit shaders (world_pbr, world_crt, world_sprite, world_terrain), for #include
+// "common/lighting": the frame's lighting uniforms (the renderer uploads the same values to every shader that includes
+// this file), the Cook-Torrance BRDF, the sky's two directional lights (the sun and the moon) with the shadow levels'
+// shadow and a lightning bolt's light, forward point lights and the shadow-casting point light with its cube shadow, a
+// screen's light, the sky's ambient light with the screen-space AO and interior lighting (common/interior: what roofs
+// keep out, rooms' own light), what a glossy surface mirrors, the weather's wetness and puddles (common/rain: what keeps
+// the rain out; common/puddles: the puddles, the sky mirrored in water), the eye's night vision and the haze in front of
+// every surface (the aerial perspective and the ground haze, common/haze).
 //
 // THE SKY'S LIGHT (one light scale): the sun and the moon reach a surface through the air (their light above the air
 // times the transmittance toward them at the surface's own height: reddened low over the horizon, gone once the disc has
@@ -125,6 +125,17 @@ uniform vec3 cloudShadowLight;    // the light it was made for (unit)
 uniform float cloudShadowFallback; // the share of that light beyond the map
 uniform bool cloudShadowIsMoon;   // the map shades the moon's light (else the sun's)
 
+// A screen's light, one per draw (the nearest shown screen that glows and reaches the draw; WorldRendererSurfaces.c): its
+// glass lights what is in front of it like a small window, in its picture's mean colour. No shadow: it lights through
+// what stands in front of it.
+uniform bool screenLightActive;
+uniform vec3 screenLightPosition;     // its glass's centre, render space
+uniform vec3 screenLightNormal;       // the way its glass faces (unit)
+uniform vec4 screenLightShape;        // its glass's area (square metres), its reach (metres), the mipmap level its
+                                      // picture's mean is read at, its whiteness (a CRT's squeezed beam)
+uniform float screenLightGlow;        // its glow per unit of its picture's colour (the picture's emission, its light)
+uniform sampler2D screenLightPicture; // its picture, sRGB as a screen's emissive map
+
 // The eye's night vision (shaders/common/night_vision.glsl): dim reflected light loses its colour as it does for the
 // eye; emitted light keeps it. The same values the sky pass gets.
 uniform float nightVisionFieldLuminance; // the scene luminance the sky's light gives (linear, the game's light units)
@@ -217,6 +228,13 @@ float GeometrySmith(vec3 n, vec3 v, vec3 l, float rough)
 vec3 FresnelSchlick(float cosTheta, vec3 f0)
 {
     return f0 + (1.0 - f0)*pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// Schlick's Fresnel for light mirrored from all around (not one light's half vector): a rough surface's grazing
+// reflectance rises only to 1 - its roughness, its blurred reflection spreading over its other directions.
+vec3 FresnelSchlickRoughness(float cosTheta, vec3 f0, float rough)
+{
+    return f0 + (max(vec3(1.0 - rough), f0) - f0)*pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
 // One directional light (the sun or the moon) through the Cook-Torrance BRDF: light from direction l (unit, toward the
@@ -546,6 +564,24 @@ vec3 SkyLightWrapped(SkyLightValues light, vec3 n, vec3 v, float shadowAmount, f
     return direct;
 }
 
+// What a glossy surface at a point mirrors toward the direction r (unit): the sky above (the sky view's, as water mirrors
+// it: common/puddles' RainSkyRadiance, its even sky the fallback) and the ground's bounce below as an even light, joined
+// over a band at the horizon, tinted as the ambient is, with the moonless night's own light; under a roof all of it
+// times the share of the sky the surface sees at its visibility (skyVisibility, as AmbientLight takes it) and its zones'
+// sky scale, plus the zones' own light (a room's even light all around).
+vec3 EnvironmentRadiance(SkyLightValues light, vec3 r, vec3 worldPos, vec3 surfaceNormal, float skyVisibility)
+{
+    vec3 up = normalize(vec3(r.x, max(r.y, 0.02), r.z));
+    vec3 sky = RainSkyRadiance(up, normalize(sunDirection), normalize(moonDirection), light.sky/PI);
+    vec3 around = mix(light.ground/PI, sky, smoothstep(-0.05, 0.05, r.y))*ambientTint + nightLight;
+    if (!interiorActive)
+    {
+        return around;
+    }
+    InteriorZoneLight zones = InteriorZonesAt(worldPos, surfaceNormal);
+    return around*InteriorSkyShare(skyVisibility)*zones.skyScale + zones.ambient;
+}
+
 // The sky mirrored by the share `water` of a wet surface (ApplyWetness), as the sky's light on surfaces is (its tint
 // in): common/puddles' RainWaterReflection, with the even sky of the sky's light at the surface as the fallback.
 vec3 WaterReflection(SkyLightValues light, vec3 n, vec3 v, float water)
@@ -692,6 +728,73 @@ vec3 PointLightsWrapped(vec3 n, vec3 v, vec3 worldPos, vec3 shadowPos, vec3 shad
             pointShadowLightRange, wrap, albedo, f0, rough, metal)*visibility;
     }
     return pointTotal;
+}
+
+
+// ---- A screen's light -----------------------------------------------------------------------------------------
+// The mean colour of the screen's picture (linear): four by four taps at the mipmap level where it spans about four
+// texels a side (as the picture's mipmaps average it, then decoded from sRGB), whitened as its beam is.
+vec3 ScreenLightColor()
+{
+    vec3 sum = vec3(0.0);
+    for (int y = 0; y < 4; y++)
+    {
+        for (int x = 0; x < 4; x++)
+        {
+            sum += textureLod(screenLightPicture, (vec2(float(x), float(y)) + 0.5)/4.0, screenLightShape.z).rgb;
+        }
+    }
+    vec3 mean = pow(max(sum/16.0, vec3(0.0)), vec3(2.2));
+    return mix(mean, vec3(1.0), clamp(screenLightShape.w, 0.0, 1.0));
+}
+
+// The screen's light at a render-space point on a surface facing it: its glass's radiance (its glow times its picture's
+// colour) times its area and its cosine toward the point, over the distance squared plus the area over pi (a disc of that
+// area's exact light on its axis, so it never blows up at the glass), faded to nothing at its reach; 0 behind the glass.
+// l receives the direction toward the glass's centre, widen how much the glass's size seen from there widens a
+// highlight (its half size over the distance, as a roughness).
+vec3 ScreenLightIrradiance(vec3 worldPos, out vec3 l, out float widen)
+{
+    vec3 toScreen = screenLightPosition - worldPos;
+    float dist2 = dot(toScreen, toScreen);
+    float dist = sqrt(dist2);
+    l = (dist > 1e-4) ? toScreen/dist : screenLightNormal;
+    float area = max(screenLightShape.x, 0.0);
+    widen = 0.5*sqrt(area)/max(dist, 1e-3);
+    float facing = dot(screenLightNormal, -l);
+    if (!(facing > 0.0) || !(dist < screenLightShape.y))
+    {
+        return vec3(0.0);
+    }
+    float window = clamp(1.0 - pow(dist/screenLightShape.y, 4.0), 0.0, 1.0);
+    return ScreenLightColor()*screenLightGlow*(area*facing/(dist2 + area/PI))*window*window;
+}
+
+// The draw's screen light through the plain BRDF, its specular widened by the glass's size (a glossy desk shows a soft
+// patch, not a pinpoint); nothing while no screen lights the draw.
+vec3 ScreenLight(vec3 n, vec3 v, vec3 worldPos, vec3 albedo, vec3 f0, float rough, float metal)
+{
+    if (!screenLightActive)
+    {
+        return vec3(0.0);
+    }
+    vec3 l;
+    float widen;
+    vec3 irradiance = ScreenLightIrradiance(worldPos, l, widen);
+    return DirectionalLight(n, v, l, irradiance, 1.0, albedo, f0, clamp(rough + widen, rough, 1.0), metal);
+}
+
+// The draw's screen light with wrap lighting (WrappedLight), as ScreenLight.
+vec3 ScreenLightWrapped(vec3 n, vec3 v, vec3 worldPos, float wrap, vec3 albedo, vec3 f0, float rough, float metal)
+{
+    if (!screenLightActive)
+    {
+        return vec3(0.0);
+    }
+    vec3 l;
+    float widen;
+    vec3 irradiance = ScreenLightIrradiance(worldPos, l, widen);
+    return WrappedLight(n, v, l, irradiance, wrap, albedo, f0, clamp(rough + widen, rough, 1.0), metal);
 }
 
 

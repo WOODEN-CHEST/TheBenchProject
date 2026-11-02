@@ -1,6 +1,6 @@
 // A world model's surfaces as pure data: the lookup by name, the texture coordinates at a point of one of a surface's
-// triangles, and the ray that finds where on a placed surface the player points. The "surfaces" section's parser and
-// loader are in WorldModelSurfaceDefinition.c.
+// triangles, where on the picture a point of the glass is (through a CRT's curvature), and the ray that finds where on a
+// placed surface the player points. The "surfaces" section's parser and loader are in WorldModelSurfaceDefinition.c.
 
 #include <math.h>
 #include "WorldModel.h"
@@ -20,7 +20,8 @@
 static const unsigned char* const SurfaceKindNames[WorldModelSurfaceKind_Count] =
 {
     [WorldModelSurfaceKind_Screen] = u8"screen",
-    [WorldModelSurfaceKind_Paper] = u8"paper"
+    [WorldModelSurfaceKind_Paper] = u8"paper",
+    [WorldModelSurfaceKind_Crt] = u8"crt"
 };
 
 
@@ -64,6 +65,18 @@ bool WorldModelSurface_GetUv(const WorldModelSurface* self, uint32_t triangle, V
     return (Uv.x >= 0.0f) && (Uv.x <= 1.0f) && (Uv.y >= 0.0f) && (Uv.y <= 1.0f);
 }
 
+bool WorldModelSurface_GetPicturePosition(const WorldModelSurface* self, Vector2 uv, Vector2* outPicture)
+{
+    Vector2 Picture = uv;
+    if (self->_kind == WorldModelSurfaceKind_Crt)
+    {
+        float Aspect = (self->_height > 0) ? ((float)self->_width / (float)self->_height) : 1.0f;
+        Picture = CrtScreen_Distort(uv, self->_crt.Curvature, Aspect);
+    }
+    *outPicture = Picture;
+    return (Picture.x >= 0.0f) && (Picture.x <= 1.0f) && (Picture.y >= 0.0f) && (Picture.y <= 1.0f);
+}
+
 bool WorldModelSurface_Raycast(const WorldModelSurface* self, const Matrix4Double* objectToWorld, Vector3Double origin,
     Vector3 direction, float maxDistance, WorldModelSurfaceHit* outHit)
 {
@@ -95,7 +108,8 @@ bool WorldModelSurface_Raycast(const WorldModelSurface* self, const Matrix4Doubl
     outHit->Distance = Hit.T;
     outHit->Triangle = Hit.TriangleIndex;
     outHit->Barycentric = Hit.Barycentric;
-    outHit->IsOnPicture = WorldModelSurface_GetUv(self, Hit.TriangleIndex, Hit.Barycentric, &outHit->Uv);
+    WorldModelSurface_GetUv(self, Hit.TriangleIndex, Hit.Barycentric, &outHit->Uv);
+    outHit->IsOnPicture = WorldModelSurface_GetPicturePosition(self, outHit->Uv, &outHit->Picture);
     return true;
 }
 

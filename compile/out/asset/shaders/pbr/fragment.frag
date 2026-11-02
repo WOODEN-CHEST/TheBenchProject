@@ -103,11 +103,12 @@ void main()
 
     // The sun and (at night) the moon through the air at the fragment's height, darkened by the shadow levels' shadow, read
     // off the triangle's own face (what the maps hold). Then the point lights, the cube-shadow light read at the fragment
-    // itself.
+    // itself, and a screen's light.
     SkyLightValues light = SkyLightAt(fragPosition);
     float shadowAmount = FaceShadowAmount(fragPosition, FaceNormal(fragPosition, surfaceNormal));
     vec3 direct = SkyLight(light, n, v, shadowAmount, albedo, f0, rough, metal);
-    vec3 pointTotal = PointLights(n, v, fragPosition, fragPosition, n, albedo, f0, rough, metal);
+    vec3 pointTotal = PointLights(n, v, fragPosition, fragPosition, n, albedo, f0, rough, metal)
+        + ScreenLight(n, v, fragPosition, albedo, f0, rough, metal);
 
     // The sky's own light as the ambient (the sky above, the ground's bounce below, the night's light; under a roof only
     // the share of the sky the surface sees, in a room its ambient zones' light). Screen-space AO darkens ONLY this

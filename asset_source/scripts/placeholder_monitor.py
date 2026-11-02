@@ -16,7 +16,9 @@ It writes, relative to the repository root:
                                                                      glass: near black, as a screen is when off)
     compile/out/asset/models/placeholder_monitor/monitor.json        the model definition (tbp:test_monitor)
     compile/out/asset/world_models/test_world/test_monitor.json      the world model: drawn crisp, colliding by its
-                                                                     bounds, its surface "screen" on slot 1 at 640 x 480
+                                                                     bounds, its surface "screen" on slot 1 at 640 x 480,
+                                                                     a CRT whose mask is the placeholder slot mask
+                                                                     (tbp:crt_mask, placeholder_crt_mask.py)
 
 The screen is one quad, 44 x 33 cm (4:3, as its picture), flush with the bezel around it, its texture coordinates 0..1
 over it with V up (the OBJ convention: raylib flips V when it loads an OBJ, so the loaded coordinates have (0, 0) at the
@@ -48,15 +50,19 @@ SCREEN_HEIGHT = 0.33
 NECK = ((-0.03, 0.03), (0.02, 0.25), (-0.06, -0.02))
 FOOT = ((-0.12, 0.12), (0.0, 0.02), (-0.14, 0.06))
 
-# The materials (raylib reads Kd as the albedo colour; the model definition sets their roughness).
+# The materials (raylib reads Kd as the albedo colour; the model definition sets their roughness: the glass glossy, so
+# lamps leave their highlights on it).
 MATERIALS = [
     ("monitor_body", (0.10, 0.10, 0.11)),
     ("monitor_screen", (0.015, 0.015, 0.02)),
 ]
 BODY = 0
 SCREEN = 1
+BODY_ROUGHNESS = 0.6
+GLASS_ROUGHNESS = 0.15
 PICTURE = [640, 480]
 SCREEN_EMISSION = 0.2
+MASK = "tbp:crt_mask"
 
 
 class Mesh:
@@ -168,8 +174,8 @@ def main():
         "name": "tbp:test_monitor",
         "location": "placeholder_monitor/monitor",
         "material_overrides": [
-            {"slot": BODY, "roughness": 0.6},
-            {"slot": SCREEN, "roughness": 0.35},
+            {"slot": BODY, "roughness": BODY_ROUGHNESS},
+            {"slot": SCREEN, "roughness": GLASS_ROUGHNESS},
         ],
     }, os.path.join(MODEL_DIRECTORY, "monitor.json"))
     write_json({
@@ -178,8 +184,8 @@ def main():
         "render": {"omit_pixelation": True},
         "collision": "bounds",
         "surfaces": [
-            {"name": "screen", "material_slot": SCREEN, "resolution": PICTURE, "kind": "screen",
-             "emission": SCREEN_EMISSION},
+            {"name": "screen", "material_slot": SCREEN, "resolution": PICTURE, "kind": "crt",
+             "emission": SCREEN_EMISSION, "crt": {"mask": MASK}},
         ],
     }, os.path.join(WORLD_MODEL_DIRECTORY, "test_monitor.json"))
     print("Wrote the placeholder monitor: %d vertices, %d faces." % (

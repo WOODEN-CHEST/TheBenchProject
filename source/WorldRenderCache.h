@@ -194,9 +194,11 @@ typedef struct WorldRenderModelStruct
      *  component, or one naming a surface the world model lacks (logged once). The lit passes put the picture handed
      *  over for it into its slot's material copy (WorldRendererSurfaces_Apply). */
     const WorldModelSurface* Surface;
-    /** @brief Whether the screen is on (this frame), and how brightly its picture glows: the surface's emission times
+    /** @brief Whether the screen is on (this frame), how far it is on (its power transition: 0 dark, 1 its whole
+     *  picture; a CRT plays its power animation by it) and how brightly its picture glows: the surface's emission times
      *  the component's brightness. Meaningful while Surface is not NULL. */
     bool IsSurfacePowered;
+    float SurfacePower;
     float SurfaceEmission;
     /** @brief What the surface was resolved for: the screen component's serial (0: none), the hash of the surface name it
      *  named and the world model, so it is looked up again (and a missing one logged again) only when one of them

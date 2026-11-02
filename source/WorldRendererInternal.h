@@ -177,6 +177,11 @@ typedef enum
     WorldRendererTextureUnit_RainMap = 16,      // sampler2DArrayShadow rainMap (the rain map: a one-layer shadow array)
     WorldRendererTextureUnit_PuddleMask = 17,   // sampler2D puddleMask
     WorldRendererTextureUnit_RainSkyView = 18,  // sampler2D atmosphereSkyViewTable in the lit programs (what water mirrors)
+    // A draw's screen light in every lit program (the picture of the screen that lights it, read at a coarse mipmap level
+    // for its mean colour), bound per draw with the light (WorldRendererSurfaces_UploadScreenLight); a CRT's mask tile in
+    // the CRT programs, bound per CRT draw. Past the rain's units, where nothing else binds.
+    WorldRendererTextureUnit_ScreenLight = 19,  // sampler2D screenLightPicture
+    WorldRendererTextureUnit_CrtMask = 20,      // sampler2D crtMaskTile
 } WorldRendererTextureUnit;
 
 _Static_assert(WorldRendererTextureUnit_ShadowLevels >= WORLD_RENDERER_MATERIAL_MAP_COUNT,
@@ -195,6 +200,9 @@ _Static_assert(WORLD_RENDERER_HAZE_SLICE_COUNT == WORLD_ATMOSPHERE_VOLUME_SLICE_
 _Static_assert((WorldRendererTextureUnit_RainMap >= WORLD_RENDERER_MATERIAL_MAP_COUNT)
     && (WorldRendererTextureUnit_RainMap > WorldRendererTextureUnit_AmbientOcclusion),
     "the rain's units sit above raylib's material maps and every other frame texture");
+_Static_assert((WorldRendererTextureUnit_ScreenLight > WorldRendererTextureUnit_RainSkyView)
+    && (WorldRendererTextureUnit_CrtMask > WorldRendererTextureUnit_ScreenLight),
+    "the screens' units sit above the rain's");
 
 /* Which objects a draw pass should include, by their OmitPixelation flag. The pixelated scene pass draws only
  * pixelated objects (when the crisp overlay is active), the crisp overlay pass draws only the flagged ones, and
@@ -712,6 +720,25 @@ typedef struct WorldRendererRainLocationsStruct
 } WorldRendererRainLocations;
 
 /**
+ * @brief The uniform locations of a draw's screen light in a shader that includes shaders/common/lighting.glsl: whether a
+ *        screen lights the draw, where its glass's centre is and the way it faces, its shape (its area, its reach, the
+ *        mipmap level its picture's mean is read at, its whiteness), its glow and its picture's sampler. -1 for a
+ *        uniform the shader lacks.
+ *
+ * Filled by WorldRendererSurfaces_PrepareLitShader, which also points the sampler at
+ * WorldRendererTextureUnit_ScreenLight; WorldRendererSurfaces_UploadScreenLight uploads a draw's light.
+ */
+typedef struct WorldRendererScreenLightLocationsStruct
+{
+    int _locActive;
+    int _locPosition;
+    int _locNormal;
+    int _locShape;
+    int _locGlow;
+    int _locPicture;
+} WorldRendererScreenLightLocations;
+
+/**
  * @brief The uniform locations of a shader that includes shaders/common/lighting.glsl (the PBR and the sprite
  *        shaders): the frame's lights, shadows, AO, haze and night vision, and the per-object forward point lights and
  *        haze multiplier.
@@ -804,6 +831,9 @@ typedef struct WorldRendererLitLocationsStruct
      *  WorldRendererTextureUnit_PuddleMask, the sky view on WorldRendererTextureUnit_RainSkyView, the puddles, the sky
      *  mirrored in water, the bolt's light and the debug view. */
     WorldRendererRainLocations _rain;
+    /** @brief The draw's screen light (common/lighting's ScreenLight): its picture on WorldRendererTextureUnit_ScreenLight,
+     *  uploaded with the forward point lights. */
+    WorldRendererScreenLightLocations _screenLight;
 } WorldRendererLitLocations;
 
 /** @brief One PBR program that shades model objects, and its uniform locations: the rigid one (world_pbr) or the skinned
@@ -1943,12 +1973,79 @@ typedef struct WorldRendererSurfaceBindingStruct
     bool IsBottomUp;
 } WorldRendererSurfaceBinding;
 
-/** @brief The surfaces' pictures (WorldRendererSurfaces.c). */
+/**
+ * @brief One screen's light in a render (WorldRendererSurfaces_PrepareFrame): a shown screen or CRT that glows with a
+ *        picture handed over for it, in render space.
+ */
+typedef struct WorldRendererScreenLightStruct
+{
+    /** @brief The screen's object. */
+    uint64_t ObjectId;
+    /** @brief Its glass's centre and the way its front faces (unit). */
+    Vector3 Position;
+    Vector3 Normal;
+    /** @brief Its glass's area (square metres) and how far its light reaches (metres). */
+    float Area;
+    float Range;
+    /** @brief Its glow per unit of its picture's colour: the surface's emission times the component's brightness, the
+     *  surface's light intensity and its power (a CRT's animation and flicker). */
+    float Glow;
+    /** @brief How white its light is (a CRT's squeezed beam), 0..1. */
+    float Whiteness;
+    /** @brief Its picture (borrowed for the render) and the mipmap level whose four by four taps give its mean colour (0
+     *  without mipmaps). */
+    Texture2D Picture;
+    float Level;
+} WorldRendererScreenLight;
+
+/** @brief The surfaces' pictures and the screens' light (WorldRendererSurfaces.c). */
 typedef struct WorldRendererSurfaceStateStruct
 {
     /** @brief The pictures handed over for the next render (WorldRendererSurfaceBinding), forgotten after it. */
     GenericBuffer _bindings;
+    /** @brief This render's screen lights (WorldRendererScreenLight), built by WorldRendererSurfaces_PrepareFrame. */
+    GenericBuffer _lights;
 } WorldRendererSurfaceState;
+
+/**
+ * @brief The uniform locations of a CRT program's own uniforms (shaders/crt/fragment.frag, shaders/common/crt.glsl), set
+ *        per CRT draw except the pass's scale: the picture's shape (curvature, aspect, width, height in pixels), its look
+ *        (scanline strength, 0 without scanlines; mask strength; glow; vignette), its power animation (the open part's
+ *        half width and height, its brightness with the flicker in, its whiteness), its mask (the kind, the tile's
+ *        sampler, its mean colour and whether it is sRGB), its glass's reflection, and the pass's window pixels per pixel.
+ *        -1 for a uniform the shader lacks.
+ */
+typedef struct WorldRendererCrtLocationsStruct
+{
+    int _locShape;
+    int _locLook;
+    int _locPower;
+    int _locMaskKind;
+    int _locMaskTile;
+    int _locMaskMean;
+    int _locMaskIsSrgb;
+    int _locReflection;
+    int _locWindowPixelScale;
+} WorldRendererCrtLocations;
+
+/** @brief The CRT surfaces' programs (WorldRendererCrt.c): the lit programs a CRT's glass draws with in the camera's lit
+ *  passes (the scene and the crisp overlay), the PBR program's uniforms and more. */
+typedef struct WorldRendererCrtStateStruct
+{
+    /** @brief The rigid program (world_crt) and the skinned one (world_crt_skinned: its fragment stage over the PBR's
+     *  skinned vertex stage), each with the PBR program's locations; a shader NULL = unavailable (a CRT draws as a plain
+     *  screen with the PBR program; without the rigid one the skinned one is not loaded). */
+    WorldRendererPbrProgram _rigid;
+    WorldRendererPbrProgram _skinned;
+    /** @brief Their CRT uniforms. */
+    WorldRendererCrtLocations _rigidCrt;
+    WorldRendererCrtLocations _skinnedCrt;
+    /** @brief Whether every CRT shows _maskOverride instead of its own mask (WorldRenderer_SetCrtMaskOverride). */
+    bool _isMaskOverridden;
+    CrtMaskKind _maskOverride;
+    /** @brief The render clock of the frame being drawn (its flicker), set with each pass's frame uniforms. */
+    float _timeSeconds;
+} WorldRendererCrtState;
 
 /**
  * @brief Which of a draw's material maps hold a picture stored bottom row first (a surface's render target, whose first
@@ -2063,6 +2160,7 @@ struct WorldRendererStruct
     WorldRendererCloudState _clouds;
     WorldRendererRainState _rain;
     WorldRendererSurfaceState _surfaces;
+    WorldRendererCrtState _crt;
 };
 
 
@@ -2464,8 +2562,9 @@ void WorldRendererSurfaces_ForgetTextures(WorldRenderer* self);
 /**
  * @brief Puts the picture handed over for a model entry's surface into the per-draw copy of that surface's material:
  *        a screen's as its emissive map, white at the entry's SurfaceEmission while it is on (off, or without a
- *        picture, it gives off no light: its material's own surface, the dark glass); a paper's as its albedo map
- *        (without a picture, its material's own). Call it only for the surface's material slot.
+ *        picture, it gives off no light: its material's own surface, the dark glass); a CRT's the same while it is on or
+ *        still turning off (its power transition above 0: the CRT program plays the animation on it); a paper's as its
+ *        albedo map (without a picture, its material's own). Call it only for the surface's material slot.
  * @param self The renderer.
  * @param model The entry; its Surface must not be NULL.
  * @param material [in,out] The per-draw copy (its maps a copy too).
@@ -2474,8 +2573,112 @@ void WorldRendererSurfaces_ForgetTextures(WorldRenderer* self);
 WorldRendererMapOrientation WorldRendererSurfaces_Apply(const WorldRenderer* self, const WorldRenderModel* model,
     Material* material);
 
-/** @brief Counts the drawn model entries with a surface, and those with a picture handed over for it (the status). */
-void WorldRendererSurfaces_Count(const WorldRenderer* self, uint32_t* outSurfaceCount, uint32_t* outPictureCount);
+/** @brief Counts the drawn model entries with a surface, those with a picture handed over for it and those whose surface
+ *  is a CRT (the status). */
+void WorldRendererSurfaces_Count(const WorldRenderer* self, uint32_t* outSurfaceCount, uint32_t* outPictureCount,
+    uint32_t* outCrtCount);
+
+/**
+ * @brief Caches a lit shader's screen light uniforms (shaders/common/lighting.glsl) and points its picture's sampler at
+ *        WorldRendererTextureUnit_ScreenLight (once, at load).
+ * @param shader The shader (its program).
+ * @param outLocations [out] Receives the locations (-1 for a uniform the shader lacks).
+ */
+void WorldRendererSurfaces_PrepareLitShader(Shader shader, WorldRendererScreenLightLocations* outLocations);
+
+/**
+ * @brief Builds the render's screen lights from the render cache's shown entries: every screen or CRT that glows with a
+ *        picture handed over for it (on, or a CRT still turning on or off: its animation's light) and a light intensity
+ *        above 0, its glass's centre, facing, area and reach in render space (the entry's matrix, its normals through
+ *        the inverse transpose), its glow and its picture's mipmap level. Every shown screen counts, in view or not:
+ *        a monitor behind the camera still lights the desk in front of it.
+ * @param self The renderer; its cache synced for @p frame and the pictures handed over.
+ * @param frame The frame (its clock: a CRT's flicker).
+ */
+void WorldRendererSurfaces_PrepareFrame(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Chooses the screen light of a draw: the nearest of the render's screen lights (by its glass's centre) whose reach
+ *        meets the draw's bounding sphere and which the sphere is not wholly behind.
+ * @param self The renderer.
+ * @param center The draw's bounding sphere's centre, in render space.
+ * @param radius Its radius.
+ * @returns The light (borrowed until the next WorldRendererSurfaces_PrepareFrame), or NULL: none reaches the draw.
+ */
+const WorldRendererScreenLight* WorldRendererSurfaces_FindScreenLight(const WorldRenderer* self, Vector3 center,
+    float radius);
+
+/**
+ * @brief Uploads the screen light of the lit draw that follows (WorldRendererSurfaces_FindScreenLight), its picture
+ *        bound on WorldRendererTextureUnit_ScreenLight; none (screenLightActive false) without one. Does nothing for a
+ *        shader without the uniforms.
+ * @param self The renderer.
+ * @param shader The lit shader (its program).
+ * @param locations Its screen light locations (WorldRendererSurfaces_PrepareLitShader).
+ * @param center The draw's bounding sphere's centre, in render space.
+ * @param radius Its radius.
+ */
+void WorldRendererSurfaces_UploadScreenLight(const WorldRenderer* self, Shader shader,
+    const WorldRendererScreenLightLocations* locations, Vector3 center, float radius);
+
+
+// WorldRendererCrt.c
+/**
+ * @brief Loads the CRT programs (world_crt and its skinned twin world_crt_skinned) as PBR programs
+ *        (WorldRendererLighting_LoadPbrProgram) and caches their CRT uniforms, the mask tile's sampler pointed at
+ *        WorldRendererTextureUnit_CrtMask. Without the rigid one (logged by the loader) CRTs draw as plain screens with
+ *        the PBR program; without the skinned one a posed CRT's skinned meshes do.
+ */
+void WorldRendererCrt_LoadShaders(WorldRenderer* self);
+
+/**
+ * @brief Whether a model entry's mesh of one material slot draws with a CRT program: the entry shows a CRT surface on
+ *        that slot and the CRT programs loaded.
+ * @param self The renderer.
+ * @param model The entry.
+ * @param materialIndex The mesh's material slot.
+ * @returns true for the CRT's glass.
+ */
+bool WorldRendererCrt_IsCrtMesh(const WorldRenderer* self, const WorldRenderModel* model, int materialIndex);
+
+/**
+ * @brief Whether a model entry shows a CRT that draws with the CRT programs (its surface is a CRT and they loaded).
+ * @param self The renderer.
+ * @param model The entry.
+ * @returns true when some of its meshes draw with them.
+ */
+bool WorldRendererCrt_IsCrtEntry(const WorldRenderer* self, const WorldRenderModel* model);
+
+/**
+ * @brief Uploads the CRT programs' uniforms of a pass: its window pixels per pixel (1 at the window's resolution, as in
+ *        the crisp overlay; the pixelated scene's more, which fades out the mask's window-pixel pattern), and keeps the
+ *        frame's clock for the flicker. WorldRendererLighting_UploadFrame calls it.
+ * @param self The renderer.
+ * @param frame The frame.
+ * @param windowPixelScale How many window pixels one of the pass's pixels spans (>= 1).
+ */
+void WorldRendererCrt_UploadPass(WorldRenderer* self, const WorldRenderFrame* frame, float windowPixelScale);
+
+/**
+ * @brief Uploads a CRT entry's own uniforms to one CRT program, for its meshes drawn next: the picture's shape and look,
+ *        its power animation (WorldRendererCrt_GetPowerShape), its mask (the renderer's override while one is set) with
+ *        the tile bound on WorldRendererTextureUnit_CrtMask, and its glass's reflection.
+ * @param self The renderer.
+ * @param program The CRT program (rigid or skinned).
+ * @param locations Its CRT locations.
+ * @param model The entry; WorldRendererCrt_IsCrtEntry must hold.
+ */
+void WorldRendererCrt_UploadDraw(const WorldRenderer* self, const WorldRendererPbrProgram* program,
+    const WorldRendererCrtLocations* locations, const WorldRenderModel* model);
+
+/**
+ * @brief A CRT entry's power animation at a moment (CrtScreen_GetPowerShape on its power state and transition), with its
+ *        flicker (CrtScreen_GetFlicker) in its brightness and its light.
+ * @param model The entry; its Surface must be a CRT.
+ * @param timeSeconds The render clock.
+ * @returns The shape.
+ */
+CrtPowerShape WorldRendererCrt_GetPowerShape(const WorldRenderModel* model, float timeSeconds);
 
 
 // WorldRendererCollision.c
@@ -2559,6 +2762,17 @@ void WorldRendererSprites_DrawLit(WorldRenderer* self, WorldRendererPixelFilter 
 void WorldRendererLighting_LoadShader(WorldRenderer* self);
 
 /**
+ * @brief Loads one program that shades meshes the PBR program's way (its material uniforms, common/lighting, the dither,
+ *        a palette when its vertex stage skins: the PBR programs and the CRT programs): its locations, its location table
+ *        with the material map samplers pointed at mraMap, normalMap and emissiveMap, and its pass shader.
+ * @param self The renderer.
+ * @param program [out] The program; its shader NULL when the asset did not load (logged by the loader).
+ * @param assetName The shader asset's name.
+ */
+void WorldRendererLighting_LoadPbrProgram(WorldRenderer* self, WorldRendererPbrProgram* program,
+    const unsigned char* assetName);
+
+/**
  * @brief Prepares a shader that includes shaders/common/lighting.glsl: caches its frame-lighting uniform locations,
  *        uploads the constants (the shadow bias and texel size), points its shadow and AO samplers at their fixed units,
  *        and checks how many point lights its arrays hold (logging once when fewer than WORLD_MAX_FORWARD_LIGHTS).
@@ -2589,16 +2803,17 @@ void WorldRendererLighting_PrepareSkyLight(WorldRenderer* self, WorldRenderFrame
 void WorldRendererLighting_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame);
 
 /**
- * @brief Uploads the frame's lighting uniforms to every lit shader the renderer has (the two PBR programs and the sprite
- *        shader), with the pass's dither pixel scale, and binds the shadow maps, the cube shadow and (when
- *        @p applyScreenAo) the AO map to their fixed units.
+ * @brief Uploads the frame's lighting uniforms to every lit shader the renderer has (the PBR programs, the CRT programs,
+ *        the sprite shader and the terrain's), with the pass's dither pixel scale and window pixel scale, and binds the
+ *        shadow maps, the cube shadow and (when @p applyScreenAo) the AO map to their fixed units.
  *
  * Call before the lit models and sprites of a pass. The crisp overlay passes false for @p applyScreenAo: it renders at
  * window resolution, where the low-res AO map would not line up; for the same reason its @p ditherPixelScale is window /
- * scene (the scene pass's is 1), which keeps the dither on the scene's pixel grid.
+ * scene (the scene pass's is 1), which keeps the dither on the scene's pixel grid, and its @p windowPixelScale 1 (the
+ * scene pass's is window / scene: how many window pixels one of its pixels spans, which a CRT's mask needs).
  */
 void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo,
-    Vector2 ditherPixelScale);
+    Vector2 ditherPixelScale, float windowPixelScale);
 
 /**
  * @brief Uploads the frame's lighting uniforms to one more lit program (the rain's), as WorldRendererLighting_UploadFrame
@@ -2614,7 +2829,8 @@ void WorldRendererLighting_UploadLitProgram(WorldRenderer* self, const WorldRend
 
 /**
  * @brief Reach-culls the frame's forward lights against a bounding sphere in render space and uploads the strongest few
- *        to a lit shader, for the object drawn next.
+ *        to a lit shader, for the object drawn next, with the screen light that reaches it
+ *        (WorldRendererSurfaces_UploadScreenLight).
  * @param self The renderer.
  * @param shader The lit shader (its program).
  * @param locations Its locations (WorldRendererLighting_PrepareLitShader).

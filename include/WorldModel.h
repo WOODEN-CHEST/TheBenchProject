@@ -5,11 +5,12 @@
 // raylib.h is needed for Vector3 (the bounds) and MaterialMap (variants apply to a material's maps); GameModel.h for
 // GameModel and GameMaterialFactors; CollisionShape.h and CollisionLayer.h for the collision sets and their
 // placements' defaults (and the surfaces' triangles, a CollisionMesh); WRVectorMath.h for the double placement a ray
-// meets a surface on.
+// meets a surface on; CrtScreen.h for a crt surface's look.
 #include "raylib/raylib.h"
 #include "wr/WRVectorMath.h"
 #include "CollisionLayer.h"
 #include "CollisionShape.h"
+#include "CrtScreen.h"
 #include "GameModel.h"
 
 /** @brief A standalone texture asset (GameTexture.h); variants name textures as dependencies. */
@@ -69,11 +70,13 @@ typedef struct AnimationGraphStruct AnimationGraph;
  * the head.
  *
  * SURFACES. Named material slots that show a picture made while the game runs (WorldModelSurface): a screen (a monitor
- * showing a UI, which glows) or a paper (lit like the surface it is on). Each names its slot, the picture's resolution
- * and its kind; the slot's texture coordinates cover 0..1 over the picture. A screen component on a placement picks
- * one (WorldScreenComponent.h), the code that owns its content hands the renderer the picture each frame, and a ray
- * finds where on the picture the player points (WorldModelSurface_Raycast): each surface keeps LOD 0's triangles of its
- * slot with their texture coordinates for that.
+ * showing a UI, which glows), a CRT (a screen behind curved glass, with scanlines, a mask, a glow and its power
+ * animation: CrtScreen.h) or a paper (lit like the surface it is on). Each names its slot, the picture's resolution
+ * and its kind; the slot's texture coordinates cover 0..1 over the glass (a CRT's picture bulges inside it). A screen
+ * or a CRT lights what is in front of it in its picture's colour (its light's intensity and reach). A screen component
+ * on a placement picks one (WorldScreenComponent.h), the code that owns its content hands the renderer the picture each
+ * frame, and a ray finds where on the picture the player points (WorldModelSurface_Raycast): each surface keeps LOD 0's
+ * triangles of its slot with their texture coordinates for that, and the place and size of its picture for its light.
  *
  * Every field is read-only (underscore-prefixed): read them through the accessors.
  */
@@ -126,6 +129,16 @@ typedef struct AnimationGraphStruct AnimationGraph;
 #define WORLD_MODEL_DEFAULT_SURFACE_EMISSION 0.2f
 /** @brief The largest emission a screen may have (far beyond it every screen is a white glare). */
 #define WORLD_MODEL_MAX_SURFACE_EMISSION 1000.0f
+/** @brief A screen's light when its definition does not say: the factor on the light its picture gives off (1 as much
+ *  as the glowing picture really sends out; 0 none). */
+#define WORLD_MODEL_DEFAULT_SURFACE_LIGHT_INTENSITY 1.0f
+/** @brief The largest light intensity a screen may have. */
+#define WORLD_MODEL_MAX_SURFACE_LIGHT_INTENSITY 1000.0f
+/** @brief How far a screen's light reaches when its definition does not say, in metres (it falls to nothing there). */
+#define WORLD_MODEL_DEFAULT_SURFACE_LIGHT_RANGE 3.0f
+/** @brief The shortest and the longest reach a screen's light may have, in metres. */
+#define WORLD_MODEL_MIN_SURFACE_LIGHT_RANGE 0.1f
+#define WORLD_MODEL_MAX_SURFACE_LIGHT_RANGE 100.0f
 
 
 // Types.
@@ -299,7 +312,8 @@ typedef struct WorldModelSocketStruct
 } WorldModelSocket;
 
 /**
- * @brief What a surface shows its picture as. Definitions name the kinds ("screen", "paper"; WorldModelSurfaceKind_GetName).
+ * @brief What a surface shows its picture as. Definitions name the kinds ("screen", "crt", "paper";
+ *        WorldModelSurfaceKind_GetName).
  */
 typedef enum WorldModelSurfaceKindEnum
 {
@@ -307,8 +321,11 @@ typedef enum WorldModelSurfaceKindEnum
     WorldModelSurfaceKind_Screen = 0,
     /** @brief A paper: the picture is the surface's own colour, lit like everything around it (a page, a poster). */
     WorldModelSurfaceKind_Paper = 1,
+    /** @brief A CRT: a screen behind curved, glossy glass, its picture bulging with scanlines, a mask and a glow, turning
+     *  on and off with the tube's animation (CrtScreen.h). */
+    WorldModelSurfaceKind_Crt = 2,
     /** @brief The number of kinds (not a kind). */
-    WorldModelSurfaceKind_Count = 2
+    WorldModelSurfaceKind_Count = 3
 } WorldModelSurfaceKind;
 
 /**
@@ -316,9 +333,11 @@ typedef enum WorldModelSurfaceKindEnum
  *        of its world model (valid while it is loaded).
  *
  * The slot's texture coordinates (as raylib loads them: u to the right, v down, so (0, 0) is the picture's top-left,
- * the UI's convention; an OBJ's are flipped on import, a glTF file's are so already) cover 0..1 over the picture. For
- * pointing at it, the surface keeps LOD 0's triangles of its slot in the object's own space (after LOD 0's import
- * transform), with each corner's texture coordinates.
+ * the UI's convention; an OBJ's are flipped on import, a glTF file's are so already) cover 0..1 over the glass: the
+ * picture, or for a CRT the glass its curved picture lies in (WorldModelSurface_GetPicturePosition). For pointing at it,
+ * the surface keeps LOD 0's triangles of its slot in the object's own space (after LOD 0's import transform), with each
+ * corner's texture coordinates; for a screen's light, the point of the glass at its centre, the way it faces and how the
+ * glass's texture coordinates run across it (its size).
  */
 typedef struct WorldModelSurfaceStruct
 {
@@ -336,6 +355,24 @@ typedef struct WorldModelSurfaceStruct
     /** @brief A screen's brightness: its picture's white on the game's light scale (1 a white surface in full sun),
      *  0 to WORLD_MODEL_MAX_SURFACE_EMISSION; 0 for a paper. */
     float _emission;
+    /** @brief A screen's light: the factor on the light its picture gives off (0 to
+     *  WORLD_MODEL_MAX_SURFACE_LIGHT_INTENSITY; 0 for a paper), and how far it reaches, in metres. */
+    float _lightIntensity;
+    float _lightRange;
+    /** @brief A CRT's look (the defaults for the other kinds). */
+    CrtScreenSettings _crt;
+    /** @brief A CRT's mask tile while its mask is CrtMaskKind_Texture (a texture asset its world model holds as a
+     *  dependency), else NULL; and the tile's mean linear colour, by which the mask is divided so it keeps the picture's
+     *  light (1 for the procedural masks). */
+    const GameTexture* _maskTexture;
+    float _maskMean[3];
+    /** @brief The glass in the object's own space, for its light: the point at the centre of its texture coordinates
+     *  (u and v 0.5), the way its front faces (unit), and how far a step of 1 in u and in v goes across it (its width
+     *  and its height with their directions; v runs down the picture). */
+    Vector3 _center;
+    Vector3 _normal;
+    Vector3 _axisU;
+    Vector3 _axisV;
     /** @brief LOD 0's triangles of the slot, in the object's own space (owned by the world model). */
     const CollisionMesh* _mesh;
     /** @brief Three texture coordinates per triangle of _mesh, in its triangle order, one per corner in the corners'
@@ -354,11 +391,14 @@ typedef struct WorldModelSurfaceHitStruct
     uint32_t Triangle;
     /** @brief The weights of the triangle's corners at the hit, in the corners' order (they sum to 1). */
     Vector3 Barycentric;
-    /** @brief The texture coordinates at the hit (WorldModelSurface_GetUv): (0, 0) the picture's top-left, (1, 1) its
+    /** @brief The texture coordinates at the hit (WorldModelSurface_GetUv): (0, 0) the glass's top-left, (1, 1) its
      *  bottom-right. */
     Vector2 Uv;
-    /** @brief Whether Uv lies in [0, 1] on both axes: the hit is on the picture (a slot may hold triangles beyond it, a
-     *  screen's rounded border). */
+    /** @brief Where on the picture the hit is (WorldModelSurface_GetPicturePosition): (0, 0) its top-left, (1, 1) its
+     *  bottom-right; Uv itself, but for a CRT the point of its curved picture shown there. */
+    Vector2 Picture;
+    /** @brief Whether Picture lies in [0, 1] on both axes: the hit is on the picture (a slot may hold triangles beyond it,
+     *  a screen's rounded border; a CRT's glass beyond its curved picture). */
     bool IsOnPicture;
 } WorldModelSurfaceHit;
 
@@ -830,6 +870,117 @@ static inline float WorldModelSurface_GetEmission(const WorldModelSurface* self)
 }
 
 /**
+ * @brief Returns whether a surface's picture glows: a screen's or a CRT's (a paper's is lit like the rest).
+ * @param self The surface; must not be NULL.
+ * @returns true for a screen and a CRT.
+ */
+static inline bool WorldModelSurface_IsGlowing(const WorldModelSurface* self)
+{
+    return (self->_kind == WorldModelSurfaceKind_Screen) || (self->_kind == WorldModelSurfaceKind_Crt);
+}
+
+/**
+ * @brief Returns the factor on the light a screen's picture gives off around it.
+ * @param self The surface; must not be NULL.
+ * @returns 0 to WORLD_MODEL_MAX_SURFACE_LIGHT_INTENSITY (0 for a paper).
+ */
+static inline float WorldModelSurface_GetLightIntensity(const WorldModelSurface* self)
+{
+    return self->_lightIntensity;
+}
+
+/**
+ * @brief Returns how far a screen's light reaches, in metres.
+ * @param self The surface; must not be NULL.
+ * @returns WORLD_MODEL_MIN_SURFACE_LIGHT_RANGE to WORLD_MODEL_MAX_SURFACE_LIGHT_RANGE.
+ */
+static inline float WorldModelSurface_GetLightRange(const WorldModelSurface* self)
+{
+    return self->_lightRange;
+}
+
+/**
+ * @brief Returns a CRT's look.
+ * @param self The surface; must not be NULL.
+ * @returns The settings (borrowed: valid while the world model is loaded); the defaults for the other kinds.
+ */
+static inline const CrtScreenSettings* WorldModelSurface_GetCrt(const WorldModelSurface* self)
+{
+    return &self->_crt;
+}
+
+/**
+ * @brief Returns a CRT's mask tile.
+ * @param self The surface; must not be NULL.
+ * @returns The texture (valid while the world model is loaded) while its mask is CrtMaskKind_Texture, else NULL.
+ */
+static inline const GameTexture* WorldModelSurface_GetMaskTexture(const WorldModelSurface* self)
+{
+    return self->_maskTexture;
+}
+
+/**
+ * @brief Returns the mean linear colour of a CRT's mask tile (1, 1, 1 without one).
+ * @param self The surface; must not be NULL.
+ * @returns Three values (borrowed), each above 0.
+ */
+static inline const float* WorldModelSurface_GetMaskMean(const WorldModelSurface* self)
+{
+    return self->_maskMean;
+}
+
+/**
+ * @brief Returns the point of a surface's glass at the centre of its texture coordinates, in the object's own space.
+ * @param self The surface; must not be NULL.
+ * @returns The point (where its light comes from).
+ */
+static inline Vector3 WorldModelSurface_GetCenter(const WorldModelSurface* self)
+{
+    return self->_center;
+}
+
+/**
+ * @brief Returns the way a surface's front faces, in the object's own space (the side its slot's triangles face).
+ * @param self The surface; must not be NULL.
+ * @returns A unit direction.
+ */
+static inline Vector3 WorldModelSurface_GetNormal(const WorldModelSurface* self)
+{
+    return self->_normal;
+}
+
+/**
+ * @brief Returns how far a step of 1 in a surface's u goes across it, in the object's own space: its width, to the right.
+ * @param self The surface; must not be NULL.
+ * @returns The direction and length.
+ */
+static inline Vector3 WorldModelSurface_GetAxisU(const WorldModelSurface* self)
+{
+    return self->_axisU;
+}
+
+/**
+ * @brief Returns how far a step of 1 in a surface's v goes across it, in the object's own space: its height, downward.
+ * @param self The surface; must not be NULL.
+ * @returns The direction and length.
+ */
+static inline Vector3 WorldModelSurface_GetAxisV(const WorldModelSurface* self)
+{
+    return self->_axisV;
+}
+
+/**
+ * @brief Where on a surface's picture a point of its glass is: the point itself, but for a CRT the point of its curved
+ *        picture shown there (CrtScreen_Distort with its curvature and its picture's aspect), the one function the
+ *        renderer draws a CRT with.
+ * @param self The surface; must not be NULL.
+ * @param uv The point of the glass: its texture coordinates ((0, 0) the top-left).
+ * @param outPicture [out] Receives where on the picture, in the same convention. Must not be NULL.
+ * @returns Whether that lies on the picture ([0, 1] on both axes).
+ */
+bool WorldModelSurface_GetPicturePosition(const WorldModelSurface* self, Vector2 uv, Vector2* outPicture);
+
+/**
  * @brief Returns the triangles a ray finds a surface by: LOD 0's of its slot, in the object's own space.
  * @param self The surface; must not be NULL.
  * @returns The mesh (valid while the world model is loaded).
@@ -864,14 +1015,15 @@ bool WorldModelSurface_GetUv(const WorldModelSurface* self, uint32_t triangle, V
  * @param origin Where the ray starts, in the world.
  * @param direction Its direction (any length but 0; it is normalised).
  * @param maxDistance How far it reaches, in metres (above 0).
- * @param outHit [out] Receives the hit, its texture coordinates and whether they lie on the picture. Must not be NULL.
+ * @param outHit [out] Receives the hit, its texture coordinates, where on the picture it is and whether that lies on the
+ *        picture. Must not be NULL.
  * @returns true when the ray meets one of the surface's triangles (also off the picture: see IsOnPicture).
  */
 bool WorldModelSurface_Raycast(const WorldModelSurface* self, const Matrix4Double* objectToWorld, Vector3Double origin,
     Vector3 direction, float maxDistance, WorldModelSurfaceHit* outHit);
 
 /**
- * @brief Returns a surface kind's name, as definitions write it ("screen", "paper").
+ * @brief Returns a surface kind's name, as definitions write it ("screen", "crt", "paper").
  * @param kind The kind.
  * @returns The name (static), or NULL for a value that is not a kind.
  */

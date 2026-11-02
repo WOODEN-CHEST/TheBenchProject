@@ -10,8 +10,9 @@
             "name": "screen",
             "material_slot": 1,
             "resolution": [640, 480],
-            "kind": "screen",
-            "emission": 0.2
+            "kind": "crt",
+            "emission": 0.2,
+            "crt": { "mask": "tbp:crt_mask" }
         }
     ]
 }
