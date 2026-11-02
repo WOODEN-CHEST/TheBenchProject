@@ -167,7 +167,7 @@ void ApplyWetness(inout vec3 albedo, inout float roughness, inout vec3 n, out fl
     {
         return;
     }
-    float open = RainOpenness(worldPos, surfaceNormal);
+    float open = RainOpenness(worldPos, surfaceNormal)*RainTopOpenness(worldPos.y);
     wet *= open;
     if (!(wet > 0.0))
     {

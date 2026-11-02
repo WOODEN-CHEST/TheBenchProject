@@ -1,6 +1,6 @@
 #version 330
 
-// The rain's splashes (splashes_vertex.vert): the flipbook's frame, lit as raindrops are (common/lighting's
+// The rain's splashes (splashes_vertex.vert): the splash animation's frame, lit as raindrops are (common/lighting's
 // RainDropLight), seen through the eye's night vision and the haze, blended premultiplied over what lies behind
 // (writing no depth).
 
@@ -8,7 +8,7 @@ in vec3 fragPosition;
 in vec2 fragTexCoord;
 in float fragAlpha;
 
-uniform sampler2D texture0; // the splash's flipbook: its frames side by side
+uniform sampler2D texture0; // the texture of the frame this draw shows (its area is the vertex stage's)
 uniform vec3 rainColor;     // the rain's colour times its brightness, linear
 
 out vec4 finalColor;

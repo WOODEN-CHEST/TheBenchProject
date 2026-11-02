@@ -1,0 +1,34 @@
+{
+    "name": "tbp:rain_splash",
+    "frames": [
+        {
+            "source": "texture",
+            "location": "rain/splash_0",
+            "texture_properties": {
+                "filtering": "point"
+            }
+        },
+        {
+            "source": "texture",
+            "location": "rain/splash_1",
+            "texture_properties": {
+                "filtering": "point"
+            }
+        },
+        {
+            "source": "texture",
+            "location": "rain/splash_2",
+            "texture_properties": {
+                "filtering": "point"
+            }
+        },
+        {
+            "source": "texture",
+            "location": "rain/splash_3",
+            "texture_properties": {
+                "filtering": "point"
+            }
+        }
+    ],
+    "fps": 20
+}

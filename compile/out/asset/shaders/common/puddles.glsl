@@ -19,11 +19,11 @@ uniform vec4 rainRippleFrame;          // xy: the origin wrapped by the ripples'
                                        // (WorldRainDrift.RippleCycles, wrapped by RAIN_CYCLE_WRAP), w: their strength
                                        // (0: still water)
 
-// The sky mirrored in water: the sky view's clear sky (common/atmosphere's table, on its own unit in the lit programs),
+// The sky mirrored in water (none while the rain is switched off: common/rain's rainActive): the sky view's clear sky
+// (common/atmosphere's table, on its own unit in the lit programs),
 // the share of it the reflection takes (the gaps between drawn clouds; 1 without them, when the table holds what the
 // clouds leave of it), and the clouds' deck on top (an overcast sky's radiance at the zenith, falling to a third at the
 // horizon; tinted, a lightning flash's glow in).
-uniform bool rainWaterActive;          // false: no water mirrors anything (the rain switched off: wet surfaces as without it)
 uniform float rainReflectionClearShare;
 uniform vec3 rainReflectionDeck;
 uniform bool rainReflectionMoon;       // the moonlit sky's half of the table adds to it
@@ -163,7 +163,7 @@ vec3 RainSkyRadiance(vec3 r, vec3 sunDir, vec3 moonDir, vec3 evenSky)
 // ground the sky view holds below it).
 vec3 RainWaterReflection(vec3 n, vec3 v, float water, vec3 sunDir, vec3 moonDir, vec3 evenSky)
 {
-    if (!rainWaterActive || !(water > 0.0))
+    if (!rainActive || !(water > 0.0))
     {
         return vec3(0.0);
     }
@@ -180,7 +180,7 @@ vec3 RainViewColor(vec3 color, vec3 p, vec3 surfaceNormal, float puddle)
 {
     if (rainView == 1)
     {
-        float open = RainOpenness(p, surfaceNormal);
+        float open = RainOpenness(p, surfaceNormal)*RainTopOpenness(p.y);
         return mix(vec3(0.05, 0.1, 0.6), vec3(1.0), open);
     }
     if (rainView == 2)

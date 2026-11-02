@@ -701,7 +701,8 @@ typedef struct WorldRendererRainLocationsStruct
     int _locPuddleMask;
     int _locPuddleFrame;
     int _locRippleFrame;
-    int _locWaterActive;
+    int _locActive;
+    int _locTop;
     int _locReflectionClearShare;
     int _locReflectionDeck;
     int _locReflectionMoon;
@@ -921,23 +922,27 @@ typedef struct WorldRendererTonemapStateStruct
 } WorldRendererTonemapState;
 
 /**
- * @brief A texture the world's environment names (the Milky Way, the moon's face, the rain's textures).
+ * @brief An asset the world's environment names: a texture (the Milky Way, the moon's face, the rain's streak and puddle
+ *        mask) or a sprite animation (the rain's splash, the lightning's bolts); a slot holds one kind, the one its sync
+ *        function loads.
  *
- * Each slot holds its texture under its own asset user, so replacing one slot's texture can never release another's
- * (two slots may name the same asset), and loads only when the environment names another texture: a failed name is
- * logged once and not retried until the name changes (WorldRendererCommon_SyncTextureSlot).
+ * Each slot holds its asset under its own asset user, so replacing one slot's asset can never release another's (two
+ * slots may name the same asset), and loads only when the environment names another asset: a failed name is logged once
+ * and not retried until the name changes (WorldRendererCommon_SyncTextureSlot, WorldRendererCommon_SyncAnimationSlot).
  */
-typedef struct WorldRendererTextureSlotStruct
+typedef struct WorldRendererAssetSlotStruct
 {
-    /** @brief The texture, held under _user; NULL = unavailable (not loaded yet, or the name failed). */
+    /** @brief The texture or the sprite animation, held under _user; NULL = unavailable (not loaded yet, or the name
+     *  failed), and always NULL for the kind the slot does not hold. */
     GameTexture* _texture;
-    /** @brief The asset user holding _texture; minted on the first load, retired with the renderer. */
+    SpriteAnimation* _animation;
+    /** @brief The asset user holding the asset; minted on the first load, retired with the renderer. */
     AssetUserID _user;
-    /** @brief The name _texture was loaded (or tried) for, NUL-terminated (unsigned char); valid while _isSynced. */
+    /** @brief The name the asset was loaded (or tried) for, NUL-terminated (unsigned char); valid while _isSynced. */
     GenericBuffer _name;
     /** @brief Whether a name has been tried. */
     bool _isSynced;
-} WorldRendererTextureSlot;
+} WorldRendererAssetSlot;
 
 /** @brief The atmospheric sky pass, with the moon, the Milky Way and light pollution's skyglow. */
 typedef struct WorldRendererSkyStateStruct
@@ -945,9 +950,9 @@ typedef struct WorldRendererSkyStateStruct
     /** @brief The atmospheric sky shader drawn behind the geometry; NULL = fall back to the gradient clear. */
     GameShader* _shader;
     /** @brief The Milky Way panorama the world names (MilkyWayTexture); without it, no Milky Way. */
-    WorldRendererTextureSlot _milkyWay;
+    WorldRendererAssetSlot _milkyWay;
     /** @brief The moon's face the world names (MoonTexture); without it the disc is a flat grey. */
-    WorldRendererTextureSlot _moon;
+    WorldRendererAssetSlot _moon;
     /** @brief Cached world_sky uniform locations (-1 when absent). */
     int _locResolution;
     int _locInvViewProj;
@@ -1244,7 +1249,8 @@ typedef struct WorldRendererRainProgramStruct
     int _locExposure;
     int _locStreakShare;
     /** @brief The splashes: the grid's first cell and corner, the cycles run, the share and the cycle's length, the rain
-     *  map's fall (its slant), the camera's axes. */
+     *  map's fall (its slant), the camera's axes; the animation's life, the frame a draw shows, the frames, that frame's
+     *  area in its texture and its width over its height. */
     int _locSplashCell;
     int _locSplashCorner;
     int _locSplashCycles;
@@ -1253,11 +1259,16 @@ typedef struct WorldRendererRainProgramStruct
     int _locSlant;
     int _locCameraRight;
     int _locCameraUp;
-    /** @brief The bolt: its foot, top and width, its texture columns, its radiance. */
+    int _locSplashLife;
+    int _locFrame;
+    int _locFrameCount;
+    int _locFrameArea;
+    int _locFrameAspect;
+    /** @brief The bolt: its foot, top and width, its frame's area in its texture, its radiance. */
     int _locBoltFoot;
     int _locBoltTop;
     int _locBoltWidth;
-    int _locBoltColumns;
+    int _locBoltArea;
     int _locBoltRadiance;
 } WorldRendererRainProgram;
 
@@ -1281,11 +1292,14 @@ typedef struct WorldRendererRainStateStruct
     bool _hasStreakMesh;
     Mesh _splashMesh;
     bool _hasSplashMesh;
-    /** @brief The textures the world names: the streak, the splash's flipbook, the puddle mask, the bolts. */
-    WorldRendererTextureSlot _streakTexture;
-    WorldRendererTextureSlot _splashTexture;
-    WorldRendererTextureSlot _puddleMask;
-    WorldRendererTextureSlot _boltTexture;
+    /** @brief What the world names: the streak's texture, the splash's sprite animation, the puddle mask's texture, the
+     *  bolts' sprite animation; and the splash animation last checked for an fps and a frame count a splash plays (each
+     *  loaded animation is checked, and a problem logged, once). */
+    WorldRendererAssetSlot _streakTexture;
+    WorldRendererAssetSlot _splashAnimation;
+    WorldRendererAssetSlot _puddleMask;
+    WorldRendererAssetSlot _boltAnimation;
+    const SpriteAnimation* _checkedSplashAnimation;
     /** @brief How far the rain has drifted (WorldRain.h), advanced by each frame's real seconds. */
     WorldRainDrift _drift;
     /** @brief The rain map kept between its draws (WorldRain.h): the box it was last drawn with; forgotten (zeroed) on
@@ -2153,11 +2167,11 @@ GameShader* WorldRendererCommon_LoadShader(WorldRenderer* self, const unsigned c
 GameTexture* WorldRendererCommon_LoadTexture(WorldRenderer* self, AssetUserID user, const unsigned char* assetName,
     const unsigned char* featureName);
 
-/** @brief An empty texture slot: no texture, no asset user yet, an empty name. */
-void WorldRendererCommon_ConstructTextureSlot(WorldRendererTextureSlot* slot);
+/** @brief An empty asset slot: no asset, no asset user yet, an empty name. */
+void WorldRendererCommon_ConstructAssetSlot(WorldRendererAssetSlot* slot);
 
-/** @brief Retires a slot's asset user (releasing its texture) and frees its name. */
-void WorldRendererCommon_DeconstructTextureSlot(WorldRenderer* self, WorldRendererTextureSlot* slot);
+/** @brief Retires a slot's asset user (releasing its asset) and frees its name. */
+void WorldRendererCommon_DeconstructAssetSlot(WorldRenderer* self, WorldRendererAssetSlot* slot);
 
 /**
  * @brief Makes a slot hold the texture the environment names: when the name differs from the one the slot was synced
@@ -2168,7 +2182,18 @@ void WorldRendererCommon_DeconstructTextureSlot(WorldRenderer* self, WorldRender
  * @param name The texture's asset name (NULL changes nothing).
  * @param featureName What goes without it, for the loader's warning.
  */
-void WorldRendererCommon_SyncTextureSlot(WorldRenderer* self, WorldRendererTextureSlot* slot, const unsigned char* name,
+void WorldRendererCommon_SyncTextureSlot(WorldRenderer* self, WorldRendererAssetSlot* slot, const unsigned char* name,
+    const unsigned char* featureName);
+
+/**
+ * @brief Makes a slot hold the sprite animation the environment names, as WorldRendererCommon_SyncTextureSlot does a
+ *        texture (the animation's frames' textures are its dependencies, held with it).
+ * @param self The renderer.
+ * @param slot The slot.
+ * @param name The sprite animation's asset name (NULL changes nothing).
+ * @param featureName What goes without it, for the loader's warning.
+ */
+void WorldRendererCommon_SyncAnimationSlot(WorldRenderer* self, WorldRendererAssetSlot* slot, const unsigned char* name,
     const unsigned char* featureName);
 
 /**

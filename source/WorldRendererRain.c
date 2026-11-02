@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include "WorldRendererInternal.h"
 #include "Logger.h"
+#include "SpriteAnimation.h"
 #include "raylib/raymath.h"
 #include "raylib/rlgl.h"
 #include "wr/WRMemory.h"
@@ -169,12 +170,17 @@ static void LoadProgram(WorldRenderer* self, WorldRendererRainProgram* program, 
     program->_locSplashShare = GetShaderLocation(RayShader, "rainSplashShare");
     program->_locSplashPeriod = GetShaderLocation(RayShader, "rainSplashPeriod");
     program->_locSlant = GetShaderLocation(RayShader, "rainSlant");
+    program->_locSplashLife = GetShaderLocation(RayShader, "rainSplashLife");
+    program->_locFrame = GetShaderLocation(RayShader, "rainFrame");
+    program->_locFrameCount = GetShaderLocation(RayShader, "rainFrameCount");
+    program->_locFrameArea = GetShaderLocation(RayShader, "rainFrameArea");
+    program->_locFrameAspect = GetShaderLocation(RayShader, "rainFrameAspect");
     program->_locCameraRight = GetShaderLocation(RayShader, "rainCameraRight");
     program->_locCameraUp = GetShaderLocation(RayShader, "rainCameraUp");
     program->_locBoltFoot = GetShaderLocation(RayShader, "boltFoot");
     program->_locBoltTop = GetShaderLocation(RayShader, "boltTop");
     program->_locBoltWidth = GetShaderLocation(RayShader, "boltWidth");
-    program->_locBoltColumns = GetShaderLocation(RayShader, "boltColumns");
+    program->_locBoltArea = GetShaderLocation(RayShader, "boltArea");
     program->_locBoltRadiance = GetShaderLocation(RayShader, "boltRadiance");
 }
 
@@ -263,6 +269,65 @@ static void DrawRainMesh(Mesh mesh, Shader shader, Texture2D texture)
     DrawMesh(mesh, RainMaterial, MatrixIdentity());
 }
 
+/* A sprite animation frame's area in its texture as texture coordinates (x and y from the texture's top left, then the
+ * width and the height) and its width over its height; false for a frame without a texture or an area. */
+static bool GetFrameArea(const SpriteAnimationFrame* frame, float outArea[4], float* outAspect)
+{
+    Rectangle Area = frame->_areaInTexture;
+    if ((frame->_texture.id == 0U) || (frame->_texture.width <= 0) || (frame->_texture.height <= 0)
+        || !(Area.width > 0.0f) || !(Area.height > 0.0f))
+    {
+        return false;
+    }
+    float Width = (float)frame->_texture.width;
+    float Height = (float)frame->_texture.height;
+    outArea[0] = Area.x / Width;
+    outArea[1] = Area.y / Height;
+    outArea[2] = Area.width / Width;
+    outArea[3] = Area.height / Height;
+    *outAspect = Area.width / Area.height;
+    return true;
+}
+
+/* The frames of the splash animation a splash plays (at most WORLD_RAIN_SPLASH_MAX_FRAMES), and its life: 0 without a
+ * usable animation. */
+static uint32_t GetSplashFrames(const WorldRendererRainState* state, float* outLife)
+{
+    SpriteAnimation* Animation = state->_splashAnimation._animation;
+    size_t Count = (Animation != NULL) ? SpriteAnimation_GetFrameCount(Animation) : 0U;
+    *outLife = (Animation != NULL) ? WorldRain_GetSplashLife(Count, SpriteAnimation_GetDefaultFPS(Animation)) : 0.0f;
+    return (*outLife > 0.0f) ? (uint32_t)((Count < WORLD_RAIN_SPLASH_MAX_FRAMES) ? Count : WORLD_RAIN_SPLASH_MAX_FRAMES)
+        : 0U;
+}
+
+/* Checks a newly loaded splash animation once: without an fps it plays nothing, beyond WORLD_RAIN_SPLASH_MAX_FRAMES frames
+ * a splash plays only the first ones (logged). */
+static void CheckSplashAnimation(WorldRenderer* self)
+{
+    WorldRendererRainState* State = &self->_rain;
+    SpriteAnimation* Animation = State->_splashAnimation._animation;
+    if ((Animation == NULL) || (Animation == State->_checkedSplashAnimation))
+    {
+        return;
+    }
+    State->_checkedSplashAnimation = Animation;
+    const char* Name = (const char*)State->_splashAnimation._name._data;
+    char Message[WARNING_CAPACITY];
+    if (!(SpriteAnimation_GetDefaultFPS(Animation) > 0.0) || (SpriteAnimation_GetFrameCount(Animation) == 0U))
+    {
+        snprintf(Message, sizeof(Message), "WorldRenderer: the rain's splash animation \"%s\" has no frames or no fps, so "
+            "no rain splashes are drawn (a splash plays its animation once at its fps).", (Name != NULL) ? Name : "");
+        WorldRendererCommon_Warn(self, (const unsigned char*)Message);
+    }
+    else if (SpriteAnimation_GetFrameCount(Animation) > WORLD_RAIN_SPLASH_MAX_FRAMES)
+    {
+        snprintf(Message, sizeof(Message), "WorldRenderer: the rain's splash animation \"%s\" has %zu frames; a splash "
+            "plays its first %u.", (Name != NULL) ? Name : "", SpriteAnimation_GetFrameCount(Animation),
+            (unsigned)WORLD_RAIN_SPLASH_MAX_FRAMES);
+        WorldRendererCommon_Warn(self, (const unsigned char*)Message);
+    }
+}
+
 /* The rain's colour times its brightness (linear), for the streaks and the splashes. */
 static void UploadColor(const WorldRenderFrame* frame, Shader shader, int location)
 {
@@ -299,7 +364,8 @@ static void DrawStreaks(WorldRenderer* self, const WorldRenderFrame* frame)
 }
 
 /* The splashes: the grid for the frame's origin, the cycles run, the share and the cycle's length, the slant of the rain
- * map they land by, the camera's axes (the quads face it: the view's rows). */
+ * map they land by, the camera's axes (the quads face it: the view's rows); then one draw per frame of the animation, with
+ * that frame's texture and area (each draw shows the splashes at that frame). */
 static void DrawSplashes(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     WorldRendererRainState* State = &self->_rain;
@@ -323,47 +389,88 @@ static void DrawSplashes(WorldRenderer* self, const WorldRenderFrame* frame)
     SetShaderValue(RayShader, Program->_locCameraRight, Right, SHADER_UNIFORM_VEC3);
     SetShaderValue(RayShader, Program->_locCameraUp, Up, SHADER_UNIFORM_VEC3);
     UploadColor(frame, RayShader, Program->_locColor);
-    DrawRainMesh(State->_splashMesh, RayShader, GameTexture_GetRaylibTexture(State->_splashTexture._texture));
+    float Life = 0.0f;
+    uint32_t FrameCount = GetSplashFrames(State, &Life);
+    int Count = (int)FrameCount;
+    SetShaderValue(RayShader, Program->_locSplashLife, &Life, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, Program->_locFrameCount, &Count, SHADER_UNIFORM_INT);
+    for (uint32_t FrameIndex = 0U; FrameIndex < FrameCount; FrameIndex++)
+    {
+        SpriteAnimationFrame Frame;
+        float Area[4];
+        float Aspect = 1.0f;
+        Error FrameResult = SpriteAnimation_GetFrameAt(State->_splashAnimation._animation, FrameIndex, &Frame);
+        bool HasFrame = (FrameResult.Code == ErrorCode_Success) && GetFrameArea(&Frame, Area, &Aspect);
+        Error_Deconstruct(&FrameResult);
+        if (!HasFrame)
+        {
+            continue; // a frame without a texture shows nothing
+        }
+        int Index = (int)FrameIndex;
+        SetShaderValue(RayShader, Program->_locFrame, &Index, SHADER_UNIFORM_INT);
+        SetShaderValue(RayShader, Program->_locFrameArea, Area, SHADER_UNIFORM_VEC4);
+        SetShaderValue(RayShader, Program->_locFrameAspect, &Aspect, SHADER_UNIFORM_FLOAT);
+        DrawRainMesh(State->_splashMesh, RayShader, Frame._texture);
+    }
     State->_wereSplashesDrawn = true;
 }
 
-/* The lightning's bolt: its channel, its texture's column (mirrored or not), its radiance against the eye's exposure. */
+/* The lightning's bolt: its channel, its frame of the bolt animation (its area, mirrored or not; as wide as the frame's
+ * shape makes it), its radiance against the eye's exposure. */
 static void DrawBolt(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     WorldRendererRainState* State = &self->_rain;
+    const WorldRainBolt* Bolt = &frame->Bolt;
+    SpriteAnimationFrame Frame;
+    float Area[4];
+    float Aspect = 1.0f;
+    Error FrameResult = SpriteAnimation_GetFrameAt(State->_boltAnimation._animation, Bolt->Variant, &Frame);
+    bool HasFrame = (FrameResult.Code == ErrorCode_Success) && GetFrameArea(&Frame, Area, &Aspect);
+    Error_Deconstruct(&FrameResult);
+    if (!HasFrame)
+    {
+        return; // a frame without a texture shows nothing; the bolt still lights the world
+    }
     const WorldRendererRainProgram* Program = &State->_bolt;
     Shader RayShader = GameShader_GetRaylibShader(Program->_shader);
     PrepareProgram(self, frame, Program, RayShader);
-    const WorldRainBolt* Bolt = &frame->Bolt;
     float Foot[3] = { Bolt->Foot.x, Bolt->Foot.y, Bolt->Foot.z };
     float Top[3] = { Bolt->Top.x, Bolt->Top.y, Bolt->Top.z };
-    float Share = 1.0f / (float)WORLD_RAIN_BOLT_VARIANTS;
-    float Columns[2] = { (float)Bolt->Variant * Share, Share };
+    float Width = (Bolt->Top.y - Bolt->Foot.y) * Aspect;
     if (Bolt->IsMirrored)
     {
-        Columns[0] += Share;
-        Columns[1] = -Share;
+        Area[0] += Area[2];
+        Area[2] = -Area[2];
     }
     float Exposure = (frame->LastExposure > 0.0f) ? frame->LastExposure : 1.0f;
     float Radiance = fminf(Bolt->Radiance * WORLD_RAIN_BOLT_SCREEN_EXPOSURE / Exposure, WORLD_SKY_LIGHT_MAX_LIGHT);
     float BoltRadiance[3] = { BOLT_RED * Radiance, BOLT_GREEN * Radiance, BOLT_BLUE * Radiance };
     SetShaderValue(RayShader, Program->_locBoltFoot, Foot, SHADER_UNIFORM_VEC3);
     SetShaderValue(RayShader, Program->_locBoltTop, Top, SHADER_UNIFORM_VEC3);
-    SetShaderValue(RayShader, Program->_locBoltWidth, &Bolt->Width, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(RayShader, Program->_locBoltColumns, Columns, SHADER_UNIFORM_VEC2);
+    SetShaderValue(RayShader, Program->_locBoltWidth, &Width, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, Program->_locBoltArea, Area, SHADER_UNIFORM_VEC4);
     SetShaderValue(RayShader, Program->_locBoltRadiance, BoltRadiance, SHADER_UNIFORM_VEC3);
-    DrawRainMesh(self->_sprites._quad, RayShader, GameTexture_GetRaylibTexture(State->_boltTexture._texture));
+    DrawRainMesh(self->_sprites._quad, RayShader, Frame._texture);
     State->_wasBoltDrawn = true;
 }
 
-/* Whether the frame's bolt can be drawn (its program, its texture and the sprites' quad), not only light the world. */
+/* The bolt animation's frames (each one bolt); 0 without an animation. */
+static uint32_t GetBoltFrames(const WorldRendererRainState* state)
+{
+    SpriteAnimation* Animation = state->_boltAnimation._animation;
+    size_t Count = (Animation != NULL) ? SpriteAnimation_GetFrameCount(Animation) : 0U;
+    return (Count < UINT32_MAX) ? (uint32_t)Count : UINT32_MAX;
+}
+
+/* Whether the frame's bolt can be drawn (its program, an animation with frames and the sprites' quad), not only light
+ * the world. */
 static bool IsBoltDrawable(const WorldRenderer* self, const WorldRenderFrame* frame)
 {
-    return frame->IsBoltActive && (self->_rain._bolt._shader != NULL) && (self->_rain._boltTexture._texture != NULL)
+    return frame->IsBoltActive && (self->_rain._bolt._shader != NULL) && (GetBoltFrames(&self->_rain) > 0U)
         && self->_sprites._hasQuad;
 }
 
-/* Syncs the textures the world names, each only while a program would draw with it. */
+/* Syncs the assets the world names, each only while a program would draw with it. */
 static void SyncTextures(WorldRenderer* self, const WorldEnvironment* environment)
 {
     WorldRendererRainState* State = &self->_rain;
@@ -374,12 +481,13 @@ static void SyncTextures(WorldRenderer* self, const WorldEnvironment* environmen
     }
     if (State->_splashes._shader != NULL)
     {
-        WorldRendererCommon_SyncTextureSlot(self, &State->_splashTexture, environment->RainSplashTexture,
+        WorldRendererCommon_SyncAnimationSlot(self, &State->_splashAnimation, environment->RainSplashAnimation,
             (const unsigned char*)u8"no rain splashes are drawn");
+        CheckSplashAnimation(self);
     }
     if (State->_bolt._shader != NULL)
     {
-        WorldRendererCommon_SyncTextureSlot(self, &State->_boltTexture, environment->LightningBoltTexture,
+        WorldRendererCommon_SyncAnimationSlot(self, &State->_boltAnimation, environment->LightningBoltAnimation,
             (const unsigned char*)u8"no lightning bolts are drawn (their light stays)");
     }
     WorldRendererCommon_SyncTextureSlot(self, &State->_puddleMask, environment->PuddleMaskTexture,
@@ -392,10 +500,10 @@ void WorldRendererRain_Construct(WorldRenderer* self)
 {
     WorldRendererRainState* State = &self->_rain;
     Memory_Zero(State, sizeof(*State));
-    WorldRendererCommon_ConstructTextureSlot(&State->_streakTexture);
-    WorldRendererCommon_ConstructTextureSlot(&State->_splashTexture);
-    WorldRendererCommon_ConstructTextureSlot(&State->_puddleMask);
-    WorldRendererCommon_ConstructTextureSlot(&State->_boltTexture);
+    WorldRendererCommon_ConstructAssetSlot(&State->_streakTexture);
+    WorldRendererCommon_ConstructAssetSlot(&State->_splashAnimation);
+    WorldRendererCommon_ConstructAssetSlot(&State->_puddleMask);
+    WorldRendererCommon_ConstructAssetSlot(&State->_boltAnimation);
     State->_isEnabled = true;
     State->_view = WorldRendererRainView_Off;
 }
@@ -403,10 +511,11 @@ void WorldRendererRain_Construct(WorldRenderer* self)
 void WorldRendererRain_Deconstruct(WorldRenderer* self)
 {
     WorldRendererRainState* State = &self->_rain;
-    WorldRendererCommon_DeconstructTextureSlot(self, &State->_streakTexture);
-    WorldRendererCommon_DeconstructTextureSlot(self, &State->_splashTexture);
-    WorldRendererCommon_DeconstructTextureSlot(self, &State->_puddleMask);
-    WorldRendererCommon_DeconstructTextureSlot(self, &State->_boltTexture);
+    WorldRendererCommon_DeconstructAssetSlot(self, &State->_streakTexture);
+    WorldRendererCommon_DeconstructAssetSlot(self, &State->_splashAnimation);
+    WorldRendererCommon_DeconstructAssetSlot(self, &State->_puddleMask);
+    WorldRendererCommon_DeconstructAssetSlot(self, &State->_boltAnimation);
+    State->_checkedSplashAnimation = NULL;
 }
 
 void WorldRendererRain_Load(WorldRenderer* self)
@@ -468,7 +577,8 @@ void WorldRendererRain_PrepareLitShader(Shader shader, WorldRendererRainLocation
     outLocations->_locPuddleMask = GetShaderLocation(shader, "puddleMask");
     outLocations->_locPuddleFrame = GetShaderLocation(shader, "rainPuddleFrame");
     outLocations->_locRippleFrame = GetShaderLocation(shader, "rainRippleFrame");
-    outLocations->_locWaterActive = GetShaderLocation(shader, "rainWaterActive");
+    outLocations->_locActive = GetShaderLocation(shader, "rainActive");
+    outLocations->_locTop = GetShaderLocation(shader, "rainTop");
     outLocations->_locReflectionClearShare = GetShaderLocation(shader, "rainReflectionClearShare");
     outLocations->_locReflectionDeck = GetShaderLocation(shader, "rainReflectionDeck");
     outLocations->_locReflectionMoon = GetShaderLocation(shader, "rainReflectionMoon");
@@ -485,7 +595,7 @@ void WorldRendererRain_PrepareLitShader(Shader shader, WorldRendererRainLocation
 void WorldRendererRain_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame, double deltaSeconds)
 {
     WorldRendererRainState* State = &self->_rain;
-    WorldRain_GetFrame(frame->Environment, &frame->Rain);
+    WorldRain_GetFrame(frame->Environment, frame->Origin.Y, &frame->Rain);
     WorldRain_AdvanceDrift(&State->_drift, &frame->Rain, deltaSeconds);
     frame->IsRainActive = State->_isEnabled;
     if (!frame->IsRainActive)
@@ -494,7 +604,8 @@ void WorldRendererRain_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame
         return; // no streaks, splashes, bolt or map: every surface wet alike
     }
     SyncTextures(self, frame->Environment);
-    WorldRain_GetBolt(frame->Environment, frame->Weather.FlashIrradiance, frame->Origin.Y, &frame->Bolt);
+    WorldRain_GetBolt(frame->Environment, frame->Weather.FlashIrradiance, frame->Origin.Y, GetBoltFrames(State),
+        &frame->Bolt);
     frame->IsBoltActive = frame->Bolt.IsVisible;
     frame->AreRainStreaksActive = frame->Rain.AreStreaksVisible && (State->_streaks._shader != NULL)
         && State->_hasStreakMesh && (State->_streakTexture._texture != NULL);
@@ -531,9 +642,11 @@ void WorldRendererRain_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame
         frame->RainMapProjection = Cascade.Projection;
         frame->RainMapViewProjection = Cascade.ViewProjection;
     }
-    // A splash lands where the map finds a surface: none without it.
+    // A splash lands where the map finds a surface (none without it) and plays the splash animation (none without one
+    // that has frames and an fps).
+    float SplashLife = 0.0f;
     frame->AreRainSplashesActive = frame->Rain.AreSplashesVisible && frame->IsRainMapActive
-        && (State->_splashes._shader != NULL) && State->_hasSplashMesh && (State->_splashTexture._texture != NULL);
+        && (State->_splashes._shader != NULL) && State->_hasSplashMesh && (GetSplashFrames(State, &SplashLife) > 0U);
 }
 
 void WorldRendererRain_RenderMap(WorldRenderer* self, const WorldRenderFrame* frame)
@@ -605,11 +718,13 @@ void WorldRendererRain_UploadLitFrame(const WorldRenderer* self, const WorldRend
         SetShaderValue(shader, locations->_locRippleFrame, RippleFrame, SHADER_UNIFORM_VEC4);
     }
 
-    // What water mirrors: the clear sky the sky view holds (the gaps' share of it while the clouds are drawn: the table then
-    // holds the sky without them) and the clouds' deck with a flash's even glow, as the sky shows them (tinted); nothing
-    // while the rain is switched off (wet surfaces as without it).
-    int WaterActive = frame->IsRainActive ? 1 : 0;
-    SetShaderValue(shader, locations->_locWaterActive, &WaterActive, SHADER_UNIFORM_INT);
+    // While the rain is on, nothing above its top is rained on, and water mirrors the clear sky the sky view holds (the
+    // gaps' share of it while the clouds are drawn: the table then holds the sky without them) and the clouds' deck with a
+    // flash's even glow, as the sky shows them (tinted). Switched off, neither: wet surfaces as without the rain.
+    int Active = frame->IsRainActive ? 1 : 0;
+    SetShaderValue(shader, locations->_locActive, &Active, SHADER_UNIFORM_INT);
+    float Top = (float)(frame->Rain.TopY - frame->Origin.Y);
+    SetShaderValue(shader, locations->_locTop, &Top, SHADER_UNIFORM_FLOAT);
     float ClearShare = frame->AreCloudsActive ? frame->Weather.DirectShare : 1.0f;
     SetShaderValue(shader, locations->_locReflectionClearShare, &ClearShare, SHADER_UNIFORM_FLOAT);
     float Tint[3];

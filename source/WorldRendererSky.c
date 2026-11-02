@@ -120,14 +120,14 @@ static void PrepareMoon(WorldRenderFrame* frame)
 // Internal functions (declared in WorldRendererInternal.h).
 void WorldRendererSky_Construct(WorldRenderer* self)
 {
-    WorldRendererCommon_ConstructTextureSlot(&self->_sky._milkyWay);
-    WorldRendererCommon_ConstructTextureSlot(&self->_sky._moon);
+    WorldRendererCommon_ConstructAssetSlot(&self->_sky._milkyWay);
+    WorldRendererCommon_ConstructAssetSlot(&self->_sky._moon);
 }
 
 void WorldRendererSky_Deconstruct(WorldRenderer* self)
 {
-    WorldRendererCommon_DeconstructTextureSlot(self, &self->_sky._milkyWay);
-    WorldRendererCommon_DeconstructTextureSlot(self, &self->_sky._moon);
+    WorldRendererCommon_DeconstructAssetSlot(self, &self->_sky._milkyWay);
+    WorldRendererCommon_DeconstructAssetSlot(self, &self->_sky._moon);
 }
 
 void WorldRendererSky_LoadShader(WorldRenderer* self)

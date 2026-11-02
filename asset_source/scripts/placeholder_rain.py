@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generates the placeholder textures of the rain: a streak, a splash's flipbook, the puddle mask and lightning bolts.
+"""Generates the placeholder art of the rain: a streak, a splash's animation, the puddle mask and lightning bolts.
 
 Run it from anywhere (only the Python standard library is needed):
 
@@ -7,21 +7,30 @@ Run it from anywhere (only the Python standard library is needed):
 
 It writes, relative to the repository root:
 
-    compile/out/asset/textures/rain/streak.png           4 x 32, RGBA: a streak along its length (the drop at the top)
-    compile/out/asset/textures/rain/splash.png           64 x 16, RGBA: four 16 x 16 frames side by side, from the
-                                                         drop's impact (left) to its last spray (right)
-    compile/out/asset/textures/rain/puddle_mask.png      256 x 256, greyscale, tileable: where water pools first (high
-                                                         in the puddles' middles), spread evenly over 0 .. 255
-    compile/out/asset/textures/rain/lightning_bolts.png  512 x 512, RGBA: four bolts side by side, each from the clouds
-                                                         (top) to the ground (bottom), branching, white with a glow
-    compile/out/asset/textures/rain/<name>.json          their texture definitions (tbp:rain_streak, tbp:rain_splash,
-                                                         tbp:rain_puddle_mask, tbp:lightning_bolts)
+    compile/out/asset/textures/rain/streak.png                 4 x 32, RGBA: a streak along its length (the drop at
+                                                               the top)
+    compile/out/asset/textures/rain/puddle_mask.png            256 x 256, greyscale, tileable: where water pools first
+                                                               (high in the puddles' middles), spread evenly over
+                                                               0 .. 255
+    compile/out/asset/textures/rain/<name>.json                their texture definitions (tbp:rain_streak,
+                                                               tbp:rain_puddle_mask)
+    compile/out/asset/sprite_animations/rain/splash_<n>.png    16 x 16, RGBA, n 0 to 3: a splash's frames, from the
+                                                               drop's impact to its last spray (standing on the bottom
+                                                               row)
+    compile/out/asset/sprite_animations/rain/splash.json       the sprite animation tbp:rain_splash: those frames at
+                                                               20 fps (a splash lasts 0.2 s)
+    compile/out/asset/sprite_animations/rain/bolt_<n>.png      128 x 512, RGBA, n 0 to 3: a bolt each, from the clouds
+                                                               (top) to the ground (bottom), branching, white with a
+                                                               glow
+    compile/out/asset/sprite_animations/rain/bolts.json        the sprite animation tbp:lightning_bolts: one frame per
+                                                               bolt (a strike shows one; no fps)
 
 The puddle mask tiles (periodic noise) and is spread evenly over its range by its histogram, so a threshold t keeps 1 - t
 of its texels: the renderer's puddle coverage means what it says (WorldRain.h, "PUDDLES").
 
-Placeholder art for checking the code, not game art: replace it with the owner's textures (a world names its own in its
-environment: rain_streak_texture, rain_splash_texture, puddle_mask_texture, lightning_bolt_texture).
+Placeholder art for checking the code, not game art: replace it with the owner's (a world names its own in its
+environment: rain_streak_texture and puddle_mask_texture name textures, rain_splash_animation and
+lightning_bolt_animation sprite animations, whose frames may have any number, size and source).
 """
 
 import json
@@ -35,6 +44,7 @@ import zlib
 # Paths.
 REPOSITORY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 TEXTURE_DIRECTORY = os.path.join(REPOSITORY, "compile", "out", "asset", "textures", "rain")
+ANIMATION_DIRECTORY = os.path.join(REPOSITORY, "compile", "out", "asset", "sprite_animations", "rain")
 SEED = 1811
 
 
@@ -66,6 +76,21 @@ def write_definition(file_name, name, location, properties, colour_space):
     definition = {"name": name, "location": location, "texture_properties": properties, "color_space": colour_space}
     with open(os.path.join(TEXTURE_DIRECTORY, file_name), "w", encoding="utf-8") as output:
         output.write(json.dumps(definition, indent=4) + "\n")
+
+
+def write_animation(file_name, name, frame_locations, filtering, fps):
+    frames = [{"source": "texture", "location": location, "texture_properties": {"filtering": filtering}}
+        for location in frame_locations]
+    definition = {"name": name, "frames": frames}
+    if fps > 0:
+        definition["fps"] = fps
+    with open(os.path.join(ANIMATION_DIRECTORY, file_name), "w", encoding="utf-8") as output:
+        output.write(json.dumps(definition, indent=4) + "\n")
+
+
+def crop(width, pixels, left, top, crop_width, crop_height):
+    """A crop_width x crop_height part of an image width pixels wide, from its column left and its row top."""
+    return [pixels[((top + y) * width) + left + x] for y in range(crop_height) for x in range(crop_width)]
 
 
 def clamp(value, low=0.0, high=1.0):
@@ -229,21 +254,30 @@ def bolts():
 
 def main():
     os.makedirs(TEXTURE_DIRECTORY, exist_ok=True)
+    os.makedirs(ANIMATION_DIRECTORY, exist_ok=True)
     point_clamp = {"filtering": "point", "wrap": "clamp", "mipmaps": False}
     width, height, pixels = streak()
     write_png(os.path.join(TEXTURE_DIRECTORY, "streak.png"), width, height, 4, pixels)
     write_definition("streak.json", "tbp:rain_streak", "rain/streak", point_clamp, "srgb")
-    width, height, pixels = splash()
-    write_png(os.path.join(TEXTURE_DIRECTORY, "splash.png"), width, height, 4, pixels)
-    write_definition("splash.json", "tbp:rain_splash", "rain/splash", point_clamp, "srgb")
     width, height, pixels = puddle_mask()
     write_png(os.path.join(TEXTURE_DIRECTORY, "puddle_mask.png"), width, height, 1, pixels)
     write_definition("puddle_mask.json", "tbp:rain_puddle_mask", "rain/puddle_mask",
         {"filtering": "trilinear", "wrap": "repeat", "mipmaps": True}, "linear")
+    # The splash: its frames cut from the strip, one image each.
+    width, height, pixels = splash()
+    for frame in range(width // height):
+        write_png(os.path.join(ANIMATION_DIRECTORY, "splash_%d.png" % frame), height, height, 4,
+            crop(width, pixels, frame * height, 0, height, height))
+    write_animation("splash.json", "tbp:rain_splash", ["rain/splash_%d" % frame for frame in range(width // height)],
+        "point", 20)
+    # The bolts: one image each, from their columns.
     width, height, pixels = bolts()
-    write_png(os.path.join(TEXTURE_DIRECTORY, "lightning_bolts.png"), width, height, 4, pixels)
-    write_definition("lightning_bolts.json", "tbp:lightning_bolts", "rain/lightning_bolts",
-        {"filtering": "bilinear", "wrap": "clamp", "mipmaps": False}, "srgb")
+    columns = 4
+    for column in range(columns):
+        write_png(os.path.join(ANIMATION_DIRECTORY, "bolt_%d.png" % column), width // columns, height, 4,
+            crop(width, pixels, column * (width // columns), 0, width // columns, height))
+    write_animation("bolts.json", "tbp:lightning_bolts", ["rain/bolt_%d" % column for column in range(columns)],
+        "bilinear", 0)
 
 
 if __name__ == "__main__":

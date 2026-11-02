@@ -1500,8 +1500,9 @@ static void ShippedShadersDrawTheClouds(TestRun* run)
 }
 
 /* The rain's shaders and their readers: the streaks' box, its fade and the speed classes are the C side's, and their copy
- * in the box is WorldRain_GetStreakPosition's formula; the splashes' grid, hash, search along the map's fall and flipbook
- * are the C side's, and they run by the cycles the renderer counts; the hash is WorldRain_Hash's; the rain map's edge
+ * in the box is WorldRain_GetStreakPosition's formula; the splashes' grid, hash, search along the map's fall and the frame
+ * an age shows are the C side's, and they run by the cycles the renderer counts; the rain's top fades the streaks, the
+ * splashes and the wetness as the C side's does; a bolt shows its frame's area; the hash is WorldRain_Hash's; the rain map's edge
  * fade and its far plane, the puddles' threshold and their mask's turned read (whole over the pattern's wrap), the
  * ripples' cells (a whole number in their period) and their counted cycles are the C side's; every lit surface wets only
  * where the rain map lets it, the models by their materials' porosity and puddles, the terrain by its materials', and
@@ -1530,9 +1531,17 @@ static void ShippedShadersDrawTheRain(TestRun* run)
             TEST_CHECK(run, (GetConstValue(&Fixture.Text, "RAIN_SPLASH_CELL") == WORLD_RAIN_SPLASH_CELL)
                 && (GetConstValue(&Fixture.Text, "RAIN_SPLASH_HASH_PERIOD") == WORLD_RAIN_SPLASH_HASH_PERIOD)
                 && (GetConstValue(&Fixture.Text, "RAIN_SPLASH_REACH") == (double)WORLD_RAIN_SPLASH_REACH)
-                && (GetConstIntValue(&Fixture.Text, "RAIN_SPLASH_STEPS") == (long)WORLD_RAIN_SPLASH_STEPS)
-                && (fabs(GetConstValue(&Fixture.Text, "RAIN_SPLASH_LIFE") - (double)WORLD_RAIN_SPLASH_LIFE) < 1e-7)
-                && (GetConstValue(&Fixture.Text, "RAIN_SPLASH_FRAMES") == (double)WORLD_RAIN_SPLASH_FRAMES));
+                && (GetConstIntValue(&Fixture.Text, "RAIN_SPLASH_STEPS") == (long)WORLD_RAIN_SPLASH_STEPS));
+            // The frame a splash's age shows (WorldRain_GetSplashFrame), its frame's area, and none above the top.
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text,
+                    "int frame = min(int(floor(age/rainSplashLife*float(rainFrameCount))), rainFrameCount - 1);") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "fragTexCoord = rainFrameArea.xy + vec2(vertexTexCoord.x, 1.0 - vertexTexCoord.y)*rainFrameArea.zw;")
+                    == 1U)
+                && (CountOccurrences(&Fixture.Text, "float top = RainTopOpenness(landing.y);") == 1U)
+                && (GetConstValue(&Fixture.Text, "RAIN_TOP_FADE") == (double)WORLD_RAIN_TOP_FADE)
+                && (CountOccurrences(&Fixture.Text, "return 1.0 - smoothstep(rainTop - RAIN_TOP_FADE, rainTop, height);")
+                    == 1U));
             TEST_CHECK(run, (CountOccurrences(&Fixture.Text,
                     "uint h = (v.x*0x8DA6B343u) ^ (v.y*0xD8163841u) ^ (v.z*0xCB1AB31Fu);") == 1U)
                 && (CountOccurrences(&Fixture.Text, "h *= 0x7FEB352Du;") == 1U)
@@ -1544,6 +1553,15 @@ static void ShippedShadersDrawTheRain(TestRun* run)
                 && (CountOccurrences(&Fixture.Text, "float cycle = rainSplashCycles + phase;") == 1U)
                 && (CountOccurrences(&Fixture.Text, "uint(mod(floor(cycle), RAIN_CYCLE_WRAP))") == 1U)
                 && (CountOccurrences(&Fixture.Text, "rainTime") == 0U));
+        }
+        if (ExpandShippedStage(run, &Fixture, "rain/streaks_fragment"))
+        {
+            TEST_CHECK(run, CountOccurrences(&Fixture.Text, "*RainTopOpenness(fragPosition.y);") == 1U);
+        }
+        if (ExpandShippedStage(run, &Fixture, "rain/bolt_vertex"))
+        {
+            TEST_CHECK(run, CountOccurrences(&Fixture.Text,
+                "fragTexCoord = boltArea.xy + vec2(vertexPosition.x, 1.0 - vertexPosition.y)*boltArea.zw;") == 1U);
         }
         if (ExpandShippedStage(run, &Fixture, "pbr/fragment"))
         {
@@ -1562,6 +1580,8 @@ static void ShippedShadersDrawTheRain(TestRun* run)
             TEST_CHECK(run, (CountOccurrences(&Fixture.Text,
                     "return (c <= 0.5) ? (1.0 - sqrt(0.5*c)) : sqrt(0.5*(1.0 - c));") == 1U)
                 && (CountOccurrences(&Fixture.Text, "    wet *= open;") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "float open = RainOpenness(worldPos, surfaceNormal)*RainTopOpenness(worldPos.y);") == 1U)
                 && (CountOccurrences(&Fixture.Text, "float puddle = RainPuddleShare(place, surfaceNormal, puddles)*open;")
                     == 1U));
             TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "ApplyWetness(albedo, rough, n, water, fragPosition, "

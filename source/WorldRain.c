@@ -57,6 +57,14 @@ static Vector3 GetLinePoint(float x, float z, Vector2 slant, float height)
     return (Vector3){ x + slant.x * height, height, z + slant.y * height };
 }
 
+/* The rain's top for an environment: the clouds' base above the atmosphere's ground, world Y. */
+static double GetTopY(const WorldEnvironment* environment)
+{
+    double GroundY = (double)ClampFinite(environment->HorizonGroundHeight, -(float)WORLD_ENVIRONMENT_MAX_DISTANCE,
+        (float)WORLD_ENVIRONMENT_MAX_DISTANCE, 0.0f);
+    return GroundY + (double)ClampFinite(environment->CloudBase, 0.0f, (float)WORLD_ENVIRONMENT_MAX_CLOUD_HEIGHT, 0.0f);
+}
+
 
 // Internal functions (declared in WorldRain.h).
 float WorldRain_GetRainRate(float precipitation)
@@ -81,7 +89,7 @@ float WorldRain_GetMistThickness(float cloudBaseY, float mistBaseY)
     return fminf(fmaxf(Thickness, WORLD_RAIN_MIN_MIST_THICKNESS), (float)WORLD_ENVIRONMENT_MAX_GROUND_HAZE_THICKNESS);
 }
 
-void WorldRain_GetFrame(const WorldEnvironment* environment, WorldRainFrame* outFrame)
+void WorldRain_GetFrame(const WorldEnvironment* environment, double originY, WorldRainFrame* outFrame)
 {
     Memory_Zero(outFrame, sizeof(*outFrame));
     float Precipitation = ClampFinite(environment->Precipitation, 0.0f, 1.0f, 0.0f);
@@ -92,8 +100,12 @@ void WorldRain_GetFrame(const WorldEnvironment* environment, WorldRainFrame* out
     float SplashDensity = ClampFinite(environment->RainSplashDensity, 0.0f, RAIN_MAX_MULTIPLE, 1.0f);
     outFrame->StreakShare = fminf(Precipitation * StreakDensity, 1.0f);
     outFrame->SplashShare = fminf(Precipitation * SplashDensity, 1.0f);
-    outFrame->AreStreaksVisible = outFrame->StreakShare > 0.0f;
-    outFrame->AreSplashesVisible = outFrame->SplashShare > 0.0f;
+    // Only while what they reach lies below the rain's top: the streaks' box, the splashes' search (written so a
+    // non-finite height counts as below).
+    outFrame->TopY = GetTopY(environment);
+    double Above = originY - outFrame->TopY;
+    outFrame->AreStreaksVisible = (outFrame->StreakShare > 0.0f) && !(Above >= 0.5 * WORLD_RAIN_BOX_SIZE);
+    outFrame->AreSplashesVisible = (outFrame->SplashShare > 0.0f) && !(Above >= (double)WORLD_RAIN_SPLASH_REACH);
     // A downpour splashes every cell about every WORLD_RAIN_SPLASH_PERIOD seconds, a light rain half as often (and in
     // fewer cells: the share).
     outFrame->SplashPeriod = WORLD_RAIN_SPLASH_PERIOD * (2.0f - Precipitation);
@@ -121,7 +133,10 @@ void WorldRain_GetFrame(const WorldEnvironment* environment, WorldRainFrame* out
     outFrame->Color[2] = powf((float)RainColor.b / 255.0f, RAIN_SRGB_GAMMA);
 
     outFrame->Wetness = ClampFinite(environment->Wetness, 0.0f, 1.0f, 0.0f);
-    outFrame->IsMapNeeded = outFrame->AreStreaksVisible || outFrame->AreSplashesVisible || (outFrame->Wetness > 0.0f);
+    // The map's box reaches WORLD_RAIN_MAP_DEPTH - WORLD_RAIN_MAP_EYE_DISTANCE metres below the camera along the rain (at
+    // most that far down): above the top by more, no surface it holds is rained on.
+    outFrame->IsMapNeeded = (outFrame->AreStreaksVisible || outFrame->AreSplashesVisible || (outFrame->Wetness > 0.0f))
+        && !(Above >= (double)(WORLD_RAIN_MAP_DEPTH - WORLD_RAIN_MAP_EYE_DISTANCE));
     outFrame->PuddleCoverage = WorldRain_GetPuddleCoverage(outFrame->Wetness,
         ClampFinite(environment->PuddleAmount, 0.0f, RAIN_MAX_MULTIPLE, 1.0f));
     outFrame->PuddleTile = (float)WORLD_RAIN_PUDDLE_TILE * ClampFinite(environment->PuddleScale,
@@ -129,6 +144,35 @@ void WorldRain_GetFrame(const WorldEnvironment* environment, WorldRainFrame* out
     // Rings on the puddles while it rains: more and stronger the harder it rains.
     outFrame->RippleStrength = sqrtf(Precipitation);
     outFrame->RippleRate = 0.5f + 2.5f * Precipitation;
+}
+
+float WorldRain_GetTopOpenness(float height, float top)
+{
+    if (!isfinite(height) || !isfinite(top))
+    {
+        return 1.0f;
+    }
+    return 1.0f - Smoothstep(top - WORLD_RAIN_TOP_FADE, top, height);
+}
+
+float WorldRain_GetSplashLife(size_t frameCount, double fps)
+{
+    if ((frameCount == 0U) || !(fps > 0.0))
+    {
+        return 0.0f;
+    }
+    size_t Frames = (frameCount < WORLD_RAIN_SPLASH_MAX_FRAMES) ? frameCount : WORLD_RAIN_SPLASH_MAX_FRAMES;
+    return (float)((double)Frames / fps);
+}
+
+uint32_t WorldRain_GetSplashFrame(float age, float life, uint32_t frameCount)
+{
+    if ((frameCount == 0U) || !(life > 0.0f) || !(age > 0.0f) || !isfinite(age))
+    {
+        return 0U;
+    }
+    float Frame = floorf(age / life * (float)frameCount);
+    return (Frame < (float)frameCount) ? (uint32_t)Frame : (frameCount - 1U);
 }
 
 void WorldRain_AdvanceDrift(WorldRainDrift* drift, const WorldRainFrame* frame, double seconds)
@@ -322,7 +366,7 @@ float WorldRain_GetPuddleThreshold(float coverage)
 }
 
 void WorldRain_GetBolt(const WorldEnvironment* environment, const float flashIrradiance[3], double originY,
-    WorldRainBolt* outBolt)
+    uint32_t frameCount, WorldRainBolt* outBolt)
 {
     Memory_Zero(outBolt, sizeof(*outBolt));
     float Flash = ClampFinite(environment->LightningFlash, 0.0f, 1.0f, 0.0f);
@@ -344,9 +388,8 @@ void WorldRain_GetBolt(const WorldEnvironment* environment, const float flashIrr
     outBolt->IsVisible = true;
     outBolt->Foot = (Vector3){ Level.x * Distance, (float)(GroundY - originY), Level.z * Distance };
     outBolt->Top = (Vector3){ outBolt->Foot.x, (float)(GroundY + (double)Height - originY), outBolt->Foot.z };
-    outBolt->Width = Height * WORLD_RAIN_BOLT_ASPECT;
     uint32_t Hash = WorldRain_Hash(GetFloatBits(Level.x), GetFloatBits(Level.z), GetFloatBits(Distance));
-    outBolt->Variant = Hash % WORLD_RAIN_BOLT_VARIANTS;
+    outBolt->Variant = (frameCount > 0U) ? (Hash % frameCount) : 0U;
     outBolt->IsMirrored = ((Hash >> 8) & 1U) != 0U;
     outBolt->Radiance = WORLD_RAIN_BOLT_RADIANCE * Flash * Brightness;
     Vector3 Middle = { outBolt->Foot.x, 0.5f * (outBolt->Foot.y + outBolt->Top.y), outBolt->Foot.z };

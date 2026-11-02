@@ -1,7 +1,8 @@
 #version 330
 
 // A lightning bolt's channel (the pure maths source/WorldRain.h, "THE BOLT"): a quad standing from the ground to the
-// clouds' base toward the strike, turned about the vertical to face the camera, showing one of the bolt texture's bolts.
+// clouds' base toward the strike, turned about the vertical to face the camera, showing one frame of the bolt animation
+// (its area in its texture; mirrored by a negative width).
 
 in vec3 vertexPosition; // the unit quad: x, y in [0, 1]
 in vec2 vertexTexCoord;
@@ -10,7 +11,8 @@ uniform mat4 rainViewProjection; // render space -> the scene's clip space
 uniform vec3 boltFoot;           // render space: its foot on the ground
 uniform vec3 boltTop;            // and its top at the clouds' base
 uniform float boltWidth;         // metres
-uniform vec2 boltColumns;        // x: where its bolt starts across the texture, y: its share of it (negative: mirrored)
+uniform vec4 boltArea;           // its frame's area in its texture: x and y from its top left, width (negative: mirrored),
+                                 // height (0 .. 1)
 
 out vec3 fragPosition; // render space
 out vec2 fragTexCoord;
@@ -22,6 +24,6 @@ void main()
     vec3 position = boltFoot + (boltTop - boltFoot)*vertexPosition.y + right*((vertexPosition.x - 0.5)*boltWidth);
     gl_Position = rainViewProjection*vec4(position, 1.0);
     fragPosition = position;
-    // The texture's top row is the clouds' end.
-    fragTexCoord = vec2(boltColumns.x + vertexPosition.x*boltColumns.y, 1.0 - vertexPosition.y);
+    // The frame's top row is the clouds' end.
+    fragTexCoord = boltArea.xy + vec2(vertexPosition.x, 1.0 - vertexPosition.y)*boltArea.zw;
 }

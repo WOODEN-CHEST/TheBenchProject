@@ -652,7 +652,7 @@ multiply it by their own `gravity_multiplier`).
 GHDF wire id, the type, the default, the rules, the inspector text. `WorldEnvironment_SetDefaults`, `_Validate`,
 `_CopyTo` and `_Deconstruct` are thin wrappers over the table, and `WorldEnvironment_ReadJSON` / `_WriteJSON` are the
 JSON entry points for the world files. **To add a setting, add the field and one table row** with a new,
-never-used wire id (the next free one is 112; 2 and 3 are retired); nothing else needs writing. The field comments state
+never-used wire id (the next free one is 114; 2, 3, 109 and 111 are retired); nothing else needs writing. The field comments state
 each value's rule; validation enforces them (finite, `TimeOfDay`, `LightPollution`, `StarTwinkle`, `MoonPhase`,
 `NightVisionStrength` and `NightVisionBlueShift` in [0, 1], `SunSizeMultiplier`, `MoonSizeMultiplier` and `MoonCycleDays` > 0, every strength/intensity/density/brightness
 >= 0, `Date` inside the calendar, the texture and climate names valid asset names of at most 128 bytes,
@@ -664,10 +664,11 @@ JSON.
 number of [GameCalendar.md](GameCalendar.md), a `Date` property: `"2026-10-18"` in JSON, default 2026-10-18 like a new
 game clock) never advance by themselves. While a game runs, the game clock ([GameClock.md](GameClock.md)) writes both
 every tick; in a world file they are where the sky starts (the editor's preview uses them, and the test frame starts
-its clock from them). The environment table's wire ids 2 and 3 are retired (never reused), so GHDF that holds them
-still reads (the entries are skipped).
+its clock from them). The environment table's wire ids 2, 3, 109 and 111 are retired (never reused), so GHDF that holds
+them still reads (the entries are skipped).
 
-**The environment owns its asset names** (`MilkyWayTexture`, `MoonTexture`, `Climate` and the rain's four textures): `WorldEnvironment_SetDefaults`
+**The environment owns its asset names** (`MilkyWayTexture`, `MoonTexture`, `Climate` and the rain's two textures and two
+sprite animations): `WorldEnvironment_SetDefaults`
 constructs and allocates them (call it on a new environment only; to reset one, `Deconstruct` first) and pairs with
 `WorldEnvironment_Deconstruct`; copies go through `CopyTo` (never assignment: a copied pointer would be freed twice);
 a name is changed through the table (`Properties_Set`), which clones the new one and frees the old. `World` pairs
@@ -812,8 +813,9 @@ all.
 | `cloud_light_pollution` | 97 | [0, 10] | 1 | How much of the town's light (light pollution) lights the clouds' undersides at night (0: none). |
 
 The rain (category "Rain"; [WorldRuntime.md](WorldRuntime.md), "Rain"): how the weather's `precipitation`, `wetness`
-and lightning look near the camera. The multiples are in [0, 10] (`WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE`); the textures
-are asset names of at most 128 bytes in full, owned by the environment as its other names are. Where water pools is a
+and lightning look near the camera; the rain falls from the clouds' base (`cloud_base`), nothing of it above. The
+multiples are in [0, 10] (`WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE`); the textures and the sprite animations are asset names
+of at most 128 bytes in full, owned by the environment as its other names are. Where water pools is a
 surface's own: a material's `puddles` and `porosity` ([GameAssets.md](GameAssets.md)), a terrain material's
 ([Terrain.md](Terrain.md)).
 
@@ -830,9 +832,9 @@ surface's own: a material's `puddles` and `porosity` ([GameAssets.md](GameAssets
 | `rain_mist` | 106 | [0, 10] | 1 | How much the rain lowers the visibility, a multiplier on real rain's (1: about 8 km in light rain, 700 m in a downpour; 0: the air stays as clear as without rain). |
 | `lightning_bolt_brightness` | 107 | [0, 10] | 1 | How bright the lightning's bolts are and how strongly their channels light the world (0: no bolts; the clouds still flash). |
 | `rain_streak_texture` | 108 | asset name | `tbp:rain_streak` | A streak's texture: its alpha along its length (the top row at the drop, the bottom at the end of its trail). |
-| `rain_splash_texture` | 109 | asset name | `tbp:rain_splash` | The splash's flipbook: four frames side by side, from the drop's impact to its last spray. |
 | `puddle_mask_texture` | 110 | asset name | `tbp:rain_puddle_mask` | Where water pools first: a tileable map whose red rises toward the puddles' middles, spread evenly over 0 to 1 (so the puddles' coverage means what it says). |
-| `lightning_bolt_texture` | 111 | asset name | `tbp:lightning_bolts` | The bolts: four side by side, each from the clouds (top) to the ground (bottom), white on a clear background. |
+| `rain_splash_animation` | 112 | asset name | `tbp:rain_splash` | The sprite animation a splash plays once, at its fps (its life: its frames over its fps), from the drop's impact to its last spray; any number of frames of any size and source, their bottom standing on the surface. |
+| `lightning_bolt_animation` | 113 | asset name | `tbp:lightning_bolts` | The sprite animation whose frames are the bolts: each strike shows one, from the clouds (its top) to the ground (its bottom), as wide as its frame's shape makes it (its fps is not used). |
 
 The sun's and the moon's shadows ([WorldRuntime.md](WorldRuntime.md), "Sun and moon shadows"): `are_shadows_enabled`
 (default true) and `shadow_reach` (wire id 63, [0, 20000] m, default 4000: how far from the camera they reach, fading out

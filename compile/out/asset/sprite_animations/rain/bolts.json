@@ -1,0 +1,33 @@
+{
+    "name": "tbp:lightning_bolts",
+    "frames": [
+        {
+            "source": "texture",
+            "location": "rain/bolt_0",
+            "texture_properties": {
+                "filtering": "bilinear"
+            }
+        },
+        {
+            "source": "texture",
+            "location": "rain/bolt_1",
+            "texture_properties": {
+                "filtering": "bilinear"
+            }
+        },
+        {
+            "source": "texture",
+            "location": "rain/bolt_2",
+            "texture_properties": {
+                "filtering": "bilinear"
+            }
+        },
+        {
+            "source": "texture",
+            "location": "rain/bolt_3",
+            "texture_properties": {
+                "filtering": "bilinear"
+            }
+        }
+    ]
+}

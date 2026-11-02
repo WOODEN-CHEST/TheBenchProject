@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 // Vector3 is raylib's: the wind, the rain's and the bolt's directions.
 #include "raylib/raylib.h"
@@ -13,6 +14,12 @@
  * environment's weather values and its rain settings, and feeds it to shaders/common/rain.glsl,
  * shaders/common/puddles.glsl and shaders/rain/, whose formulas this file mirrors (keep them in step;
  * tests/ShaderSourceTests.c pins the shared constants).
+ *
+ * THE RAIN'S TOP. Rain falls from the clouds' base (the atmosphere's ground plus CloudBase, WorldRainFrame.TopY): above
+ * it nothing of the rain shows (no streak, no splash, no wetness or puddle on a surface there), fading out over the last
+ * WORLD_RAIN_TOP_FADE metres below it (WorldRain_GetTopOpenness), so a camera above the clouds sees none around it and a
+ * mountain above them stays dry. The streaks, the splashes and the rain map are not drawn at all while everything they
+ * reach lies above the top (WorldRain_GetFrame takes the camera's height).
  *
  * THE RAIN. The weather's precipitation (0 none .. 1 a downpour) is a rain rate of WORLD_RAIN_DOWNPOUR_RATE x p^3
  * millimetres an hour (a light rain's 0.3 is 2.7 mm/h, the rain preset's 0.7 34 mm/h, a downpour 100 mm/h). Drops fall at
@@ -50,9 +57,12 @@
  * double by WORLD_RAIN_SPLASH_HASH_PERIOD cells). Each cell splashes now and then at a random place in it: where a drop
  * falling through there lands, the first surface the rain map finds on the way down its line along the map's own fall (a
  * bisection, WorldRain_FindLanding), so splashes sit on roofs, awnings, the street and the windward side of walls, never
- * under cover and never in the air of a wall's lee. Every cell runs its cycles (WorldRainFrame.SplashPeriod long) by a
- * count the renderer keeps (WorldRainDrift.SplashCycles), as the ripples do theirs: a count advanced by each frame's
- * rate, never a clock times a rate (which would race or run backwards while the rain changes).
+ * under cover and never in the air of a wall's lee. A splash plays the world's splash sprite animation once, at the
+ * animation's fps (its life is its frames over its fps, WorldRain_GetSplashLife; WorldRain_GetSplashFrame picks the frame
+ * an age shows), each frame drawn with its own texture and area, so a creator's animation may hold any number of frames
+ * of any size from any source. Every cell runs its cycles (WorldRainFrame.SplashPeriod long) by a count the renderer
+ * keeps (WorldRainDrift.SplashCycles), as the ripples do theirs: a count advanced by each frame's rate, never a clock
+ * times a rate (which would race or run backwards while the rain changes).
  *
  * PUDDLES. A surface facing up holds water where the puddle mask (a tileable texture spread evenly over 0 .. 1, read twice:
  * the second read turned by cosine 4/5 and sine 3/5 and 5/4 as fine, so the mix repeats only every WORLD_RAIN_PATTERN_TILES
@@ -63,9 +73,10 @@
  * world-anchored pattern.
  *
  * THE BOLT. While a lightning flash lasts, its channel stands between the ground and the clouds' base toward the strike,
- * drawn as one of the bolt texture's WORLD_RAIN_BOLT_VARIANTS bolts (picked from the strike's direction and distance), and
- * it lights every surface from its middle, unshadowed (its light WORLD_RAIN_BOLT_LIGHT_SHARE times the flash's on a level
- * surface, from the side it stands on).
+ * drawn as one of the frames of the world's bolt sprite animation (each frame one bolt, picked from the strike's direction
+ * and distance, and mirrored or not; the frame's own shape sets the bolt's width), and it lights every surface from its
+ * middle, unshadowed (its light WORLD_RAIN_BOLT_LIGHT_SHARE times the flash's on a level surface, from the side it stands
+ * on).
  */
 
 
@@ -114,10 +125,9 @@
 #define WORLD_RAIN_SPLASH_HASH_PERIOD 4096.0
 #define WORLD_RAIN_SPLASH_REACH 12.0f
 #define WORLD_RAIN_SPLASH_STEPS 12
-/** @brief A splash's life (its flipbook's frames over it), seconds, and a cell's mean time between splashes in a
- *  downpour, seconds (longer in lighter rain: WorldRainFrame.SplashPeriod). */
-#define WORLD_RAIN_SPLASH_FRAMES 4
-#define WORLD_RAIN_SPLASH_LIFE 0.2f
+/** @brief The most frames of the splash animation a splash plays (each frame is a draw), and a cell's mean time between
+ *  splashes in a downpour, seconds (longer in lighter rain: WorldRainFrame.SplashPeriod). */
+#define WORLD_RAIN_SPLASH_MAX_FRAMES 64U
 #define WORLD_RAIN_SPLASH_PERIOD 0.6f
 /** @brief Where the splashes' and the ripples' cycle counts wrap: a whole number of cycles, the shaders taking a cycle's
  *  number modulo the same, so the wrap changes nothing. */
@@ -132,9 +142,8 @@
 /** @brief Puddles: none below this wetness, and the most of a surface they cover (its puddles 1, soaked). */
 #define WORLD_RAIN_PUDDLE_WETNESS 0.25f
 #define WORLD_RAIN_PUDDLE_MAX_COVERAGE 0.35f
-/** @brief The bolt texture's bolts side by side, and a bolt's width over its height (one bolt's share of the texture). */
-#define WORLD_RAIN_BOLT_VARIANTS 4U
-#define WORLD_RAIN_BOLT_ASPECT 0.25f
+/** @brief How far below the rain's top (the clouds' base) the rain starts to fade out, metres. */
+#define WORLD_RAIN_TOP_FADE 30.0f
 /** @brief A flash below this draws no bolt. */
 #define WORLD_RAIN_BOLT_MIN_FLASH 0.01f
 /** @brief The bolt's channel's light on a surface facing it, as a share of the flash's on a level surface. */
@@ -180,12 +189,12 @@ typedef struct WorldRainBoltStruct
 {
     /** @brief Whether it is drawn and lights the world (a flash at least WORLD_RAIN_BOLT_MIN_FLASH, a brightness above 0). */
     bool IsVisible;
-    /** @brief Its foot on the ground and its top at the clouds' base, render space. */
+    /** @brief Its foot on the ground and its top at the clouds' base, render space (its width is its height times the
+     *  shown frame's width over its height). */
     Vector3 Foot;
     Vector3 Top;
-    /** @brief Its width, metres (its height times WORLD_RAIN_BOLT_ASPECT). */
-    float Width;
-    /** @brief Which of the texture's bolts it shows, below WORLD_RAIN_BOLT_VARIANTS, and whether it is mirrored. */
+    /** @brief Which of the bolt animation's frames it shows (below the frame count given; 0 without frames), and whether
+     *  it is mirrored. */
     uint32_t Variant;
     bool IsMirrored;
     /** @brief Its radiance before the eye's exposure: WORLD_RAIN_BOLT_RADIANCE x the flash x the brightness (the pass
@@ -202,7 +211,8 @@ typedef struct WorldRainFrameStruct
     /** @brief The weather's precipitation (0 .. 1) and its rain rate, millimetres an hour. */
     float Precipitation;
     float RainRate;
-    /** @brief Whether streaks fall (a share of them above 0) and whether splashes land (theirs above 0). */
+    /** @brief Whether streaks fall (a share of them above 0, and their box around the camera reaching below the rain's top)
+     *  and whether splashes land (theirs above 0, and their search reaching below the top). */
     bool AreStreaksVisible;
     bool AreSplashesVisible;
     /** @brief The share of the streaks drawn (precipitation x RainStreakDensity, at most 1) and of the splash cells that
@@ -225,7 +235,11 @@ typedef struct WorldRainFrameStruct
     float StreakExposure;
     float StreakBrightness;
     float Color[3];
-    /** @brief The weather's wetness (0 .. 1), and whether the rain map is drawn: it rains or surfaces are wet. */
+    /** @brief The rain's top: the clouds' base, world Y (the atmosphere's ground plus CloudBase); nothing of the rain shows
+     *  above it (WorldRain_GetTopOpenness). */
+    double TopY;
+    /** @brief The weather's wetness (0 .. 1), and whether the rain map is drawn: it rains or surfaces are wet, and its box
+     *  reaches below the rain's top. */
     float Wetness;
     bool IsMapNeeded;
     /** @brief The puddles: the most of a puddles-1 surface under water now (the wetness's and PuddleAmount's), and the
@@ -264,12 +278,42 @@ float WorldRain_GetMistExtinction(float precipitation);
 float WorldRain_GetMistThickness(float cloudBaseY, float mistBaseY);
 
 /**
- * @brief Fills the frame's rain from the environment (the weather's precipitation, wetness and wind; the rain settings).
- *        Non-finite values count as none; settings are clamped to their rules.
+ * @brief Fills the frame's rain from the environment (the weather's precipitation, wetness and wind; the rain settings;
+ *        the clouds' base as the rain's top) and the camera's height (the streaks, the splashes and the rain map only
+ *        while what they reach lies below the top). Non-finite values count as none; settings are clamped to their rules.
  * @param environment The environment; must not be NULL.
+ * @param originY The frame's origin's Y (the camera's height), world; a non-finite one counts as below the top.
  * @param outFrame [out] The frame; must not be NULL.
  */
-void WorldRain_GetFrame(const WorldEnvironment* environment, WorldRainFrame* outFrame);
+void WorldRain_GetFrame(const WorldEnvironment* environment, double originY, WorldRainFrame* outFrame);
+
+/**
+ * @brief How much of the rain shows at a height, by the rain's top: 1 up to WORLD_RAIN_TOP_FADE metres below it, falling
+ *        smoothly to 0 at it and above (the C mirror of common/rain's RainTopOpenness). Both heights in one frame of
+ *        reference (render space: the top less the camera's height).
+ * @param height The point's height.
+ * @param top The rain's top.
+ * @returns The share, in [0, 1]; 1 for anything not finite.
+ */
+float WorldRain_GetTopOpenness(float height, float top);
+
+/**
+ * @brief A splash's life: its animation's frames (at most WORLD_RAIN_SPLASH_MAX_FRAMES) over its fps.
+ * @param frameCount The splash animation's frames.
+ * @param fps The animation's fps.
+ * @returns The life, seconds; 0 (no splashes) without frames or with an fps not above 0.
+ */
+float WorldRain_GetSplashLife(size_t frameCount, double fps);
+
+/**
+ * @brief The frame of the splash animation a splash shows at an age (the C mirror of shaders/rain/splashes_vertex.vert's
+ *        pick): the frames spread evenly over its life.
+ * @param age The splash's age, seconds (below its life while it shows).
+ * @param life Its life (WorldRain_GetSplashLife).
+ * @param frameCount The frames it plays (at most WORLD_RAIN_SPLASH_MAX_FRAMES).
+ * @returns The frame, below @p frameCount; 0 without frames, life or a finite age.
+ */
+uint32_t WorldRain_GetSplashFrame(float age, float life, uint32_t frameCount);
 
 /**
  * @brief Advances the rain's drift by real seconds: the wind's sideways drift by the wind now, the fall by the fall speed,
@@ -446,13 +490,14 @@ float WorldRain_GetPuddleThreshold(float coverage);
 
 /**
  * @brief The lightning's bolt for a frame: while the flash lasts, its channel toward the strike from the ground (the
- *        atmosphere's ground, HorizonGroundHeight) to the clouds' base, in render space, its texture variant, its
- *        radiance and its light.
+ *        atmosphere's ground, HorizonGroundHeight) to the clouds' base, in render space, the frame of the bolt animation
+ *        it shows, its radiance and its light.
  * @param environment The environment (the lightning's values, the clouds' base, the ground, the bolt's brightness); must
  *        not be NULL.
  * @param flashIrradiance The flash's light on a level surface (WorldWeatherLight.FlashIrradiance).
  * @param originY The frame's origin's Y (the camera's height), world.
+ * @param frameCount The bolt animation's frames (each one bolt); 0 without an animation (the bolt still lights).
  * @param outBolt [out] The bolt; must not be NULL.
  */
 void WorldRain_GetBolt(const WorldEnvironment* environment, const float flashIrradiance[3], double originY,
-    WorldRainBolt* outBolt);
+    uint32_t frameCount, WorldRainBolt* outBolt);

@@ -1,0 +1,16 @@
+{
+    "name": "tbp:test_colored_frames",
+    "frames": [
+        {
+            "source": "texture",
+            "location": "test_world/placeholder_sign",
+            "texture_properties": { "filtering": "point" }
+        },
+        {
+            "source": "spritesheet",
+            "sprite_sheet": "tbp:ui_main",
+            "name": "button_top_left_up"
+        }
+    ],
+    "fps": 10
+}

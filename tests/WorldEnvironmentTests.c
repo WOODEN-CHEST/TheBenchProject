@@ -568,8 +568,10 @@ static void DateAndTimeComeFromTheClock(TestRun* run)
     const PropertyTable* Table = WorldEnvironment_GetPropertyTable();
     TEST_CHECK(run, (PropertyTable_FindByKey(Table, u8"is_day_night_cycle_enabled") == NULL)
         && (PropertyTable_FindByKey(Table, u8"day_length_seconds") == NULL));
-    TEST_CHECK(run, (Table->RetiredWireIdCount == 2U) && (Table->RetiredWireIds[0] == 2U)
-        && (Table->RetiredWireIds[1] == 3U));
+    TEST_CHECK(run, (Table->RetiredWireIdCount == 4U) && (Table->RetiredWireIds[0] == 2U)
+        && (Table->RetiredWireIds[1] == 3U) && (Table->RetiredWireIds[2] == 109U) && (Table->RetiredWireIds[3] == 111U));
+    TEST_CHECK(run, (PropertyTable_FindByKey(Table, u8"rain_splash_texture") == NULL)
+        && (PropertyTable_FindByKey(Table, u8"lightning_bolt_texture") == NULL));
     const PropertyDescriptor* DateRow = PropertyTable_FindByKey(Table, u8"date");
     TEST_CHECK(run, (DateRow != NULL) && (DateRow->Type == PropertyType_Date) && (DateRow->WireId == 30U));
     GameClock_Deconstruct(&Clock);
@@ -1080,9 +1082,9 @@ static void TheRainStartsAsRealRainAndIsValidated(TestRun* run)
         && (Environment.PuddleAmount == 1.0f) && (Environment.PuddleScale == 1.0f) && (Environment.RainMist == 1.0f)
         && (Environment.LightningBoltBrightness == 1.0f));
     TEST_CHECK(run, (strcmp((const char*)Environment.RainStreakTexture, "tbp:rain_streak") == 0)
-        && (strcmp((const char*)Environment.RainSplashTexture, "tbp:rain_splash") == 0)
+        && (strcmp((const char*)Environment.RainSplashAnimation, "tbp:rain_splash") == 0)
         && (strcmp((const char*)Environment.PuddleMaskTexture, "tbp:rain_puddle_mask") == 0)
-        && (strcmp((const char*)Environment.LightningBoltTexture, "tbp:lightning_bolts") == 0));
+        && (strcmp((const char*)Environment.LightningBoltAnimation, "tbp:lightning_bolts") == 0));
     TEST_CHECK_SUCCESS(run, WorldEnvironment_Validate(&Environment));
 
     Environment.RainFallSpeed = 0.4f;

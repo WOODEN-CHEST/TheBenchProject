@@ -914,11 +914,12 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .SinceVersion = 1U
     },
     {
-        .Key = u8"rain_splash_texture", .WireId = 109U, .Type = PropertyType_AssetName,
-        PROPERTY_MEMBER(WorldEnvironment, RainSplashTexture), .Default.StringValue = u8"tbp:rain_splash",
+        .Key = u8"rain_splash_animation", .WireId = 112U, .Type = PropertyType_AssetName,
+        PROPERTY_MEMBER(WorldEnvironment, RainSplashAnimation), .Default.StringValue = u8"tbp:rain_splash",
         .Rules = PROPERTY_RULES_STRING(WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH, false), .Flags = PROPERTY_FLAGS_SETTING,
-        .Category = CATEGORY_RAIN, .DisplayName = u8"Rain splash texture",
-        .Description = u8"The splash's flipbook: its four frames side by side, from the drop's impact to its last spray.",
+        .Category = CATEGORY_RAIN, .DisplayName = u8"Rain splash animation",
+        .Description = u8"The sprite animation a splash plays once, at its fps, from the drop's impact to its last spray "
+            u8"(any number of frames, any size; its frames' bottom stands on the surface).",
         .SinceVersion = 1U
     },
     {
@@ -931,12 +932,13 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .SinceVersion = 1U
     },
     {
-        .Key = u8"lightning_bolt_texture", .WireId = 111U, .Type = PropertyType_AssetName,
-        PROPERTY_MEMBER(WorldEnvironment, LightningBoltTexture), .Default.StringValue = u8"tbp:lightning_bolts",
+        .Key = u8"lightning_bolt_animation", .WireId = 113U, .Type = PropertyType_AssetName,
+        PROPERTY_MEMBER(WorldEnvironment, LightningBoltAnimation), .Default.StringValue = u8"tbp:lightning_bolts",
         .Rules = PROPERTY_RULES_STRING(WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH, false), .Flags = PROPERTY_FLAGS_SETTING,
-        .Category = CATEGORY_RAIN, .DisplayName = u8"Lightning bolt texture",
-        .Description = u8"The lightning's bolts: four of them side by side, each from the clouds (top) to the ground "
-            u8"(bottom), white on a clear background.",
+        .Category = CATEGORY_RAIN, .DisplayName = u8"Lightning bolt animation",
+        .Description = u8"The sprite animation whose frames are the lightning's bolts: each strike shows one of them, "
+            u8"from the clouds (its top) to the ground (its bottom), as wide as its frame's shape makes it (its fps is not "
+            u8"used).",
         .SinceVersion = 1U
     },
     {
@@ -1033,8 +1035,9 @@ static const PropertyDescriptor EnvironmentProperties[] =
 };
 
 /* Removed settings, never to be used again: 2 is_day_night_cycle_enabled and 3 day_length_seconds (the game clock's
- * pause and time scale do their work). */
-static const uint16_t EnvironmentRetiredWireIds[] = { 2U, 3U };
+ * pause and time scale do their work), 109 rain_splash_texture and 111 lightning_bolt_texture (the splash and the bolts
+ * are sprite animations: rain_splash_animation and lightning_bolt_animation). */
+static const uint16_t EnvironmentRetiredWireIds[] = { 2U, 3U, 109U, 111U };
 
 static const PropertyTable EnvironmentTable =
 {

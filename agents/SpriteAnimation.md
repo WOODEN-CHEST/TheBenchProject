@@ -27,9 +27,12 @@ animations").
   (`SpriteAnimationReachedState_End` or `_Loop`), and `_args._endArgs._direction` / `_args._loopArgs._direction`
   (`SpriteAnimationStateDirection_Forwards` or `_Backwards`).
 
-Every field is read-only to other modules: use the inline getters (`SpriteAnimationInstance_GetFPS`,
-`GetFrameIndex`, `GetFrameStep`, `GetSecondsSinceFrameChange`, `GetIsRunning`, `GetIsLooped`, `GetSource`, `HasSource`,
-`GetStateReachEvent`) and the validating setters.
+Every field is read-only to other modules: use the inline getters (an animation's defaults:
+`SpriteAnimation_GetDefaultFPS`, `GetDefaultFrameStep`, `GetDefaultIsRunning`, `GetDefaultIsLooped`; an instance's:
+`SpriteAnimationInstance_GetFPS`, `GetFrameIndex`, `GetFrameStep`, `GetSecondsSinceFrameChange`, `GetIsRunning`,
+`GetIsLooped`, `GetSource`, `HasSource`, `GetStateReachEvent`) and the validating setters. A frame's `_texture` and
+`_areaInTexture` are read directly by the drawing code (the world sprites, the text layout, the rain's splashes and
+bolts).
 
 ## Ownership and lifetime
 

@@ -1,12 +1,17 @@
 // The rain on the world, for #include "common/rain" (common/lighting includes it through common/puddles, and the rain's
-// own programs include it, in any stage): the rain map's lookups (what keeps the rain out), the rain's hash and the
-// lightning bolt's light. The puddles, their ripples and the sky mirrored in water are common/puddles' (the fragment
+// own programs include it, in any stage): the rain's top (the clouds' base: nothing of the rain above it), the rain map's
+// lookups (what keeps the rain out), the rain's hash and the lightning bolt's light. The puddles, their ripples and the sky mirrored in water are common/puddles' (the fragment
 // stage's: their mask's reads take screen derivatives). The pure maths and the constants' C twins are source/WorldRain.h
 // (tests/ShaderSourceTests.c pins them).
 //
 // RENDER SPACE. Positions are relative to the camera.
 
 #include "common/math"
+
+// Whether the rain is on (false: switched off, nothing of this applies: wet surfaces as without the rain), and its top: the
+// clouds' base, render space (WorldRain.h, "THE RAIN'S TOP").
+uniform bool rainActive;
+uniform float rainTop;
 
 // The rain map (WorldRain.h, "THE RAIN MAP"): a depth map along the rain's mean fall around the camera, of what keeps the
 // sky out; a point behind its first surface, seen from where the rain comes from, is covered.
@@ -27,6 +32,19 @@ const float RAIN_SURFACE_SPREAD = 0.16;
 // Where the splashes' and the ripples' cycle counts wrap (WORLD_RAIN_CYCLE_WRAP): a cycle's number is taken modulo the
 // same, so the wrap changes nothing.
 const float RAIN_CYCLE_WRAP = 4096.0;
+// How far below its top the rain fades out, metres (WORLD_RAIN_TOP_FADE).
+const float RAIN_TOP_FADE = 30.0;
+
+// How much of the rain shows at a render-space height: all of it up to RAIN_TOP_FADE below its top, none at it and above
+// (WorldRain_GetTopOpenness); all of it while the rain is switched off.
+float RainTopOpenness(float height)
+{
+    if (!rainActive)
+    {
+        return 1.0;
+    }
+    return 1.0 - smoothstep(rainTop - RAIN_TOP_FADE, rainTop, height);
+}
 
 // The rain's hash of three whole numbers (WorldRain_Hash): three odd multipliers, then the "lowbias32" finalizer.
 uint rainHash(uvec3 v)

@@ -907,7 +907,8 @@ cloud pass unavailable), the sky shows them as one even deck too, and their shar
   itself, its channel standing toward the strike, and its channel's own light are the rain's ("Rain").
 - **Wetness** (`surfaceWetness`, `common/lighting`'s `ApplyWetness`): wet = `wetness` x clamp(0.5 + 0.5 n.y) by the
   surface's own normal (most facing up, half upright, none facing down), times how open it is to the rain (the rain
-  map: covered surfaces stay dry, "Rain"); the albedo x (1 - 0.7 x porosity x wet) (water in the pores traps the light)
+  map: covered surfaces stay dry; and nothing above the clouds' base: "Rain"); the albedo x (1 - 0.7 x porosity x wet)
+  (water in the pores traps the light)
   and the roughness x (1 - 0.5 x wet), at least 0.045 (a film of water reflects like a polished surface: wet slopes
   glint in the sun, wet ground mirrors lamps), and the film mirrors the sky ("Rain"). Models take their material's
   porosity (its params: 0.5 by default, a model's or a variant's `material_overrides` set it) x (1 - metallic) (a metal
@@ -1070,6 +1071,13 @@ and mirror the sky, lightning's bolts and their light, and the rain's mist:
 - **The rain** (`WorldRain_GetFrame`): `precipitation` (0 .. 1) is a rain rate of 100 p^3 mm/h (a light rain's 0.3 is
   2.7 mm/h, the rain preset's 0.7 34 mm/h, a downpour 100). Drops fall at `rain_fall_speed` (7.5 m/s) in three classes
   (3/4, 1 and 5/4 of it) and drift with the wind, gusts in: at 8 m/s the rain slants about 47 degrees.
+- **The rain's top** (`WorldRainFrame.TopY`, `WorldRain_GetTopOpenness`; `common/rain`'s `RainTopOpenness`): rain falls
+  from the clouds' base (the atmosphere's ground plus `cloud_base`), and nothing of it shows above: no streak, no
+  splash, no wetness or puddle, fading out over the last 30 m below the base. A camera above the clouds sees no rain
+  around it, and a mountain above them stays dry while it rains below. The streaks, the splashes and the rain map are
+  not drawn at all while everything they reach lies above it (their box, their search, the map's 500 m below its
+  centre). Inside the clouds no rain falls either (the clouds are not drawn around the camera there). Switched off, the
+  rain applies no top (wet surfaces as without it).
 - **The rain map** (`WorldRendererRain_RenderMap`; `common/rain`'s `RainOpenness`): a depth map, one layer of a
   `GLShadowArray` (1024 x 1024 texels over 96 m: 9.4 cm), looking along the rain's mean fall (the wind without its
   gusts) at a box around the camera whose centre is snapped to its texels in double (`WorldRenderSpace_StepCascade` with
@@ -1101,7 +1109,8 @@ and mirror the sky, lightning's bolts and their light, and the rain's mist:
   fall by four boxes, so each class's fall wraps by whole boxes), so the rain stands still in the world as the camera
   moves and never jumps (`WorldRain_GetStreakPosition` is the C mirror). Streaks fade out over the last 3 m inside the
   box's faces (where they wrap), are cut where the rain map covers them (per pixel: the rain stops at a roof's edge and
-  falls past a doorway), and their alpha falls as 1 / distance beyond 6 m (a drop covers less of its pixel).
+  falls past a doorway) and above the rain's top, and their alpha falls as 1 / distance beyond 6 m (a drop covers less
+  of its pixel).
 - **The splashes** (`world_rain_splashes`): a grid of 20 x 20 one-metre cells around the camera, fixed in the world
   (hashed from their whole coordinates, wrapped in double every 4096 cells); each cell splashes now and then (a share
   `precipitation` x `rain_splash_density` of its cycles; a cycle 0.6 s in a downpour, 1.2 s in a light rain) at a random
@@ -1109,8 +1118,15 @@ and mirror the sky, lightning's bolts and their light, and the rain's mist:
   map's own fall (`rainSlant`, `WorldRain_GetSlant`) between 12 m above and below the camera against the map (12
   halvings: 6 mm of height; `WorldRain_FindLanding` is the C mirror). Along the map's axis the change from open to
   covered is the first surface itself, so splashes sit on roofs, awnings, the street and the windward side of walls,
-  never under cover and never in the air of a wall's lee (a vertical line there would find the rain shadow's edge); a
-  quad of 22 to 34 cm facing the camera plays the flipbook's four frames over 0.2 s. The cycles are counted, not taken
+  never under cover and never in the air of a wall's lee (a vertical line there would find the rain shadow's edge), and
+  none above the rain's top. A splash is a quad facing the camera, 22 to 34 cm tall and as wide as its frame's shape
+  makes it, standing on the surface, that plays the world's splash animation (`rain_splash_animation`, a sprite
+  animation) once at its fps: its life is its frames over its fps (`WorldRain_GetSplashLife`; the shipped one's four
+  frames at 20 fps: 0.2 s; at most a cell's cycle shows), the frames spread evenly over it
+  (`WorldRain_GetSplashFrame`). The pass draws the splashes once per frame of the animation (at most 64), each draw
+  with that frame's own texture and area, so the frames may have any number, size and source (standalone images,
+  sprite sheet images, or both); its frame step, running and looping are not used. Without frames or an fps no splash
+  is drawn (logged once for the animation, as is one with more than 64 frames). The cycles are counted, not taken
   from a clock: the renderer advances `WorldRainDrift.SplashCycles` by each frame's seconds over the cycle's length (in
   double, wrapped by 4096 cycles, which the shader's hash takes modulo the same), so a rain that changes changes how fast
   the splashes come, never where they are in their cycle.
@@ -1142,9 +1158,11 @@ and mirror the sky, lightning's bolts and their light, and the rain's mist:
   BRDF's own specular at the water's smoothness.
 - **Lightning's bolt** (`world_lightning_bolt`, `WorldRain_GetBolt`): while a flash lasts (at least 0.01), its channel
   stands toward the strike (`lightning_direction` and `lightning_distance` from the camera, at least 200 m) from the
-  atmosphere's ground to the clouds' base, a quad turned about the vertical to face the camera, a quarter as wide as it
-  is tall, showing one of the bolt texture's four bolts side by side (`lightning_bolt_texture`; picked and mirrored by
-  the strike's direction and distance, so its return strokes show the same bolt); its radiance 40 x the flash x
+  atmosphere's ground to the clouds' base, a quad turned about the vertical to face the camera, showing one frame of
+  the world's bolt animation (`lightning_bolt_animation`, a sprite animation whose frames are the bolts: any number,
+  size and source; picked and mirrored by the strike's direction and distance, so its return strokes show the same
+  bolt; its fps and playback are not used), as wide as its frame's shape makes it (the shipped bolts: a quarter of
+  their height); without frames the bolt still lights the world. Its radiance 40 x the flash x
   `lightning_bolt_brightness` against the eye's exposure (as the sun's disc: it stays white), dimmed by the air in front
   of it (the haze's transmittance: a strike behind a downpour's mist is a glow in the clouds, not a bolt), added over
   the scene, depth tested (a hill hides its foot). Its channel lights every lit surface from its middle, unshadowed,
@@ -1678,7 +1696,7 @@ get no AO and no outlines.
 |---|---|
 | `WorldRenderer.c` | Public API: create/destroy, `PrepareWorld`, `RenderToTarget` (frame context, pass decisions, the visibility build, pass order), status. Orchestration only. |
 | `WorldRendererInternal.h` | The renderer state (one state struct per pass), `WorldRenderFrame`, fixed texture units, shared constants, and every internal function, documented. |
-| `WorldRendererCommon.c` | Config multipliers, colour conversion, shader loading, the textures the world names (texture slots: one asset user each, loaded when the name changes, a failed name logged once), one-time warnings, render-target constructors; the camera passes' depth (their depth buffers, the reversed state around them, the projection they load, the depth convention's uniform). |
+| `WorldRendererCommon.c` | Config multipliers, colour conversion, shader loading, the textures and sprite animations the world names (asset slots: one asset user each, loaded when the name changes, a failed name logged once), one-time warnings, render-target constructors; the camera passes' depth (their depth buffers, the reversed state around them, the projection they load, the depth convention's uniform). |
 | `WorldRendererScene.c` | Scene target size, HDR tiers and recreation on resize (asks each pass to recreate its targets); the scene pass. |
 | `WorldRendererGeometry.c` | Model meshes one LOD at a time with per-draw materials (both LODs of a cross-fade in the lit passes; `WorldRendererGeometry_PrepareMaterial` builds each, the instanced draws use it too), each mesh with its pass's rigid shader or, posed and skinned, its skinned twin after the pose's palette; the unlit fallback's skinned shader; the LOD tinting, light gizmos, the pixelation filter. |
 | `WorldRendererInstances.c` | The model instances' copies (see "Model instances"): each entry's records buffer, the G-buffer's and the shadows' instanced twins (the lit one is the lighting file's), the instanced draw that mirrors `DrawMesh`, each pass's cells instanced or one at a time (the A/B and every fallback), the status line. |
@@ -1702,7 +1720,7 @@ get no AO and no outlines.
 | `GLTexture3D.c` (not a pass) | 3D textures (`GL_TEXTURE_3D`, R8 or RGBA8, with mipmaps, repeating): direct OpenGL calls in `GLTextureArray`'s manner; private (`source/GLTexture3D.h`). |
 | `WorldClouds.c` (pure maths, not a pass) | The clouds' model: the frame's layers from the environment, the drift and the anchors, the shadow map's frame, a ray's stretch through a shell (the C mirror of `common/clouds`); see "Clouds". |
 | `CloudNoise.c` (not a pass) | The clouds' noise textures, made on the CPU at load; see "Clouds". |
-| `WorldRendererRain.c` | The rain (see "Rain"): the rain map (one layer of a `GLShadowArray`, its box along the rain's mean fall, its pass through the shadow levels' depth programs, kept between draws: drawn every fourth frame), the streaks' and the splashes' meshes and programs and the lightning bolt's, the textures the world names for them (texture slots), the lit programs' rain uniforms and frame textures (the rain map on 16, the puddle mask on 17, the sky view on 18), the draws in the scene pass after the sprites, the status line. |
+| `WorldRendererRain.c` | The rain (see "Rain"): the rain map (one layer of a `GLShadowArray`, its box along the rain's mean fall, its pass through the shadow levels' depth programs, kept between draws: drawn every fourth frame), the streaks' and the splashes' meshes and programs and the lightning bolt's, the textures and sprite animations the world names for them (asset slots; the splashes drawn once per frame of their animation), the lit programs' rain uniforms and frame textures (the rain map on 16, the puddle mask on 17, the sky view on 18), the draws in the scene pass after the sprites, the status line. |
 | `WorldRain.c` (pure maths, not a pass) | The rain's model: its rate and mist, the streaks' drift and their copies, the splashes' and the ripples' cycles, the rain map's box, lookups and keeping, the splashes' grid and landing, the puddles' coverage and threshold, the bolt (the C mirror of `common/rain`, `common/puddles` and `shaders/rain/`); see "Rain". |
 | `WorldRendererPost.c` | Outlines, bloom, sun shafts and the tonemap. |
 | `WorldRendererExposure.c` | The eye (see "Eye adaptation"): the meter's shader, target and readback, the meter pass after the sun shafts, the eye's update from the newest blocks (`EyeAdaptation`) and the exposure the tonemap takes. |

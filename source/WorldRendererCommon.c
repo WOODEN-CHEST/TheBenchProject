@@ -18,8 +18,8 @@
 #define PALETTE_UNIFORM_NAME_CAPACITY 32
 /** The palette rows a shader could hold at most: three per bone of the largest skeleton a model may have. */
 #define PALETTE_MAX_ROWS ((int)(GAME_SKELETON_MAX_BONES * 3U))
-/** Initial capacity of a texture slot's name buffer, in bytes (it grows for longer names). */
-#define TEXTURE_SLOT_NAME_CAPACITY 32U
+/** Initial capacity of an asset slot's name buffer, in bytes (it grows for longer names). */
+#define ASSET_SLOT_NAME_CAPACITY 32U
 
 
 // Static functions.
@@ -33,7 +33,7 @@ static bool HasPaletteRow(Shader shader, int row)
 }
 
 /* Whether a slot already holds (or has failed) exactly @p name. */
-static bool IsSlotFor(const WorldRendererTextureSlot* slot, const unsigned char* name)
+static bool IsSlotFor(const WorldRendererAssetSlot* slot, const unsigned char* name)
 {
     if (!slot->_isSynced || (slot->_name._data == NULL))
     {
@@ -270,12 +270,13 @@ GameTexture* WorldRendererCommon_LoadTexture(WorldRenderer* self, AssetUserID us
     return LoadedTexture;
 }
 
-void WorldRendererCommon_SyncTextureSlot(WorldRenderer* self, WorldRendererTextureSlot* slot, const unsigned char* name,
-    const unsigned char* featureName)
+/* The start of a slot's sync: false when the slot already holds (or has failed) @p name; otherwise its old asset released,
+ * the name kept and its asset user minted when it has none, true when the new asset is to be loaded under it. */
+static bool BeginSlotSync(WorldRenderer* self, WorldRendererAssetSlot* slot, const unsigned char* name)
 {
     if ((name == NULL) || IsSlotFor(slot, name))
     {
-        return;
+        return false;
     }
     if (slot->_user != ASSET_USER_ID_INVALID)
     {
@@ -283,12 +284,13 @@ void WorldRendererCommon_SyncTextureSlot(WorldRenderer* self, WorldRendererTextu
         Error_Deconstruct(&ReleaseResult); // fails only for an unknown user, which a minted one is not
     }
     slot->_texture = NULL;
+    slot->_animation = NULL;
     slot->_isSynced = true;
     GenericBuffer_Clear(&slot->_name);
     if (!GenericBuffer_AppendString(&slot->_name, name) || !GenericBuffer_NullTerminate(&slot->_name))
     {
         slot->_isSynced = false; // cannot happen short of running out of memory; try again next frame
-        return;
+        return false;
     }
 
     if (slot->_user == ASSET_USER_ID_INVALID)
@@ -297,21 +299,56 @@ void WorldRendererCommon_SyncTextureSlot(WorldRenderer* self, WorldRendererTextu
         if (UserResult.Code != ErrorCode_Success)
         {
             slot->_user = ASSET_USER_ID_INVALID;
-            WorldRendererCommon_Warn(self, (const unsigned char*)u8"WorldRenderer: no asset user for a texture the world names.");
+            WorldRendererCommon_Warn(self, (const unsigned char*)u8"WorldRenderer: no asset user for an asset the world names.");
             Error_Deconstruct(&UserResult);
-            return;
+            return false;
         }
     }
-    slot->_texture = WorldRendererCommon_LoadTexture(self, slot->_user, name, featureName);
+    return true;
 }
 
-void WorldRendererCommon_ConstructTextureSlot(WorldRendererTextureSlot* slot)
+void WorldRendererCommon_SyncTextureSlot(WorldRenderer* self, WorldRendererAssetSlot* slot, const unsigned char* name,
+    const unsigned char* featureName)
 {
-    *slot = (WorldRendererTextureSlot){ ._texture = NULL, ._user = ASSET_USER_ID_INVALID, ._isSynced = false };
-    GenericBuffer_AllocateVariable(&slot->_name, TEXTURE_SLOT_NAME_CAPACITY, sizeof(unsigned char));
+    if (BeginSlotSync(self, slot, name))
+    {
+        slot->_texture = WorldRendererCommon_LoadTexture(self, slot->_user, name, featureName);
+    }
 }
 
-void WorldRendererCommon_DeconstructTextureSlot(WorldRenderer* self, WorldRendererTextureSlot* slot)
+void WorldRendererCommon_SyncAnimationSlot(WorldRenderer* self, WorldRendererAssetSlot* slot, const unsigned char* name,
+    const unsigned char* featureName)
+{
+    if (!BeginSlotSync(self, slot, name))
+    {
+        return;
+    }
+    SpriteAnimation* LoadedAnimation = NULL;
+    Error LoadResult = AssetManager_LoadSpriteAnimation(self->_assetManager, name, slot->_user, &LoadedAnimation);
+    if (LoadResult.Code != ErrorCode_Success)
+    {
+        if (self->_logger != NULL)
+        {
+            Error LogResult = Logger_LogWarningFormatted(self->_logger,
+                (const unsigned char*)u8"WorldRenderer: sprite animation \"%s\" unavailable, so %s (%s).",
+                (const char*)name, (const char*)featureName,
+                (LoadResult.Message != NULL) ? (const char*)LoadResult.Message : "no details");
+            Error_Deconstruct(&LogResult);
+        }
+        Error_Deconstruct(&LoadResult);
+        return;
+    }
+    slot->_animation = LoadedAnimation;
+}
+
+void WorldRendererCommon_ConstructAssetSlot(WorldRendererAssetSlot* slot)
+{
+    *slot = (WorldRendererAssetSlot){ ._texture = NULL, ._animation = NULL, ._user = ASSET_USER_ID_INVALID,
+        ._isSynced = false };
+    GenericBuffer_AllocateVariable(&slot->_name, ASSET_SLOT_NAME_CAPACITY, sizeof(unsigned char));
+}
+
+void WorldRendererCommon_DeconstructAssetSlot(WorldRenderer* self, WorldRendererAssetSlot* slot)
 {
     if (slot->_user != ASSET_USER_ID_INVALID)
     {
@@ -320,6 +357,7 @@ void WorldRendererCommon_DeconstructTextureSlot(WorldRenderer* self, WorldRender
         slot->_user = ASSET_USER_ID_INVALID;
     }
     slot->_texture = NULL;
+    slot->_animation = NULL;
     slot->_isSynced = false;
     Memory_Free(slot->_name._data);
     slot->_name = (GenericBuffer){ 0 };

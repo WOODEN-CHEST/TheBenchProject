@@ -7,7 +7,7 @@
 in vec3 fragPosition;
 in vec2 fragTexCoord;
 
-uniform sampler2D texture0; // the bolt texture: its bolts side by side, white on a clear background
+uniform sampler2D texture0; // the texture of the bolt's frame (its area is the vertex stage's)
 uniform vec3 boltRadiance;  // the bolt's colour times its radiance on screen (the eye's exposure divided out), linear
 
 out vec4 finalColor;

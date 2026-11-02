@@ -359,9 +359,9 @@ Current module list:
     marched over the sky's pixels on the curved planet, accumulated over frames, lit by the sun or the moon, the sky,
     the ground and the town, seen through the haze, and casting shadows on every lit surface; the rain
     (source/WorldRendererRain.c, shaders/common/rain.glsl, shaders/common/puddles.glsl and shaders/rain/): a depth map
-    along the rain's fall of what keeps it out, streaks wrapping around the camera, splashes where drops land, wet
-    surfaces and puddles only where the rain reaches, ripples, the sky mirrored in water, lightning's bolt and its
-    light; the camera's passes in
+    along the rain's fall of what keeps it out, streaks wrapping around the camera, splashes where drops land (a sprite
+    animation), wet surfaces and puddles only where the rain reaches and below the clouds' base, ripples, the sky
+    mirrored in water, lightning's bolt (a frame of a sprite animation) and its light; the camera's passes in
     reversed 32-bit float
     depth with no far plane where the GPU has clip control (GLDepth), so whatever has the draw distance draws at any
     distance), in render space: the world's orientation with the camera at the origin, every position relative to the
@@ -450,11 +450,12 @@ Current module list:
     the three textures the cloud pass uploads at load (the shape volume, the erosion volume, the weather map), each
     spread evenly over its range and the same every time.
   * WorldRain - The rain and the lightning's bolts as pure maths (private, source/WorldRain.h): the frame's rain from
-    the environment (its rate, the streaks' and the splashes' shares, the slant, the wetness and the puddles' coverage),
+    the environment and the camera's height (its rate, the streaks' and the splashes' shares, the slant, the wetness and
+    the puddles' coverage, its top at the clouds' base and what is drawn below it),
     its mist, the streaks' drift (in double) and their copies wrapped around the camera, the splashes' and the ripples'
     counted cycles, the rain map's box, its lookups' offsets and edge and when a kept map is drawn again, the splashes'
-    grid and where a drop lands along the map's fall, the patterns' anchors, the puddles' threshold and the bolt standing
-    toward a strike: the C mirror of shaders/common/rain.glsl, shaders/common/puddles.glsl and
+    grid, where a drop lands along the map's fall and the frame of the splash animation an age shows, the patterns'
+    anchors, the puddles' threshold and the bolt standing toward a strike (a frame of the bolt animation): the C mirror of shaders/common/rain.glsl, shaders/common/puddles.glsl and
     shaders/rain/ (WorldRuntime.md, "Rain").
   * WorldInterior - Interior lighting as pure maths (private, source/WorldInterior.h): ambient zones in render space
     (placed by their objects' world matrices), their weights (the fade from the surface, surfaces facing in), the at

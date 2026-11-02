@@ -271,6 +271,50 @@ size_t SpriteAnimation_GetFrameCount(SpriteAnimation* self);
 Error SpriteAnimation_GetFrameAt(SpriteAnimation* self, size_t frameIndex, SpriteAnimationFrame* outFrame);
 
 /**
+ * @brief Returns the animation's default frames-per-second (what new instances start with).
+ *
+ * @param self The animation to query; must not be NULL.
+ * @returns The default FPS; 0 means the animation does not advance.
+ */
+static inline double SpriteAnimation_GetDefaultFPS(const SpriteAnimation* self)
+{
+    return self->_defaultFPS;
+}
+
+/**
+ * @brief Returns the animation's default frame step (the frame increment per frame change new instances start with).
+ *
+ * @param self The animation to query; must not be NULL.
+ * @returns The default frame step.
+ */
+static inline int64_t SpriteAnimation_GetDefaultFrameStep(const SpriteAnimation* self)
+{
+    return self->_defaultFrameStep;
+}
+
+/**
+ * @brief Returns whether new instances of the animation start running.
+ *
+ * @param self The animation to query; must not be NULL.
+ * @returns The default running state.
+ */
+static inline bool SpriteAnimation_GetDefaultIsRunning(const SpriteAnimation* self)
+{
+    return self->_defaultIsRunning;
+}
+
+/**
+ * @brief Returns whether new instances of the animation start looped.
+ *
+ * @param self The animation to query; must not be NULL.
+ * @returns The default looping state.
+ */
+static inline bool SpriteAnimation_GetDefaultIsLooped(const SpriteAnimation* self)
+{
+    return self->_defaultIsLooped;
+}
+
+/**
  * @brief Creates a new instance backed by this animation and initialized to its default parameters.
  *
  * Constructs @p outInstance (including its embedded event), links it to @p self as its source, and

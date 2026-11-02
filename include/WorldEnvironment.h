@@ -507,14 +507,15 @@ typedef struct WorldEnvironmentStruct
     /** @brief How bright the lightning's bolts are, and how strongly their channels light the world (default 1; 0 no
      *  bolts, only the clouds' flash). Finite and in [0, WORLD_ENVIRONMENT_MAX_RAIN_MULTIPLE]. */
     float LightningBoltBrightness;
-    /** @brief Names of the textures the rain is drawn with (owned; valid asset names of at most
-     *  WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH bytes, kept in full; never NULL): a streak along its length (default
-     *  "tbp:rain_streak"), the splash's flipbook of frames side by side (default "tbp:rain_splash"), the tileable puddle
-     *  mask (default "tbp:rain_puddle_mask") and the bolts side by side (default "tbp:lightning_bolts"). */
+    /** @brief Names of the assets the rain is drawn with (owned; valid asset names of at most
+     *  WORLD_ENVIRONMENT_TEXTURE_NAME_MAX_LENGTH bytes, kept in full; never NULL): the texture of a streak along its length
+     *  (default "tbp:rain_streak"), the sprite animation a splash plays (default "tbp:rain_splash"), the tileable puddle
+     *  mask's texture (default "tbp:rain_puddle_mask") and the sprite animation whose frames are the lightning's bolts
+     *  (default "tbp:lightning_bolts"). */
     unsigned char* RainStreakTexture;
-    unsigned char* RainSplashTexture;
+    unsigned char* RainSplashAnimation;
     unsigned char* PuddleMaskTexture;
-    unsigned char* LightningBoltTexture;
+    unsigned char* LightningBoltAnimation;
 
     // ---- Post-effect world multipliers (combined with the game config multipliers) ----
     /** @brief When false, this world suppresses bloom regardless of the config. */

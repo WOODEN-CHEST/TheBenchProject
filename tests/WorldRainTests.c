@@ -135,7 +135,7 @@ static void TheFrameFollowsTheEnvironment(TestRun* run)
 {
     WorldEnvironment Environment = MakeEnvironment();
     WorldRainFrame Frame;
-    WorldRain_GetFrame(&Environment, &Frame);
+    WorldRain_GetFrame(&Environment, 0.0, &Frame);
     TEST_CHECK(run, !Frame.AreStreaksVisible && !Frame.AreSplashesVisible && !Frame.IsMapNeeded);
     TEST_CHECK(run, (Frame.StreakShare == 0.0f) && (Frame.SplashShare == 0.0f) && (Frame.PuddleCoverage == 0.0f));
     TEST_CHECK(run, (Frame.TowardRain.x == 0.0f) && (Frame.TowardRain.y == 1.0f) && (Frame.TowardRain.z == 0.0f));
@@ -143,7 +143,7 @@ static void TheFrameFollowsTheEnvironment(TestRun* run)
 
     // Wet without rain: the map keeps covered surfaces dry.
     Environment.Wetness = 0.5f;
-    WorldRain_GetFrame(&Environment, &Frame);
+    WorldRain_GetFrame(&Environment, 0.0, &Frame);
     TEST_CHECK(run, Frame.IsMapNeeded && !Frame.AreStreaksVisible);
 
     Environment.Precipitation = 0.5f;
@@ -152,7 +152,7 @@ static void TheFrameFollowsTheEnvironment(TestRun* run)
     Environment.WindDirection = (float)(0.5 * 3.14159265358979323846); // toward +X
     Environment.WindSpeed = 6.0f;
     Environment.WindGust = 2.0f;
-    WorldRain_GetFrame(&Environment, &Frame);
+    WorldRain_GetFrame(&Environment, 0.0, &Frame);
     TEST_CHECK(run, Frame.AreStreaksVisible && Frame.AreSplashesVisible);
     TEST_CHECK(run, IsNear(Frame.StreakShare, 0.75, 1e-6) && (Frame.SplashShare == 1.0f));
     TEST_CHECK(run, IsNear(Frame.Wind.x, 8.0, 1e-5) && IsNear(Frame.MeanWind.x, 6.0, 1e-5));
@@ -169,10 +169,10 @@ static void TheFrameFollowsTheEnvironment(TestRun* run)
     Environment.RainStreakDensity = NAN;
     Environment.RainFallSpeed = NAN;
     Environment.Precipitation = 1.0f;
-    WorldRain_GetFrame(&Environment, &Frame);
+    WorldRain_GetFrame(&Environment, 0.0, &Frame);
     TEST_CHECK(run, (Frame.StreakShare == 1.0f) && (Frame.FallSpeed == WORLD_ENVIRONMENT_DEFAULT_RAIN_FALL_SPEED));
     Environment.RainStreakDensity = 1.5f;
-    WorldRain_GetFrame(&Environment, &Frame);
+    WorldRain_GetFrame(&Environment, 0.0, &Frame);
     TEST_CHECK(run, Frame.StreakShare == 1.0f);
 
     // The look's settings: the streaks' length, the colour (linear), the puddles' amount and size (clamped to their
@@ -183,7 +183,7 @@ static void TheFrameFollowsTheEnvironment(TestRun* run)
     Environment.RainColor = (Color){ 128, 200, 64, 255 };
     Environment.PuddleAmount = 0.5f;
     Environment.PuddleScale = 2.0f;
-    WorldRain_GetFrame(&Environment, &Frame);
+    WorldRain_GetFrame(&Environment, 0.0, &Frame);
     TEST_CHECK(run, IsNear(Frame.StreakExposure, 2.0 * WORLD_RAIN_EXPOSURE, 1e-9));
     TEST_CHECK(run, IsNear(Frame.Color[0], pow(128.0 / 255.0, 2.2), 1e-6)
         && IsNear(Frame.Color[1], pow(200.0 / 255.0, 2.2), 1e-6) && IsNear(Frame.Color[2], pow(64.0 / 255.0, 2.2), 1e-6));
@@ -192,12 +192,85 @@ static void TheFrameFollowsTheEnvironment(TestRun* run)
     TEST_CHECK(run, IsNear(Frame.RippleStrength, 0.5, 1e-7) && IsNear(Frame.RippleRate, 1.125, 1e-6)
         && IsNear(Frame.SplashPeriod, WORLD_RAIN_SPLASH_PERIOD * 1.75, 1e-6));
     Environment.PuddleScale = 50.0f;
-    WorldRain_GetFrame(&Environment, &Frame);
+    WorldRain_GetFrame(&Environment, 0.0, &Frame);
     TEST_CHECK(run, IsNear(Frame.PuddleTile, WORLD_ENVIRONMENT_MAX_PUDDLE_SCALE * WORLD_RAIN_PUDDLE_TILE, 1e-4));
     Environment.PuddleScale = 0.01f;
-    WorldRain_GetFrame(&Environment, &Frame);
+    WorldRain_GetFrame(&Environment, 0.0, &Frame);
     TEST_CHECK(run, IsNear(Frame.PuddleTile, WORLD_ENVIRONMENT_MIN_PUDDLE_SCALE * WORLD_RAIN_PUDDLE_TILE, 1e-5));
     WorldEnvironment_Deconstruct(&Environment);
+}
+
+/* The rain falls from the clouds' base: its top is the atmosphere's ground plus the base; the streaks, the splashes and the
+ * map run only while what they reach lies below it (a non-finite camera height counts as below); the rain fades out over
+ * the last WORLD_RAIN_TOP_FADE metres below it. */
+static void TheRainStopsAtTheCloudsBase(TestRun* run)
+{
+    WorldEnvironment Environment = MakeEnvironment();
+    Environment.Precipitation = 0.7f;
+    Environment.Wetness = 1.0f;
+    Environment.CloudBase = 800.0f;
+    Environment.HorizonGroundHeight = -20.0f;
+    WorldRainFrame Frame;
+    WorldRain_GetFrame(&Environment, 2.5, &Frame);
+    TEST_CHECK(run, (Frame.TopY == 780.0) && Frame.AreStreaksVisible && Frame.AreSplashesVisible && Frame.IsMapNeeded);
+    // The streaks' box reaches half a box below the camera, the splashes' search WORLD_RAIN_SPLASH_REACH, the map its
+    // depth below its eye.
+    double Half = 0.5 * WORLD_RAIN_BOX_SIZE;
+    WorldRain_GetFrame(&Environment, 780.0 + Half - 0.01, &Frame);
+    TEST_CHECK(run, Frame.AreStreaksVisible && !Frame.AreSplashesVisible && Frame.IsMapNeeded);
+    WorldRain_GetFrame(&Environment, 780.0 + Half, &Frame);
+    TEST_CHECK(run, !Frame.AreStreaksVisible);
+    WorldRain_GetFrame(&Environment, 780.0 + (double)WORLD_RAIN_SPLASH_REACH - 0.01, &Frame);
+    TEST_CHECK(run, Frame.AreSplashesVisible);
+    double MapReach = (double)(WORLD_RAIN_MAP_DEPTH - WORLD_RAIN_MAP_EYE_DISTANCE);
+    WorldRain_GetFrame(&Environment, 780.0 + MapReach - 0.01, &Frame);
+    TEST_CHECK(run, Frame.IsMapNeeded);
+    WorldRain_GetFrame(&Environment, 780.0 + MapReach, &Frame);
+    TEST_CHECK(run, !Frame.IsMapNeeded && !Frame.AreStreaksVisible && !Frame.AreSplashesVisible);
+    WorldRain_GetFrame(&Environment, NAN, &Frame);
+    TEST_CHECK(run, Frame.AreStreaksVisible && Frame.AreSplashesVisible && Frame.IsMapNeeded);
+    WorldEnvironment_Deconstruct(&Environment);
+
+    // The fade below the top.
+    TEST_CHECK(run, WorldRain_GetTopOpenness(100.0f - WORLD_RAIN_TOP_FADE - 1.0f, 100.0f) == 1.0f);
+    TEST_CHECK(run, IsNear(WorldRain_GetTopOpenness(100.0f - 0.5f * WORLD_RAIN_TOP_FADE, 100.0f), 0.5, 1e-6));
+    TEST_CHECK(run, (WorldRain_GetTopOpenness(100.0f, 100.0f) == 0.0f) && (WorldRain_GetTopOpenness(160.0f, 100.0f) == 0.0f));
+    TEST_CHECK(run, (WorldRain_GetTopOpenness(NAN, 100.0f) == 1.0f) && (WorldRain_GetTopOpenness(5.0f, INFINITY) == 1.0f)
+        && (WorldRain_GetTopOpenness(INFINITY, 100.0f) == 1.0f));
+    float Last = 1.0f;
+    for (int Step = 0; Step <= 100; Step++)
+    {
+        float Openness = WorldRain_GetTopOpenness(60.0f + 0.5f * (float)Step, 100.0f);
+        TEST_CHECK(run, Openness <= Last);
+        Last = Openness;
+    }
+}
+
+/* A splash plays the splash animation once at its fps: its life is the frames (at most WORLD_RAIN_SPLASH_MAX_FRAMES) over
+ * the fps, none without frames or an fps; the frames spread evenly over the life, the last one held at its end. */
+static void SplashesPlayTheirAnimation(TestRun* run)
+{
+    TEST_CHECK(run, IsNear(WorldRain_GetSplashLife(4U, 20.0), 0.2, 1e-7));
+    TEST_CHECK(run, IsNear(WorldRain_GetSplashLife(1U, 8.0), 0.125, 1e-7));
+    TEST_CHECK(run, (WorldRain_GetSplashLife(0U, 20.0) == 0.0f) && (WorldRain_GetSplashLife(4U, 0.0) == 0.0f)
+        && (WorldRain_GetSplashLife(4U, -1.0) == 0.0f) && (WorldRain_GetSplashLife(4U, NAN) == 0.0f)
+        && (WorldRain_GetSplashLife(4U, INFINITY) == 0.0f));
+    TEST_CHECK(run, IsNear(WorldRain_GetSplashLife(200U, 10.0), (double)WORLD_RAIN_SPLASH_MAX_FRAMES / 10.0, 1e-5));
+    // Each of four frames shows for a quarter of a 0.2 s life.
+    uint32_t Shown[4] = { 0U, 0U, 0U, 0U };
+    for (int Step = 0; Step < 400; Step++)
+    {
+        uint32_t Frame = WorldRain_GetSplashFrame(((float)Step + 0.5f) * 0.0005f, 0.2f, 4U);
+        TEST_CHECK(run, Frame < 4U);
+        if (Frame < 4U)
+        {
+            Shown[Frame]++;
+        }
+    }
+    TEST_CHECK(run, (Shown[0] == 100U) && (Shown[1] == 100U) && (Shown[2] == 100U) && (Shown[3] == 100U));
+    TEST_CHECK(run, (WorldRain_GetSplashFrame(0.3f, 0.2f, 4U) == 3U) && (WorldRain_GetSplashFrame(0.0f, 0.2f, 4U) == 0U));
+    TEST_CHECK(run, (WorldRain_GetSplashFrame(-1.0f, 0.2f, 4U) == 0U) && (WorldRain_GetSplashFrame(NAN, 0.2f, 4U) == 0U)
+        && (WorldRain_GetSplashFrame(0.1f, 0.0f, 4U) == 0U) && (WorldRain_GetSplashFrame(0.1f, 0.2f, 0U) == 0U));
 }
 
 /* Every streak's copy lies in the box around the camera, near the world's origin and far from it. */
@@ -260,7 +333,7 @@ static void TheCyclesRunAtTheRainsRates(TestRun* run)
         // The rain rises and eases while it runs, across both wraps.
         Environment.Precipitation = 0.5f + 0.5f * sinf(0.02f * (float)Step);
         WorldRainFrame Frame;
-        WorldRain_GetFrame(&Environment, &Frame);
+        WorldRain_GetFrame(&Environment, 0.0, &Frame);
         WorldRainDrift Before = Drift;
         WorldRain_AdvanceDrift(&Drift, &Frame, Seconds);
         double Splashes = fmod(Drift.SplashCycles - Before.SplashCycles + WORLD_RAIN_CYCLE_WRAP, WORLD_RAIN_CYCLE_WRAP);
@@ -285,7 +358,7 @@ static void StreaksMoveWithoutJumps(TestRun* run)
     Environment.WindDirection = 0.6f;
     Environment.WindSpeed = 5.0f;
     WorldRainFrame Frame;
-    WorldRain_GetFrame(&Environment, &Frame);
+    WorldRain_GetFrame(&Environment, 0.0, &Frame);
     Vector3Double Origin = { 31.25, 4.5, -17.75 };
     WorldRainDrift Drift = { 0 };
     // Start just short of the fall's wrap, so the run crosses it.
@@ -672,7 +745,7 @@ static void TheBoltStandsTowardTheStrike(TestRun* run)
     WorldEnvironment Environment = MakeEnvironment();
     float Flash[3] = { 0.08f, 0.09f, 0.1f };
     WorldRainBolt Bolt;
-    WorldRain_GetBolt(&Environment, Flash, 1.7, &Bolt);
+    WorldRain_GetBolt(&Environment, Flash, 1.7, 4U, &Bolt);
     TEST_CHECK(run, !Bolt.IsVisible && (Bolt.Irradiance[0] == 0.0f));
 
     Environment.LightningFlash = 0.5f;
@@ -680,13 +753,12 @@ static void TheBoltStandsTowardTheStrike(TestRun* run)
     Environment.LightningDirection = (Vector3){ 3.0f, 0.0f, 4.0f };
     Environment.CloudBase = 1200.0f;
     Environment.HorizonGroundHeight = -5.0f;
-    WorldRain_GetBolt(&Environment, Flash, 101.5, &Bolt);
+    WorldRain_GetBolt(&Environment, Flash, 101.5, 4U, &Bolt);
     TEST_CHECK(run, Bolt.IsVisible);
     TEST_CHECK(run, IsNear(Bolt.Foot.x, 1200.0, 1e-3) && IsNear(Bolt.Foot.z, 1600.0, 1e-3)
         && IsNear(Bolt.Foot.y, -106.5, 1e-4));
     TEST_CHECK(run, IsNear(Bolt.Top.y, 1093.5, 1e-3) && (Bolt.Top.x == Bolt.Foot.x) && (Bolt.Top.z == Bolt.Foot.z));
-    TEST_CHECK(run, IsNear(Bolt.Width, 1200.0 * WORLD_RAIN_BOLT_ASPECT, 1e-3));
-    TEST_CHECK(run, Bolt.Variant < WORLD_RAIN_BOLT_VARIANTS);
+    TEST_CHECK(run, Bolt.Variant < 4U);
     TEST_CHECK(run, IsNear(Bolt.Radiance, WORLD_RAIN_BOLT_RADIANCE * 0.5, 1e-4));
     float Length = sqrtf(Bolt.Direction.x * Bolt.Direction.x + Bolt.Direction.y * Bolt.Direction.y
         + Bolt.Direction.z * Bolt.Direction.z);
@@ -696,27 +768,32 @@ static void TheBoltStandsTowardTheStrike(TestRun* run)
     TEST_CHECK(run, IsNear(Bolt.Irradiance[2], 0.1 * WORLD_RAIN_BOLT_LIGHT_SHARE, 1e-6));
     // The same strike picks the same bolt; the nearest distance counts for nearer ones.
     WorldRainBolt Again;
-    WorldRain_GetBolt(&Environment, Flash, 101.5, &Again);
+    WorldRain_GetBolt(&Environment, Flash, 101.5, 4U, &Again);
     TEST_CHECK(run, (Again.Variant == Bolt.Variant) && (Again.IsMirrored == Bolt.IsMirrored));
     Environment.LightningDistance = 10.0f;
-    WorldRain_GetBolt(&Environment, Flash, 0.0, &Bolt);
+    WorldRain_GetBolt(&Environment, Flash, 0.0, 4U, &Bolt);
     TEST_CHECK(run, IsNear(sqrtf(Bolt.Foot.x * Bolt.Foot.x + Bolt.Foot.z * Bolt.Foot.z),
         WORLD_WEATHER_FLASH_NEAREST_DISTANCE, 1e-3));
     // Too faint a flash, or no brightness: none.
     Environment.LightningFlash = 0.5f * WORLD_RAIN_BOLT_MIN_FLASH;
-    WorldRain_GetBolt(&Environment, Flash, 0.0, &Bolt);
+    WorldRain_GetBolt(&Environment, Flash, 0.0, 4U, &Bolt);
     TEST_CHECK(run, !Bolt.IsVisible);
     Environment.LightningFlash = 1.0f;
     Environment.LightningBoltBrightness = 0.0f;
-    WorldRain_GetBolt(&Environment, Flash, 0.0, &Bolt);
+    WorldRain_GetBolt(&Environment, Flash, 0.0, 4U, &Bolt);
     TEST_CHECK(run, !Bolt.IsVisible);
     Environment.LightningBoltBrightness = 2.0f;
-    WorldRain_GetBolt(&Environment, Flash, 0.0, &Bolt);
+    WorldRain_GetBolt(&Environment, Flash, 0.0, 4U, &Bolt);
     TEST_CHECK(run, Bolt.IsVisible && IsNear(Bolt.Irradiance[0], 0.16 * WORLD_RAIN_BOLT_LIGHT_SHARE, 1e-6));
     // A negative light is none.
     float Negative[3] = { -0.5f, 0.09f, NAN };
-    WorldRain_GetBolt(&Environment, Negative, 0.0, &Bolt);
+    WorldRain_GetBolt(&Environment, Negative, 0.0, 4U, &Bolt);
     TEST_CHECK(run, (Bolt.Irradiance[0] == 0.0f) && (Bolt.Irradiance[2] == 0.0f) && (Bolt.Irradiance[1] > 0.0f));
+    // The frame comes from the animation's frames: one frame, the first; none, the first too, and the bolt still lights.
+    WorldRain_GetBolt(&Environment, Flash, 0.0, 1U, &Bolt);
+    TEST_CHECK(run, Bolt.IsVisible && (Bolt.Variant == 0U));
+    WorldRain_GetBolt(&Environment, Flash, 0.0, 0U, &Bolt);
+    TEST_CHECK(run, Bolt.IsVisible && (Bolt.Variant == 0U) && (Bolt.Irradiance[1] > 0.0f));
     // Strikes at one distance in different directions show different bolts.
     Environment.LightningDistance = 3000.0f;
     uint32_t Seen = 0U;
@@ -724,8 +801,9 @@ static void TheBoltStandsTowardTheStrike(TestRun* run)
     {
         float Angle = 0.39f * (float)Direction;
         Environment.LightningDirection = (Vector3){ sinf(Angle), 0.0f, cosf(Angle) };
-        WorldRain_GetBolt(&Environment, Flash, 0.0, &Bolt);
-        Seen |= 1U << Bolt.Variant;
+        WorldRain_GetBolt(&Environment, Flash, 0.0, 4U, &Bolt);
+        TEST_CHECK(run, Bolt.Variant < 4U);
+        Seen |= 1U << (Bolt.Variant & 31U);
     }
     TEST_CHECK(run, (Seen != 0U) && ((Seen & (Seen - 1U)) != 0U));
     WorldEnvironment_Deconstruct(&Environment);
@@ -738,6 +816,7 @@ void WorldRainTests_Run(TestRun* run)
     static const TestCase Cases[] =
     {
         { "the_rain_rate_and_its_mist", TheRainRateAndItsMist },
+        { "the_rain_stops_at_the_clouds_base", TheRainStopsAtTheCloudsBase },
         { "the_frame_follows_the_environment", TheFrameFollowsTheEnvironment },
         { "streaks_stay_in_the_box", StreaksStayInTheBox },
         { "streaks_move_without_jumps", StreaksMoveWithoutJumps },
@@ -748,6 +827,7 @@ void WorldRainTests_Run(TestRun* run)
         { "the_rain_map_is_kept_between_draws", TheRainMapIsKeptBetweenDraws },
         { "splashes_land_on_the_first_surface", SplashesLandOnTheFirstSurface },
         { "splashes_land_on_surfaces_in_a_slanting_rain", SplashesLandOnSurfacesInASlantingRain },
+        { "splashes_play_their_animation", SplashesPlayTheirAnimation },
         { "the_splash_grid_stands_in_the_world", TheSplashGridStandsInTheWorld },
         { "the_hash_and_the_patterns_origins", TheHashAndThePatternsOrigins },
         { "puddles_grow_with_the_wetness", PuddlesGrowWithTheWetness },
