@@ -216,6 +216,7 @@ static bool ConstructDriverWorld(TestRun* run, World* world, KeyRegistry* keys)
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Terrain),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_ModelInstances),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_AmbientZone),
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Screen),
         &TestDriverA,
         &TestDriverB,
     };
@@ -615,7 +616,7 @@ static void ComponentTypesAreFoundByName(TestRun* run)
 
     TEST_CHECK(run, World_GetComponentTypeCount(&TestWorld) == (size_t)WorldComponentType_Count);
     const char* const Names[WorldComponentType_Count] = { "model", "sprite", "light", "collider", "character", "animator",
-        "terrain", "model_instances", "ambient_zone" };
+        "terrain", "model_instances", "ambient_zone", "screen" };
     for (size_t Type = 0; Type < (size_t)WorldComponentType_Count; Type++)
     {
         const WorldComponentTypeInfo* Info = World_GetComponentTypeInfo(&TestWorld, (WorldComponentType)Type);
@@ -1187,6 +1188,7 @@ static void CustomComponentTypesAreChecked(TestRun* run)
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Terrain),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_ModelInstances),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_AmbientZone),
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Screen),
         &TestUnhooked,
     };
     const char* const Fragments[] = { "test_unhooked", "AfterSet", NULL };

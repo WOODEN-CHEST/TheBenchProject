@@ -1814,7 +1814,7 @@ static void TheShippedWorldModelsAreRead(TestRun* run)
     static const char* const Names[] =
     {
         "test", "pbr_demo", "pbr_metal", "painted_cube", "lod_test", "test_door", "test_humanoid", "test_humanoid_short",
-        "trash_can_lined"
+        "trash_can_lined", "test_monitor"
     };
     TestAssetFixture Fixture;
     GenericBuffer Root;

@@ -190,6 +190,20 @@ typedef struct WorldRenderModelStruct
      *  (the cache's) with their skinning collapsed to their joint, so the camera riding its eyes does not see them. Its
      *  shadows keep Pose. */
     const WorldAnimatorPose* CameraPose;
+    /** @brief The surface the object's screen component shows on (one of Asset's, borrowed from it), or NULL: no screen
+     *  component, or one naming a surface the world model lacks (logged once). The lit passes put the picture handed
+     *  over for it into its slot's material copy (WorldRendererSurfaces_Apply). */
+    const WorldModelSurface* Surface;
+    /** @brief Whether the screen is on (this frame), and how brightly its picture glows: the surface's emission times
+     *  the component's brightness. Meaningful while Surface is not NULL. */
+    bool IsSurfacePowered;
+    float SurfaceEmission;
+    /** @brief What the surface was resolved for: the screen component's serial (0: none), the hash of the surface name it
+     *  named and the world model, so it is looked up again (and a missing one logged again) only when one of them
+     *  changes. */
+    uint64_t ScreenSerial;
+    uint64_t ScreenSurfaceNameHash;
+    const WorldModel* ScreenAsset;
 } WorldRenderModel;
 
 /** @brief A sprite component that has a frame to draw this frame, with everything the passes need. Its settings are the

@@ -634,7 +634,10 @@ default setting of this file for that one placement: an explicit override flag n
         "eyes": { "bone": "head", "position": [0, 0.1, 0.1] },
         "seat": { "position": [0, 0, 0.55] }      // no bone: fixed in the object's own space
     },
-    "first_person": { "eyes": "eyes", "hidden_bones": [ "neck" ] } // [OPTIONAL]
+    "first_person": { "eyes": "eyes", "hidden_bones": [ "neck" ] }, // [OPTIONAL]
+    "surfaces": [                                  // [OPTIONAL] at most 16
+        { "name": "screen", "material_slot": 1, "resolution": [640, 480], "kind": "screen", "emission": 0.2 }
+    ]
 }
 ```
 
@@ -652,6 +655,7 @@ default setting of this file for that one placement: an explicit override flag n
 | `animation_graph` | an asset name | The animation graph (below, "Animation graphs") the placements' animators play with those clips, loaded with the world model as a dependency. A placement may play its own instead (the animator block). |
 | `sockets` | at most 32 `"name": { "bone", "position", "rotation" }` | Named places on the model: where a held item hangs (a hand), where an action's anchor puts a character (a bench's seat, in front of a cup), where a first-person camera sits. The name: `[a-z][a-z0-9_.-]*`, at most 64 bytes. `bone` (optional, at most 31 bytes): a bone of the skeleton the socket follows, its `position` ([x, y, z] metres, default the origin) and `rotation` (degrees about X, Y and Z in that order, default none) along the bone's axes (its frame in the object's space, without any scale a bone or the import transform carries); without a bone the socket is fixed in the object's own space. Its +Z is the way it faces (an anchor turns a character that way). A bone socket on a world model without a skeleton, or on a bone its skeleton lacks, fails the load. |
 | `first_person` | `{ "eyes", "hidden_bones" }` | What a first-person camera does with this body: `eyes` (required) names one of its sockets, the camera's place; `hidden_bones` (at most 16 bone names) the bones the camera's passes leave out, each with its subtree (the head, from inside). Hidden bones need a skeleton that has them. |
+| `surfaces` | at most 16 `{ "name", "material_slot", "resolution", "kind", "emission" }` | Material slots that show a picture made while the game runs: a computer's screen showing a UI, later a page on a desk. A placed object picks one with its screen component (`references/world_structure.md`, the screen block) and the code that owns the picture hands it over each frame. `name` (required): `[a-z][a-z0-9_.-]*`, at most 64 bytes, unique. `material_slot` (required, 0 to 2147483647, one surface a slot): the material whose meshes show the picture; their texture coordinates must cover 0..1 over the picture, U to the right and V up as Blender paints them (the screen's top edge at V 1), and LOD 0's meshes of the slot must exist and have them (or the world model does not load); every LOD should keep them. `resolution` (required): `[width, height]` of the picture, each 16 to 2048 pixels. `kind` (default `screen`): `screen`, the picture is light the screen gives off (it glows, and shows in the dark), or `paper`, the picture is the surface's own colour, lit like everything around it. `emission` (a screen's only, refused on a paper): how bright its picture's white is on the game's light scale (1 a white surface in full sun; 0 to 1000, default 0.2: readable under the noon sun, a glow at night without glare); a placement's `brightness` multiplies it. A ray finds where on the picture the player points from LOD 0's triangles of the slot (from the front: the side its triangles face). Author a screen's slot as the glass it is when off (dark): an off screen, or one nothing is shown on, gives off no light and shows that material. |
 
 **A variant's material override** takes the same keys as a model's `material_overrides` and reads them with the same
 parser, with one difference: the maps name **texture assets** (`textures/`, see "Textures"), so a texture several
@@ -715,8 +719,8 @@ needs the GPU, so tools without it can use only `points` hulls.
 
 **Rules.** A definition that breaks one is rejected when the definitions are read, with a message naming the key and
 where it is (`World model "desk": lods[1].max_distance (12) must be above lods[0].max_distance (15)...`). Unknown keys
-are rejected in the root, each LOD, `render`, each variant, each material override, `bounds`, `collision`, each set and
-each shape, with the keys allowed there: a `surfaces` section is not part of the format yet and is refused as unknown.
+are rejected in the root, each LOD, `render`, each variant, each material override, `bounds`, `collision`, each set,
+each shape and each surface, with the keys allowed there.
 (Vectors and colours accept their
 usual forms, see "Common data structures".) The LOD models and variant textures must exist when the world model loads; a missing
 one fails the load (logged once, like every load failure) and the objects using it draw nothing.
@@ -730,7 +734,10 @@ radius 0.5 m at 32x16, 16x8 and 8x4 segments). They collide: `test`, `pbr_metal`
 model `test_door`: the test cube made a 1 x 2 m panel by its import transform, hinged at its origin) has the sets
 `closed` and `open`, and an `opener` socket (where a character stands to push it). The others are `test_humanoid`
 and `test_humanoid_short` (the placeholder humanoid; they play the `test_humanoid` graph and have the sockets `hand_r`,
-`hand_l` and `eyes` and a first_person block, and keep no sky out: `render.occludes_sky` false), `test_bench` (the model `test_bench`, collision `bounds`,
+`hand_l` and `eyes` and a first_person block, and keep no sky out: `render.occludes_sky` false), `test_monitor` (the
+placeholder monitor, `models/placeholder_monitor/`, written by `asset_source/scripts/placeholder_monitor.py`: a flat
+screen on a stand, its screen material slot 1 with texture coordinates 0..1; drawn crisp, colliding by its bounds, the
+surface `screen` at 640 x 480 and emission 0.2), `test_bench` (the model `test_bench`, collision `bounds`,
 its `seat` socket on the floor 0.55 m in front), `test_cup` (collision `bounds`, its `grip` on its side and its
 `reach` 0.52 m in front of it, facing it), and `test_tree` and `test_pebble`, the placeholders for instanced drawing
 (`asset_source/scripts/placeholder_instances.py`): a conifer of three LODs seen 250 m, which the test world's grove

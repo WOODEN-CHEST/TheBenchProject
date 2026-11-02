@@ -1,7 +1,7 @@
 // The world model asset's data functions: the default settings, the variants (lookup by name, and applying one to a
 // per-draw copy of a material's maps), the collision sets (lookup by name) and the sockets (lookup by name, a socket's
-// frame in a pose). The definition and the loader are in WorldModelDefinition.c, the
-// collision section's in WorldModelCollisionDefinition.c.
+// frame in a pose). The surfaces' are in WorldModelSurface.c. The definition and the loader are in
+// WorldModelDefinition.c, the collision section's in WorldModelCollisionDefinition.c.
 
 #include "WorldModel.h"
 #include "GameSkeleton.h"

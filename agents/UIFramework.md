@@ -30,6 +30,8 @@ widget's position and size are relative to its parent (or the screen, for a root
 - **LabelWidget** (`LabelWidget.h/.c`): the first concrete widget (below).
 - **UITestFrame** (`UITestFrame.h/.c`): a debug game frame running a screen over the world test (see
   [WorldRuntime.md](WorldRuntime.md)).
+- **WorldScreenHost** (`WorldScreenHost.h/.c`): the host of a screen shown on a screen in the world (below, "World
+  screens").
 
 ## Setting up a screen
 
@@ -62,7 +64,54 @@ screen has the keyboard. `UIScreenInput_CreateFromWindow` makes the full-window 
 window size; no pointer while the cursor is captured, outside the window, or already claimed by UI above). For a UI on
 a world surface, the host raycasts the pointer onto the surface, passes the hit's UV (or no pointer) and gives the
 keyboard to the surface in use. The host also keeps the `UIViewport` (the surface's size in pixels and the fitted-area
-settings) current; the Layout pass converts units with it.
+settings) current; the Layout pass converts units with it. A screen in the world has a host of its own:
+`WorldScreenHost` (below, "World screens").
+
+## World screens
+
+A UI can be the picture of a screen in the world (the office computer): a world model's surface
+([WorldModels.md](WorldModels.md), "Surfaces") that an object's screen component shows ([WorldData.md](WorldData.md),
+"Screen component"). The code that owns the screen's content keeps a `UIScreen`, a render target at the surface's
+resolution (`WorldScreens_TryGetScreen`) and a `WorldScreenHost` (`include/WorldScreenHost.h`), and each frame:
+1. **In Update**, before the game's own controls (the screen reads first, as a UI above the game does): finds where the
+   player points (`WorldScreens_Raycast`: the aim from the eyes or the camera, out to the character's reach, the
+   player's own body ignored; or the free cursor's ray, `GetScreenToWorldRayEx` through the camera) and calls
+   `WorldScreenHost_Update(host, screen, time, input, &hit or NULL)`.
+2. **In Render, before the world renders**: draws the screen into its render target (`RenderContext_Create` on the
+   target with the surface's aspect, `UIScreen_Render`; mipmaps after it keep a small or slanted screen calm), then hands
+   it over with `WorldRenderer_SetSurfaceTexture(renderer, objectId, surfaceName, target.texture, true)` (a render
+   target's rows run bottom-up: [WorldRuntime.md](WorldRuntime.md), "Surfaces' pictures"). It holds for that render
+   only.
+
+What the host does each tick:
+- **The pointer** is where the player points on the hosted screen's picture: the hit's texture coordinates are the UI's
+  own [0;1] position as they are, (0, 0) the picture's top-left. Off the picture, at another screen, nowhere, or while
+  UI above claimed the pointer (`GameInput_IsPointerConsumed`), there is none. Buttons go to the UI under the pointer; a
+  press on the picture that no widget takes is consumed anyway: the game below never sees a click on the screen.
+- **Using it.** The use action (`tbp:use`, E) or a left click on the picture **focuses** the screen: it gets the
+  keyboard. The press of use that focuses it is consumed with the tick's typed text, and while its key stays held each
+  tick's text is dropped too (the key's repeats), so it neither acts in the game nor types its letter; the click also
+  goes to the UI.
+- **The keyboard while focused**: the screen gets every key and the typed text first within its frame
+  (`HasKeyboardFocus`; a frame above reads before it, as frames update top-down), then the host consumes every keyboard
+  key down or released and the text: nothing below acts on a key while the player types,
+  the movement actions included. The mouse is not the keyboard's, so the view still turns and the pointer follows the
+  aim.
+- **Letting go**: an Escape (`ui_back` or `pause`) the UI leaves unused releases the screen and is consumed (it does not
+  pause the game); one the UI uses (clearing its focus, ending navigation) does not, and neither does a press in a tick
+  whose typed text the UI took (a `pause` bound to a letter types it into a field; an Escape in that same tick needs
+  pressing again). A `ui_back` bound to a letter is still the UI's navigation first: a widget that takes text should
+  claim the key presses that type it, or that letter clears its focus. Pointing away from the picture
+  releases it too: a screen the player no longer points at gets no input. `WorldScreenHost_Release` lets go at once (the
+  object went away).
+
+The UI's own focus is the UI's: the first Escape over a focused widget clears that focus, and only the next lets go of
+the screen. Content that wants one Escape to give control back keeps a widget focused while the screen is in use and
+releases the host when the UI lets go of it (the test frame's monitor does: its full-screen desk widget). A UI frame
+above the world that always has the keyboard (the UI test frame) still reads Tab and the arrows first. Tests:
+`tests/WorldScreenTests.c` (a probe screen: the pointer, focus by use or a click, the keyboard taken after the UI read
+it, the use press neither typing nor reaching the UI, keys and clicks left to the game while the screen is not in use,
+letting go by Escape, pause or pointing away).
 
 ## Widget lifecycle
 

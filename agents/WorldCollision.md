@@ -94,8 +94,9 @@ space, an optional part `Name`, and the sizes its type uses. Build one with `Col
     a mesh box's bottom or top edge would take that face's normal and plane distance, a push of most of its height);
   - a median-split BVH is built.
 
-  Each triangle keeps its model part and its index there (`_part`, `_sourceIndex`; with a hit's barycentrics they give
-  the UVs, for surface picking, not built yet).
+  Each triangle keeps its part and its index there (`_part`, `_sourceIndex`; with a hit's barycentrics they give the
+  source's vertex attributes at the hit, as a world model's surfaces take their texture coordinates: WorldModels.md,
+  "Surfaces").
 - **Given edges and indices.** A `CollisionMeshPart` may bring each triangle's edge flags (`ActiveEdges`: bit 0
   for (v0, v1), bit 1 for (v1, v2), bit 2 for (v2, v0)) and its own source index (`SourceIndices`) instead: the mesh
   keeps them as given (the parts' welding and degenerate triangles change neither) and computes nothing for them. The
@@ -180,7 +181,7 @@ A terrain component ([Terrain.md](Terrain.md)) is the collision world's second s
   sliding across it takes the face's normal, exactly as inside a chunk (the tests check a ball's contacts across seams
   and compare a capsule's walk across them with the same walk on a box).
 - **Hits name the terrain's triangle:** `MeshPart` is the chunk and `SourceTriangle` the terrain's triangle index
-  (surface picking, scattering and the editor, none built yet, will read its weights from it).
+  (scattering and the editor, not built yet, will read its weights from it).
 - **One-sided:** the front (counter-clockwise) side collides; rays and casts from below pass through. An overhang's
   underside faces down, so it is a roof.
 - **Settings:** the layer, the mask and whether it collides are the settings in effect

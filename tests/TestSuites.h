@@ -85,6 +85,16 @@ void WorldTests_Run(TestRun* run);
  *  component's override flags and the settings they resolve to, and the shipped world models (WorldModelTests.c). */
 void WorldModelTests_Run(TestRun* run);
 
+/** @brief Screens: a world model's surfaces (every rule of the section and its message, LOD 0's triangles of each slot
+ *  with their texture coordinates, the loads that fail), where a ray meets a placed surface (a quad, a turned, scaled,
+ *  mirrored and far placement, a curved surface in facets, misses, a border off the picture), the screen component (its
+ *  defaults, rules and saves), the screens system (what each screen resolves to and logs once, the nearest screen a ray
+ *  points at, what hides one, following the components, removals between syncs; also 100 km out), the host of a
+ *  screen's UI (the pointer, focus by use or a click, the keyboard taken after the UI reads it, typing a release key,
+ *  letting go by Escape, pause or pointing away), the render cache's screens, the renderer's pictures for one render (only
+ *  on their slot's draws, before the LOD glow) and its status's counts (WorldScreenTests.c). */
+void WorldScreenTests_Run(TestRun* run);
+
 /** @brief Colliders: the world model's collision section (every key, the "bounds" box under the import transform,
  *  each rule and its message, the limits, hulls and meshes from models as dependencies, a model that cannot give
  *  them), the collider component's defaults, the settings it resolves to from its override flags over the world

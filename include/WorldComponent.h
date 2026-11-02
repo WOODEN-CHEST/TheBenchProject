@@ -16,7 +16,7 @@ typedef struct WorldObjectStruct WorldObject;
  *
  * A world object (WorldObject.h) is one concrete type: an id, a name, a transform, a tint and its flags. What it IS
  * comes from its components: a model, a sprite, a light, a collider, a character, an animator, a terrain, model
- * instances, an ambient zone, and later a screen.
+ * instances, an ambient zone, a screen.
  * An object carries at most one component of each type; a street lamp is one object with a model and a light.
  *
  * A component is a struct that embeds WorldComponent as its FIRST member (so a pointer to it is also a valid
@@ -48,7 +48,7 @@ typedef struct WorldObjectStruct WorldObject;
 /**
  * @brief How many component types a world can hold: every object has one slot per type.
  *
- * Above WorldComponentType_Count to leave room for types not built yet (a screen, ...) and for
+ * Above WorldComponentType_Count to leave room for types not built yet (an interactable, a vehicle, ...) and for
  * test-only types.
  */
 #define WORLD_MAX_COMPONENT_TYPES ((size_t)16)
@@ -80,8 +80,11 @@ typedef enum WorldComponentTypeEnum
     WorldComponentType_ModelInstances = 7,
     /** @brief An ambient zone: a volume that sets a room's own light (WorldAmbientZoneComponent.h). */
     WorldComponentType_AmbientZone = 8,
+    /** @brief A screen: the surface of the object's world model that shows a picture made while the game runs
+     *  (WorldScreenComponent.h). */
+    WorldComponentType_Screen = 9,
     /** @brief The number of standard types (not a type). */
-    WorldComponentType_Count = 9
+    WorldComponentType_Count = 10
 } WorldComponentType;
 
 /**

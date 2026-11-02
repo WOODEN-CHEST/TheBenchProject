@@ -88,7 +88,11 @@ Current module list:
   source/WorldModelSocketDefinition.c); its LOD models, its variants' textures, libraries, graph and the models its
   hulls and meshes are built from load as its dependencies. The definition (source/WorldModelDefinition.c) refuses unknown keys and
   checks every rule when it is read. Variants apply to the renderer's per-draw material copies, never to an asset. The
-  model component names a world model and overrides its settings per placement with explicit flags.
+  model component names a world model and overrides its settings per placement with explicit flags. Its surfaces
+  (source/WorldModelSurface.c, the section in source/WorldModelSurfaceDefinition.c) are material slots that show a
+  picture made while the game runs (a screen's UI that glows, a paper's page lit like the rest): each a name, a slot, the
+  picture's resolution, its kind and a screen's emission, with LOD 0's triangles of the slot and their texture
+  coordinates, which the pure WorldModelSurface_Raycast meets a ray on, giving where on the picture it points.
 * World collision (WorldCollision.md) - Collision for the 3D world: shapes, layers, the collider component
   and the collision world with its step (moving and pushing). Covers:
   * CollisionShape - Collision shapes as plain values (sphere, capsule, box, cylinder, convex hull, plane bounded or
@@ -275,7 +279,7 @@ Current module list:
   * WorldQuery - Searches over a world's objects by tags, data comparisons, components, flags, distance and box, ordered
     by id or distance, with a limit: the engine side of selectors.
 * World data layer (WorldData.md) - The rendering-independent 3D world model: one object type made of components, in a
-  hierarchy. Covers nine modules (plus the private source/WorldInternal.h they share):
+  hierarchy. Covers these modules (plus the private source/WorldInternal.h they share):
   * WorldObject - The one object type: id, name, parent, transform (relative to the parent), tint, enabled, visible,
     mobility (static/movable), a revision, its tags and data (a DataMap, with a data revision), and one slot per
     component type; created by the World only; validating setters and a property table (the parent row is ReadOnly:
@@ -303,6 +307,11 @@ Current module list:
     outline, crisp, draw distance, fixed draw distance), plus a draw distance multiplier; a pure function resolves the
     settings in effect (the draw distance from the placement, the world sprite or the kind).
   * WorldLightComponent - A point light (colour, intensity, range, casts shadows).
+  * WorldScreenComponent - Component type 9 (`screen`): which surface of its object's world model shows a picture made
+    while the game runs, whether the screen is on, and its brightness (WorldData.md, "Screen component").
+  * WorldScreens - The screens system: every screen component's surface resolved on its object's world model (under its
+    own asset user, failures logged once), synced once a tick, and the ray that finds the nearest screen a player points
+    at and where on its picture, hidden by other objects' colliders in front of it (WorldData.md, "Screen component").
   * WorldAmbientZoneComponent - Component type 8 (`ambient_zone`): a box or a sphere around its object that sets a
     room's own light (its colour and intensity, the sky's share inside, the eye's exposure bias, its priority where
     zones overlap, its air's haze), fading in from its surface (WorldData.md; the renderer's side in WorldRuntime.md,
@@ -361,7 +370,10 @@ Current module list:
     (source/WorldRendererRain.c, shaders/common/rain.glsl, shaders/common/puddles.glsl and shaders/rain/): a depth map
     along the rain's fall of what keeps it out, streaks wrapping around the camera, splashes where drops land (a sprite
     animation), wet surfaces and puddles only where the rain reaches and below the clouds' base, ripples, the sky
-    mirrored in water, lightning's bolt (a frame of a sprite animation) and its light; the camera's passes in
+    mirrored in water, lightning's bolt (a frame of a sprite animation) and its light; the surfaces' pictures
+    (source/WorldRendererSurfaces.c): what the code that owns a screen's content hands over for one render
+    (WorldRenderer_SetSurfaceTexture), put into the surface's per-draw material copy (a screen's glowing emissive map, a
+    paper's albedo map, a render target's rows read bottom-up); the camera's passes in
     reversed 32-bit float
     depth with no far plane where the GPU has clip control (GLDepth), so whatever has the draw distance draws at any
     distance), in render space: the world's orientation with the camera at the origin, every position relative to the
@@ -487,7 +499,9 @@ Current module list:
     source/WorldTestWeather.{h,c}): Insert the next preset, Home the lock, End the speed, Page Up a strike, Page Down the
     mode, the backslash a forecast. The keypad's - switches the rain (the A/B: every surface wet alike) and Enter steps
     its debug view (how open surfaces are to the rain, the puddles); the test slab and the room's roof are pavement that
-    pools water (a world model variant).
+    pools water (a world model variant). A monitor on a small table in the start view shows a UI (the private
+    source/WorldTestScreens.{h,c}): pointing at its picture (the aim, or the free cursor) moves a pointer on it, E or a
+    click uses it (typing and clicks show on it), Escape or pointing away lets go.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
@@ -547,6 +561,10 @@ Current module list:
   * UIScreen - The context: id registry, roots, focus, input routing, keyboard navigation + outlines, animations,
     notifications (subscriptions; queued, delivered at the end of UIScreen_Update), layout pass and rendering.
   * UITestFrame - A debug game frame over the world test that exercises the UI and the input sharing.
+  * WorldScreenHost - The host of a UI shown on a screen in the world: its pointer where the player points (the aim or
+    the free cursor, through WorldScreens), the keyboard while the player uses the screen (the use action or a click
+    focuses it; the screen reads first, then the host takes the whole keyboard), letting go on an unused Escape or when
+    the player points away (UIFramework.md, "World screens").
   * LabelWidget - The first concrete widget: displays a (possibly multi-line) rich text with per-line alignment and bound handling (cut/wrap/resize/wrap-then-resize/wrap-then-cut). Embeds a TextDocument and a TextLayout (TextDocument.md), lays out in Update, draws in Render. Auto-fits its widget box to the rendered text.
   Also adds 2D rectangle/outline/line primitives to the Renderer module.
 * Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text as a STRICT TREE: a parent owns

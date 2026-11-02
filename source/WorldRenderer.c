@@ -24,6 +24,8 @@
 #define SUNSHAFT_BASE_INTENSITY 0.5f
 /** Initial capacity (in lights) of the forward-light lists; they grow with the world. */
 #define INITIAL_FORWARD_LIGHT_CAPACITY 32
+/** Initial capacity of the surfaces' pictures handed over for a render; the list grows with the screens. */
+#define INITIAL_SURFACE_BINDING_CAPACITY 4
 /** Initial capacity (in bytes) of the status log line. */
 #define STATUS_LINE_CAPACITY 256
 /** The render clock (WorldRenderFrame.TimeSeconds) wraps after this many seconds, so a float still resolves
@@ -478,6 +480,7 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
             Status->PosedModelCount++;
         }
     }
+    WorldRendererSurfaces_Count(self, &Status->ScreenCount, &Status->ScreenPictureCount);
     // Skinning needs the skinned twin of the shader models draw with: the PBR one, or the unlit one without PBR.
     bool HasSkinning = HasPbr
         ? ((self->_pbr._skinned._shader != NULL) && (self->_pbr._skinned._palette._location >= 0))
@@ -743,6 +746,8 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
         sizeof(WorldRendererRadiance));
     GenericBuffer_AllocateVariable(&Renderer->_skyVisibility._modelLayers, 0U, sizeof(uint8_t));
     GenericBuffer_AllocateVariable(&Renderer->_skyVisibility._modelBoxes, 0U, sizeof(BoundingBox));
+    GenericBuffer_AllocateVariable(&Renderer->_surfaces._bindings, INITIAL_SURFACE_BINDING_CAPACITY,
+        sizeof(WorldRendererSurfaceBinding));
     for (int Feature = 0; Feature < (int)WorldRendererFeature_Count; Feature++)
     {
         Renderer->_status.Features[Feature] = WorldRendererFeatureState_Inactive;
@@ -781,6 +786,7 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     Memory_Free(self->_skyVisibility._modelLayers._data);
     Memory_Free(self->_skyVisibility._modelBoxes._data);
     Memory_Free(self->_pbr._forwardRadiances._data);
+    Memory_Free(self->_surfaces._bindings._data);
 
     Error Result = AssetManager_RetireUser(self->_assetManager, self->_modelUser);
     Error ShaderResult = AssetManager_RetireUser(self->_assetManager, self->_shaderUser);
@@ -846,15 +852,10 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world)
     return RetireResult;
 }
 
-Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const GameCamera* camera,
-    double deltaSeconds, RenderTexture2D target)
+/* One render (WorldRenderer_RenderToTarget, its arguments checked): the cache, the frame, every pass, the status. */
+static Error RenderFrame(WorldRenderer* self, World* world, const GameCamera* camera, double deltaSeconds,
+    RenderTexture2D target)
 {
-    if ((self == NULL) || (world == NULL) || (camera == NULL))
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument,
-            "WorldRenderer_RenderToTarget: self, world and camera must not be NULL.");
-    }
-
     Stopwatch RenderClock = Stopwatch_StartNew();
     EnsureShaders(self);
 
@@ -1011,6 +1012,25 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
     return Error_CreateSuccess();
 }
 
+Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const GameCamera* camera,
+    double deltaSeconds, RenderTexture2D target)
+{
+    if ((self == NULL) || (world == NULL) || (camera == NULL))
+    {
+        if (self != NULL)
+        {
+            WorldRendererSurfaces_ForgetTextures(self); // the pictures were for this render, which did not happen
+        }
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "WorldRenderer_RenderToTarget: self, world and camera must not be NULL.");
+    }
+    Error Result = RenderFrame(self, world, camera, deltaSeconds, target);
+    // The surfaces' pictures hold for one render, whatever it returned: a screen whose owner stops handing one over
+    // shows none, never a stale or freed texture.
+    WorldRendererSurfaces_ForgetTextures(self);
+    return Result;
+}
+
 void WorldRenderer_GetStatus(const WorldRenderer* self, WorldRendererStatus* outStatus)
 {
     *outStatus = self->_status;
@@ -1083,13 +1103,14 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
         : (Status->IsSceneDepthSamplable ? "HDR with samplable depth" : "HDR without samplable depth");
     Error LogResult = Logger_LogInfoFormatted(self->_logger,
         (const unsigned char*)u8"WorldRenderer: %s scene; %" PRIu64 u8" models (%" PRIu64 u8" without a world model, %"
-        PRIu64 u8" posed), %" PRIu64 u8" sprites (%" PRIu64 u8" decals, %" PRIu64 u8" blended or additive), %" PRIu64
+        PRIu64 u8" posed, %" PRIu32 u8" screens, %" PRIu32 u8" showing a picture), %" PRIu64 u8" sprites (%" PRIu64
+        u8" decals, %" PRIu64 u8" blended or additive), %" PRIu64
         u8" lights, %" PRIu64 u8" stars; drawn %" PRIu64 u8" models and %" PRIu64 u8" sprites (%" PRIu64 u8" fading; "
         u8"models by LOD %s, %" PRIu64 u8" cross-fading%s), culled %" PRIu64 u8" outside the view%s and %" PRIu64
         u8" faded out (draw distance, opacity); terrain: %" PRIu64 u8" placed (%" PRIu64 u8" without a terrain), "
         u8"%" PRIu64 u8" of %" PRIu64 u8" chunks drawn, %" PRIu64 u8" triangles%s%s%s; %s.",
         Tier, (uint64_t)Status->ModelCount, (uint64_t)Status->ModelWithoutAssetCount, (uint64_t)Status->PosedModelCount,
-        (uint64_t)Status->SpriteCount, (uint64_t)Status->DecalCount, (uint64_t)Status->TransparentSpriteCount,
+        Status->ScreenCount, Status->ScreenPictureCount, (uint64_t)Status->SpriteCount, (uint64_t)Status->DecalCount, (uint64_t)Status->TransparentSpriteCount,
         (uint64_t)Status->LightCount,
         (uint64_t)Status->StarCount, (uint64_t)Status->DrawnModelCount, (uint64_t)Status->DrawnSpriteCount,
         (uint64_t)Status->FadingCount, AreLodsBuilt ? (const char*)Lods._data : "?",
@@ -1416,6 +1437,16 @@ void WorldRenderer_SetFirstPersonObject(WorldRenderer* self, uint64_t objectId)
 uint64_t WorldRenderer_GetFirstPersonObject(const WorldRenderer* self)
 {
     return self->_cache._firstPersonObjectId;
+}
+
+Error WorldRenderer_SetSurfaceTexture(WorldRenderer* self, uint64_t objectId, const unsigned char* surfaceName,
+    Texture2D texture, bool isBottomUp)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "WorldRenderer_SetSurfaceTexture: self must not be NULL.");
+    }
+    return WorldRendererSurfaces_SetTexture(self, objectId, surfaceName, texture, isBottomUp);
 }
 
 void WorldRenderer_SetDebugGridEnabled(WorldRenderer* self, bool enabled)

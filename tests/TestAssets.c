@@ -43,6 +43,16 @@ typedef struct TestAnimationLoadedStruct
     TestAssetCounters* Counters;
 } TestAnimationLoaded;
 
+typedef struct TestModelMeshStruct
+{
+    float* Vertices;          // owned copies of a CPU-side mesh
+    float* Texcoords;         // NULL: none
+    int VertexCount;
+    unsigned short* Indices;  // NULL: every three vertices are a triangle
+    int TriangleCount;
+    int Material;
+} TestModelMesh;
+
 typedef struct TestModelDefinitionStruct
 {
     AssetDefinition Base;
@@ -50,10 +60,8 @@ typedef struct TestModelDefinitionStruct
     int MaterialCount;
     Matrix Transform;
     TestAssetCounters* Counters;
-    float* Vertices;          // owned copies of a CPU-side mesh (NULL: no mesh)
-    int VertexCount;
-    unsigned short* Indices;  // NULL: every three vertices are a triangle
-    int TriangleCount;
+    TestModelMesh* Meshes;    // owned (NULL: no mesh)
+    int MeshCount;
 } TestModelDefinition;
 
 typedef struct TestModelLoadedStruct
@@ -279,8 +287,12 @@ static void TestModelLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
     Memory_Free(Loaded->Model._rayModel.materials);
     if (Loaded->Model._rayModel.meshes != NULL)
     {
-        Memory_Free(Loaded->Model._rayModel.meshes[0].vertices);
-        Memory_Free(Loaded->Model._rayModel.meshes[0].indices);
+        for (int MeshIndex = 0; MeshIndex < Loaded->Model._rayModel.meshCount; MeshIndex++)
+        {
+            Memory_Free(Loaded->Model._rayModel.meshes[MeshIndex].vertices);
+            Memory_Free(Loaded->Model._rayModel.meshes[MeshIndex].texcoords);
+            Memory_Free(Loaded->Model._rayModel.meshes[MeshIndex].indices);
+        }
         Memory_Free(Loaded->Model._rayModel.meshes);
         Memory_Free(Loaded->Model._rayModel.meshMaterial);
     }
@@ -289,30 +301,46 @@ static void TestModelLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
 
 static const LoadedAssetVTable TestModelLoadedVTable = { TestModelLoaded_Destroy };
 
-/* Gives a loaded test model its definition's CPU-side mesh (no GPU upload: vaoId 0), as LoadModel keeps it. */
-static void AddTestMesh(const TestModelDefinition* definition, Model* model)
+/* Copies @p count floats (or nothing for NULL) into an owned array. */
+static float* CopyFloats(const float* values, size_t count)
 {
-    Mesh* Built = Memory_Allocate(sizeof(Mesh));
-    Memory_Zero(Built, sizeof(*Built));
-    size_t VertexBytes = (size_t)definition->VertexCount * 3U * sizeof(float);
-    Built->vertices = Memory_Allocate(VertexBytes);
-    Memory_Copy(definition->Vertices, Built->vertices, VertexBytes);
-    Built->vertexCount = definition->VertexCount;
-    if (definition->Indices != NULL)
+    if (values == NULL)
     {
-        size_t IndexBytes = (size_t)definition->TriangleCount * 3U * sizeof(unsigned short);
-        Built->indices = Memory_Allocate(IndexBytes);
-        Memory_Copy(definition->Indices, Built->indices, IndexBytes);
-        Built->triangleCount = definition->TriangleCount;
+        return NULL;
     }
-    else
+    float* Copy = Memory_Allocate(count * sizeof(float));
+    Memory_Copy(values, Copy, count * sizeof(float));
+    return Copy;
+}
+
+/* Gives a loaded test model its definition's CPU-side meshes (no GPU upload: vaoId 0), as LoadModel keeps them. */
+static void AddTestMeshes(const TestModelDefinition* definition, Model* model)
+{
+    Mesh* Built = Memory_Allocate((size_t)definition->MeshCount * sizeof(Mesh));
+    Memory_Zero(Built, (size_t)definition->MeshCount * sizeof(Mesh));
+    model->meshMaterial = Memory_Allocate((size_t)definition->MeshCount * sizeof(int));
+    for (int Index = 0; Index < definition->MeshCount; Index++)
     {
-        Built->triangleCount = definition->VertexCount / 3;
+        const TestModelMesh* Source = &definition->Meshes[Index];
+        Mesh* Target = &Built[Index];
+        Target->vertices = CopyFloats(Source->Vertices, (size_t)Source->VertexCount * 3U);
+        Target->texcoords = CopyFloats(Source->Texcoords, (size_t)Source->VertexCount * 2U);
+        Target->vertexCount = Source->VertexCount;
+        if (Source->Indices != NULL)
+        {
+            size_t IndexBytes = (size_t)Source->TriangleCount * 3U * sizeof(unsigned short);
+            Target->indices = Memory_Allocate(IndexBytes);
+            Memory_Copy(Source->Indices, Target->indices, IndexBytes);
+            Target->triangleCount = Source->TriangleCount;
+        }
+        else
+        {
+            Target->triangleCount = Source->VertexCount / 3;
+        }
+        model->meshMaterial[Index] = Source->Material;
     }
     model->meshes = Built;
-    model->meshCount = 1;
-    model->meshMaterial = Memory_Allocate(sizeof(int));
-    model->meshMaterial[0] = 0;
+    model->meshCount = definition->MeshCount;
 }
 
 static Error TestModel_LoadAsset(void* self, AssetManager* manager, AssetUserID dependencyUser, LoadedAsset* outLoaded)
@@ -333,9 +361,9 @@ static Error TestModel_LoadAsset(void* self, AssetManager* manager, AssetUserID 
         Memory_Zero(Loaded->Model._rayModel.materials, ByteCount);
         Loaded->Model._rayModel.materialCount = Definition->MaterialCount;
     }
-    if (Definition->Vertices != NULL)
+    if (Definition->Meshes != NULL)
     {
-        AddTestMesh(Definition, &Loaded->Model._rayModel);
+        AddTestMeshes(Definition, &Loaded->Model._rayModel);
     }
     Loaded->Counters = Definition->Counters;
     if (Loaded->Counters != NULL)
@@ -351,8 +379,13 @@ static Error TestModel_LoadAsset(void* self, AssetManager* manager, AssetUserID 
 static void TestModelDefinition_Destroy(void* self)
 {
     TestModelDefinition* Definition = self;
-    Memory_Free(Definition->Vertices);
-    Memory_Free(Definition->Indices);
+    for (int Index = 0; Index < Definition->MeshCount; Index++)
+    {
+        Memory_Free(Definition->Meshes[Index].Vertices);
+        Memory_Free(Definition->Meshes[Index].Texcoords);
+        Memory_Free(Definition->Meshes[Index].Indices);
+    }
+    Memory_Free(Definition->Meshes);
     TestDefinition_Destroy(self);
 }
 
@@ -684,33 +717,55 @@ bool TestAssets_AddModelWithMaterials(TestRun* run, TestAssetFixture* fixture, c
 bool TestAssets_AddMeshModel(TestRun* run, TestAssetFixture* fixture, const char* name, const float* vertices,
     int vertexCount, const unsigned short* indices, int triangleCount, Matrix transform, TestAssetCounters* counters)
 {
-    BoundingBox Bounds = { .min = { 0.0f, 0.0f, 0.0f }, .max = { 0.0f, 0.0f, 0.0f } };
-    for (int Vertex = 0; Vertex < vertexCount; Vertex++)
+    TestModelPart Part =
     {
-        Vector3 Point = { vertices[(Vertex * 3)], vertices[(Vertex * 3) + 1], vertices[(Vertex * 3) + 2] };
-        Bounds.min = (Vertex == 0) ? Point : Vector3Min(Bounds.min, Point);
-        Bounds.max = (Vertex == 0) ? Point : Vector3Max(Bounds.max, Point);
-    }
+        .Vertices = vertices, .Texcoords = NULL, .VertexCount = vertexCount, .Indices = indices,
+        .TriangleCount = triangleCount, .Material = 0
+    };
+    return TestAssets_AddPartsModel(run, fixture, name, &Part, 1, 1, transform, counters);
+}
+
+bool TestAssets_AddPartsModel(TestRun* run, TestAssetFixture* fixture, const char* name, const TestModelPart* parts,
+    int partCount, int materialCount, Matrix transform, TestAssetCounters* counters)
+{
+    BoundingBox Bounds = { .min = { 0.0f, 0.0f, 0.0f }, .max = { 0.0f, 0.0f, 0.0f } };
+    bool IsFirst = true;
     TestModelDefinition* Definition = Memory_Allocate(sizeof(TestModelDefinition));
     Memory_Zero(Definition, sizeof(*Definition));
+    Definition->Meshes = Memory_Allocate((size_t)partCount * sizeof(TestModelMesh));
+    Memory_Zero(Definition->Meshes, (size_t)partCount * sizeof(TestModelMesh));
+    Definition->MeshCount = partCount;
+    for (int Index = 0; Index < partCount; Index++)
+    {
+        const TestModelPart* Part = &parts[Index];
+        for (int Vertex = 0; Vertex < Part->VertexCount; Vertex++)
+        {
+            const float* At = &Part->Vertices[Vertex * 3];
+            Vector3 Point = { At[0], At[1], At[2] };
+            Bounds.min = IsFirst ? Point : Vector3Min(Bounds.min, Point);
+            Bounds.max = IsFirst ? Point : Vector3Max(Bounds.max, Point);
+            IsFirst = false;
+        }
+        TestModelMesh* Copy = &Definition->Meshes[Index];
+        Copy->Vertices = CopyFloats(Part->Vertices, (size_t)Part->VertexCount * 3U);
+        Copy->Texcoords = CopyFloats(Part->Texcoords, (size_t)Part->VertexCount * 2U);
+        Copy->VertexCount = Part->VertexCount;
+        if (Part->Indices != NULL)
+        {
+            size_t IndexBytes = (size_t)Part->TriangleCount * 3U * sizeof(unsigned short);
+            Copy->Indices = Memory_Allocate(IndexBytes);
+            Memory_Copy(Part->Indices, Copy->Indices, IndexBytes);
+            Copy->TriangleCount = Part->TriangleCount;
+        }
+        Copy->Material = Part->Material;
+    }
     Definition->Base.VTable = &TestModelVTable;
     Definition->Base.Type = fixture->Types.Model;
     Definition->Base.Name = CloneName(name);
     Definition->Bounds = Bounds;
-    Definition->MaterialCount = 1;
+    Definition->MaterialCount = materialCount;
     Definition->Transform = transform;
     Definition->Counters = counters;
-    size_t VertexBytes = (size_t)vertexCount * 3U * sizeof(float);
-    Definition->Vertices = Memory_Allocate(VertexBytes);
-    Memory_Copy(vertices, Definition->Vertices, VertexBytes);
-    Definition->VertexCount = vertexCount;
-    if (indices != NULL)
-    {
-        size_t IndexBytes = (size_t)triangleCount * 3U * sizeof(unsigned short);
-        Definition->Indices = Memory_Allocate(IndexBytes);
-        Memory_Copy(indices, Definition->Indices, IndexBytes);
-        Definition->TriangleCount = triangleCount;
-    }
     return TEST_CHECK_SUCCESS(run, AssetManager_SetDefinition(fixture->Manager, &Definition->Base));
 }
 

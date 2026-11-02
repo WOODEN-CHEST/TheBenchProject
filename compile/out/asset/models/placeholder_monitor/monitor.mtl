@@ -1,0 +1,6 @@
+# The placeholder monitor's materials, in slot order: the body (0) and the screen's glass (1).
+newmtl monitor_body
+Kd 0.1000 0.1000 0.1100
+
+newmtl monitor_screen
+Kd 0.0150 0.0150 0.0200

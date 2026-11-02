@@ -19,6 +19,8 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A world sprite by asset name ([WorldSprites.md](WorldSprites.md)), bound by the world with its animation's playback instance, and every setting this placement overrides (explicit flags next to its own values: orientation, pivot, size, flips, alpha mode, lighting, decal, render flags, shadow distance, fixed shadow distance, shadow only, draw distance, fixed draw distance; draw and shadow distance multipliers), with the pure function that resolves the settings in effect. |
 | WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point light (colour, intensity, range, casts shadows). |
 | WorldAmbientZoneComponent | `include/WorldAmbientZoneComponent.h`, `source/WorldAmbientZoneComponent.c` | A volume that sets a room's own light (a box or a sphere: its light, the sky's share in it, the eye's exposure bias, its priority and its air's haze). |
+| WorldScreenComponent | `include/WorldScreenComponent.h`, `source/WorldScreenComponent.c` | Which surface of the object's world model shows a picture made while the game runs ([WorldModels.md](WorldModels.md), "Surfaces"), whether the screen is on and how bright it is. |
+| WorldScreens | `include/WorldScreens.h`, `source/WorldScreens.c` | The screens system: every screen component's surface resolved on its object's world model (under its own asset user), and the ray that finds which screen the player points at and where on its picture (below, "Screen component"). |
 | WorldColliderComponent | `include/WorldColliderComponent.h`, `source/WorldColliderComponent.c` | How the object collides ([WorldCollision.md](WorldCollision.md)): its world model's collision set (or one primitive of its own), its layer, mask and trigger flag (each overriding the world model's default with an explicit flag), a local offset, rotation and scale, and a rotation mode, with the pure function that resolves the settings in effect. |
 | WorldCharacterComponent | `include/WorldCharacterComponent.h`, `source/WorldCharacterComponent.c` | The player or an NPC ([Characters.md](Characters.md)): a character asset by name and every setting this placement overrides (explicit flags next to its own values), the input its driver gives it and the state it is in; the first transform driver. |
 | WorldAnimatorComponent | `include/WorldAnimatorComponent.h`, `source/WorldAnimatorComponent.c` | What plays the object's skeletal animation ([Animation.md](Animation.md)): the clip row and how it plays, the placement's own libraries, and the pose the animation system publishes. |
@@ -197,10 +199,11 @@ carries **at most one component of each type**; a street lamp is one object with
 | `WorldComponentType_Terrain` | 6 | `terrain` | `WorldTerrainComponent` ([Terrain.md](Terrain.md)) |
 | `WorldComponentType_ModelInstances` | 7 | `model_instances` | `WorldModelInstancesComponent` (the renderer's side in [WorldRuntime.md](WorldRuntime.md), "Model instances") |
 | `WorldComponentType_AmbientZone` | 8 | `ambient_zone` | `WorldAmbientZoneComponent` (the renderer's side in [WorldRuntime.md](WorldRuntime.md), "Interior lighting") |
+| `WorldComponentType_Screen` | 9 | `screen` | `WorldScreenComponent` (below, "Screen component") |
 
 The values are explicit and never renumbered (world files save them). `WorldComponentType_Count` is the number
 of standard types; `WORLD_MAX_COMPONENT_TYPES` (16) is how many a world can hold, room for the types still to come
-(9 onward: the screen) and for test-only types.
+(10 onward: an interactable, vehicles, rigid bodies) and for test-only types.
 
 **The registry.** Each type has one `WorldComponentTypeInfo` (a static constant of its module, handed out by
 `Xxx_GetTypeInfo`; `WorldComponent_GetStandardTypeInfo(type)` maps the standard types): `Type`, `Name` (the key of its
@@ -417,6 +420,36 @@ times `_skyAmbientScale` (>= 0, 1; 0 no sky light at all), and the part of a vie
 `_exposureBias` stops more (within ±8, default 0). Where zones overlap, the higher `_priority` (an `int32_t`, 0) wins
 and equal ones blend by their weights. A hidden or disabled object's zone is off, as a light is, also under a hidden or
 disabled ancestor, and so is a zone with no inside (a zero half size or radius, or a zero scale).
+
+### Screen component (`screen_component`)
+A surface of the object's world model that shows a picture made while the game runs ([WorldModels.md](WorldModels.md),
+"Surfaces"): the office computer's screen, later a page on a desk. `_surface` (a local name, `[a-z][a-z0-9_.-]*`, at
+most 64 bytes, never NULL; default `screen`: `WORLD_SCREEN_COMPONENT_DEFAULT_SURFACE`) names the surface, `_isPowered`
+(true) turns the screen on and off (off it shows no picture: its material's own surface, a screen's dark glass), and
+`_brightness` (0 to `WORLD_SCREEN_COMPONENT_MAX_BRIGHTNESS`, 1000; default 1) multiplies a screen surface's emission (a
+paper takes neither). The object also needs a model component naming that world model. The content is game state, not
+world data: the code that owns it (the virtual PC, the test frame's monitor) keeps a `UIScreen` and its render target,
+draws it each frame and hands it to the renderer (`WorldRenderer_SetSurfaceTexture`, [WorldRuntime.md](WorldRuntime.md),
+"Surfaces' pictures"), and drives its input through a `WorldScreenHost` ([UIFramework.md](UIFramework.md), "World
+screens").
+
+**The screens system** (`WorldScreens`, `include/WorldScreens.h`): `WorldScreens_Create(world, assets, logger, &out)`,
+`WorldScreens_Sync` once a tick (after the tick's moves and `World_UpdateTransforms`, before anything points at a
+screen: it follows the screen components across additions and removals by their serials, and resolves an entry again
+only when the surface the screen component names changes (or the component is replaced), or the model component's world
+model does; a screen that cannot show anything, without a model component naming a world model, with a world model that
+does not load or one without the surface it names, is logged once, `WorldScreens: object 70 ("monitor") cannot be
+pointed at: ...`, and points at nothing; between syncs the queries find each screen's object by id and skip one whose
+object or screen component the world removed, so they never read a removed component, and a screen added since is not
+there yet), `WorldScreens_TryGetScreen(objectId, &info)` (its world model and surface: what the content owner makes its
+render target at) and `WorldScreens_Raycast(origin, direction, maxDistance, collision, filter, &hit)`: the nearest
+enabled, visible screen the ray meets from the front (`WorldModelSurface_Raycast` on each, at its object's world matrix,
+in double), with the object, the surface, the texture coordinates (the UI's position: (0, 0) the picture's top-left),
+whether they lie on the picture, the point and the distance. With a collision world, a collider of another object
+between the ray's origin and the screen (more than `WORLD_SCREENS_OCCLUSION_TOLERANCE`, 1 cm, in front of it) hides it;
+the screen's own colliders never do (a monitor's box encloses its glass), and the filter's ignored object (the one
+pointing) never does. Pointers it returns are valid until the next sync; it borrows the world and holds the world models
+under its own asset user until it is destroyed.
 
 ## World
 
@@ -923,4 +956,6 @@ GL context, and world models and world sprites built from JSON over them. `tests
 models and the model component's overrides ([WorldModels.md](WorldModels.md)), `tests/WorldSpriteTests.c` the world
 sprites and the sprite component's overrides ([WorldSprites.md](WorldSprites.md)), `tests/WorldColliderTests.c` the
 collider component and the world models' collision, `tests/WorldCollisionTests.c` the collision world and
-`tests/WorldCollisionMotionTests.c` its step ([WorldCollision.md](WorldCollision.md)).
+`tests/WorldCollisionMotionTests.c` its step ([WorldCollision.md](WorldCollision.md)); `tests/WorldScreenTests.c` the
+screen component, the screens system (also 100 km out) and the surfaces they point at ([WorldModels.md](WorldModels.md),
+"Surfaces").

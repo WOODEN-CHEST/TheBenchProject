@@ -1,0 +1,17 @@
+{
+    "name": "tbp:test_monitor",
+    "lods": [
+        { "model": "tbp:test_monitor", "max_distance": 60 }
+    ],
+    "render": { "omit_pixelation": true },
+    "collision": "bounds",
+    "surfaces": [
+        {
+            "name": "screen",
+            "material_slot": 1,
+            "resolution": [640, 480],
+            "kind": "screen",
+            "emission": 0.2
+        }
+    ]
+}

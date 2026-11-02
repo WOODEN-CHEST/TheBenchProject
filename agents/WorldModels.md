@@ -1,14 +1,16 @@
 # World models
 
 `include/WorldModel.h`, `source/WorldModel.c` (the asset's data functions: the default settings, variants by name and
-on one material) and `source/WorldModelDefinition.c` (the `world_model` asset type: the definition's
-parser and the loader). The placements' side is the model component, `include/WorldModelComponent.h` and
+on one material), `source/WorldModelSurface.c` (the surfaces' data functions: by name, the texture coordinates at a
+point, the ray that meets a placed surface) and `source/WorldModelDefinition.c` (the `world_model` asset type: the
+definition's parser and the loader; the `surfaces` section's in `source/WorldModelSurfaceDefinition.c`). The placements' side is the model component, `include/WorldModelComponent.h` and
 `source/WorldModelComponent.c` ([WorldData.md](WorldData.md)), and the model instances component, many copies
 of one world model with the model component's settings (`include/WorldModelInstancesComponent.h`; its LODs change in
 distance bands per copy, [WorldRuntime.md](WorldRuntime.md), "Model instances"). The definition format is in
 `references/asset_structure.md`, "World models". Tests: `tests/WorldModelTests.c`, the renderer's side in
 `tests/WorldRenderCacheTests.c` and `tests/WorldVisibilityTests.c`; the LOD maths in `tests/WorldLodTests.c`; the
-`collision` section ("Collision" below) in `tests/WorldColliderTests.c`.
+`collision` section ("Collision" below) in `tests/WorldColliderTests.c`; the `surfaces` section ("Surfaces" below) and
+pointing at a surface in `tests/WorldScreenTests.c`.
 
 A **world model** is everything that is the same for every placement of a thing: which model to draw at which distance
 (its LODs), how far it is seen, the default render settings of its placements, and its material variants. A **world
@@ -79,7 +81,8 @@ sky out, draw distance, fixed),
 `_HasOwnBounds`, the animation's `_GetSkeleton`, `_GetSkeletonLod` and libraries, its graph, sockets and
 first-person block,
 `_GetVariantCount`,
-`_GetVariantName(index)`, `WorldModel_TryFindVariant(name, &index)` and `WorldModel_ApplyVariant`.
+`_GetVariantName(index)`, `WorldModel_TryFindVariant(name, &index)` and `WorldModel_ApplyVariant`; the surfaces'
+`_GetSurfaceCount`, `_GetSurface(index)` and `WorldModel_TryFindSurface(name, &index)`.
 `WorldModelSettings_CreateDefault` is what a world model and a placement start from.
 
 ## Variants
@@ -244,6 +247,49 @@ them and the collision world are in [WorldCollision.md](WorldCollision.md).
   `WorldModel_GetCollision` returns it (NULL without a section), with `WorldModelCollision_GetSetCount`, `_GetSet`,
   `_GetDefaultSetIndex` and `_TryFindSet(name)`.
 
+## Surfaces
+
+A world model may name **surfaces**: material slots that show a picture made while the game runs. A **screen** (a
+monitor, a TV) shows a UI drawn into a render target, glowing in the dark; a **paper** shows its picture as the
+surface's own colour (tinted by its material's albedo colour: author it white), lit like everything around it. The office computer is the first: its content is a `UIScreen` the
+code that owns it draws each frame ([UIFramework.md](UIFramework.md), "World screens").
+```json
+"surfaces": [
+    { "name": "screen", "material_slot": 1, "resolution": [640, 480], "kind": "screen", "emission": 0.2 }
+]
+```
+- **The definition** (`source/WorldModelSurfaceDefinition.c`, unknown keys refused, every message naming the place):
+  at most `WORLD_MODEL_MAX_SURFACES` (16); `name` (required, `[a-z][a-z0-9_.-]*`, at most 64 bytes, unique);
+  `material_slot` (required, 0 to 2147483647, one surface a slot); `resolution` (required, `[width, height]`, each 16 to
+  2048 pixels: the content's render target is made at it); `kind` (`screen`, the default, or `paper`); `emission` (a
+  screen's only: its picture's white on the game's light scale, 1 a white surface in full sun, 0 to 1000, default
+  `WORLD_MODEL_DEFAULT_SURFACE_EMISSION`, 0.2: readable under the noon sun, a glow at night without glare; a paper gives
+  off no light, so the key is refused there).
+- **The slot's texture coordinates place the picture**: they cover 0..1 over it. As raylib loads them v grows toward
+  the image's bottom (it flips an OBJ's, a glTF file's are so already), so (0, 0) is the picture's top-left, the UI's
+  convention: a hit's coordinates are the UI's pointer as they are. Authored in Blender (V up) the screen's top edge is
+  V 1. Coordinates beyond 0..1 (a rounded border in the same slot) are met but off the picture.
+- **Loaded with the world model** (`WorldModelSurfaceDefinition_Load`): LOD 0's meshes of the slot (each must have finite
+  texture coordinates; a slot no mesh of LOD 0 uses fails the load, naming the surface) are built into a collision
+  mesh (`CollisionMesh_Create`: welded, degenerate triangles skipped, a BVH) in the object's own space, after LOD 0's
+  import transform, and each kept triangle's three corners' texture coordinates are copied beside it, from the mesh and
+  triangle it came from (`_part`, `_sourceIndex`), in the corners' order. One block the asset owns holds the surfaces,
+  the coordinates and the names; the meshes are its own too (`WorldModelSurfaces_DestroyBlock`). Every LOD should keep
+  the surface's slot and coordinates: the renderer puts the picture into whichever LOD is drawn, a ray meets LOD 0's.
+- **Accessors**: `WorldModelSurface_GetName`, `_GetMaterialSlot`, `_GetWidth`, `_GetHeight`, `_GetKind`
+  (`WorldModelSurfaceKind_GetName`), `_GetEmission`, `_GetMesh`.
+- **Pointing at one** (pure, tested): `WorldModelSurface_Raycast(surface, objectToWorld, origin, direction,
+  maxDistance, &hit)` takes the ray into the object's own space (its origin relative to the object's position in
+  double, then the inverse of the placement's turn and scale, so a placement 10 000 km out is met as exactly as one at
+  the origin; a placement that cannot be inverted is met by nothing), meets the nearest triangle it enters from the
+  front (counter-clockwise; a mirrored placement keeps the side the slot faces, although the renderer, which does not
+  flip its culling for a mirrored placement, draws such a model inside out: its screen shows from behind) and gives the
+  distance, the triangle, its barycentrics, the texture coordinates there (`WorldModelSurface_GetUv`: the corners'
+  weighted) and whether they lie on the picture. The screens system runs it for every screen of a world ([WorldData.md](WorldData.md), "Screen
+  component"; `include/WorldScreens.h`).
+- **The renderer** puts the picture handed over for a placement's surface into that slot's per-draw material copy
+  ([WorldRuntime.md](WorldRuntime.md), "Surfaces' pictures"), never into the asset.
+
 ## Hot reload (designed in, built later)
 
 Consumers keep only names and re-resolve when something changes: the render cache resolves a world model by name and
@@ -280,6 +326,13 @@ and have the sockets `hand_r` and `hand_l` (in the palm, turned so a held cup st
 the floor 0.55 m in front of it, where a sitter's feet go) and `test_cup` (its `grip` on its side, its `reach` 0.52 m
 in front, facing it) both collide by `"bounds"`; `test_door` has an `opener` socket.
 
+A screen: `test_monitor`, a flat screen on a stand (the placeholder model `test_monitor`,
+`models/placeholder_monitor/monitor.obj` and `.mtl`, written by `asset_source/scripts/placeholder_monitor.py`: a 48 x 37 cm
+panel 4 cm deep, its 44 x 33 cm screen the material slot 1 with its texture coordinates 0..1, the bezel, back, neck and
+foot slot 0), drawn crisp (`render.omit_pixelation`), colliding by its bounds, with the surface `screen` (slot 1, 640 x 480,
+emission 0.2). The test world stands it on a small table in the start view (objects 66 to 70) with a screen component;
+the test frame shows a UI on it ([WorldRuntime.md](WorldRuntime.md), "WorldTestFrame").
+
 An asset made in Blender: `trash_can_lined` (`world_models/trash_cans/`), a slatted steel bin with a black liner, its
 four LODs the models `world.trash_can_lined.lod0` to `lod3` (`models/world/trash_can_lined/`: each .glb brings its own
 base colour, normal and metallic-roughness maps, 256 down to 32 pixels, packed as glTF materials are: GameAssets.md),
@@ -288,7 +341,8 @@ one, pushable, in the start view.
 
 ## Known limits
 
-- **Surfaces** are not built yet: the `surfaces` key is refused as unknown.
+- **A surface is pointed at on LOD 0's triangles in their bind pose**: a skinned screen (a laptop whose lid an animation
+  opens) is met where its rest pose has it.
 - **A missing dependency fails the whole world model** (every LOD and texture must load), so its objects draw nothing;
   a variant texture typo costs the model, not just the variant.
 - **The unknown-variant warning** comes again after `WorldRenderer_PrepareWorld` (the cache resolves everything again).

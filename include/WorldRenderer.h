@@ -318,6 +318,10 @@ typedef struct WorldRendererStatusStruct
     size_t ModelWithoutAssetCount;
     /** @brief Of the shown models, those with a pose: their skinned meshes bend with their animators. */
     size_t PosedModelCount;
+    /** @brief Of the shown models, those whose screen component shows on a surface of their world model, and of those
+     *  the ones a picture was handed over for (WorldRenderer_SetSurfaceTexture). */
+    uint32_t ScreenCount;
+    uint32_t ScreenPictureCount;
     /** @brief Sprite components with a frame to draw, on enabled and visible objects. */
     size_t SpriteCount;
     /** @brief Of those, the decals. */
@@ -1029,6 +1033,33 @@ void WorldRenderer_SetFirstPersonObject(WorldRenderer* self, uint64_t objectId);
  * @returns The object's id, or 0.
  */
 uint64_t WorldRenderer_GetFirstPersonObject(const WorldRenderer* self);
+
+/**
+ * @brief Hands the renderer the picture a screen shows in the next render: the surface's content, made while the game
+ *        runs (a UI drawn into a render target).
+ *
+ * The content is game state: the code that owns it keeps its texture (at the surface's resolution,
+ * WorldModelSurface_GetWidth and _GetHeight), draws into it each frame before the world renders, then hands it over
+ * here. The picture shows on the surface the object's screen component names (WorldScreenComponent.h; @p surfaceName
+ * must be that one, a picture for another surface of the object shows nowhere), put into that material slot's per-draw
+ * copy, never into the asset: a screen's as its emissive map, glowing at the surface's emission times the component's
+ * brightness while it is on; a paper's as its albedo map, lit like the rest.
+ *
+ * It holds for ONE render: WorldRenderer_RenderToTarget forgets every picture handed over, whatever it returns. A screen
+ * whose owner stops handing one over shows none (a screen's no glow, its material's dark glass; a paper its material),
+ * never a stale or freed texture. A second picture for the same object's surface before the render replaces the first.
+ * @param self The renderer; must not be NULL.
+ * @param objectId The screen's object; not 0.
+ * @param surfaceName The surface's name, as the world model calls it ("screen"); copied.
+ * @param texture The picture (borrowed for the next render: it must stay valid until WorldRenderer_RenderToTarget
+ *        returns); its id not 0.
+ * @param isBottomUp Whether its first row is its picture's bottom: true for a render target drawn with raylib
+ *        (OpenGL's convention: RenderTexture2D.texture), false for an image loaded the usual way.
+ * @returns Success; ErrorCode_IllegalArgument for a NULL renderer or name, an object id of 0 or a texture id of 0;
+ *          ErrorCode_ArgumentOutOfRange for a name longer than a surface's can be (WORLD_MODEL_SURFACE_NAME_MAX_LENGTH).
+ */
+Error WorldRenderer_SetSurfaceTexture(WorldRenderer* self, uint64_t objectId, const unsigned char* surfaceName,
+    Texture2D texture, bool isBottomUp);
 
 /**
  * @brief Enables or disables the debug reference grid drawn on the ground plane.

@@ -3,6 +3,7 @@
 #include "WorldRenderCache.h"
 #include "WorldObject.h"
 #include "WorldTransform.h"
+#include "WorldScreenComponent.h"
 #include "GameSkeleton.h"
 #include "SkeletalAnimation.h"
 #include "GameMath.h"
@@ -146,6 +147,43 @@ static void ResolveModel(WorldRenderModel* entry, AssetManager* assets, AssetUse
     ResolveVariant(entry, logger);
 }
 
+/* Takes the object's screen component into its model entry: the surface it names in the entry's world model (looked up
+ * again only when the component, its surface name or the world model changed; a name the world model lacks is logged
+ * then, once), whether it is on and how brightly it glows. */
+static void UpdateScreen(WorldRenderModel* entry, const WorldObject* owner, Logger* logger)
+{
+    const WorldScreenComponent* Screen = WorldScreenComponent_FromComponent(WorldObject_GetComponent(owner,
+        WorldComponentType_Screen));
+    if ((Screen == NULL) || (entry->Asset == NULL))
+    {
+        entry->Surface = NULL;
+        entry->ScreenSerial = 0U;
+        return;
+    }
+    uint64_t Serial = WorldComponent_GetSerial(&Screen->Base);
+    uint64_t NameHash = HashName(WorldScreenComponent_GetSurface(Screen));
+    if ((Serial != entry->ScreenSerial) || (NameHash != entry->ScreenSurfaceNameHash) || (entry->Asset != entry->ScreenAsset))
+    {
+        entry->ScreenSerial = Serial;
+        entry->ScreenSurfaceNameHash = NameHash;
+        entry->ScreenAsset = entry->Asset;
+        uint32_t Index = 0U;
+        entry->Surface = WorldModel_TryFindSurface(entry->Asset, WorldScreenComponent_GetSurface(Screen), &Index)
+            ? WorldModel_GetSurface(entry->Asset, Index) : NULL;
+        if ((entry->Surface == NULL) && (logger != NULL))
+        {
+            Error LogResult = Logger_LogWarningFormatted(logger, (const unsigned char*)u8"WorldRenderer: object %" PRIu64
+                u8" (\"%s\") shows no picture: world model \"%s\" has no surface \"%s\".", WorldObject_GetId(owner),
+                GetObjectName(owner), (const char*)WorldModelComponent_GetWorldModel(entry->Component),
+                (const char*)WorldScreenComponent_GetSurface(Screen));
+            Error_Deconstruct(&LogResult);
+        }
+    }
+    entry->IsSurfacePowered = WorldScreenComponent_IsPowered(Screen);
+    entry->SurfaceEmission = (entry->Surface != NULL)
+        ? (WorldModelSurface_GetEmission(entry->Surface) * WorldScreenComponent_GetBrightness(Screen)) : 0.0f;
+}
+
 /* The pose of the object's animator when it was made for @p asset, or NULL. */
 static const WorldAnimatorPose* GetPose(const WorldObject* owner, const WorldModel* asset)
 {
@@ -203,6 +241,7 @@ static void UpdateModel(WorldRenderModel* entry, Vector3Double origin, AssetMana
     entry->IsDrawn = (entry->Asset != NULL) && IsObjectShown(Owner);
     entry->Pose = NULL;
     entry->CameraPose = NULL;
+    UpdateScreen(entry, Owner, logger);
     if (entry->Asset == NULL)
     {
         return;

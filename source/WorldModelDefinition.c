@@ -13,6 +13,7 @@
 #include "WorldModel.h"
 #include "WorldModelCollisionInternal.h"
 #include "WorldModelSocketInternal.h"
+#include "WorldModelSurfaceInternal.h"
 #include "raylib/raymath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
@@ -34,7 +35,8 @@
  * and meshes built from models that load as further dependencies. The animation libraries are dependencies too;
  * the skeleton is the first skinned LOD's, which every other skinned LOD must share. The animation graph is a
  * dependency as well; the "sockets" and "first_person" sections are parsed and loaded by
- * source/WorldModelSocketDefinition.c into a third block the asset owns.
+ * source/WorldModelSocketDefinition.c into a third block the asset owns, the "surfaces" section by
+ * source/WorldModelSurfaceDefinition.c into a fourth (with LOD 0's triangles of each surface's slot).
  */
 
 
@@ -99,6 +101,7 @@ typedef struct WorldModelDefinitionStruct
     size_t AnimationLibraryCount;
     unsigned char* AnimationGraph;       // owned asset name, NULL without one
     WorldModelSocketDefinition* Sockets; // owned, NULL without "sockets" and "first_person"
+    WorldModelSurfaceDefinition* Surfaces; // owned, NULL without "surfaces"
 } WorldModelDefinition;
 
 /* The definition being read, its name in printable form, for messages, and the asset manager's logger for warnings
@@ -117,6 +120,7 @@ typedef struct WorldModelLoadedStruct
     void* CollisionBlock; // owned: the collision sets, shapes, hulls and meshes (NULL without collision)
     void* LibraryBlock;   // owned: the animation libraries' names in one block (NULL without libraries)
     void* SocketBlock;    // owned: the sockets, their names and the hidden bones (NULL without them)
+    void* SurfaceBlock;   // owned: the surfaces, their meshes, texture coordinates and names (NULL without them)
     unsigned char* GraphName; // owned copy of the animation graph's name (NULL without one)
 } WorldModelLoaded;
 
@@ -126,7 +130,7 @@ static const unsigned char* const RootKeys[] =
 {
     u8"name", u8"lods", u8"draw_distance", u8"is_draw_distance_fixed", u8"lod_fade_seconds", u8"lod_hysteresis",
     u8"render", u8"variants", u8"bounds", u8"collision", u8"animation_libraries", u8"animation_graph", u8"sockets",
-    u8"first_person"
+    u8"first_person", u8"surfaces"
 };
 static const unsigned char* const LodKeys[] = { u8"model", u8"max_distance" };
 static const unsigned char* const RenderKeys[] =
@@ -969,6 +973,10 @@ static Error ParseDefinition(WorldModelDefinition* definition, JSONCompound* roo
     {
         Result = WorldModelSocketDefinition_Parse(Context.Name, root, &definition->Sockets);
     }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldModelSurfaceDefinition_Parse(Context.Name, root, &definition->Surfaces);
+    }
     return Result;
 }
 
@@ -982,6 +990,7 @@ static void WorldModelLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
     WorldModelCollision_DestroyBlock(Loaded->CollisionBlock);
     Memory_Free(Loaded->LibraryBlock);
     Memory_Free(Loaded->SocketBlock);
+    WorldModelSurfaces_DestroyBlock(Loaded->SurfaceBlock);
     Memory_Free(Loaded->GraphName);
     Memory_Free(Loaded);
 }
@@ -1426,6 +1435,18 @@ static Error WorldModelDefinition_LoadAsset(void* self, AssetManager* manager, A
             return Result;
         }
     }
+    void* SurfaceBlock = NULL;
+    Result = WorldModelSurfaceDefinition_Load(Definition->Surfaces, Definition->Base.Name, Built._lods[0]._model, &Built,
+        &SurfaceBlock);
+    if (Result.Code != ErrorCode_Success)
+    {
+        WorldModelCollision_DestroyBlock(CollisionBlock);
+        Memory_Free(VariantBlock);
+        Memory_Free(SocketBlock);
+        Memory_Free(GraphName);
+        Memory_Free(LibraryBlock);
+        return Result;
+    }
     Built._settings = Definition->Settings;
     Built._lodFadeSeconds = Definition->LodFadeSeconds;
     Built._lodHysteresis = Definition->LodHysteresis;
@@ -1438,6 +1459,7 @@ static Error WorldModelDefinition_LoadAsset(void* self, AssetManager* manager, A
     Loaded->CollisionBlock = CollisionBlock;
     Loaded->LibraryBlock = LibraryBlock;
     Loaded->SocketBlock = SocketBlock;
+    Loaded->SurfaceBlock = SurfaceBlock;
     Loaded->GraphName = GraphName;
     outLoaded->Asset = &Loaded->Model;
     outLoaded->VTable = &WorldModelLoadedVTable;
@@ -1473,6 +1495,7 @@ static void WorldModelDefinition_Destroy(void* self)
     }
     Memory_Free(Definition->AnimationGraph);
     WorldModelSocketDefinition_Destroy(Definition->Sockets);
+    WorldModelSurfaceDefinition_Destroy(Definition->Surfaces);
     Memory_Free(Definition->Base.Name);
     Memory_Free(Definition);
 }

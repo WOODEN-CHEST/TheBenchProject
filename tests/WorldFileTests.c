@@ -17,6 +17,7 @@
 #include "WorldFile.h"
 #include "WorldLightComponent.h"
 #include "WorldModelComponent.h"
+#include "WorldScreenComponent.h"
 #include "WorldModelInstancesComponent.h"
 #include "WorldObject.h"
 #include "WorldSpriteComponent.h"
@@ -1538,7 +1539,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 65U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 70U);
             // The terrain: one object placing the placeholder terrain around the ground slab.
             WorldComponent* Ground = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 51U, WorldComponentType_Terrain, &Ground)
@@ -1646,13 +1647,23 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
                 TEST_CHECK(run, (Offer != NULL) && (Offer->Type == DataType_String)
                     && AreNamesEqual(Offer->StringValue, (const unsigned char*)Offers[Index].Action));
             }
-            // The collision examples: 44 colliders, among them a door of two sets, a trigger zone where the desk
+            // The collision examples: 48 colliders, among them a door of two sets, a trigger zone where the desk
             // slides, a pushing wall, a row of five pushable crates, its stop, a crate pinned in a corner of two posts
-            // in the door's swing, the bench, the coffee cup, a pushable trash can and the test room's walls and roof;
-            // the door turns, so it is movable.
+            // in the door's swing, the bench, the coffee cup, a pushable trash can, the test room's walls and roof, and
+            // the monitor and its table; the door turns, so it is movable.
             size_t ColliderCount = 0U;
             World_GetComponents(&Loaded, WorldComponentType_Collider, &ColliderCount);
-            TEST_CHECK(run, ColliderCount == 44U);
+            TEST_CHECK(run, ColliderCount == 48U);
+            // The test monitor: a screen on its table (a child of the table's pivot), showing on its surface "screen".
+            WorldComponent* Monitor = NULL;
+            WorldObject* MonitorObject = NULL;
+            size_t ScreenCount = 0U;
+            World_GetComponents(&Loaded, WorldComponentType_Screen, &ScreenCount);
+            TEST_CHECK(run, (ScreenCount == 1U)
+                && World_TryGetComponent(&Loaded, 70U, WorldComponentType_Screen, &Monitor)
+                && AreNamesEqual(WorldScreenComponent_GetSurface(WorldScreenComponent_FromComponent(Monitor)),
+                    (const unsigned char*)u8"screen")
+                && World_TryGetObject(&Loaded, 70U, &MonitorObject) && (WorldObject_GetParentId(MonitorObject) == 66U));
             // An asset made in Blender: the lined trash can (four LODs, their maps inside the .glb files), standing in
             // the start view.
             WorldComponent* TrashCan = NULL;

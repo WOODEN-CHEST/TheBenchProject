@@ -11,7 +11,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | GameCamera | `include/GameCamera.h`, `source/GameCamera.c` | The 3D camera (a double position, fov/yaw/pitch/roll), converted to raylib's render camera at the origin only at render time. |
 | Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, the key registry, the root registry, base directory). |
 | WorldRenderer | `include/WorldRenderer.h`, `source/WorldRenderer*.c`, `source/WorldRendererInternal.h` | Renders a World through a GameCamera; fully separate from the world data. Split by render pass, see "Renderer structure". |
-| WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with their resolved world models, their LOD state, the variant, the settings in effect and their pose; the camera's pose, the first-person object's with its hidden bones collapsed; sprites with their world sprites' settings in effect; lights; terrains and their chunks; the model instances components with their cells), built from the world's per-type component arrays. |
+| WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with their resolved world models, their LOD state, the variant, the settings in effect, their pose and their screen's surface; the camera's pose, the first-person object's with its hidden bones collapsed; sprites with their world sprites' settings in effect; lights; terrains and their chunks; the model instances components with their cells), built from the world's per-type component arrays. |
 | WorldInstancing | `source/WorldInstancing.h`, `source/WorldInstancing.c` (private) | Instanced drawing as pure maths (see "Model instances"): a component's copies sorted into cells with their records, the copies' LOD bands, fades and per-pass draws, and the LODs a cell can show: the C mirror of `shaders/common/instancing.glsl`. |
 | WorldLod | `source/WorldLod.h`, `source/WorldLod.c` (private) | Levels of detail as pure maths (see "LODs"): the LOD selection by distance with hysteresis, the scale and a forced LOD, and the cross-fade's state and its two draws. |
 | WorldAtmosphere | `source/WorldAtmosphere.h`, `source/WorldAtmosphere.c` (private) | The atmosphere as pure maths (see "Atmosphere"): the air's coefficients from the environment, the height the sky is seen from, heights and distances along rays without cancellation, and the lookup tables' layout: the C mirror of `shaders/common/atmosphere.glsl`'s mappings. |
@@ -25,7 +25,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | WorldRain | `source/WorldRain.h`, `source/WorldRain.c` (private) | The rain and the lightning's bolts as pure maths (see "Rain"): the rain rate and its mist, the streaks' drift and their copies around the camera (wrapped in double), the splashes' and the ripples' counted cycles, the rain map's box, lookups and keeping between draws, the splashes' grid and landing along the map's fall, the puddles' coverage and threshold, the bolt: the C mirror of `shaders/common/rain.glsl`, `common/puddles.glsl` and `shaders/rain/`. |
 | CloudNoise | `source/CloudNoise.h`, `source/CloudNoise.c` (private) | The clouds' noise (see "Clouds"): tileable gradient and Worley noise, and the three textures made from them at load (the shape volume, the erosion volume, the weather map), the same every time. |
 | WorldInterior | `source/WorldInterior.h`, `source/WorldInterior.c` (private) | Interior lighting as pure maths (see "Interior lighting"): ambient zones in render space, their weights, the draws' choice of zones and their composition, the haze inside them, the sky's occupancy volume (its map, slices and window) and the march through it, the camera's interior and the light the eye is in: the C mirror of `shaders/common/interior.glsl`. |
-| WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c`, `source/WorldTestCharacters.{h,c}` (private: walk mode and the test NPCs), `source/WorldTestAnimation.{h,c}` (private: the animation system and its keys), `source/WorldTestInstances.{h,c}` (private: the pebble field and the instancing A/B) | A concrete GameFrame: a WASD + mouse-look flycam over a test world, and walk mode (the player as a character) and test NPCs. |
+| WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c`, `source/WorldTestCharacters.{h,c}` (private: walk mode and the test NPCs), `source/WorldTestAnimation.{h,c}` (private: the animation system and its keys), `source/WorldTestInstances.{h,c}` (private: the pebble field and the instancing A/B), `source/WorldTestScreens.{h,c}` (private: the test monitor's UI and its use) | A concrete GameFrame: a WASD + mouse-look flycam over a test world, and walk mode (the player as a character) and test NPCs. |
 
 `source/main.c` is the composition root (bootstrap).
 
@@ -167,7 +167,11 @@ camera, however far out it is. The maths is the private `source/WorldRenderSpace
   also takes its object's **pose** (`Pose`: the animator's, when it was made for the entry's world model,
   [Animation.md](Animation.md)); then, unless the world model gives bounds of its own (`WorldModel_HasOwnBounds`), its
   sphere is the one around the pose's box, moved by the skeleton LOD's import transform, so culling, shadows and LOD
-  distances follow the pose.
+  distances follow the pose. And it takes its object's **screen** (`Surface`: the world model's surface the screen
+  component names, looked up again only when the component is replaced, its surface name changes or the world model
+  does; a name the world model lacks is logged once, `WorldRenderer: object N ("name") shows no picture: world model "x"
+  has no surface "y".`), whether it is on and its picture's glow (`IsSurfacePowered`, `SurfaceEmission`: the surface's
+  emission times the component's brightness), every frame: see "Surfaces' pictures".
 - **Sprites:** the sprites of effectively enabled and visible objects whose playback instance has a frame: the current
   frame and its area in its texture (normalized: the shaders' `uvRect`), the quad before a viewer turns it
   (`SpriteShape`: the orientation, the object's world position and rotation axes, the world size from the frame's
@@ -1638,6 +1642,31 @@ camera's meter does:
   `EYE_ADAPTATION_POWER` sets how far days, dusks and nights stand apart (0 every scene alike, more: a brighter noon
   against a darker night unless the key follows); the window and the anchor's share; the speeds.
 
+**Surfaces' pictures** (`source/WorldRendererSurfaces.c`; [WorldModels.md](WorldModels.md), "Surfaces"). A screen
+component shows on a surface of its object's world model what the code that owns its content hands over each frame:
+`WorldRenderer_SetSurfaceTexture(renderer, objectId, surfaceName, texture, isBottomUp)` (a UI drawn into a render target;
+[UIFramework.md](UIFramework.md), "World screens").
+- **One render only.** The pictures are kept in a small list (one per object and surface: a second replaces the first)
+  that `WorldRenderer_RenderToTarget` forgets when it returns, whatever it returns: a screen whose owner stops handing one
+  over shows none, never a stale or freed texture. The texture is borrowed until then.
+- **Into the material copy.** `WorldRendererGeometry_PrepareMaterial` calls `WorldRendererSurfaces_Apply` for the
+  surface's material slot of an entry with a surface, after the variant and before the LOD tinting's glow: a screen's
+  picture becomes the copy's emissive map, white at the entry's `SurfaceEmission` (its own emission's colour, intensity
+  and map replaced), while the screen is on; off, or without a picture, it gives off no light at all (its material's own
+  emission too), so its own surface shows: author a screen's slot as its dark glass. A paper's picture becomes the
+  copy's albedo map (lit like the rest, its material's albedo colour tinting it: author a paper's slot white to show the
+  picture as it is; without one its material's own albedo shows). Every LOD's meshes of the slot
+  take it; the crisp overlay's draws too, so a crisp monitor reads at window resolution. Only the surface the object's
+  screen component names shows a picture; one handed over for another surface of the object shows nowhere.
+- **Rows bottom-up.** A render target drawn with raylib holds its picture bottom row first (OpenGL's convention), where a
+  model's texture coordinates read an image top row first. `isBottomUp` says which: the lit shaders read that map with v
+  flipped (`isAlbedoMapBottomUp`, `isEmissiveMapBottomUp` in `pbr/fragment.frag`, uploaded per material with its
+  factors: `WorldRendererMapOrientation`; false for every map a model brings, so the shader reads those as they are).
+- **Status.** The status line counts the shown models with a screen and those a picture was handed over for (`... 1
+  screens, 1 showing a picture`; `WorldRendererStatus.ScreenCount`, `ScreenPictureCount`).
+- **Not built yet**: the screen's light spilling into the room, the glass's own reflection and a CRT's look (its
+  curvature, scanlines, shadow mask and power animation).
+
 **Crisp overlay.** OmitPixelation models and cutout sprites render lit at window resolution and are composited over the
 pixelated image, depth-tested against the scene so they are occluded correctly (e.g. a readable in-world
 screen). When the overlay cannot run they fall back to the pixelated passes, so they never vanish. Crisp objects
@@ -1725,6 +1754,7 @@ get no AO and no outlines.
 | `WorldRendererPost.c` | Outlines, bloom, sun shafts and the tonemap. |
 | `WorldRendererExposure.c` | The eye (see "Eye adaptation"): the meter's shader, target and readback, the meter pass after the sun shafts, the eye's update from the newest blocks (`EyeAdaptation`) and the exposure the tonemap takes. |
 | `WorldRendererCrisp.c` | The crisp overlay. |
+| `WorldRendererSurfaces.c` | The surfaces' pictures (see "Surfaces' pictures"): the list handed over for one render, each put into its surface's material copy (a screen's emissive map, a paper's albedo map) with its rows' orientation, the status's counts. Not a pass: the lit passes' material copies call it. |
 | `WorldRendererCollision.c` | Debug wireframes of a collision world's shapes and its contact points (`WorldRenderer_SetCollisionDebug`), drawn in the scene pass after the light gizmos from its read-only debug lists ([WorldCollision.md](WorldCollision.md)). |
 | `WorldVisibility.c` (with the cache, not a pass) | The frame's visibility lists (per pass, the entries it draws, and every entry's fades) and the dither's C mirror; see "Visibility". |
 | `WorldLod.c` (with the cache, not a pass) | LOD selection and the cross-fade's state; the cache's `WorldRenderCache_UpdateLods` runs it per entry; see "LODs". |
@@ -1904,9 +1934,10 @@ world models: two cubes behind the centre row, `variant_cube_left` (red) and `va
 and the lamp are placement overrides (`overrides_omit_pixelation`, `overrides_shadow_distance`). Its LODs: a row of six
 `lod_test` spheres (`lod_test_1` to `_6`, ids 25 to 30) along the left edge of the ground, at x = 8 from z = -6 to 9,
 switching at 13 and 16 m, and beside it `lod_test_forced` (id 31, LOD 2 forced) and `lod_test_own_distances` (id 32, its
-own switch distances 3 and 6 m). Its collision ([WorldCollision.md](WorldCollision.md)): 44 colliders (the slab,
+own switch distances 3 and 6 m). Its collision ([WorldCollision.md](WorldCollision.md)): 48 colliders (the slab,
 the cubes, the desk's parts, the LOD spheres' hulls, the PBR cube's mesh, the cup's, the tree trunk's and the trash
-can's cylinders, the sign's plane, the test room's walls and roof), a `door` (id 33, the `test_door` world model with
+can's cylinders, the sign's plane, the test room's walls and roof, the monitor and its table), a `door` (id 33, the
+`test_door` world model with
 a `closed` and an `open` set; movable, a
 kinematic mover that stops when blocked) on the right of the start view, and a `desk_trigger_zone` (id 34, an own box,
 a trigger) at the end of the desk's slide; the desk is movable. Its moving and pushing content (boxes, the `test` world model's `bounds`, every
@@ -1928,6 +1959,10 @@ casts nothing (it has no face turned away) and the second a square shadow.
 An asset made in Blender: a `trash_can` (id 65, the `trash_can_lined` world model: a slatted steel bin with a black
 liner, four LODs from .glb files with their own maps, [WorldModels.md](WorldModels.md)) stands in the start view at
 (0.3, 0.05, -2.7), in front of the crates; it is movable and pushable (30 kg).
+A screen: a `monitor` (id 70, the `test_monitor` world model: a flat screen on a stand whose surface `screen` is
+640 x 480, crisp, emission 0.2; with a collider and a screen component) on a small table (`monitor_table`, id 66, a pivot
+at (-1.6, 0.05, -3.3) turned 155 degrees so the screen faces the start view, with its top and two sides, ids 67 to 69),
+on the right of the start view (see "The test monitor" below).
 Edit the file and restart to change the test world.
 The frame owns a `WorldCollision` too, created after the world, and a `WorldCharacters` (the character
 system, [Characters.md](Characters.md)) created after that, with its test characters (the private
@@ -1953,6 +1988,24 @@ items), then, in walk mode, the camera on the player's eyes (its body's eyes soc
 the renderer's first-person object (`WorldRenderer_SetFirstPersonObject`; 0 out of walk mode); last how open the
 camera's surroundings are to the sky (`WorldCollision_GetSkyOpenness`, 30 m against the world and prop layers,
 triggers left out) for interior lighting (`WorldRenderer_SetCameraOpenness`).
+**The test monitor** (the private `source/WorldTestScreens.{h,c}`): the frame keeps a `WorldScreens` (created after the
+world, synced at the end of every `Update`, after the look target) and the monitor's UI: a `UIScreen` of its own (its own
+widget and text factories, like the UI test frame's) at the surface's resolution, a full-screen focusable "desk" widget
+(it counts the left clicks on the picture and keeps a line of what is typed, Backspace deleting; it draws a small cross
+where the player points) and input-disabled labels over it: a title, the game clock, the pointer's position, the clicks
+(and where the last one was), the typed line and a hint. `Update` runs it first, before the frame's own controls: the
+pointing ray is the camera's aim as last shown (walk mode: from the eyes, out to the player's character's reach, its own
+body ignored; fly mode: 4 m, `WORLD_TEST_SCREEN_FLY_REACH`) or, while the mouse is free (M), the cursor's ray through the
+camera; then its `WorldScreenHost` (E or a click on the picture uses the monitor; Escape or pointing away lets go;
+while it is in use the whole keyboard is the monitor's, so W does not walk and E types, and the mouse still turns the
+view). While it is in use the desk keeps the UI's focus, and the UI letting go of it (Escape) lets go of the monitor:
+one Escape gives control back. The use starting and ending is logged (`WorldTest: the monitor is in use: ...`,
+`WorldTest: let go of the monitor: ...`). `Render` draws the UI into the monitor's render target (made on the first
+render, at the surface's resolution, with mipmaps and trilinear filtering), then hands it to the renderer before the
+world renders. A test world without a monitor logs that once and runs without it. The UI test frame above reads first
+while the monitor is in use (frames update top-down, and its screen always has the keyboard): Tab and the arrows move
+its focus, R rebuilds its menu and Delete removes its focused item; the letters typed with them still reach the
+monitor.
 **Game time:** the clock starts from the world environment's date and time of day (noon, 2026-10-18) at time scale
 720 (a 2-minute day; the clock's own default is 72). Every `Update` advances it,
 logs a new day when it crosses midnight, and writes its time of day and date into the environment, so the sky shows
@@ -2116,10 +2169,14 @@ raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writi
   **semicolon** (`;`) switches instanced drawing (logged): off, every copy is drawn on its own through the ordinary
   shaders, and the picture must not change (it may round differently by a level here and there). Q's LOD tinting
   colours the copies' LODs too, and the status line (I) gives the copies by LOD;
-- T toggles the text sample.
+- T toggles the text sample;
+- **the monitor** (see "The test monitor" above; no keys of its own): pointing at its picture (the aim within reach, or
+  the free cursor) shows a cross there; E (`use`) or a click on the picture uses it, and then every key is the
+  monitor's (typing shows on it; the debug keys and the movement wait) until Escape or pointing away lets go.
 
-M frees the cursor for the UI (and captures it again); a left click the UI did not take captures it again. An
-unconsumed `pause` (Escape once the UI is not using it) quits through `GameFrameManager_RequestStop`. `Render` handles
+M frees the cursor for the UI (and captures it again); a left click the UI did not take captures it again, unless it
+landed on the monitor's picture (the monitor's). An unconsumed `pause` (Escape once neither the UI nor the monitor is
+using it) quits through `GameFrameManager_RequestStop`. `Render` handles
 no input. Captures the cursor in `Start`, releases it in `End`/`Destroy`. The world is loaded and the clock built in `Create`;
 `BeginLoad` calls `WorldRenderer_PrepareWorld` (shaders and models), so the stepped load/unload slots are trivial.
 `Create` builds everything up front so `Destroy` is always safe (even on forced teardown); it destroys the renderer,

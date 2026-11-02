@@ -4,8 +4,10 @@
 #include <stdint.h>
 // raylib.h is needed for Vector3 (the bounds) and MaterialMap (variants apply to a material's maps); GameModel.h for
 // GameModel and GameMaterialFactors; CollisionShape.h and CollisionLayer.h for the collision sets and their
-// placements' defaults.
+// placements' defaults (and the surfaces' triangles, a CollisionMesh); WRVectorMath.h for the double placement a ray
+// meets a surface on.
 #include "raylib/raylib.h"
+#include "wr/WRVectorMath.h"
 #include "CollisionLayer.h"
 #include "CollisionShape.h"
 #include "GameModel.h"
@@ -66,6 +68,13 @@ typedef struct AnimationGraphStruct AnimationGraph;
  * out (WorldModel_GetFirstPerson): the socket of its eyes and the bones (with their subtrees) the camera's passes hide,
  * the head.
  *
+ * SURFACES. Named material slots that show a picture made while the game runs (WorldModelSurface): a screen (a monitor
+ * showing a UI, which glows) or a paper (lit like the surface it is on). Each names its slot, the picture's resolution
+ * and its kind; the slot's texture coordinates cover 0..1 over the picture. A screen component on a placement picks
+ * one (WorldScreenComponent.h), the code that owns its content hands the renderer the picture each frame, and a ray
+ * finds where on the picture the player points (WorldModelSurface_Raycast): each surface keeps LOD 0's triangles of its
+ * slot with their texture coordinates for that.
+ *
  * Every field is read-only (underscore-prefixed): read them through the accessors.
  */
 
@@ -104,6 +113,19 @@ typedef struct AnimationGraphStruct AnimationGraph;
 #define WORLD_MODEL_SOCKET_NAME_MAX_LENGTH ((size_t)64)
 /** @brief The most bones a first-person camera's passes may hide (each with its subtree). */
 #define WORLD_MODEL_MAX_HIDDEN_BONES ((size_t)16)
+/** @brief The most surfaces a world model may have. */
+#define WORLD_MODEL_MAX_SURFACES ((size_t)16)
+/** @brief The most bytes a surface's name may have ([a-z][a-z0-9_.-]*, without the terminator). */
+#define WORLD_MODEL_SURFACE_NAME_MAX_LENGTH ((size_t)64)
+/** @brief The smallest side of a surface's picture, in pixels. */
+#define WORLD_MODEL_SURFACE_MIN_RESOLUTION 16
+/** @brief The largest side of a surface's picture, in pixels. */
+#define WORLD_MODEL_SURFACE_MAX_RESOLUTION 2048
+/** @brief A screen's emission when its definition does not say, on the game's light scale (1 is a white surface in full
+ *  sun): a fifth of that, so a screen still reads under the noon sun and glows without glaring at night. */
+#define WORLD_MODEL_DEFAULT_SURFACE_EMISSION 0.2f
+/** @brief The largest emission a screen may have (far beyond it every screen is a white glare). */
+#define WORLD_MODEL_MAX_SURFACE_EMISSION 1000.0f
 
 
 // Types.
@@ -277,6 +299,70 @@ typedef struct WorldModelSocketStruct
 } WorldModelSocket;
 
 /**
+ * @brief What a surface shows its picture as. Definitions name the kinds ("screen", "paper"; WorldModelSurfaceKind_GetName).
+ */
+typedef enum WorldModelSurfaceKindEnum
+{
+    /** @brief A screen: the picture is light it gives off, so it glows and shows in the dark (a monitor, a TV). */
+    WorldModelSurfaceKind_Screen = 0,
+    /** @brief A paper: the picture is the surface's own colour, lit like everything around it (a page, a poster). */
+    WorldModelSurfaceKind_Paper = 1,
+    /** @brief The number of kinds (not a kind). */
+    WorldModelSurfaceKind_Count = 2
+} WorldModelSurfaceKind;
+
+/**
+ * @brief One surface of a world model: a material slot that shows a picture made while the game runs. Read-only; part
+ *        of its world model (valid while it is loaded).
+ *
+ * The slot's texture coordinates (as raylib loads them: u to the right, v down, so (0, 0) is the picture's top-left,
+ * the UI's convention; an OBJ's are flipped on import, a glTF file's are so already) cover 0..1 over the picture. For
+ * pointing at it, the surface keeps LOD 0's triangles of its slot in the object's own space (after LOD 0's import
+ * transform), with each corner's texture coordinates.
+ */
+typedef struct WorldModelSurfaceStruct
+{
+    /** @brief Its name ([a-z][a-z0-9_.-]*, at most WORLD_MODEL_SURFACE_NAME_MAX_LENGTH bytes), unique in its world
+     *  model. */
+    const unsigned char* _name;
+    /** @brief The material slot whose meshes show the picture (the material's index in every LOD's model). */
+    int32_t _materialSlot;
+    /** @brief The picture's size in pixels, each side WORLD_MODEL_SURFACE_MIN_RESOLUTION to
+     *  WORLD_MODEL_SURFACE_MAX_RESOLUTION: what the content's render target is made at. */
+    int32_t _width;
+    int32_t _height;
+    /** @brief How the picture shows. */
+    WorldModelSurfaceKind _kind;
+    /** @brief A screen's brightness: its picture's white on the game's light scale (1 a white surface in full sun),
+     *  0 to WORLD_MODEL_MAX_SURFACE_EMISSION; 0 for a paper. */
+    float _emission;
+    /** @brief LOD 0's triangles of the slot, in the object's own space (owned by the world model). */
+    const CollisionMesh* _mesh;
+    /** @brief Three texture coordinates per triangle of _mesh, in its triangle order, one per corner in the corners'
+     *  order (owned by the world model). */
+    const Vector2* _triangleUvs;
+} WorldModelSurface;
+
+/**
+ * @brief Where a ray meets a surface of a placed world model (WorldModelSurface_Raycast). A plain value type.
+ */
+typedef struct WorldModelSurfaceHitStruct
+{
+    /** @brief How far from the ray's origin, in metres. */
+    float Distance;
+    /** @brief The triangle hit, in the surface's mesh (its triangle order). */
+    uint32_t Triangle;
+    /** @brief The weights of the triangle's corners at the hit, in the corners' order (they sum to 1). */
+    Vector3 Barycentric;
+    /** @brief The texture coordinates at the hit (WorldModelSurface_GetUv): (0, 0) the picture's top-left, (1, 1) its
+     *  bottom-right. */
+    Vector2 Uv;
+    /** @brief Whether Uv lies in [0, 1] on both axes: the hit is on the picture (a slot may hold triangles beyond it, a
+     *  screen's rounded border). */
+    bool IsOnPicture;
+} WorldModelSurfaceHit;
+
+/**
  * @brief A loaded world model. Built and owned by the asset manager (the "world_model" type); read-only.
  */
 typedef struct WorldModelStruct
@@ -332,6 +418,9 @@ typedef struct WorldModelStruct
     /** @brief The bones the camera's passes hide with their subtrees (skeleton indices, owned), and how many. */
     const uint32_t* _hiddenBones;
     uint32_t _hiddenBoneCount;
+    /** @brief Its surfaces (owned), and how many (0 to WORLD_MODEL_MAX_SURFACES). */
+    const WorldModelSurface* _surfaces;
+    uint32_t _surfaceCount;
 } WorldModel;
 
 
@@ -673,3 +762,117 @@ static inline uint32_t WorldModelCollision_GetDefaultSetIndex(const WorldModelCo
  * @returns true when there is a set of that name.
  */
 bool WorldModelCollision_TryFindSet(const WorldModelCollision* self, const unsigned char* name, uint32_t* outIndex);
+
+/** @brief Returns how many surfaces the world model has. @param self The world model; must not be NULL. */
+static inline uint32_t WorldModel_GetSurfaceCount(const WorldModel* self)
+{
+    return self->_surfaceCount;
+}
+
+/**
+ * @brief Returns one of the world model's surfaces.
+ * @param self The world model; must not be NULL.
+ * @param index The surface's index.
+ * @returns The surface (valid while the world model is loaded), or NULL for an index past the last surface.
+ */
+static inline const WorldModelSurface* WorldModel_GetSurface(const WorldModel* self, uint32_t index)
+{
+    return (index < self->_surfaceCount) ? &self->_surfaces[index] : NULL;
+}
+
+/**
+ * @brief Finds a surface by name (a linear search over a few surfaces).
+ * @param self The world model; must not be NULL.
+ * @param name The name, NUL-terminated UTF-8; NULL finds nothing.
+ * @param outIndex [out] Receives its index when found; may be NULL.
+ * @returns Whether the world model has a surface of that name.
+ */
+bool WorldModel_TryFindSurface(const WorldModel* self, const unsigned char* name, uint32_t* outIndex);
+
+/** @brief Returns a surface's name (valid while its world model is loaded). @param self The surface; must not be NULL. */
+static inline const unsigned char* WorldModelSurface_GetName(const WorldModelSurface* self)
+{
+    return self->_name;
+}
+
+/** @brief Returns the material slot that shows a surface's picture. @param self The surface; must not be NULL. */
+static inline int32_t WorldModelSurface_GetMaterialSlot(const WorldModelSurface* self)
+{
+    return self->_materialSlot;
+}
+
+/** @brief Returns the width of a surface's picture, in pixels. @param self The surface; must not be NULL. */
+static inline int32_t WorldModelSurface_GetWidth(const WorldModelSurface* self)
+{
+    return self->_width;
+}
+
+/** @brief Returns the height of a surface's picture, in pixels. @param self The surface; must not be NULL. */
+static inline int32_t WorldModelSurface_GetHeight(const WorldModelSurface* self)
+{
+    return self->_height;
+}
+
+/** @brief Returns how a surface shows its picture. @param self The surface; must not be NULL. */
+static inline WorldModelSurfaceKind WorldModelSurface_GetKind(const WorldModelSurface* self)
+{
+    return self->_kind;
+}
+
+/**
+ * @brief Returns a screen's brightness: its picture's white on the game's light scale (1 a white surface in full sun).
+ * @param self The surface; must not be NULL.
+ * @returns 0 to WORLD_MODEL_MAX_SURFACE_EMISSION (0 for a paper).
+ */
+static inline float WorldModelSurface_GetEmission(const WorldModelSurface* self)
+{
+    return self->_emission;
+}
+
+/**
+ * @brief Returns the triangles a ray finds a surface by: LOD 0's of its slot, in the object's own space.
+ * @param self The surface; must not be NULL.
+ * @returns The mesh (valid while the world model is loaded).
+ */
+static inline const CollisionMesh* WorldModelSurface_GetMesh(const WorldModelSurface* self)
+{
+    return self->_mesh;
+}
+
+/**
+ * @brief The texture coordinates at a point of one of a surface's triangles: its corners' coordinates weighted by the
+ *        point's barycentric weights.
+ * @param self The surface; must not be NULL.
+ * @param triangle The triangle, in the surface's mesh.
+ * @param barycentric The point's weights of the triangle's corners, in the corners' order.
+ * @param outUv [out] Receives the coordinates ((0, 0) the picture's top-left, (1, 1) its bottom-right; (0, 0) for a
+ *        triangle past the last). Must not be NULL.
+ * @returns Whether the coordinates lie in [0, 1] on both axes (the point is on the picture); false for a triangle past
+ *          the last.
+ */
+bool WorldModelSurface_GetUv(const WorldModelSurface* self, uint32_t triangle, Vector3 barycentric, Vector2* outUv);
+
+/**
+ * @brief Finds where a ray meets a surface of a placed world model: the nearest of the surface's triangles it enters
+ *        from the front (the side the slot's triangles face, counter-clockwise), within @p maxDistance.
+ *
+ * The ray is taken into the object's own space in double, its origin relative to the object's position first, so a
+ * placement far from the world's origin is met as exactly as one near it. A placement whose matrix cannot be inverted
+ * (a zero scale) is never met.
+ * @param self The surface; must not be NULL.
+ * @param objectToWorld The placement: the object's world matrix (WorldObject_GetWorldMatrix). Must not be NULL.
+ * @param origin Where the ray starts, in the world.
+ * @param direction Its direction (any length but 0; it is normalised).
+ * @param maxDistance How far it reaches, in metres (above 0).
+ * @param outHit [out] Receives the hit, its texture coordinates and whether they lie on the picture. Must not be NULL.
+ * @returns true when the ray meets one of the surface's triangles (also off the picture: see IsOnPicture).
+ */
+bool WorldModelSurface_Raycast(const WorldModelSurface* self, const Matrix4Double* objectToWorld, Vector3Double origin,
+    Vector3 direction, float maxDistance, WorldModelSurfaceHit* outHit);
+
+/**
+ * @brief Returns a surface kind's name, as definitions write it ("screen", "paper").
+ * @param kind The kind.
+ * @returns The name (static), or NULL for a value that is not a kind.
+ */
+const unsigned char* WorldModelSurfaceKind_GetName(WorldModelSurfaceKind kind);

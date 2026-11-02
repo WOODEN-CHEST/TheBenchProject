@@ -835,6 +835,10 @@ typedef struct WorldRendererPbrProgramStruct
     /** @brief The material's porosity and puddles (its params, GameModel.h), uploaded per material too. */
     int _locMaterialPorosity;
     int _locMaterialPuddles;
+    /** @brief Whether the albedo map and the emissive map hold a picture stored bottom row first (a surface's render
+     *  target), uploaded per material too (WorldRendererMapOrientation). */
+    int _locIsAlbedoMapBottomUp;
+    int _locIsEmissiveMapBottomUp;
     /** @brief The skinned program's bone palette (location -1 in the rigid program's). */
     WorldRendererPalette _palette;
 } WorldRendererPbrProgram;
@@ -1926,6 +1930,39 @@ typedef struct WorldRendererInteriorStateStruct
     WorldRendererInteriorView _view;
 } WorldRendererInteriorState;
 
+/** @brief One picture handed over for a surface (WorldRenderer_SetSurfaceTexture), held for one render. */
+typedef struct WorldRendererSurfaceBindingStruct
+{
+    /** @brief The screen's object. */
+    uint64_t ObjectId;
+    /** @brief The surface's name (a copy). */
+    unsigned char SurfaceName[WORLD_MODEL_SURFACE_NAME_MAX_LENGTH + 1U];
+    /** @brief The picture (its owner's texture, borrowed for the render). */
+    Texture2D Texture;
+    /** @brief Whether its first row is its picture's bottom (a render target drawn with raylib). */
+    bool IsBottomUp;
+} WorldRendererSurfaceBinding;
+
+/** @brief The surfaces' pictures (WorldRendererSurfaces.c). */
+typedef struct WorldRendererSurfaceStateStruct
+{
+    /** @brief The pictures handed over for the next render (WorldRendererSurfaceBinding), forgotten after it. */
+    GenericBuffer _bindings;
+} WorldRendererSurfaceState;
+
+/**
+ * @brief Which of a draw's material maps hold a picture stored bottom row first (a surface's render target, whose first
+ *        row is the bottom of what was drawn into it): the lit shaders read those with v flipped. False for every map a
+ *        model brings.
+ */
+typedef struct WorldRendererMapOrientationStruct
+{
+    /** @brief The albedo map (a paper's picture). */
+    bool IsAlbedoBottomUp;
+    /** @brief The emissive map (a screen's picture). */
+    bool IsEmissiveBottomUp;
+} WorldRendererMapOrientation;
+
 /** @brief The crisp overlay (un-pixelated OmitPixelation objects composited over the pixelated frame). */
 typedef struct WorldRendererCrispStateStruct
 {
@@ -2025,6 +2062,7 @@ struct WorldRendererStruct
     WorldRendererInteriorState _interior;
     WorldRendererCloudState _clouds;
     WorldRendererRainState _rain;
+    WorldRendererSurfaceState _surfaces;
 };
 
 
@@ -2404,6 +2442,42 @@ Color WorldRendererGeometry_MultiplyColor(Color a, Color b);
 void WorldRendererGeometry_DrawLightGizmos(WorldRenderer* self);
 
 
+// WorldRendererSurfaces.c
+/**
+ * @brief Holds a surface's picture for the next render (WorldRenderer_SetSurfaceTexture): a second picture for the same
+ *        object's surface replaces the first.
+ * @param self The renderer.
+ * @param objectId The screen's object; not 0.
+ * @param surfaceName The surface's name; not NULL, at most WORLD_MODEL_SURFACE_NAME_MAX_LENGTH bytes.
+ * @param texture The picture; its id not 0.
+ * @param isBottomUp Whether its first row is its picture's bottom (a render target).
+ * @returns Success; ErrorCode_IllegalArgument for an id of 0, a NULL name or a texture id of 0;
+ *          ErrorCode_ArgumentOutOfRange for a name longer than a surface's can be.
+ */
+Error WorldRendererSurfaces_SetTexture(WorldRenderer* self, uint64_t objectId, const unsigned char* surfaceName,
+    Texture2D texture, bool isBottomUp);
+
+/** @brief Forgets the pictures handed over: they held for one render (a screen whose owner stops handing one over shows
+ *  none, never a stale or freed texture). */
+void WorldRendererSurfaces_ForgetTextures(WorldRenderer* self);
+
+/**
+ * @brief Puts the picture handed over for a model entry's surface into the per-draw copy of that surface's material:
+ *        a screen's as its emissive map, white at the entry's SurfaceEmission while it is on (off, or without a
+ *        picture, it gives off no light: its material's own surface, the dark glass); a paper's as its albedo map
+ *        (without a picture, its material's own). Call it only for the surface's material slot.
+ * @param self The renderer.
+ * @param model The entry; its Surface must not be NULL.
+ * @param material [in,out] The per-draw copy (its maps a copy too).
+ * @returns Which of its maps now hold a picture stored bottom row first.
+ */
+WorldRendererMapOrientation WorldRendererSurfaces_Apply(const WorldRenderer* self, const WorldRenderModel* model,
+    Material* material);
+
+/** @brief Counts the drawn model entries with a surface, and those with a picture handed over for it (the status). */
+void WorldRendererSurfaces_Count(const WorldRenderer* self, uint32_t* outSurfaceCount, uint32_t* outPictureCount);
+
+
 // WorldRendererCollision.c
 /** @brief Draws the collision world's debug shapes (_collisionDebug) as wireframes in their world placements, coloured by
  *  layer, and its contact points (a debug aid), moved into render space for the frame's origin. Inside BeginMode3D;
@@ -2571,12 +2645,14 @@ void WorldRendererLighting_SetDrawPlace(const WorldRenderer* self, Shader shader
 /**
  * @brief Uploads one material's PBR scalar factors and map-presence flags to a PBR program, for its meshes drawn next.
  *
- * DrawMesh uploads colDiffuse and binds the maps itself, but not these. Pass the per-draw copy, after the variant was
- * applied to it, so its factors and maps are the ones drawn.
+ * DrawMesh uploads colDiffuse and binds the maps itself, but not these. Pass the per-draw copy, after the variant and a
+ * surface's picture were applied to it, so its factors and maps are the ones drawn.
  * @param program The program the meshes draw with (the rigid one or the skinned one).
  * @param material The material.
+ * @param orientation Which of its maps hold a picture stored bottom row first (a surface's).
  */
-void WorldRendererLighting_UploadMaterial(const WorldRendererPbrProgram* program, const Material* material);
+void WorldRendererLighting_UploadMaterial(const WorldRendererPbrProgram* program, const Material* material,
+    WorldRendererMapOrientation orientation);
 
 /** @brief Logs a line about the frame's light at the camera (with the status, WorldRenderer_LogStatus): the sun's and the
  *  moon's through the air, the sky's irradiance, the ground's bounce, the night's light, the scene luminance and the

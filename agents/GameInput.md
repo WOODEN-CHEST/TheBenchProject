@@ -75,7 +75,9 @@ release (the UI screen does this for mouse buttons and for keys a widget handled
 
 Who reads first is decided by update order: the frame manager updates frames **top-down** (highest z first), and a
 frame that hosts UI updates its `UIScreen` before its game logic. So a menu frame over the game frame, and the UI inside
-a frame, always get first refusal.
+a frame, always get first refusal. A screen in the world the player uses (`WorldScreenHost`,
+[UIFramework.md](UIFramework.md), "World screens") reads first too, and then consumes every keyboard key down or
+released and the typed text: while the player types on it, nothing below acts on a key.
 
 ### Actions
 

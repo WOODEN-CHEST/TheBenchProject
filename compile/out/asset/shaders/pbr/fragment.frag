@@ -26,6 +26,10 @@ uniform sampler2D emissiveMap; // sRGB emissive colour map; MULTIPLIES emissiveC
 uniform bool hasMraMap;
 uniform bool hasNormalMap;
 uniform bool hasEmissiveMap;
+// A surface's picture (a screen's emissive map, a paper's albedo map) is a render target, whose first row is the bottom
+// of what was drawn into it: read with v flipped. False for every map a model brings.
+uniform bool isAlbedoMapBottomUp;
+uniform bool isEmissiveMapBottomUp;
 
 out vec4 finalColor;
 
@@ -61,7 +65,8 @@ vec3 PerturbNormal(vec3 n, vec3 worldPos, vec2 uv, vec3 mapN)
 
 void main()
 {
-    vec4 texel = texture(texture0, fragTexCoord)*colDiffuse*fragColor;
+    vec2 albedoTexCoord = isAlbedoMapBottomUp ? vec2(fragTexCoord.x, 1.0 - fragTexCoord.y) : fragTexCoord;
+    vec4 texel = texture(texture0, albedoTexCoord)*colDiffuse*fragColor;
     vec3 albedo = pow(max(texel.rgb, vec3(0.0)), vec3(2.2)); // sRGB -> linear
 
     float rough = roughness;
@@ -113,7 +118,8 @@ void main()
     vec3 emissive = emissiveColor*emissiveIntensity;
     if (hasEmissiveMap)
     {
-        vec3 em = texture(emissiveMap, fragTexCoord).rgb;
+        vec2 emissiveTexCoord = isEmissiveMapBottomUp ? vec2(fragTexCoord.x, 1.0 - fragTexCoord.y) : fragTexCoord;
+        vec3 em = texture(emissiveMap, emissiveTexCoord).rgb;
         emissive *= pow(max(em, vec3(0.0)), vec3(2.2)); // sRGB -> linear
     }
 

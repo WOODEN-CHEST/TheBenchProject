@@ -142,6 +142,8 @@ static void CacheMaterialLocations(WorldRendererPbrProgram* program, Shader shad
     program->_locHasEmissiveMap = GetShaderLocation(shader, "hasEmissiveMap");
     program->_locMaterialPorosity = GetShaderLocation(shader, "materialPorosity");
     program->_locMaterialPuddles = GetShaderLocation(shader, "materialPuddles");
+    program->_locIsAlbedoMapBottomUp = GetShaderLocation(shader, "isAlbedoMapBottomUp");
+    program->_locIsEmissiveMapBottomUp = GetShaderLocation(shader, "isEmissiveMapBottomUp");
 }
 
 /* Loads one PBR program and prepares it: its lit locations and constants, its material locations, its dither, its own
@@ -671,7 +673,8 @@ void WorldRendererLighting_SetDrawPlace(const WorldRenderer* self, Shader shader
  * pass shader's table), but NOT the scalar factors, the has*Map guards or the wetness params, so this does that. A map flag is true
  * only when the slot actually holds a texture; the shader must not sample an unbound map sampler (it would read
  * texture unit 0 = albedo — the silent-fallback bug seen across the post passes). */
-void WorldRendererLighting_UploadMaterial(const WorldRendererPbrProgram* program, const Material* material)
+void WorldRendererLighting_UploadMaterial(const WorldRendererPbrProgram* program, const Material* material,
+    WorldRendererMapOrientation orientation)
 {
     Shader RayShader = GameShader_GetRaylibShader(program->_shader);
     float Metallic = material->maps[MATERIAL_MAP_METALNESS].value;
@@ -686,6 +689,8 @@ void WorldRendererLighting_UploadMaterial(const WorldRendererPbrProgram* program
     int HasMra = (material->maps[MATERIAL_MAP_METALNESS].texture.id > 0) ? 1 : 0;
     int HasNormal = (material->maps[MATERIAL_MAP_NORMAL].texture.id > 0) ? 1 : 0;
     int HasEmissive = (material->maps[MATERIAL_MAP_EMISSION].texture.id > 0) ? 1 : 0;
+    int IsAlbedoBottomUp = orientation.IsAlbedoBottomUp ? 1 : 0;
+    int IsEmissiveBottomUp = orientation.IsEmissiveBottomUp ? 1 : 0;
 
     SetShaderValue(RayShader, program->_locMetallic, &Metallic, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, program->_locRoughness, &Roughness, SHADER_UNIFORM_FLOAT);
@@ -697,6 +702,8 @@ void WorldRendererLighting_UploadMaterial(const WorldRendererPbrProgram* program
     SetShaderValue(RayShader, program->_locHasEmissiveMap, &HasEmissive, SHADER_UNIFORM_INT);
     SetShaderValue(RayShader, program->_locMaterialPorosity, &Porosity, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, program->_locMaterialPuddles, &Puddles, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(RayShader, program->_locIsAlbedoMapBottomUp, &IsAlbedoBottomUp, SHADER_UNIFORM_INT);
+    SetShaderValue(RayShader, program->_locIsEmissiveMapBottomUp, &IsEmissiveBottomUp, SHADER_UNIFORM_INT);
 }
 
 void WorldRendererLighting_LogStatus(const WorldRenderer* self)

@@ -44,6 +44,23 @@ typedef struct TestAssetCountersStruct
     size_t UnloadCount;
 } TestAssetCounters;
 
+/** @brief One mesh of a model built in code (TestAssets_AddPartsModel); its arrays are borrowed for the call (copied). */
+typedef struct TestModelPartStruct
+{
+    /** @brief The vertices, three floats each. */
+    const float* Vertices;
+    /** @brief Two texture coordinates per vertex (u, v as raylib keeps them), or NULL: the mesh has none. */
+    const float* Texcoords;
+    /** @brief The number of vertices. */
+    int VertexCount;
+    /** @brief Three indices per triangle, or NULL: every three vertices are a triangle. */
+    const unsigned short* Indices;
+    /** @brief The number of triangles (with Indices). */
+    int TriangleCount;
+    /** @brief The mesh's material index (raylib's meshMaterial). */
+    int Material;
+} TestModelPart;
+
 /** @brief An asset manager with the standard asset types and no search roots; tests add definitions in code. */
 typedef struct TestAssetFixtureStruct
 {
@@ -128,6 +145,17 @@ bool TestAssets_AddModelWithMaterials(TestRun* run, TestAssetFixture* fixture, c
  */
 bool TestAssets_AddMeshModel(TestRun* run, TestAssetFixture* fixture, const char* name, const float* vertices,
     int vertexCount, const unsigned short* indices, int triangleCount, Matrix transform, TestAssetCounters* counters);
+
+/**
+ * @brief Registers a model definition named @p name whose asset has one CPU-side mesh per part (copies of its vertices,
+ *        texture coordinates and indices, its material index), never uploaded, @p materialCount materials (without maps),
+ *        the import transform @p transform and the vertices' box as its mesh-space bounds: what a world model's
+ *        surfaces read from a real model.
+ * @param counters Counts its loads and unloads; may be NULL. Must outlive the fixture's manager.
+ * @returns true when it was registered.
+ */
+bool TestAssets_AddPartsModel(TestRun* run, TestAssetFixture* fixture, const char* name, const TestModelPart* parts,
+    int partCount, int materialCount, Matrix transform, TestAssetCounters* counters);
 
 /**
  * @brief Registers a model definition named @p name whose asset is a skinned model built in code

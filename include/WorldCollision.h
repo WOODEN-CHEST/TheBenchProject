@@ -234,7 +234,7 @@ typedef struct WorldCollisionShapeInfoStruct
     /** @brief The triangle's index in the mesh (CollisionMesh's order). */
     uint32_t TriangleIndex;
     /** @brief The model's mesh the triangle came from, and its index among that mesh's own triangles (with the
-     *  barycentrics, the model's UVs at the hit, for surface picking, not built yet). */
+     *  barycentrics, the model's vertex attributes at the hit). */
     uint32_t MeshPart;
     uint32_t SourceTriangle;
     /** @brief The mesh part's material index, -1 for none. */

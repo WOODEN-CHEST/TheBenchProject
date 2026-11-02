@@ -81,10 +81,10 @@ Color WorldRendererGeometry_MultiplyColor(Color a, Color b)
     return Result;
 }
 
-/* The asset material and its maps are copied, so the variant (its maps and factors for this material slot), the tint,
- * the LOD tinting's glow and the pass shader land on the copy and nothing is written to the shared assets (raylib's
- * DrawModel instead writes the tint into the asset's maps for the duration of the draw). DrawMesh still binds the maps'
- * textures, through the shader's location table. */
+/* The asset material and its maps are copied, so the variant (its maps and factors for this material slot), a surface's
+ * picture (on its slot), the tint, the LOD tinting's glow and the pass shader land on the copy and nothing is written to
+ * the shared assets (raylib's DrawModel instead writes the tint into the asset's maps for the duration of the draw).
+ * DrawMesh still binds the maps' textures, through the shader's location table. */
 Material WorldRendererGeometry_PrepareMaterial(const WorldRenderer* self, const WorldRenderModel* model, Model rayModel,
     int meshIndex, size_t lod, const Shader* passShader, const WorldRendererPbrProgram* litProgram,
     MaterialMap* outMaps)
@@ -99,6 +99,11 @@ Material WorldRendererGeometry_PrepareMaterial(const WorldRenderer* self, const 
     {
         WorldModel_ApplyVariant(model->Asset, model->VariantIndex, MaterialIndex, &DrawMaterial);
     }
+    WorldRendererMapOrientation Orientation = { .IsAlbedoBottomUp = false, .IsEmissiveBottomUp = false };
+    if ((model->Surface != NULL) && (MaterialIndex == WorldModelSurface_GetMaterialSlot(model->Surface)))
+    {
+        Orientation = WorldRendererSurfaces_Apply(self, model, &DrawMaterial);
+    }
     if (Look.HasGlow)
     {
         outMaps[MATERIAL_MAP_EMISSION].texture.id = 0U; // the debug glow replaces the material's own emission
@@ -108,7 +113,7 @@ Material WorldRendererGeometry_PrepareMaterial(const WorldRenderer* self, const 
 
     if (litProgram != NULL)
     {
-        WorldRendererLighting_UploadMaterial(litProgram, &DrawMaterial);
+        WorldRendererLighting_UploadMaterial(litProgram, &DrawMaterial, Orientation);
     }
     outMaps[MATERIAL_MAP_ALBEDO].color = WorldRendererGeometry_MultiplyColor(outMaps[MATERIAL_MAP_ALBEDO].color,
         Look.Tint);

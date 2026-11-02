@@ -142,10 +142,11 @@ typedef struct CollisionMeshTriangleStruct
 {
     /** @brief Its vertices' indices in the mesh. */
     uint32_t _indices[3];
-    /** @brief The model's mesh (raylib's mesh index) it came from. */
+    /** @brief The part it came from: its index among the parts the mesh was built from (for a mesh built from a whole
+     *  model, raylib's mesh index). */
     uint32_t _part;
-    /** @brief Its index among that mesh's own triangles (with the part, it finds the model's UVs, for surface picking,
-     *  not built yet). */
+    /** @brief Its index among that part's own triangles (with the part, it finds the source's vertices and their
+     *  attributes: a world model's surfaces take each corner's texture coordinates so). */
     uint32_t _sourceIndex;
     /** @brief Which edges are active: bit 0 for (v0, v1), bit 1 for (v1, v2), bit 2 for (v2, v0). An inactive edge is
      *  shared with a neighbour across a flat or concave seam: contacts on it take the face normal, so shapes slide over

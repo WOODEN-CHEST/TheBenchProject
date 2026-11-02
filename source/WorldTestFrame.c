@@ -10,9 +10,11 @@
 #include "WorldCharacters.h"
 #include "WorldColliderComponent.h"
 #include "WorldCollision.h"
+#include "WorldScreens.h"
 #include "WorldTestAnimation.h"
 #include "WorldTestCharacters.h"
 #include "WorldTestInstances.h"
+#include "WorldTestScreens.h"
 #include "WorldTestShadows.h"
 #include "WorldTestWeather.h"
 #include "WorldFile.h"
@@ -240,6 +242,11 @@ typedef struct WorldTestFrameStruct
     /** The weather: the test world's climate run on the frame's clock, and its keys (Insert, Home, End, Page Up, Page
      *  Down, the backslash). */
     WorldTestWeather _testWeather;
+    /** The world's screens (every screen component's surface, and where the player points at them), synced at the end of
+     *  every tick; owned. */
+    WorldScreens* _screens;
+    /** The test monitor and the UI it shows: pointed at by the aim, used with E or a click, let go with Escape. */
+    WorldTestScreens _testScreens;
     /** Where the F11 key's far shift has moved the test world, its characters and the camera: an index into FarShifts
      *  (0: not moved). */
     size_t _farShiftIndex;
@@ -1681,7 +1688,7 @@ static void HandleFlySpeedWheel(WorldTestFrame* frame, GameInput* input)
 /* The frame's own controls, from what the UI above left unconsumed: quitting, the mouse, the flycam. */
 static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaSeconds)
 {
-    // An unconsumed pause (Escape when the UI is not using it) quits this test.
+    // An unconsumed pause (Escape when the UI is not using it, nor the monitor letting go) quits this test.
     if (GameInput_IsActionPressed(input, GameAction_Pause))
     {
         if (frame->_services->Logger != NULL)
@@ -1802,6 +1809,17 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     float Delta = (float)time.PassedTime;
     Stopwatch UpdateClock = Stopwatch_StartNew();
 
+    // The monitor reads first, as a UI above the game does: where the player points at it (the camera's aim as last
+    // shown, or the free cursor), its use, and while it is in use the whole keyboard (the mouse still turns the view).
+    uint64_t PlayerId = WorldTestCharacters_IsWalking(&Frame->_testCharacters)
+        ? WorldTestCharacters_GetPlayer(&Frame->_testCharacters) : 0U;
+    Error ScreenResult = WorldTestScreens_Update(&Frame->_testScreens, time, &Frame->_camera, PlayerId,
+        Frame->_cursorCaptured, &Frame->_clock);
+    if (ScreenResult.Code != ErrorCode_Success)
+    {
+        Stopwatch_Deconstruct(&UpdateClock);
+        return ScreenResult;
+    }
     if (Frame->_services->Input != NULL)
     {
         HandleControls(Frame, Frame->_services->Input, Delta);
@@ -1843,9 +1861,11 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     AdvanceSpriteAnimations(&Frame->_world, time.PassedTime);
 
     // The world matrices of everything that moved this tick, so the renderer reads them cached; then the look target
-    // (its changes logged). The camera rides the player's eyes from PrepareRender, after the pose step.
+    // (its changes logged) and the screens (the next tick points at them). The camera rides the player's eyes from
+    // PrepareRender, after the pose step.
     World_UpdateTransforms(&Frame->_world);
     WorldTestCharacters_AfterStep(&Frame->_testCharacters);
+    WorldScreens_Sync(Frame->_screens);
 
     // The text sample animates its sprite and is laid out here (laying out loads its fonts); Render only draws it.
     Error TextResult = TextDocument_Update(&Frame->_textSample, time);
@@ -1921,8 +1941,14 @@ static Error WorldTestFrame_Render(void* self, const FrameRenderContext* context
 {
     WorldTestFrame* Frame = self;
     // All input (movement, mouse look, debug keys) is handled in Update, where input is polled per tick.
+    // The monitor's UI is drawn into its picture first, which the renderer shows on its screen in this render.
+    Error Result = WorldTestScreens_Render(&Frame->_testScreens, Frame->_renderer);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
     // The render tick's real frame delta paces the renderer's HDR eye adaptation.
-    Error Result = WorldRenderer_RenderToTarget(Frame->_renderer, &Frame->_world, &Frame->_camera,
+    Result = WorldRenderer_RenderToTarget(Frame->_renderer, &Frame->_world, &Frame->_camera,
         context->Time.PassedTime, target);
     if ((Result.Code != ErrorCode_Success) || !Frame->_isTextSampleShown)
     {
@@ -1955,6 +1981,9 @@ static void WorldTestFrame_Destroy(void* self)
         Error RendererResult = WorldRenderer_Deconstruct(Frame->_renderer);
         Error_Deconstruct(&RendererResult);
     }
+    // The monitor's UI borrows the screens, which borrow the world.
+    WorldTestScreens_Deconstruct(&Frame->_testScreens);
+    WorldScreens_Destroy(Frame->_screens);
     // The characters borrow the collision world, which borrows the world (and the renderer borrowed it): they go after
     // the renderer, before the world, as the animation system does.
     WorldTestAnimation_Deconstruct(&Frame->_testAnimation);
@@ -2169,6 +2198,22 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
     Frame->_flySpeedStep = 0;
     Frame->_flyWheelRemainder = 0.0f;
     Frame->_lastUpdateMilliseconds = 0.0;
+
+    // The screens, and the test monitor's UI (its picture at the surface's resolution: the screens sync first).
+    Frame->_screens = NULL;
+    Memory_Zero(&Frame->_testScreens, sizeof(Frame->_testScreens));
+    Error ScreensResult = WorldScreens_Create(&Frame->_world, services->Assets, services->Logger, &Frame->_screens);
+    if (ScreensResult.Code == ErrorCode_Success)
+    {
+        WorldScreens_Sync(Frame->_screens);
+        ScreensResult = WorldTestScreens_Construct(&Frame->_testScreens, services, &Frame->_world, Frame->_collision,
+            Frame->_screens);
+    }
+    if (ScreensResult.Code != ErrorCode_Success)
+    {
+        WorldTestFrame_Destroy(Frame); // everything above is built: the frame's own teardown releases it
+        return ScreensResult;
+    }
 
     *outFrame = &Frame->Base;
     return Error_CreateSuccess();

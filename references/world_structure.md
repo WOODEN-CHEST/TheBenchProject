@@ -97,7 +97,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 | `mobility` | `"static"` / `"movable"` | |
 | `tags` | array of keys | See "Tags and data". |
 | `data` | object | See "Tags and data". |
-| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`, `collider`, `character`, `animator`, `terrain`, `model_instances`, `ambient_zone`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component`, `collider_component`, `character_component`, `animator_component`, `terrain_component`, `model_instances_component`, `ambient_zone_component` in `agents/WorldData.md`, `agents/Characters.md`, `agents/Animation.md` and `agents/Terrain.md`). |
+| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`, `collider`, `character`, `animator`, `terrain`, `model_instances`, `ambient_zone`, `screen`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component`, `collider_component`, `character_component`, `animator_component`, `terrain_component`, `model_instances_component`, `ambient_zone_component`, `screen_component` in `agents/WorldData.md`, `agents/Characters.md`, `agents/Animation.md` and `agents/Terrain.md`). |
 
 An object has at most one component of each type. A block whose values are all defaults is still written (`"light":
 {}`): the component is there.
@@ -399,6 +399,23 @@ ceiling):
     "half_extents": [1.9, 1.4, 1.7],
     "haze": 0.0
 }
+```
+
+### The screen block
+
+The `screen` component shows a picture made while the game runs (a computer's UI) on a surface of the object's world
+model (`references/asset_structure.md`, "World models", `surfaces`; `agents/WorldData.md`, "Screen component"). The object
+also needs a `model` block naming that world model; the picture itself is the game's, never saved.
+
+| Key | Value (default) | |
+|---|---|---|
+| `surface` | a name, `[a-z][a-z0-9_.-]*`, at most 64 bytes (`screen`) | Which of the world model's surfaces shows the picture. |
+| `is_powered` | boolean (true) | Off, the screen shows no picture: its material's own surface. |
+| `brightness` | in [0, 1000] (1) | Times the surface's `emission`: how brightly a screen's picture glows (a paper takes none). |
+
+The test world's monitor (object 70, a child of its table's pivot) takes every default:
+```
+"screen": {}
 ```
 
 ### Values

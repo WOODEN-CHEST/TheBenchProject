@@ -809,6 +809,7 @@ static bool ConstructRecorderWorld(TestRun* run, World* world, KeyRegistry* keys
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Terrain),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_ModelInstances),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_AmbientZone),
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Screen),
         &RecorderType,
     };
     if (!TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(keys)))
