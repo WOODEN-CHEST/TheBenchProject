@@ -2,8 +2,9 @@
 // with materials built on the stack, so no pass writes into a shared model asset. A model is drawn one LOD at a time:
 // the lit passes draw both LODs of a cross-fade with complementary dithers (WorldLod.h). A posed object's skinned meshes
 // draw with each pass's skinned shader and the pose's palette; a CRT's glass with the CRT program in the lit passes
-// (WorldRendererCrt.c); the depth passes draw the meshes alone, with no material. Sprites have their own file
-// (WorldRendererSprites.c).
+// (WorldRendererCrt.c); the depth passes draw the meshes alone, with no material. A world model's water slots are drawn
+// by the water pass (with their water materials: WorldRendererWater.c) and the G-buffer alone: every pass draws one set
+// of meshes (WorldRendererMeshSet). Sprites have their own file (WorldRendererSprites.c).
 
 #include "WorldRendererInternal.h"
 #include "GameSkeleton.h"
@@ -167,6 +168,13 @@ void WorldRendererGeometry_ResetPalettes(WorldRenderer* self)
     }
 }
 
+bool WorldRendererGeometry_IsMeshInSet(const WorldRenderModel* model, int materialIndex, WorldRendererMeshSet set)
+{
+    bool IsWater = (model->Asset != NULL) && (WorldModel_GetWaterCount(model->Asset) > 0U)
+        && WorldModel_TryFindWater(model->Asset, (int32_t)materialIndex, NULL);
+    return IsWater == (set == WorldRendererMeshSet_Water);
+}
+
 bool WorldRendererGeometry_PassesFilter(bool omitPixelation, WorldRendererPixelFilter filter)
 {
     switch (filter)
@@ -196,14 +204,36 @@ void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel
     bool IsPosed = CanSkin(model, Skeleton, shaders);
     for (int MeshIndex = 0; MeshIndex < RayModel.meshCount; MeshIndex++)
     {
+        int MaterialIndex = RayModel.meshMaterial[MeshIndex];
+        if (!WorldRendererGeometry_IsMeshInSet(model, MaterialIndex, shaders->Meshes))
+        {
+            continue;
+        }
+        if (shaders->Water != NULL)
+        {
+            // The water pass: the slot's water material with the water program, rigid.
+            if ((Skeleton != NULL) && (model->CameraPose != NULL) && GameSkeleton_IsMeshSkinned(Skeleton, (uint32_t)MeshIndex))
+            {
+                WorldRendererCommon_WarnOnce(self, &self->_water._isSkinnedReported, (const unsigned char*)u8"WorldRenderer: "
+                    u8"a world model's water slot is on a skinned mesh: water draws in its bind pose.");
+            }
+            MaterialMap WaterMaps[WORLD_RENDERER_MATERIAL_MAP_COUNT];
+            Material WaterDraw = WorldRendererWater_PrepareMaterial(self, shaders->Water, model, MaterialIndex,
+                WaterMaps);
+            if (WaterDraw.shader.id != 0U)
+            {
+                DrawMesh(RayModel.meshes[MeshIndex], WaterDraw, LodTransform);
+            }
+            continue;
+        }
         bool IsSkinned = IsPosed && GameSkeleton_IsMeshSkinned(Skeleton, (uint32_t)MeshIndex);
         const WorldRendererPbrProgram* LitProgram = NULL;
         const Shader* PassShader = IsSkinned ? shaders->Skinned : shaders->Rigid;
         if (isLit)
         {
             LitProgram = IsSkinned ? &self->_pbr._skinned : &self->_pbr._rigid;
-            const WorldRendererPbrProgram* CrtProgram = WorldRendererCrt_IsCrtMesh(self, model,
-                RayModel.meshMaterial[MeshIndex]) ? GetCrtProgram(self, model, IsSkinned) : NULL;
+            const WorldRendererPbrProgram* CrtProgram = WorldRendererCrt_IsCrtMesh(self, model, MaterialIndex)
+                ? GetCrtProgram(self, model, IsSkinned) : NULL;
             if (CrtProgram != NULL)
             {
                 LitProgram = CrtProgram;
@@ -232,6 +262,10 @@ void WorldRendererGeometry_DrawModelDepth(const WorldRenderModel* model, size_t 
     unsigned int Bound = 0U;
     for (int MeshIndex = 0; MeshIndex < RayModel.meshCount; MeshIndex++)
     {
+        if (!WorldRendererGeometry_IsMeshInSet(model, RayModel.meshMaterial[MeshIndex], shaders->Meshes))
+        {
+            continue;
+        }
         bool IsSkinned = IsPosed && GameSkeleton_IsMeshSkinned(Skeleton, (uint32_t)MeshIndex);
         Shader MeshShader = IsSkinned ? *shaders->Skinned : *shaders->Rigid;
         if (MeshShader.id != Bound)

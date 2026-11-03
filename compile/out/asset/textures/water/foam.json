@@ -1,0 +1,6 @@
+{
+    "name": "tbp:water_foam",
+    "location": "water/foam",
+    "texture_properties": { "filtering": "trilinear", "wrap": "repeat", "mipmaps": true },
+    "color_space": "linear"
+}

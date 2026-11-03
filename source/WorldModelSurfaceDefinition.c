@@ -818,6 +818,22 @@ void WorldModelSurfaceDefinition_Destroy(WorldModelSurfaceDefinition* self)
     Memory_Free(self);
 }
 
+bool WorldModelSurfaceDefinition_HasSlot(const WorldModelSurfaceDefinition* self, int32_t materialSlot)
+{
+    if (self == NULL)
+    {
+        return false;
+    }
+    for (size_t Index = 0U; Index < self->SurfaceCount; Index++)
+    {
+        if (self->Surfaces[Index].MaterialSlot == materialSlot)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 Error WorldModelSurfaceDefinition_Load(const WorldModelSurfaceDefinition* self, const unsigned char* worldModelName,
     AssetManager* manager, AssetUserID dependencyUser, GameModel* lod0, WorldModel* model, void** outBlock)
 {

@@ -114,7 +114,7 @@ are no "inherit" values.
 | Setting | Flag | Value |
 |---|---|---|
 | The outline | `overrides_has_outline` | `has_outline` (default true) |
-| Full resolution over the pixelated image | `overrides_omit_pixelation` | `omit_pixelation` (default false) |
+| Full resolution over the pixelated image | `overrides_omit_pixelation` | `omit_pixelation` (default false; ignored when the world model has a `water` section) |
 | Casting shadows | `overrides_casts_shadows` | `casts_shadows` (default true) |
 | How far from the camera it still casts | `overrides_shadow_distance` | `shadow_distance`: metres, above 0 (default 600; while not overridden, the world model's own, or without one its draw distance) |
 | Keeping the shadow distance fixed against the quality setting | `overrides_is_shadow_distance_fixed` | `is_shadow_distance_fixed` (default false) |

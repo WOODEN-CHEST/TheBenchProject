@@ -1,0 +1,6 @@
+# In slot order: the stone (0) and the water (1).
+newmtl stone
+Kd 0.5200 0.5000 0.4700
+
+newmtl water_surface
+Kd 0.1000 0.2000 0.2500

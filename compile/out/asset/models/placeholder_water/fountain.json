@@ -1,0 +1,7 @@
+{
+    "name": "tbp:test_fountain",
+    "location": "placeholder_water/fountain",
+    "material_overrides": [
+        { "slot": 0, "roughness": 0.85 }
+    ]
+}

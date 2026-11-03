@@ -1,0 +1,5 @@
+{
+    "name": "tbp:world_water",
+    "vertex_location": "pbr/vertex",
+    "fragment_location": "water/fragment"
+}

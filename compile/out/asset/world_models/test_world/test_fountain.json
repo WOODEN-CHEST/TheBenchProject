@@ -1,0 +1,18 @@
+{
+    "name": "tbp:test_fountain",
+    "lods": [
+        { "model": "tbp:test_fountain", "max_distance": 150 }
+    ],
+    "water": [
+        { "material_slot": 1, "water_material": "tbp:test_fountain_clear" }
+    ],
+    "variants": [
+        { "name": "clear" },
+        {
+            "name": "murky",
+            "material_overrides": [
+                { "slot": 1, "water_material": "tbp:test_fountain_murky" }
+            ]
+        }
+    ]
+}

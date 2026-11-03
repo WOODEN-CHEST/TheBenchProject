@@ -500,6 +500,67 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
     CacheFixture_Deconstruct(run, &Fixture);
 }
 
+/* A world model with water slots is never drawn crisp, whatever its omit_pixelation or its placement's override says (its
+ * water lies over copies of the pixelated scene, which must hold the rest of it); the same basin without water is. */
+static void AModelWithWaterIsNeverCrisp(TestRun* run)
+{
+    static const float Floor[] = { 0.0f, -0.5f, 0.0f, 1.0f, -0.5f, 0.0f, 1.0f, -0.5f, 1.0f, 0.0f, -0.5f, 1.0f };
+    static const float Surface[] = { 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f };
+    static const float Texcoords[] = { 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f };
+    static const unsigned short Indices[] = { 0, 2, 1, 0, 3, 2 };
+    TestModelPart Parts[] =
+    {
+        { .Vertices = Floor, .Texcoords = Texcoords, .VertexCount = 4, .Indices = Indices, .TriangleCount = 2,
+            .Material = 0 },
+        { .Vertices = Surface, .Texcoords = Texcoords, .VertexCount = 4, .Indices = Indices, .TriangleCount = 2,
+            .Material = 1 },
+    };
+    CacheFixture Fixture;
+    WorldModelComponent* Pond = NULL;
+    WorldModelComponent* Basin = NULL;
+    if (!CacheFixture_Construct(run, &Fixture)
+        || !TestAssets_AddPartsModel(run, &Fixture.Assets, "basin", Parts, 2, 2, MatrixIdentity(), NULL)
+        || !TestAssets_AddWaterMaterial(run, &Fixture.Assets, "{\"name\": \"still\"}")
+        || !TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"crisp_pond\", \"lods\": [{\"model\": "
+            "\"basin\", \"max_distance\": 20}], \"render\": {\"omit_pixelation\": true}, \"water\": [{\"material_slot\": 1, "
+            "\"water_material\": \"still\"}]}")
+        || !TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"crisp_basin\", \"lods\": [{\"model\": "
+            "\"basin\", \"max_distance\": 20}], \"render\": {\"omit_pixelation\": true}}")
+        || ((Pond = AddModel(run, &Fixture.World, "crisp_pond", Vector3Zero(), (Vector3){ 1.0f, 1.0f, 1.0f })) == NULL)
+        || ((Basin = AddModel(run, &Fixture.World, "crisp_basin", (Vector3){ 3.0f, 0.0f, 0.0f },
+            (Vector3){ 1.0f, 1.0f, 1.0f })) == NULL)
+        || !CacheFixture_Sync(run, &Fixture))
+    {
+        CacheFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    for (int Pass = 0; Pass < 2; Pass++)
+    {
+        size_t Count = 0;
+        const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
+        const WorldRenderModel* PondEntry = NULL;
+        const WorldRenderModel* BasinEntry = NULL;
+        for (size_t Index = 0U; Index < Count; Index++)
+        {
+            PondEntry = (Models[Index].Component == Pond) ? &Models[Index] : PondEntry;
+            BasinEntry = (Models[Index].Component == Basin) ? &Models[Index] : BasinEntry;
+        }
+        TEST_CHECK(run, (Count == 2) && (PondEntry != NULL) && (BasinEntry != NULL) && (PondEntry->Asset != NULL)
+            && !PondEntry->OmitsPixelation && BasinEntry->OmitsPixelation);
+        if (Pass == 0)
+        {
+            // The placement's own crisp setting changes nothing either.
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Pond, WorldModelSetting_OmitPixelation, true));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOmitsPixelation(Pond, true));
+            if (!CacheFixture_Sync(run, &Fixture))
+            {
+                break;
+            }
+        }
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
 /* Changing an object's world model swaps what it draws and keeps the object: the component's revision advances and the
  * next sync resolves the new world model (the old one stays held until PrepareWorld swaps the user). */
 static void SwappingTheWorldModelKeepsTheObject(TestRun* run)
@@ -2327,6 +2388,7 @@ void WorldRenderCacheTests_Run(TestRun* run)
         { "lists_drawable_sprites_and_every_light", ListsDrawableSpritesAndEveryLight },
         { "disabled_and_hidden_objects_are_not_drawn", DisabledAndHiddenObjectsAreNotDrawn },
         { "entries_carry_the_settings_in_effect", EntriesCarryTheSettingsInEffect },
+        { "a_model_with_water_is_never_crisp", AModelWithWaterIsNeverCrisp },
         { "ambient_zones_are_listed_in_render_space", AmbientZonesAreListedInRenderSpace },
         { "swapping_the_world_model_keeps_the_object", SwappingTheWorldModelKeepsTheObject },
         { "variants_resolve_by_name_and_unknown_ones_warn_once", VariantsResolveByNameAndUnknownOnesWarnOnce },

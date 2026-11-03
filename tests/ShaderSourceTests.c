@@ -15,6 +15,7 @@
 #include "WorldShadowLevels.h"
 #include "WorldSkyLight.h"
 #include "WorldVisibility.h"
+#include "WorldWater.h"
 #include "WorldWeatherLight.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRJSON.h"
@@ -1002,7 +1003,8 @@ static void ShippedInstancedTwinsShareTheirStages(TestRun* run)
         { "pbr/pbr_instanced.json", "pbr/instanced", "pbr/fragment" },
         { "normal/normal_instanced.json", "normal/instanced", "normal/fragment" },
         { "depth/depth_instanced.json", "depth/instanced", "depth/fragment" },
-        { "cube_depth/cube_depth_instanced.json", "cube_depth/instanced", "cube_depth/fragment" }
+        { "cube_depth/cube_depth_instanced.json", "cube_depth/instanced", "cube_depth/fragment" },
+        { "water/water_instanced.json", "pbr/instanced", "water/fragment" }
     };
     const char* const Instanced[] = { "WORLD_INSTANCED" };
     ShaderFixture Fixture;
@@ -1017,7 +1019,7 @@ static void ShippedInstancedTwinsShareTheirStages(TestRun* run)
         TEST_CHECK(run, FailedCount == 0U);
         const unsigned char* const Names[] = { (const unsigned char*)u8"world_pbr_instanced",
             (const unsigned char*)u8"world_normal_instanced", (const unsigned char*)u8"world_depth_instanced",
-            (const unsigned char*)u8"world_cube_depth_instanced" };
+            (const unsigned char*)u8"world_cube_depth_instanced", (const unsigned char*)u8"world_water_instanced" };
         for (size_t Index = 0U; Index < (sizeof(Names) / sizeof(Names[0])); Index++)
         {
             bool Exists = false;
@@ -1795,6 +1797,58 @@ static void ShippedShadersMakeTheReflections(TestRun* run)
     ShaderFixture_Deconstruct(run, &Fixture);
 }
 
+/* The water: its program's definition pairs the PBR's vertex stage with its fragment stage, which reads the lighting,
+ * the dither, the depth convention and the reflection outputs; common/water holds its C mirror's constants and steps
+ * (WorldWater.h: WorldWater_GetMapCoordinate, _GetTransmittance and _GetFoam); the water hands its reflection to the
+ * pass only while it runs and the material lets it, and lies over the bottom seen through it as a blended surface over
+ * the haze. */
+static void ShippedShadersDrawTheWater(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        GenericBuffer Definition;
+        GenericBuffer_AllocateVariable(&Definition, 0U, sizeof(unsigned char));
+        if (ReadShippedText(run, "water/water.json", &Definition))
+        {
+            TEST_CHECK(run, BufferContains(&Definition, "\"vertex_location\": \"pbr/vertex\"")
+                && BufferContains(&Definition, "\"fragment_location\": \"water/fragment\""));
+        }
+        Memory_Free(Definition._data);
+        if (ExpandShippedStage(run, &Fixture, "water/fragment"))
+        {
+            TEST_CHECK(run, BufferContains(&Fixture.SourceList, "\"common/water\"")
+                && BufferContains(&Fixture.SourceList, "\"common/lighting\"")
+                && BufferContains(&Fixture.SourceList, "\"common/dither\"")
+                && BufferContains(&Fixture.SourceList, "\"common/depth\"")
+                && BufferContains(&Fixture.SourceList, "\"common/reflection_output\""));
+            TEST_CHECK(run, ((float)GetConstValue(&Fixture.Text, "WATER_FOAM_EDGE") == WORLD_WATER_FOAM_EDGE)
+                && ((float)GetConstValue(&Fixture.Text, "WATER_MIN_ROUGHNESS") == WORLD_WATER_MIN_ROUGHNESS));
+            // A place on a map, the bottom's light through the water and the foam, as the C mirror computes them.
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text,
+                    "vec2 turned = vec2(frame.z*place.x + frame.w*place.y, -frame.w*place.x + frame.z*place.y);") == 1U)
+                && (CountOccurrences(&Fixture.Text, "return (turned + frame.xy)*inverseTile;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "return exp(-max(absorption, vec3(0.0))*max(path, 0.0));") == 1U)
+                && (CountOccurrences(&Fixture.Text, "float ratio = max(depth, 0.0)/foamDepth;") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "return smoothstep(ratio - WATER_FOAM_EDGE, ratio + WATER_FOAM_EDGE, texel)"
+                    "*min(foamStrength, 1.0);") == 1U));
+            // Its outputs, its reflection handed over only while the pass runs and its material lets it, and the bottom
+            // under its light.
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "layout(location = 0) out vec4 finalColor;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "layout(location = 1) out vec4 reflectionWeight;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "if (reflectionsDeferred && waterHasReflections)") == 1U)
+                && (CountOccurrences(&Fixture.Text, "WriteReflection(reflection, fragPosition);") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "vec3 color = bottomColor*through + own*airTransmittance "
+                    "+ NightVisionOf(inScatter)*(vec3(1.0) - through);") == 1U));
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
 // Public functions.
 void ShaderSourceTests_Run(TestRun* run)
 {
@@ -1829,6 +1883,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "shipped_shaders_draw_the_rain", ShippedShadersDrawTheRain },
         { "shipped_shaders_draw_the_crt", ShippedShadersDrawTheCrt },
         { "shipped_shaders_make_the_reflections", ShippedShadersMakeTheReflections },
+        { "shipped_shaders_draw_the_water", ShippedShadersDrawTheWater },
     };
     TestRun_RunSuite(run, "ShaderSource", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

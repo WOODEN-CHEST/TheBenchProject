@@ -175,6 +175,7 @@ Error WorldRendererScene_EnsureTargets(WorldRenderer* self, int windowWidth, int
     // The passes' own targets depend on the scene target's size and depth tier, so they come after it (the reflections'
     // attachments go onto the scene target itself).
     WorldRendererReflections_CreateTargets(self, SceneWidth, SceneHeight);
+    WorldRendererWater_CreateTargets(self, SceneWidth, SceneHeight);
     WorldRendererGBuffer_CreateTargets(self, SceneWidth, SceneHeight);
     WorldRendererPost_CreateTargets(self, SceneWidth, SceneHeight);
     WorldRendererCrisp_CreateTargets(self, SafeWindowWidth, SafeWindowHeight);
@@ -186,6 +187,7 @@ Error WorldRendererScene_EnsureTargets(WorldRenderer* self, int windowWidth, int
 void WorldRendererScene_ReleaseTargets(WorldRenderer* self)
 {
     WorldRendererReflections_ReleaseTargets(self);
+    WorldRendererWater_ReleaseTargets(self);
     WorldRendererCommon_UnloadTarget(&self->_scene._target, &self->_scene._hasTarget);
     self->_scene._isDepthSamplable = false;
     WorldRendererGBuffer_ReleaseTargets(self);
@@ -252,10 +254,13 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
 
     // The cutout sprites, lit like the models (opaque, writing depth).
     WorldRendererSprites_DrawLitOpaque(self, frame->SceneFilter, true);
+
+    // The water over the opaque world, from copies of what lies under it; it hands its reflections over too.
+    WorldRendererWater_Render(self, frame);
     WorldRendererReflections_EndSurfaces(self);
 
-    // What the opaque world mirrors, added to its colour: the pass reads the scene's colour and depth, so it runs outside
-    // the scene's texture mode, which resumes after it.
+    // What the opaque world and the water mirror, added to the colour: the pass reads the scene's colour and depth, so it
+    // runs outside the scene's texture mode, which resumes after it.
     if (frame->AreReflectionsActive)
     {
         EndMode3D();

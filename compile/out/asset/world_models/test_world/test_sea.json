@@ -1,0 +1,11 @@
+{
+    "name": "tbp:test_sea",
+    "lods": [
+        { "model": "tbp:water_plane", "max_distance": 1000000 }
+    ],
+    "is_draw_distance_fixed": true,
+    "render": { "casts_shadows": false, "occludes_sky": false },
+    "water": [
+        { "material_slot": 0, "water_material": "tbp:test_sea" }
+    ]
+}

@@ -70,6 +70,10 @@
  *  overrides of registered actions and categories). */
 #define ASSET_TYPE_NAME_INPUT_ACTIONS      ((const unsigned char*)u8"input_actions")
 #define ASSET_TYPE_DIRECTORY_INPUT_ACTIONS ((const unsigned char*)u8"input_actions")
+/** @brief Standard water material type name / directory (WaterMaterial.h: the look of a body of water, its maps loaded as
+ *  texture dependencies). */
+#define ASSET_TYPE_NAME_WATER_MATERIAL      ((const unsigned char*)u8"water_material")
+#define ASSET_TYPE_DIRECTORY_WATER_MATERIAL ((const unsigned char*)u8"water_materials")
 
 /** @brief Definition-file extension (without the dot) for every standard type: their definitions are JSON.
  *  AssetManager_ReadDefinitions uses it to skip non-definition resource files sharing the type directory. */
@@ -138,6 +142,10 @@ Error InputActionsDefinition_Construct(AssetManager* manager, const UserData* us
  *  AssetDefinitionConstructor. */
 Error TerrainMaterialDefinition_Construct(AssetManager* manager, const UserData* userData,
     const GenericBuffer* rawData, const unsigned char* sourceDescription, AssetDefinition** outDefinition);
+/** @brief Builds a water material definition from a JSON blob (WaterMaterialDefinition.c). See
+ *  AssetDefinitionConstructor. */
+Error WaterMaterialDefinition_Construct(AssetManager* manager, const UserData* userData, const GenericBuffer* rawData,
+    const unsigned char* sourceDescription, AssetDefinition** outDefinition);
 
 /**
  * @brief Decodes the image file of a texture definition into 8-bit RGBA pixels on the CPU (TextureDefinition.c), the

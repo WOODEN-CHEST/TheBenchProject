@@ -14,6 +14,7 @@
 #include "WorldModelCollisionInternal.h"
 #include "WorldModelSocketInternal.h"
 #include "WorldModelSurfaceInternal.h"
+#include "WorldModelWaterInternal.h"
 #include "raylib/raymath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
@@ -36,7 +37,10 @@
  * the skeleton is the first skinned LOD's, which every other skinned LOD must share. The animation graph is a
  * dependency as well; the "sockets" and "first_person" sections are parsed and loaded by
  * source/WorldModelSocketDefinition.c into a third block the asset owns, the "surfaces" section by
- * source/WorldModelSurfaceDefinition.c into a fourth (with LOD 0's triangles of each surface's slot).
+ * source/WorldModelSurfaceDefinition.c into a fourth (with LOD 0's triangles of each surface's slot), the "water"
+ * section by source/WorldModelWaterDefinition.c into a fifth (its water materials load as dependencies, as do those the
+ * variants swap in). A material slot is a surface or water, never both, and a variant swaps a water material only on a
+ * water slot, whose override may hold nothing else.
  */
 
 
@@ -74,6 +78,7 @@ typedef struct WorldModelOverrideDefinitionStruct
     unsigned char* Mra;
     unsigned char* Emissive;
     GameMaterialFactors Factors;
+    unsigned char* WaterMaterial; // owned water material asset name, NULL when the override keeps the slot's
 } WorldModelOverrideDefinition;
 
 typedef struct WorldModelVariantDefinitionStruct
@@ -102,6 +107,7 @@ typedef struct WorldModelDefinitionStruct
     unsigned char* AnimationGraph;       // owned asset name, NULL without one
     WorldModelSocketDefinition* Sockets; // owned, NULL without "sockets" and "first_person"
     WorldModelSurfaceDefinition* Surfaces; // owned, NULL without "surfaces"
+    WorldModelWaterDefinition* Water;      // owned, NULL without "water"
 } WorldModelDefinition;
 
 /* The definition being read, its name in printable form, for messages, and the asset manager's logger for warnings
@@ -121,6 +127,7 @@ typedef struct WorldModelLoadedStruct
     void* LibraryBlock;   // owned: the animation libraries' names in one block (NULL without libraries)
     void* SocketBlock;    // owned: the sockets, their names and the hidden bones (NULL without them)
     void* SurfaceBlock;   // owned: the surfaces, their meshes, texture coordinates and names (NULL without them)
+    void* WaterBlock;     // owned: the water slots and their materials' names (NULL without them)
     unsigned char* GraphName; // owned copy of the animation graph's name (NULL without one)
 } WorldModelLoaded;
 
@@ -130,7 +137,7 @@ static const unsigned char* const RootKeys[] =
 {
     u8"name", u8"lods", u8"draw_distance", u8"is_draw_distance_fixed", u8"lod_fade_seconds", u8"lod_hysteresis",
     u8"render", u8"variants", u8"bounds", u8"collision", u8"animation_libraries", u8"animation_graph", u8"sockets",
-    u8"first_person", u8"surfaces"
+    u8"first_person", u8"surfaces", u8"water"
 };
 static const unsigned char* const LodKeys[] = { u8"model", u8"max_distance" };
 static const unsigned char* const RenderKeys[] =
@@ -145,8 +152,11 @@ static const unsigned char* const VariantKeys[] = { u8"name", u8"material_overri
 static const unsigned char* const OverrideKeys[] =
 {
     u8"slot", u8"albedo", u8"normal", u8"mra", u8"emissive", u8"tint", u8"metallic", u8"roughness", u8"emissive_color",
-    u8"emissive_intensity", u8"porosity", u8"puddles"
+    u8"emissive_intensity", u8"porosity", u8"puddles", u8"water_material"
 };
+/* The keys a water slot's override may hold: it is drawn with a water material, never with its material's maps and
+ * factors. */
+static const unsigned char* const WaterOverrideKeys[] = { u8"slot", u8"water_material" };
 static const unsigned char* const BoundsKeys[] = { u8"center", u8"radius" };
 static const unsigned char* const OverrideTextureKeys[OVERRIDE_TEXTURE_KEY_COUNT] =
 {
@@ -676,6 +686,29 @@ static Error ParseOverride(const ParseContext* context, JSONCompound* compound, 
                 path, Override->Slot);
         }
     }
+    // A water slot draws with its water material alone: its override may swap that and nothing else.
+    bool IsWater = WorldModelWaterDefinition_HasSlot(context->Definition->Water, Override->Slot);
+    if (IsWater)
+    {
+        Result = AssetJSON_RejectUnknownKeys(compound, WaterOverrideKeys, KEY_COUNT(WaterOverrideKeys),
+            FormatWhere(context, Where, sizeof(Where), ", %s (material slot %" PRId32 " is drawn as water: its override "
+                "may only swap its water material)", path, Override->Slot));
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+    }
+    Result = ReadAssetName(context, compound, (const unsigned char*)u8"water_material", false, path,
+        &Override->WaterMaterial);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if ((Override->WaterMaterial != NULL) && !IsWater)
+    {
+        return Fail(context, "%s names a \"water_material\" for material slot %" PRId32 ", which the \"water\" section "
+            "does not draw as water.", path, Override->Slot);
+    }
 
     unsigned char** const TextureNames[OVERRIDE_TEXTURE_KEY_COUNT] =
     {
@@ -927,6 +960,23 @@ static Error ParseAnimationLibraries(const ParseContext* context, JSONCompound* 
     return Error_CreateSuccess();
 }
 
+/* A material slot is a surface or water, never both. */
+static Error CheckWaterSlots(const ParseContext* context)
+{
+    const WorldModelDefinition* Definition = context->Definition;
+    uint32_t Count = WorldModelWaterDefinition_GetCount(Definition->Water);
+    for (uint32_t Index = 0U; Index < Count; Index++)
+    {
+        int32_t Slot = WorldModelWaterDefinition_GetSlot(Definition->Water, Index);
+        if (WorldModelSurfaceDefinition_HasSlot(Definition->Surfaces, Slot))
+        {
+            return Fail(context, "water[%" PRIu32 "].material_slot %" PRId32 " shows a surface's picture too; a material "
+                "slot is a surface or water, never both.", Index, Slot);
+        }
+    }
+    return Error_CreateSuccess();
+}
+
 /* Reads everything after the name, in the reference's order; warnings go to @p log (may be NULL). */
 static Error ParseDefinition(WorldModelDefinition* definition, JSONCompound* root, Logger* log)
 {
@@ -952,6 +1002,11 @@ static Error ParseDefinition(WorldModelDefinition* definition, JSONCompound* roo
     if (Result.Code == ErrorCode_Success)
     {
         Result = ParseRender(&Context, root);
+    }
+    // The water slots before the variants: a variant may swap a water slot's material, and only that.
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldModelWaterDefinition_Parse(Context.Name, root, &definition->Water);
     }
     if (Result.Code == ErrorCode_Success)
     {
@@ -982,6 +1037,10 @@ static Error ParseDefinition(WorldModelDefinition* definition, JSONCompound* roo
     {
         Result = WorldModelSurfaceDefinition_Parse(Context.Name, root, &definition->Surfaces);
     }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = CheckWaterSlots(&Context);
+    }
     return Result;
 }
 
@@ -996,6 +1055,7 @@ static void WorldModelLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
     Memory_Free(Loaded->LibraryBlock);
     Memory_Free(Loaded->SocketBlock);
     WorldModelSurfaces_DestroyBlock(Loaded->SurfaceBlock);
+    Memory_Free(Loaded->WaterBlock);
     Memory_Free(Loaded->GraphName);
     Memory_Free(Loaded);
 }
@@ -1266,7 +1326,35 @@ static Error LoadVariantTexture(AssetManager* manager, AssetTypeID textureType, 
     return Error_CreateSuccess();
 }
 
-/* Fills one override of the loaded asset: the slot, the textures (loaded as dependencies) and the factors. */
+/* Loads the water material a variant swaps onto a water slot as a dependency. */
+static Error LoadVariantWater(AssetManager* manager, AssetUserID dependencyUser, const WorldModelDefinition* definition,
+    const WorldModelVariantDefinition* variant, const WorldModelOverrideDefinition* source,
+    const WaterMaterial** outMaterial)
+{
+    *outMaterial = NULL;
+    AssetTypeID WaterType = ASSET_TYPE_ID_INVALID;
+    Error Result = GetTypeId(manager, ASSET_TYPE_NAME_WATER_MATERIAL, &WaterType);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    void* Asset = NULL;
+    Result = AssetManager_LoadAssetSingle(manager, WaterType, source->WaterMaterial, dependencyUser, &Asset);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error Wrapped = Error_Construct3(Result.Code,
+            u8"World model \"%s\": variant \"%s\", slot %" PRId32 u8": water material \"%s\": %s", definition->Base.Name,
+            variant->Name, source->Slot, source->WaterMaterial,
+            (Result.Message != NULL) ? Result.Message : (const unsigned char*)u8"it did not load.");
+        Error_Deconstruct(&Result);
+        return Wrapped;
+    }
+    *outMaterial = Asset;
+    return Error_CreateSuccess();
+}
+
+/* Fills one override of the loaded asset: the slot, the textures and a water slot's water material (loaded as
+ * dependencies) and the factors. */
 static Error LoadOverride(AssetManager* manager, AssetTypeID textureType, AssetUserID dependencyUser,
     const WorldModelDefinition* definition, const WorldModelVariantDefinition* variant,
     const WorldModelOverrideDefinition* source, WorldModelMaterialOverride* target)
@@ -1289,6 +1377,10 @@ static Error LoadOverride(AssetManager* manager, AssetTypeID textureType, AssetU
     {
         Result = LoadVariantTexture(manager, textureType, dependencyUser, definition, variant, source->Slot,
             source->Emissive, &target->_emissive);
+    }
+    if ((Result.Code == ErrorCode_Success) && (source->WaterMaterial != NULL))
+    {
+        Result = LoadVariantWater(manager, dependencyUser, definition, variant, source, &target->_waterMaterial);
     }
     return Result;
 }
@@ -1443,8 +1535,15 @@ static Error WorldModelDefinition_LoadAsset(void* self, AssetManager* manager, A
     void* SurfaceBlock = NULL;
     Result = WorldModelSurfaceDefinition_Load(Definition->Surfaces, Definition->Base.Name, manager, dependencyUser,
         Built._lods[0]._model, &Built, &SurfaceBlock);
+    void* WaterBlock = NULL;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WorldModelWaterDefinition_Load(Definition->Water, Definition->Base.Name, manager, dependencyUser,
+            Built._lods[0]._model, &Built, &WaterBlock);
+    }
     if (Result.Code != ErrorCode_Success)
     {
+        WorldModelSurfaces_DestroyBlock(SurfaceBlock);
         WorldModelCollision_DestroyBlock(CollisionBlock);
         Memory_Free(VariantBlock);
         Memory_Free(SocketBlock);
@@ -1465,6 +1564,7 @@ static Error WorldModelDefinition_LoadAsset(void* self, AssetManager* manager, A
     Loaded->LibraryBlock = LibraryBlock;
     Loaded->SocketBlock = SocketBlock;
     Loaded->SurfaceBlock = SurfaceBlock;
+    Loaded->WaterBlock = WaterBlock;
     Loaded->GraphName = GraphName;
     outLoaded->Asset = &Loaded->Model;
     outLoaded->VTable = &WorldModelLoadedVTable;
@@ -1488,6 +1588,7 @@ static void WorldModelDefinition_Destroy(void* self)
             Memory_Free(Variant->Overrides[Override].Normal);
             Memory_Free(Variant->Overrides[Override].Mra);
             Memory_Free(Variant->Overrides[Override].Emissive);
+            Memory_Free(Variant->Overrides[Override].WaterMaterial);
         }
         Memory_Free(Variant->Overrides);
         Memory_Free(Variant->Name);
@@ -1501,6 +1602,7 @@ static void WorldModelDefinition_Destroy(void* self)
     Memory_Free(Definition->AnimationGraph);
     WorldModelSocketDefinition_Destroy(Definition->Sockets);
     WorldModelSurfaceDefinition_Destroy(Definition->Surfaces);
+    WorldModelWaterDefinition_Destroy(Definition->Water);
     Memory_Free(Definition->Base.Name);
     Memory_Free(Definition);
 }

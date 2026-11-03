@@ -6,16 +6,17 @@ sets), and one loader per type: `source/SpriteSheetDefinition.c`, `source/Sprite
 `source/SoundDefinition.c`, `source/FontDefinition.c`, `source/ShaderDefinition.c` (with its `#include` expander
 `source/ShaderSource.{h,c}`), `source/ModelDefinition.c`, `source/TextureDefinition.c`, `source/WorldModelDefinition.c`,
 and the other types' (`WorldSpriteDefinition.c`, `CharacterDefinition.c`, `AnimationLibraryDefinition.c`,
-`AnimationGraphDefinition.c`, `TerrainDefinition.c`, `TerrainMaterialDefinition.c`, `ClimateDefinition.c`).
+`AnimationGraphDefinition.c`, `TerrainDefinition.c`, `TerrainMaterialDefinition.c`, `ClimateDefinition.c`,
+`WaterMaterialDefinition.c`).
 The definition JSON format is specified in `references/asset_structure.md`.
 
 ## Purpose
 
 Loads, shares and unloads game assets. The manager stores **definitions** (named recipes, normally JSON files
 under the asset search roots) and builds an asset from its definition the first time someone loads it. Asset
-types are registered at runtime (`AssetManager_CreateAssetType`); the sixteen standard types (sprite sheet, sprite
+types are registered at runtime (`AssetManager_CreateAssetType`); the seventeen standard types (sprite sheet, sprite
 animation, sound, font, shader, model, texture, world model, world sprite, character, animation library, animation
-graph, terrain, terrain material, climate, input actions) are
+graph, terrain, terrain material, climate, input actions, water material) are
 registered together by `AssetManager_CreateStandardAssetTypes`. The wrappers it hands out are documented in
 [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md),
 [WorldModels.md](WorldModels.md), [WorldSprites.md](WorldSprites.md), [Characters.md](Characters.md),
@@ -124,7 +125,8 @@ Error_Deconstruct(&RetireResult);
 
 The typed loaders (`AssetManager_LoadSpriteSheet`, `LoadSpriteAnimation`, `LoadSound`, `LoadFont`, `LoadShader`,
 `LoadModel`, `LoadTexture`, `LoadWorldModel`, `LoadWorldSprite`, `LoadCharacter`, `LoadAnimationLibrary`,
-`LoadAnimationGraph`, `LoadTerrain`, `LoadTerrainMaterial`, `LoadClimate`) return `ErrorCode_InvalidState` if the
+`LoadAnimationGraph`, `LoadTerrain`, `LoadTerrainMaterial`, `LoadClimate`, `LoadWaterMaterial`) return
+`ErrorCode_InvalidState` if the
 standard types were never registered. `AssetManager_LoadTexturePixels` is not a load: it decodes the image file of the texture
 definition registered under a name (a pack's override wins) into CPU pixels, each call, without holding or caching
 anything ([GameAssets.md](GameAssets.md), "GameTexture"). Custom types use
@@ -296,9 +298,11 @@ with `TextureProperties_Apply`, the sprite sheet, sprite animation and font load
 | `terrain` (`terrains`) | `AssetManager_LoadTerrain` | `TerrainAsset` | Its mesh (`TerrainMesh`: CPU data, no GL; the renderer keeps the GPU copies), its names and its rules. Its palette's terrain materials are held under its dependency user (a material that fails fails the terrain; their maps of one kind must share one size). The mesh is imported from a `.glb` (`source: model`) or read from its binary form (`.ghdf`, `source: data`) when it loads, both treated as hostile; unknown keys are refused everywhere in the definition ([Terrain.md](Terrain.md)). |
 | `climate` (`climates`) | `AssetManager_LoadClimate` | `Climate` | Its presets and settings, one block of plain data (a copy of the definition's: no pointers inside, no dependencies). Read from a hostile definition: unknown keys are refused everywhere and every value is checked as it is read ([WeatherSystem.md](WeatherSystem.md)). |
 | `terrain_material` (`terrain_materials`) | `AssetManager_LoadTerrainMaterial` | `TerrainMaterial` | Its settings (read through a property table) and its maps' pixels in one block, read from the image files of the texture assets it names (`AssetManager_LoadTexturePixels`: no texture asset is loaded, so it has no dependencies and needs no GL); the renderer makes texture arrays from them ([Terrain.md](Terrain.md)). |
+| `water_material` (`water_materials`) | `AssetManager_LoadWaterMaterial` | `WaterMaterial` | Only its own data: its settings (read through a property table that a later per-placement override can share; unknown keys are refused). The texture assets its maps name (two normal maps and a foam pattern, each optional) are held under its dependency user and unload right after it; a map that does not load fails the material, naming it. World models load the water materials their water slots and variants name as their dependencies ([WorldModels.md](WorldModels.md), "Water"). |
 
 Details per type: [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md),
-[WorldModels.md](WorldModels.md), [WorldSprites.md](WorldSprites.md), [Terrain.md](Terrain.md). The table lacks the
+[WorldModels.md](WorldModels.md) (water materials too: its "Water"), [WorldSprites.md](WorldSprites.md),
+[Terrain.md](Terrain.md). The table lacks the
 two animation types; [Animation.md](Animation.md) has them.
 
 ## Bulk operations (stepped loading)

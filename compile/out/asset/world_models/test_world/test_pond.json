@@ -1,0 +1,10 @@
+{
+    "name": "tbp:test_pond",
+    "lods": [
+        { "model": "tbp:water_plane", "max_distance": 3000 }
+    ],
+    "render": { "casts_shadows": false, "occludes_sky": false },
+    "water": [
+        { "material_slot": 0, "water_material": "tbp:test_pond" }
+    ]
+}

@@ -5,7 +5,9 @@
 // (shaders/common/instancing.glsl), whose vertex stage works out each copy's fade and LOD band and drops the copies
 // that draw does not show. Without a pass's instanced twin or a buffer, and in every pass while instancing is off (the
 // A/B), each copy is drawn on its own through the pass's ordinary shader, with the copy's values from the C mirror
-// (WorldInstancing.c); the unlit fallback (no PBR lighting) draws them so too, with the materials' own shaders.
+// (WorldInstancing.c); the unlit fallback (no PBR lighting) draws them so too, with the materials' own shaders. Each pass
+// draws one set of a model's meshes (WorldRendererMeshSet): the water pass the water slots' (each with its water
+// material), the G-buffer both sets, every other pass every mesh but the water slots'.
 
 #include <inttypes.h>
 #include <math.h>
@@ -45,16 +47,18 @@ _Static_assert(offsetof(WorldInstanceRecord, Random) == (offsetof(WorldInstanceR
 
 // Types.
 /* How one pass draws the copies of a cell: the pass the C mirror evaluates for; the instanced twin, its uniforms and
- * (in the lit pass) its PBR program, or NULL to draw one at a time; for the one-at-a-time draws the ordinary shaders,
- * their dither (NULL: solid) and whether the pass is lit; and for a light's shadow pass (IsCast: a shadow level, Level,
- * or the cube shadow, Level NULL) what its copies cast with: their shadow distance and shadow LOD, the level's size cut
- * and LOD distance. A plain value type; everything in it is borrowed for the pass. */
+ * (in the lit pass) its PBR program or (in the water pass) its water program, or NULL to draw one at a time; for the
+ * one-at-a-time draws the ordinary shaders (with the set of meshes the pass draws, for both kinds of draw), their dither
+ * (NULL: solid) and whether the pass is lit; and for a light's shadow pass (IsCast: a shadow level, Level, or the cube
+ * shadow, Level NULL) what its copies cast with: their shadow distance and shadow LOD, the level's size cut and LOD
+ * distance. A plain value type; everything in it is borrowed for the pass. */
 typedef struct CopyPassStruct
 {
     WorldInstancePass Pass;
     const Shader* InstancedShader;
     const WorldRendererInstancingLocations* Instancing;
     const WorldRendererPbrProgram* InstancedLitProgram;
+    const WorldRendererWaterProgram* InstancedWater;
     WorldRendererMeshShaders OrdinaryShaders;
     const WorldRendererDitherLocations* OrdinaryDither;
     bool IsLit;
@@ -347,9 +351,20 @@ static void DrawCellLodInstanced(WorldRenderer* self, const CopyPass* pass, cons
     SetShaderValueMatrix(*pass->InstancedShader, pass->Instancing->_locLodTransform, RayModel.transform);
     for (int MeshIndex = 0; MeshIndex < RayModel.meshCount; MeshIndex++)
     {
+        int MaterialIndex = RayModel.meshMaterial[MeshIndex];
+        if (!WorldRendererGeometry_IsMeshInSet(model, MaterialIndex, pass->OrdinaryShaders.Meshes))
+        {
+            continue;
+        }
         MaterialMap Maps[WORLD_RENDERER_MATERIAL_MAP_COUNT];
-        Material DrawMaterial = WorldRendererGeometry_PrepareMaterial(self, model, RayModel, MeshIndex, lod,
-            pass->InstancedShader, pass->InstancedLitProgram, Maps);
+        Material DrawMaterial = (pass->InstancedWater != NULL)
+            ? WorldRendererWater_PrepareMaterial(self, pass->InstancedWater, model, MaterialIndex, Maps)
+            : WorldRendererGeometry_PrepareMaterial(self, model, RayModel, MeshIndex, lod, pass->InstancedShader,
+                pass->InstancedLitProgram, Maps);
+        if (DrawMaterial.shader.id == 0U)
+        {
+            continue; // a water slot without a water material
+        }
         if (!DrawMeshCopies(RayModel.meshes[MeshIndex], DrawMaterial, cell->RenderMatrix, buffer, cell->FirstRecord,
             cell->RecordCount))
         {
@@ -552,6 +567,11 @@ void WorldRendererInstances_LoadShaders(WorldRenderer* self)
         PrepareInstancing(GameShader_GetRaylibShader(self->_pbr._instanced._shader), WorldInstancePass_Lit,
             &State->_pbrInstancing);
     }
+    if (self->_water._instanced._program._shader != NULL)
+    {
+        PrepareInstancing(GameShader_GetRaylibShader(self->_water._instanced._program._shader), WorldInstancePass_Lit,
+            &State->_waterInstancing);
+    }
     // Each twin only beside its ordinary shader: without that, the pass does not run.
     State->_normalShader = (self->_gbuffer._shader != NULL) ? LoadTwin(self, NORMAL_INSTANCED_SHADER_ASSET_NAME,
         WorldInstancePass_GBuffer, &State->_normalDither, &State->_normalInstancing) : NULL;
@@ -742,7 +762,22 @@ void WorldRendererInstances_DrawNormals(WorldRenderer* self, const WorldRenderFr
             SetShaderValue(Twin, State->_normalLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
             SetShaderValue(Twin, State->_normalLocHazeMultiplier, &Entries[Cell->Entry].Haze, SHADER_UNIFORM_FLOAT);
         }
+        Pass.OrdinaryShaders.Meshes = WorldRendererMeshSet_Solid;
         DrawCell(self, &Pass, Cell, frame->ZoomFactor, DrawDistanceScale);
+        // The water slots (while water is drawn) as surfaces without an outline: what lies under them is not outlined
+        // through them, and the clouds' march stops at them.
+        const WorldModel* Asset = Entries[Cell->Entry].Asset;
+        if (WorldRendererWater_IsAvailable(self) && (Asset != NULL) && (WorldModel_GetWaterCount(Asset) > 0U))
+        {
+            float NoOutline = 0.0f;
+            SetShaderValue(shader, locOutlineFlag, &NoOutline, SHADER_UNIFORM_FLOAT);
+            if (IsInstanced)
+            {
+                SetShaderValue(Twin, State->_normalLocOutlineFlag, &NoOutline, SHADER_UNIFORM_FLOAT);
+            }
+            Pass.OrdinaryShaders.Meshes = WorldRendererMeshSet_Water;
+            DrawCell(self, &Pass, Cell, frame->ZoomFactor, DrawDistanceScale);
+        }
     }
 }
 
@@ -785,6 +820,60 @@ void WorldRendererInstances_DrawCasters(WorldRenderer* self, const WorldRenderFr
     {
         DrawCell(self, &Pass, &Cells[Casters[Position]], frame->ZoomFactor, DrawDistanceScale);
     }
+}
+
+size_t WorldRendererInstances_DrawWater(WorldRenderer* self, const WorldRenderFrame* frame)
+{
+    WorldRendererWaterProgram* Rigid = &self->_water._rigid;
+    WorldRendererWaterProgram* Instanced = &self->_water._instanced;
+    if (Rigid->_program._shader == NULL)
+    {
+        return 0U;
+    }
+    bool IsInstanced = (Instanced->_program._shader != NULL) && self->_instances._isEnabled;
+    CopyPass Pass =
+    {
+        .Pass = WorldInstancePass_Lit,
+        .InstancedShader = IsInstanced ? &Instanced->_program._passShader : NULL,
+        .Instancing = &self->_instances._waterInstancing,
+        .InstancedLitProgram = NULL,
+        .InstancedWater = IsInstanced ? Instanced : NULL,
+        .OrdinaryShaders = { .Rigid = &Rigid->_program._passShader, .Skinned = NULL, .Palette = NULL,
+            .IsCameraView = true, .Meshes = WorldRendererMeshSet_Water, .Water = Rigid },
+        .OrdinaryDither = &Rigid->_program._dither,
+        .IsLit = true
+    };
+    float DrawDistanceScale = WorldRendererCommon_ConfigDrawDistanceScale(self);
+    size_t EntryCount = 0U;
+    const WorldRenderInstances* Entries = WorldRenderCache_GetInstances(&self->_cache, &EntryCount);
+    size_t CellCount = 0U;
+    const WorldRenderInstanceCell* Cells = WorldRenderCache_GetInstanceCells(&self->_cache, &CellCount);
+    size_t VisibleCount = 0U;
+    const size_t* Visible = WorldVisibility_GetInstanceCells(&self->_visibility, &self->_cache,
+        WorldVisibilityPass_Camera, &VisibleCount);
+    size_t Drawn = 0U;
+    for (size_t Position = 0U; Position < VisibleCount; Position++)
+    {
+        const WorldRenderInstanceCell* Cell = &Cells[Visible[Position]];
+        if ((Cell->Entry >= EntryCount) || (Entries[Cell->Entry].Asset == NULL)
+            || (WorldModel_GetWaterCount(Entries[Cell->Entry].Asset) == 0U))
+        {
+            continue;
+        }
+        // The cell's forward lights and ambient zones by its sphere and its component's haze multiplier, into the
+        // program that draws it; whether the G-buffer drew it, by the cell's fade. Its water material says whether it
+        // mirrors.
+        const WorldRendererPbrProgram* Program = (IsInstanced && (GetEntryBuffer(self, Cell->Entry) != 0U))
+            ? &Instanced->_program : &Rigid->_program;
+        WorldRendererLighting_UploadObjectLights(self, Program->_passShader, &Program->_lit, Cell->RenderCenter,
+            Cell->Radius);
+        WorldRendererLighting_SetDrawPlace(self, Program->_passShader, &Program->_lit, Cell->RenderCenter, Cell->Radius,
+            Entries[Cell->Entry].Haze, WorldVisibility_GetInstanceCellFade(&self->_visibility, Visible[Position]).Combined
+                < WORLD_VISIBILITY_GBUFFER_FADE_LIMIT, false);
+        DrawCell(self, &Pass, Cell, frame->ZoomFactor, DrawDistanceScale);
+        Drawn++;
+    }
+    return Drawn;
 }
 
 WorldRendererFeatureState WorldRendererInstances_GetState(const WorldRenderer* self)

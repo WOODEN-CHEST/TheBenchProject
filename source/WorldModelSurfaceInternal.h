@@ -33,6 +33,9 @@ Error WorldModelSurfaceDefinition_Parse(const char* printableName, JSONCompound*
 /* Releases a parsed section; NULL does nothing. */
 void WorldModelSurfaceDefinition_Destroy(WorldModelSurfaceDefinition* self);
 
+/* Whether a surface of the section shows its picture on a material slot (false for a NULL section). */
+bool WorldModelSurfaceDefinition_HasSlot(const WorldModelSurfaceDefinition* self, int32_t materialSlot);
+
 /* Builds the surfaces of @p model from LOD 0 (@p lod0) into one block (*outBlock, owned by the world model: release it
  * with WorldModelSurfaces_DestroyBlock) and points the model's fields into it; a CRT's mask tile loads from @p manager
  * under @p dependencyUser. @p self may be NULL (no surfaces). On failure nothing is kept (the manager releases the tiles

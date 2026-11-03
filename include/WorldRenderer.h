@@ -231,6 +231,11 @@ typedef enum WorldRendererFeatureEnum
      *  quality off; active while something in view mirrors (and they are switched on:
      *  WorldRenderer_SetReflectionsEnabled), inactive otherwise. */
     WorldRendererFeature_Reflections,
+    /** @brief Water: the world models' water slots drawn with their water materials (waves, the bottom seen through
+     *  them, foam, glints, what they mirror). Unavailable without its shader (world_water; logged once by the loader):
+     *  then no water slot is drawn at all; active while a model or a copies' cell with water slots is in view. Without
+     *  an HDR scene target with a samplable depth (or copies of it) the water shows no bottom, as deep water. */
+    WorldRendererFeature_Water,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -487,6 +492,15 @@ typedef struct WorldRendererStatusStruct
     size_t MirroringObjectCount;
     bool AreWetSurfacesMirroring;
     WorldRendererReflectionView ReflectionView;
+    /** @brief The water as drawn: the shown models and copies' cells with water slots in view, those of them that
+     *  mirror their surroundings, the water pass's draws (one per LOD drawn of each model with water slots, one per cell
+     *  of copies with them), whether the pass saw what lies under the water (its copies of the scene), and the wind's
+     *  speed its waves took (m/s, gust in). */
+    size_t WaterObjectCount;
+    size_t WaterMirrorCount;
+    size_t WaterDrawCount;
+    bool IsWaterBottomActive;
+    float WaterWindSpeed;
     /** @brief The eye: the luminance it was adapted to (the view's log-average in the game's light units: the sky
      *  light's anchor before the first measurement), the real luminance that stands for (cd/m^2, on night vision's scale
      *  at the camera's mix of daylight and the night's lights), and whether a measurement of the picture set it. */

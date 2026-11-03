@@ -1,0 +1,9 @@
+{
+    "name": "tbp:test_gutter",
+    "lods": [
+        { "model": "tbp:test_gutter", "max_distance": 150 }
+    ],
+    "water": [
+        { "material_slot": 1, "water_material": "tbp:test_stream" }
+    ]
+}

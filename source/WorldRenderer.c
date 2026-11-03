@@ -66,8 +66,10 @@ static void EnsureShaders(WorldRenderer* self)
     // The atmosphere's tables first: the sky and every lit shader read them.
     WorldRendererAtmosphere_LoadShaders(self);
     WorldRendererLighting_LoadShader(self);
-    // A CRT's glass shades as the PBR program does, so after it.
+    // A CRT's glass shades as the PBR program does, so after it; so does the water (before the instanced twins: its own
+    // twin's instancing is prepared with theirs).
     WorldRendererCrt_LoadShaders(self);
+    WorldRendererWater_LoadShaders(self);
     WorldRendererGeometry_LoadShaders(self);
     WorldRendererPost_LoadShaders(self);
     WorldRendererExposure_Load(self);
@@ -642,6 +644,7 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
         frame->IsInteriorActive && (Status->AmbientZoneCount > 0U));
     WorldRendererRain_UpdateStatus(self, frame);
     WorldRendererReflections_UpdateStatus(self, frame);
+    WorldRendererWater_UpdateStatus(self, frame);
 }
 
 /* Appends the drawn models per LOD to the status line's LOD text, LOD 0 first, up to the coarsest LOD drawn: "9 / 3 / 1".
@@ -753,6 +756,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     WorldRendererInterior_Construct(Renderer);
     WorldRendererRain_Construct(Renderer);
     WorldRendererReflections_Construct(Renderer);
+    WorldRendererWater_Construct(Renderer);
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardLights, INITIAL_FORWARD_LIGHT_CAPACITY,
         sizeof(WorldCullingLight));
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardRadiances, INITIAL_FORWARD_LIGHT_CAPACITY,
@@ -936,6 +940,8 @@ static Error RenderFrame(WorldRenderer* self, World* world, const GameCamera* ca
         WorldShadowLevels_Invalidate(&self->_shadowLevels._levels);
         return VisibilityResult;
     }
+    // The water in view and its drift, before the passes' decisions (the reflections count the water that mirrors).
+    WorldRendererWater_PrepareFrame(self, &Frame, deltaSeconds);
     DecidePasses(self, &Frame);
     WorldRendererLighting_PrepareFrame(self, &Frame);
     // The screens' light from the pictures handed over for this render.
@@ -1096,6 +1102,7 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_CrtScreens:       return (const unsigned char*)u8"CRT screens";
         case WorldRendererFeature_ScreenLight:      return (const unsigned char*)u8"screen light";
         case WorldRendererFeature_Reflections:      return (const unsigned char*)u8"reflections";
+        case WorldRendererFeature_Water:            return (const unsigned char*)u8"water";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -1161,6 +1168,7 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
     WorldRendererClouds_LogStatus(self);
     WorldRendererRain_LogStatus(self);
     WorldRendererReflections_LogStatus(self);
+    WorldRendererWater_LogStatus(self);
 }
 
 void WorldRenderer_SetPixelationEnabled(WorldRenderer* self, bool enabled)

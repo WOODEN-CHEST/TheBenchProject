@@ -1,0 +1,7 @@
+{
+    "name": "tbp:test_gutter",
+    "location": "placeholder_water/gutter",
+    "material_overrides": [
+        { "slot": 0, "roughness": 0.85 }
+    ]
+}

@@ -1,0 +1,12 @@
+{
+    "name": "tbp:test_fountain_murky",
+    "normal_a": "tbp:water_normal_b",
+    "normal_a_tile_size": 1.2,
+    "wave_strength": 0.35,
+    "wind_response": 0.3,
+    "flow": "fixed",
+    "flow_speed": 0.0,
+    "color": "#2e3a1e",
+    "absorption": [6.0, 4.5, 5.5],
+    "roughness": 0.08
+}

@@ -30,6 +30,7 @@
 #include "WorldClouds.h"
 #include "WorldRain.h"
 #include "WorldReflections.h"
+#include "WorldWater.h"
 #include "SpriteTransform.h"
 #include "WorldRenderSpace.h"
 #include "WorldShadowLevels.h"
@@ -77,6 +78,9 @@
  *   WorldRendererReflections.c the screen-space reflections (WorldReflections.h): the scene target's reflection
  *                            attachments the lit surfaces hand their data to, the switches around the opaque world's
  *                            draws, and the pass that marches every mirroring pixel's ray and adds what it mirrors
+ *   WorldRendererWater.c     the water (WorldWater.h): the world models' water slots drawn over the opaque world with
+ *                            their water materials, from copies of the scene's colour and depth (what lies under the
+ *                            water), handing their reflections over; every other pass but the G-buffer leaves them out
  * The camera's passes (the scene, the G-buffer, the crisp overlay) draw with reversed depth where the GPU has clip
  * control (GLDepth.h, direct GL calls; WorldRendererCommon_BeginCameraDepth and the rest): a 32-bit float depth
  * from 1 at the near plane to 0 at infinity and no far plane, so whatever has a long draw distance draws at any distance.
@@ -195,6 +199,14 @@ typedef enum
     WorldRendererTextureUnit_ReflectionSceneColor = 24,  // sampler2D sceneColor
     WorldRendererTextureUnit_ReflectionSceneDepth = 25,  // sampler2D sceneDepth (the march and the blocks)
     WorldRendererTextureUnit_ReflectionBlocks = 26,      // sampler2D reflectionBlocks
+    // The water programs' own textures (world_water, world_water_instanced: lit programs whose materials carry no maps,
+    // drawn in the scene pass before the reflection pass): a water material's maps, bound per material, and the copies of
+    // the scene's colour and depth, bound for the pass. Past every unit the other programs read.
+    WorldRendererTextureUnit_WaterNormalA = 27,          // sampler2D waterNormalA
+    WorldRendererTextureUnit_WaterNormalB = 28,          // sampler2D waterNormalB
+    WorldRendererTextureUnit_WaterFoam = 29,             // sampler2D waterFoam
+    WorldRendererTextureUnit_WaterSceneColor = 30,       // sampler2D waterSceneColor
+    WorldRendererTextureUnit_WaterSceneDepth = 31,       // sampler2D waterSceneDepth
 } WorldRendererTextureUnit;
 
 _Static_assert(WorldRendererTextureUnit_ShadowLevels >= WORLD_RENDERER_MATERIAL_MAP_COUNT,
@@ -218,6 +230,9 @@ _Static_assert((WorldRendererTextureUnit_ScreenLight > WorldRendererTextureUnit_
     "the screens' units sit above the rain's");
 _Static_assert(WorldRendererTextureUnit_ReflectionWeights > WorldRendererTextureUnit_CrtMask,
     "the reflection pass's units sit above every lit program's");
+_Static_assert((WorldRendererTextureUnit_WaterNormalA > WorldRendererTextureUnit_ReflectionBlocks)
+    && (WorldRendererTextureUnit_WaterSceneDepth < 48),
+    "the water's units sit above the reflection pass's, within the 48 combined units GL 3.3 guarantees");
 
 /* Which objects a draw pass should include, by their OmitPixelation flag. The pixelated scene pass draws only
  * pixelated objects (when the crisp overlay is active), the crisp overlay pass draws only the flagged ones, and
@@ -538,6 +553,16 @@ typedef struct WorldRenderFrameStruct
     WorldReflectionsMarchSettings ReflectionMarch;
     size_t MirroringObjectCount;
     bool AreWetSurfacesMirroring;
+    /** @brief The water this frame (WorldRendererWater_PrepareFrame): whether its pass runs (its program loaded and a
+     *  model or a copies' cell in view has water slots), how many of those are in view and how many of them mirror their
+     *  surroundings (a water material with has_reflections: the reflection pass then runs), whether the pass copies the
+     *  scene for what lies under the water (the scene's HDR tier with a samplable depth and the copies made; otherwise
+     *  the water shows its colour alone, as deep water), and the wind's speed its waves take (gust in). */
+    bool IsWaterActive;
+    size_t WaterObjectCount;
+    size_t WaterMirrorCount;
+    bool IsWaterBottomActive;
+    float WaterWindSpeed;
 } WorldRenderFrame;
 
 /**
@@ -585,10 +610,24 @@ typedef struct WorldRendererPaletteStruct
     uint32_t _revision;
 } WorldRendererPalette;
 
+/** @brief Which of a model's meshes a geometry pass draws: its world model's water slots are drawn by the water pass and
+ *  the G-buffer alone. */
+typedef enum
+{
+    /** @brief Every mesh but the water slots' (the zero value: every pass that does not say). */
+    WorldRendererMeshSet_Solid = 0,
+    /** @brief Only the water slots' meshes (the water pass with its program, the G-buffer as plain surfaces). */
+    WorldRendererMeshSet_Water = 1,
+} WorldRendererMeshSet;
+
+/** @brief A water program (WorldRendererWater.c), declared below. */
+typedef struct WorldRendererWaterProgramStruct WorldRendererWaterProgram;
+
 /**
  * @brief The shaders one geometry pass draws an object's meshes with: its rigid meshes with Rigid, its skinned ones
  *        (GameSkeleton_IsMeshSkinned) with Skinned while the object has a pose (WorldRenderModel.Pose) that Palette can
- *        hold. A plain value type; everything in it is borrowed for the pass.
+ *        hold, and which of its meshes (Meshes; the water slots' with Water's water material in the water pass). A plain
+ *        value type; everything in it is borrowed for the pass.
  */
 typedef struct WorldRendererMeshShadersStruct
 {
@@ -601,6 +640,11 @@ typedef struct WorldRendererMeshShadersStruct
     /** @brief Whether the pass draws the camera's view (the entries' CameraPose: the first-person object without its
      *  hidden bones) or a light's (their full Pose). */
     bool IsCameraView;
+    /** @brief Which meshes it draws (zeroed: every mesh but the water slots'). */
+    WorldRendererMeshSet Meshes;
+    /** @brief With Meshes Water in the water pass: the program the water slots' meshes draw with, each with its water
+     *  material (Rigid is its pass shader); NULL elsewhere (the G-buffer draws them with Rigid as any surface). */
+    const WorldRendererWaterProgram* Water;
 } WorldRendererMeshShaders;
 
 /** @brief The scene render target the 3D world is drawn into (pixel resolution when pixelating). */
@@ -1892,6 +1936,8 @@ typedef struct WorldRendererInstanceStateStruct
 {
     /** @brief The lit twin's instancing uniforms (its program is _pbr._instanced). */
     WorldRendererInstancingLocations _pbrInstancing;
+    /** @brief The water's twin's instancing uniforms (its program is _water._instanced). */
+    WorldRendererInstancingLocations _waterInstancing;
     /** @brief The G-buffer's twin (world_normal_instanced), its outline flag and its uniforms; NULL = copies draw one at a
      *  time into the G-buffer. */
     GameShader* _normalShader;
@@ -2149,6 +2195,80 @@ typedef struct WorldRendererReflectionStateStruct
     bool _isFailureReported;
 } WorldRendererReflectionState;
 
+/**
+ * @brief The uniform locations of a water program's own uniforms (shaders/water/fragment.frag, shaders/common/water.glsl).
+ *        A water material's, set per draw of a material: its maps' switches, the maps' frames (each the offset and the
+ *        turn) and one over their tiles, whether they lie on the texture coordinates, the waves' strength with the wind
+ *        in, the colour (linear), the absorption, the roughness, the reflectance facing it, the foam's depth and
+ *        strength, its ripples and reflections. The pass's: whether the copies hold what lies under the water, the
+ *        inverse of the scene's view-projection (the bottom's place from its depth), the depth convention. The samplers
+ *        are pointed at their units at load. -1 for a uniform the shader lacks.
+ */
+typedef struct WorldRendererWaterLocationsStruct
+{
+    int _locHasNormalA;
+    int _locHasNormalB;
+    int _locHasFoam;
+    int _locMapA;
+    int _locMapB;
+    int _locMapFoam;
+    int _locInverseTiles;
+    int _locIsAlongUv;
+    int _locWaveStrength;
+    int _locColor;
+    int _locAbsorption;
+    int _locRoughness;
+    int _locReflectance;
+    int _locFoamShape;
+    int _locHasRipples;
+    int _locHasReflections;
+    int _locHasBottom;
+    int _locInvViewProjection;
+    int _locDepthReversed;
+} WorldRendererWaterLocations;
+
+/** @brief One water program (world_water, or its instanced twin world_water_instanced): a lit program (the PBR
+ *  program's locations, dither and pass shader; its materials carry no maps) with the water's own uniforms, and the
+ *  water material whose uniforms it holds this frame. */
+struct WorldRendererWaterProgramStruct
+{
+    /** @brief The lit program; its shader NULL = unavailable. */
+    WorldRendererPbrProgram _program;
+    /** @brief Its water uniforms. */
+    WorldRendererWaterLocations _water;
+    /** @brief The water material its uniforms were last set for, NULL from each frame's start (the maps' frames move
+     *  every frame). */
+    const WaterMaterial* _uploadedMaterial;
+};
+
+/** @brief The water (WorldRendererWater.c; the moving patterns' maths are WorldWater.h's). */
+typedef struct WorldRendererWaterStateStruct
+{
+    /** @brief The programs for the models' water slots and for the copies' (instanced); the rigid one NULL = no water is
+     *  drawn (the slots are left out of every pass), the instanced one NULL = copies draw one at a time. */
+    WorldRendererWaterProgram _rigid;
+    WorldRendererWaterProgram _instanced;
+    /** @brief The copies of the scene's colour and depth (a target made as the scene's: RGBA16F and the camera's depth
+     *  texture), made when water first needs them for the scene's size, and whether they exist; whether making them
+     *  failed for this size (no retry until the scene target is made again), and the size. */
+    RenderTexture2D _copies;
+    bool _hasCopies;
+    bool _isCopyFailed;
+    int _width;
+    int _height;
+    /** @brief How far every water's patterns have run (WorldWater.h). */
+    WorldWaterDrift _drift;
+    /** @brief The frame's origin and wind, for the maps' frames of the materials drawn. */
+    Vector3Double _origin;
+    float _windSpeed;
+    /** @brief The draws of the last render: one per LOD drawn of each model with water slots, one per cell of copies
+     *  with them. */
+    size_t _drawCount;
+    /** @brief Set once a skinned water mesh, and a failure of the copies, have been logged. */
+    bool _isSkinnedReported;
+    bool _isCopyFailureReported;
+} WorldRendererWaterState;
+
 /** @brief The crisp overlay (un-pixelated OmitPixelation objects composited over the pixelated frame). */
 typedef struct WorldRendererCrispStateStruct
 {
@@ -2251,6 +2371,7 @@ struct WorldRendererStruct
     WorldRendererSurfaceState _surfaces;
     WorldRendererCrtState _crt;
     WorldRendererReflectionState _reflections;
+    WorldRendererWaterState _water;
 };
 
 
@@ -2570,6 +2691,10 @@ void WorldRendererGeometry_ResetPalettes(WorldRenderer* self);
  * (GameSkeleton_IsMeshSkinned) draw with it; its other meshes draw with the rigid shader. Without a pose, a skinned
  * shader or room in its palette, every mesh draws with the rigid shader (skinned ones in their bind pose).
  *
+ * WATER. Only the meshes of @p shaders' set are drawn (WorldRendererMeshSet: by default every mesh but the world model's
+ * water slots'). In the water pass (the water set with a water program) each water slot's mesh draws with that program
+ * and its water material (WorldRendererWater_PrepareMaterial), rigid (a skinned one in its bind pose, logged once).
+ *
  * Must run inside a 3D mode (BeginMode3D or explicit rlgl matrices). A LOD past the world model's last draws nothing.
  * @param self The renderer.
  * @param model The cached model; must have an asset.
@@ -2593,6 +2718,16 @@ void WorldRendererGeometry_DrawModel(WorldRenderer* self, const WorldRenderModel
  */
 void WorldRendererGeometry_DrawModelDepth(const WorldRenderModel* model, size_t lod,
     const WorldRendererMeshShaders* shaders);
+
+/**
+ * @brief Whether a mesh of a cached model belongs to a pass's set: a water slot's mesh (its material slot is one of its
+ *        world model's water slots) to the water set alone, every other mesh to the solid set.
+ * @param model The cached model (one without an asset has no water slots).
+ * @param materialIndex The mesh's material index (raylib's meshMaterial).
+ * @param set The pass's set.
+ * @returns Whether the pass draws the mesh.
+ */
+bool WorldRendererGeometry_IsMeshInSet(const WorldRenderModel* model, int materialIndex, WorldRendererMeshSet set);
 
 /** @brief Draws the camera's models (the visibility's camera list) that pass @p filter. With the PBR shader (the lit
  *  pass) it uploads each object's forward point lights and draws its LODs (both during a cross-fade) dithered by its fade
@@ -3701,6 +3836,18 @@ void WorldRendererInstances_DrawNormals(WorldRenderer* self, const WorldRenderFr
 void WorldRendererInstances_DrawCasters(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
     const WorldRendererDitherLocations* dither, WorldVisibilityPass pass, const WorldRendererShadowLevelFrame* level);
 
+/**
+ * @brief The water pass's copies: the camera's cells whose world model has water slots, each with its forward lights and
+ *        draw place (by its sphere and its component's haze) and the LODs its copies show, their water slots' meshes with
+ *        their water materials, instanced through world_water_instanced (each copy's fade and LOD band in the vertex
+ *        stage), or one at a time through world_water while instancing is off or the twin or a buffer is missing. Inside
+ *        the water pass (WorldRendererWater_Render).
+ * @param self The renderer.
+ * @param frame The frame (its zoom factor).
+ * @returns How many cells' water was drawn.
+ */
+size_t WorldRendererInstances_DrawWater(WorldRenderer* self, const WorldRenderFrame* frame);
+
 /** @brief The status's "instancing" feature: unavailable without the lit twin (or without PBR lighting), active
  *  while the camera's pass drew a cell instanced, inactive otherwise (switched off, or no copies in view). */
 WorldRendererFeatureState WorldRendererInstances_GetState(const WorldRenderer* self);
@@ -3807,6 +3954,67 @@ void WorldRendererReflections_UpdateStatus(WorldRenderer* self, const WorldRende
 
 /** @brief Logs one line about the reflections (with the status, WorldRenderer_LogStatus). */
 void WorldRendererReflections_LogStatus(const WorldRenderer* self);
+
+
+// WorldRendererWater.c
+/** @brief Starts the water's state: no programs, no copies, a drift at nothing. */
+void WorldRendererWater_Construct(WorldRenderer* self);
+
+/**
+ * @brief Loads the water's programs (world_water, then its instanced twin world_water_instanced), each a lit program
+ *        (WorldRendererLighting_LoadPbrProgram) with the water's uniforms, its samplers pointed at their units. Without
+ *        the rigid one no water is drawn (logged once by the loader). Needs a live GL context; before the instanced
+ *        twins' load (WorldRendererInstances_LoadShaders prepares the water twin's instancing).
+ */
+void WorldRendererWater_LoadShaders(WorldRenderer* self);
+
+/**
+ * @brief Notes the scene's new size: the copies of an old size are released, and made again when water first needs them
+ *        (WorldRendererWater_PrepareFrame).
+ */
+void WorldRendererWater_CreateTargets(WorldRenderer* self, int width, int height);
+
+/** @brief Releases the copies. */
+void WorldRendererWater_ReleaseTargets(WorldRenderer* self);
+
+/** @brief Whether water can be drawn at all: the rigid program loaded. */
+bool WorldRendererWater_IsAvailable(const WorldRenderer* self);
+
+/**
+ * @brief The frame's water: runs the drift by @p deltaSeconds with the environment's wind, counts the models and the
+ *        copies' cells in view with water slots (and those that mirror their surroundings), and decides whether the pass
+ *        runs and whether it sees what lies under the water. Needs the frame's visibility; before the reflections'
+ *        decision (WorldRendererReflections_Decide counts the water that mirrors).
+ */
+void WorldRendererWater_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame, double deltaSeconds);
+
+/**
+ * @brief The material a water slot's mesh draws with in the water pass: no maps (DrawMesh binds none), @p program's
+ *        pass shader; the water material's uniforms (its maps' frames for the frame, its look) uploaded into @p program
+ *        unless it holds them already this frame, and its maps bound on the water's units.
+ * @param self The renderer.
+ * @param program The water program the mesh draws with (the rigid or the instanced one).
+ * @param model The cached model (its world model and variant pick the water material).
+ * @param materialIndex The mesh's material index: one of the world model's water slots.
+ * @param outMaps [out] The material's maps (WORLD_RENDERER_MATERIAL_MAP_COUNT of them, zeroed).
+ * @returns The material; its shader's id is 0 when the slot has no water material (nothing should be drawn).
+ */
+Material WorldRendererWater_PrepareMaterial(WorldRenderer* self, const WorldRendererWaterProgram* program,
+    const WorldRenderModel* model, int materialIndex, MaterialMap* outMaps);
+
+/**
+ * @brief The water pass, inside the scene pass's texture mode and 3D mode, after the opaque world (its reflection
+ *        attachments still written while the reflections run): copies the scene's colour and depth, binds them, and draws
+ *        the camera's models' and copies' water slots over the opaque world (dithered by their fades, both LODs of a
+ *        cross-fade), each with its forward lights and draw place. Nothing while the frame has no water.
+ */
+void WorldRendererWater_Render(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief The status's "water" feature and the water's fields, from the last render. */
+void WorldRendererWater_UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief Logs one line about the water (with the status, WorldRenderer_LogStatus). */
+void WorldRendererWater_LogStatus(const WorldRenderer* self);
 
 
 // WorldRendererRain.c

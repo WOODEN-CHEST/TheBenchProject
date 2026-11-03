@@ -143,7 +143,8 @@ typedef struct WorldRenderModelStruct
      *  and visible. */
     bool IsDrawn;
     /** @brief The render settings in effect (this frame): the world model's, or the component's own while their
-     *  override flags are on (WorldModelComponent_ResolveSettings). */
+     *  override flags are on (WorldModelComponent_ResolveSettings); never crisp with a world model that has water slots
+     *  (its water lies over copies of the pixelated scene, which must hold the rest of it). */
     bool HasOutline;
     bool OmitsPixelation;
     bool CastsShadows;

@@ -223,7 +223,10 @@ static void UpdateModel(WorldRenderModel* entry, Vector3Double origin, AssetMana
         : WorldModelSettings_CreateDefault();
     WorldModelSettings Settings = WorldModelComponent_ResolveSettings(ModelComponent, &Defaults);
     entry->HasOutline = Settings.HasOutline;
-    entry->OmitsPixelation = Settings.OmitsPixelation;
+    // A world model with water is never crisp: its water lies over copies of the pixelated scene, which must hold the
+    // rest of it.
+    entry->OmitsPixelation = Settings.OmitsPixelation
+        && ((entry->Asset == NULL) || (WorldModel_GetWaterCount(entry->Asset) == 0U));
     entry->CastsShadows = Settings.CastsShadows;
     entry->HasShadowDistance = Settings.HasShadowDistance;
     entry->ShadowDistance = Settings.ShadowDistance;

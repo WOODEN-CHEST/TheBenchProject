@@ -641,6 +641,9 @@ default setting of this file for that one placement: an explicit override flag n
           "crt": { "curvature": 0.08, "scanlines": true, "scanline_strength": 0.35, "mask": "aperture_grille",
                    "mask_strength": 0.3, "glow": 0.35, "reflection": 0.6, "flicker": 0.01, "vignette": 0.25,
                    "power_on_seconds": 0.8, "power_off_seconds": 0.6 } } // [OPTIONAL] a CRT's only
+    ],
+    "water": [                                     // [OPTIONAL] at most 16
+        { "material_slot": 2, "water_material": "tbp:vase_water" }
     ]
 }
 ```
@@ -652,7 +655,7 @@ default setting of this file for that one placement: an explicit override flag n
 | `is_draw_distance_fixed` | boolean | true: the player's `draw_distance_scale` leaves the draw distance as it is (landmarks, gameplay-critical props). |
 | `lod_fade_seconds` | seconds, >= 0 | How long a LOD cross-fade takes: both LODs are drawn with complementary pixel dithers meanwhile; 0 swaps at once. |
 | `lod_hysteresis` | in [0, 1) | A LOD switches to a coarser one at its switch distance x (1 + h) and back at x (1 - h), so an object standing at a boundary does not flicker. |
-| `render` | object | The default render settings of the placements: `has_outline` (default true: a 1-pixel outline), `omit_pixelation` (default false: true draws it at full resolution over the pixelated image, for readable screens), `casts_shadows` (default true), `has_shadow_distance` and `shadow_distance` (metres, above 0; default false and 600: without a distance of its own a model casts as far as it is drawn; `shadow_distance` alone turns the flag on), `is_shadow_distance_fixed` (default false: true keeps the player's `shadow_distance_scale` off it), `is_shadow_only` (default false: true casts without being drawn, a cheap stand-in shape for a detailed model whose own `casts_shadows` is off), `has_two_sided_shadows` (default false: true casts from both faces, for open meshes such as a single-plane roof or a sign), `has_shadow_lod` and `shadow_lod` (an integer >= 0; default false and 0: the LOD it casts with in every shadow level, past the last LOD the last; `shadow_lod` alone turns the flag on), `haze` (in [0, 1000], default 1: times the air's haze in front of it; 0 as if the air were clear, for a beacon or a sign that must read from far away), `occludes_sky` (default true: it keeps the sky's light off what lies under it, as a roof, a wall or a tree's canopy does; false for grass, small plants, people and poles) and `has_reflections` (default false: true makes its glossy surfaces mirror what the screen shows around them, a polished floor, a car's paint, a window or chrome, the rougher a surface the more of its reflection the sky's alone; wet surfaces mirror their water either way). An older definition's `shadow_tier` (`both`, `near` or `far`) is still read, with a warning: `near` as a `shadow_distance` of 16 unless the block gives one, `both` and `far` as nothing. |
+| `render` | object | The default render settings of the placements: `has_outline` (default true: a 1-pixel outline), `omit_pixelation` (default false: true draws it at full resolution over the pixelated image, for readable screens; ignored with a `water` section), `casts_shadows` (default true), `has_shadow_distance` and `shadow_distance` (metres, above 0; default false and 600: without a distance of its own a model casts as far as it is drawn; `shadow_distance` alone turns the flag on), `is_shadow_distance_fixed` (default false: true keeps the player's `shadow_distance_scale` off it), `is_shadow_only` (default false: true casts without being drawn, a cheap stand-in shape for a detailed model whose own `casts_shadows` is off), `has_two_sided_shadows` (default false: true casts from both faces, for open meshes such as a single-plane roof or a sign), `has_shadow_lod` and `shadow_lod` (an integer >= 0; default false and 0: the LOD it casts with in every shadow level, past the last LOD the last; `shadow_lod` alone turns the flag on), `haze` (in [0, 1000], default 1: times the air's haze in front of it; 0 as if the air were clear, for a beacon or a sign that must read from far away), `occludes_sky` (default true: it keeps the sky's light off what lies under it, as a roof, a wall or a tree's canopy does; false for grass, small plants, people and poles) and `has_reflections` (default false: true makes its glossy surfaces mirror what the screen shows around them, a polished floor, a car's paint, a window or chrome, the rougher a surface the more of its reflection the sky's alone; wet surfaces mirror their water either way). An older definition's `shadow_tier` (`both`, `near` or `far`) is still read, with a warning: `near` as a `shadow_distance` of 16 unless the block gives one, `both` and `far` as nothing. |
 | `variants` | at most 64 `{ "name", "material_overrides" }` | Other looks of the same meshes (dark wood, a red car). `name`: `[a-z][a-z0-9_.-]*`, at most 128 bytes, unique in the world model. `material_overrides` (optional; at most 32, one per slot): what the variant changes in each material slot, below. A placed object picks one with `uses_variant` and `variant`. |
 | `bounds` | `{ "center": [x, y, z], "radius": metres >= 0 }` | The bounding sphere culling and draw distances use, in the object's own space (after each LOD's import transform). Left out, it is the sphere around LOD 0's mesh bounds, or, for an object an animator poses, the sphere around its pose. Give it to keep one fixed sphere whatever the pose. |
 | `animation_libraries` | at most 16 asset names, each once | The animation libraries (below, "Animation libraries") whose clips the placements play, loaded with the world model as its dependencies. Two of them may not hold a clip of the same name. The skinned LODs must share one skeleton: every LOD with bones must have the first one's bones and bind poses, or the world model is rejected (a coarse LOD may be rigid). A placement may play its own libraries instead (`references/world_structure.md`, the animator block). |
@@ -660,6 +663,7 @@ default setting of this file for that one placement: an explicit override flag n
 | `sockets` | at most 32 `"name": { "bone", "position", "rotation" }` | Named places on the model: where a held item hangs (a hand), where an action's anchor puts a character (a bench's seat, in front of a cup), where a first-person camera sits. The name: `[a-z][a-z0-9_.-]*`, at most 64 bytes. `bone` (optional, at most 31 bytes): a bone of the skeleton the socket follows, its `position` ([x, y, z] metres, default the origin) and `rotation` (degrees about X, Y and Z in that order, default none) along the bone's axes (its frame in the object's space, without any scale a bone or the import transform carries); without a bone the socket is fixed in the object's own space. Its +Z is the way it faces (an anchor turns a character that way). A bone socket on a world model without a skeleton, or on a bone its skeleton lacks, fails the load. |
 | `first_person` | `{ "eyes", "hidden_bones" }` | What a first-person camera does with this body: `eyes` (required) names one of its sockets, the camera's place; `hidden_bones` (at most 16 bone names) the bones the camera's passes leave out, each with its subtree (the head, from inside). Hidden bones need a skeleton that has them. |
 | `surfaces` | at most 16 `{ "name", "material_slot", "resolution", "kind", "emission", "light_intensity", "light_range", "crt" }` | Material slots that show a picture made while the game runs: a computer's screen showing a UI, later a page on a desk. A placed object picks one with its screen component (`references/world_structure.md`, the screen block) and the code that owns the picture hands it over each frame. `name` (required): `[a-z][a-z0-9_.-]*`, at most 64 bytes, unique. `material_slot` (required, 0 to 2147483647, one surface a slot): the material whose meshes show the picture; their texture coordinates must cover 0..1 over the picture (a CRT's: over its glass, its curved picture inside), U to the right and V up as Blender paints them (the screen's top edge at V 1), and LOD 0's meshes of the slot must exist and have them (or the world model does not load); every LOD should keep them. `resolution` (required): `[width, height]` of the picture, each 16 to 2048 pixels. `kind` (default `screen`): `screen`, the picture is light the screen gives off (it glows, and shows in the dark); `crt`, a screen behind a CRT's curved, glossy glass (its picture bulges, with scanlines, a mask, a glow, a vignette and a flicker, and plays the tube's power-on and power-off animation; its glass mirrors the sky and shows the lights' highlights); or `paper`, the picture is the surface's own colour, lit like everything around it. `emission` (a screen's or a CRT's, refused on a paper): how bright its picture's white is on the game's light scale (1 a white surface in full sun; 0 to 1000, default 0.2: readable under the noon sun, a glow at night without glare); a placement's `brightness` multiplies it. `light_intensity` (0 to 1000, default 1; refused on a paper): the factor on the light the picture gives off around it (1 as much as the glowing picture really sends out, 0 none): a screen lights what is in front of it in its picture's colour; `light_range` (0.1 to 100 m, default 3; refused on a paper): how far. `crt` (a CRT's only, refused on the other kinds; every key optional): `curvature` (0 to 0.5, default 0.08: the picture's corners come in by about that share of its half width), `scanlines` (default true) and `scanline_strength` (0 to 1, 0.35), `mask` (`aperture_grille`, the default; `shadow_mask`; `none`; or a texture asset's name: a small tile, at most 64 pixels a side, repeated over the window's pixels; it loads as the world model's dependency and must be read from an image file) and `mask_strength` (0 to 1, 0.3), `glow` (0 to 1, 0.35: the share of the picture's light spread into a soft glow), `reflection` (0 to 1, 0.6: the glass's reflectance facing it as a share of a bare glass's, as an anti-glare coating keeps it; toward grazing angles any glass mirrors more, so even 0 mirrors nearly edge-on), `flicker` (0 to 0.5, 0.01), `vignette` (0 to 1, 0.25), `power_on_seconds` and `power_off_seconds` (0 to 10, 0.8 and 0.6; 0 at once). A ray finds where on the picture the player points from LOD 0's triangles of the slot (from the front: the side its triangles face), through a CRT's curvature. Author a screen's slot as the glass it is when off (dark; a CRT's glossy: its roughness is the glass's): an off screen, or one nothing is shown on, gives off no light and shows that material. |
+| `water` | at most 16 `{ "material_slot", "water_material" }` | Material slots drawn as water: a pond's surface, a fountain's basin, a river, the sea (a huge flat mesh; there is no global sea). `material_slot` (required, 0 to 2147483647, one water slot a slot, never a surface's slot too): the material whose meshes are water, in every LOD; LOD 0 must have a mesh on it (or the world model does not load). `water_material` (required): a water material's asset name (see "Water materials"), loaded with the world model as its dependency; its waves, colour, absorption and foam replace the meshes' own material, which is never drawn. Water casts no shadow and keeps neither the sky nor the rain out, whatever `render` says, and on a skinned mesh draws in its bind pose; a world model with water is never drawn crisp (its `omit_pixelation` is ignored). Lay its mesh flat at the water's level (it shows the ground under it as its bottom, and wherever it lies above the ground); with the `uv` flow its texture coordinates in metres with V along the flow. A variant may swap a slot's water material (below). |
 
 **A variant's material override** takes the same keys as a model's `material_overrides` and reads them with the same
 parser, with one difference: the maps name **texture assets** (`textures/`, see "Textures"), so a texture several
@@ -671,6 +675,9 @@ variants or world models share loads once, and its filtering, wrap and mipmaps c
   left out keeps the model's.
 * `tint`, `metallic`, `roughness`, `porosity` and `puddles` (in [0, 1]), `emissive_color`, `emissive_intensity` (>= 0):
   as for models; an emissive map without a colour or intensity of its own shows at white x 1.
+* On a slot the `water` section draws as water, an override takes `slot` and `water_material` only: the water material
+  that slot draws with under this variant (a clear and a murky fountain from one basin), loaded with the world model as
+  its dependency. A `water_material` on any other slot is refused.
 A variant is applied when the object is drawn, to the renderer's copy of each material, never to the model asset, so
 the same model can show every variant at once.
 
@@ -724,10 +731,10 @@ needs the GPU, so tools without it can use only `points` hulls.
 **Rules.** A definition that breaks one is rejected when the definitions are read, with a message naming the key and
 where it is (`World model "desk": lods[1].max_distance (12) must be above lods[0].max_distance (15)...`). Unknown keys
 are rejected in the root, each LOD, `render`, each variant, each material override, `bounds`, `collision`, each set,
-each shape and each surface, with the keys allowed there.
+each shape, each surface and each water slot, with the keys allowed there.
 (Vectors and colours accept their
-usual forms, see "Common data structures".) The LOD models and variant textures must exist when the world model loads; a missing
-one fails the load (logged once, like every load failure) and the objects using it draw nothing.
+usual forms, see "Common data structures".) The LOD models, variant textures and water materials must exist when the world model loads; a
+missing one fails the load (logged once, like every load failure) and the objects using it draw nothing.
 
 The test world's world models are in `world_models/test_world/`: `test`, `pbr_demo` and `pbr_metal`, one LOD each, the
 model of the same name, seen 600 m, `painted_cube`, the test
@@ -751,7 +758,13 @@ its `seat` socket on the floor 0.55 m in front), `test_cup` (collision `bounds`,
 draws, and a pebble of two seen 45 m, which the test frame's pebble field draws (it keeps no sky out). The test world
 also places `trash_can_lined` (`world_models/trash_cans/`), a bin made in Blender: four LODs from .glb files with their
 own maps, switching at 10, 35 and 90 m and seen 300 m, colliding as one cylinder standing on its origin (its `center`
-half its height up: a shape is placed by its centre).
+half its height up: a shape is placed by its centre). The water's (see "Water materials" for their materials) are
+`test_sea` (the model `tbp:water_plane`, a flat 1 km grid of 32 x 32 quads, with the sea's water material, seen to
+1000 km at a fixed draw distance: the test frame scales it to 200 km), `test_pond` (the same plane, seen 3 km: the
+test world scales it to 60 x 220 m in the test terrain's valley), `test_gutter` (a stone channel 8 m long, its water
+slot 1 a stream along its texture coordinates) and `test_fountain` (a round basin 3 m across, its water slot 1 still
+and clear; its variant `murky` swaps in a dark green water material), written by
+`asset_source/scripts/placeholder_water.py` (`models/placeholder_water/`).
 
 
 ## World sprites.
@@ -1456,3 +1469,80 @@ nothing too (an override of an action nobody registered refuses them all, logged
 The shipped `input_actions/test_frame.json` declares the test frame's own category (`tbp:test_frame`, "Test Frame",
 order 900) with one action, `tbp:test_wave` ("Wave", default `0`): the test characters wave on it
 (`agents/WorldRuntime.md`, the test frame).
+
+
+## Water materials.
+A water material is the look of a body of water: a pond, a river, a fountain's basin, the sea. A world model names one
+for each of its water slots (see "World models", `water`), and a variant may swap it. Its maps are texture assets (see
+"Textures"), loaded with it as its dependencies. Definitions live under `water_materials/`; how the water is drawn is
+in `agents/WorldRuntime.md`, "Water".
+
+```
+{
+    "name": "tbp:pond",
+    "normal_a": "tbp:water_normal_a",  // [OPTIONAL] a texture asset: the larger waves (a normal map, linear)
+    "normal_a_tile_size": 5.0,         // [OPTIONAL]
+    "normal_a_speed": 1.0,             // [OPTIONAL]
+    "normal_b": "tbp:water_normal_b",  // [OPTIONAL] a texture asset: the smaller waves
+    "normal_b_tile_size": 1.7,         // [OPTIONAL]
+    "normal_b_speed": 0.6,             // [OPTIONAL]
+    "normal_b_turn": 35,               // [OPTIONAL] degrees
+    "wave_strength": 1.0,              // [OPTIONAL]
+    "wind_response": 1.0,              // [OPTIONAL]
+    "flow": "wind",                    // [OPTIONAL] "wind", "fixed" or "uv"
+    "flow_angle": 0,                   // [OPTIONAL] degrees
+    "flow_speed": 0.3,                 // [OPTIONAL] metres a second
+    "color": "#1a3238",                // [OPTIONAL]
+    "absorption": [0.45, 0.09, 0.06],  // [OPTIONAL] per metre: red, green, blue
+    "roughness": 0.06,                 // [OPTIONAL]
+    "reflectance": 1.0,                // [OPTIONAL]
+    "foam": "tbp:water_foam",          // [OPTIONAL] a texture asset: the foam's pattern (its red channel)
+    "foam_tile_size": 2.0,             // [OPTIONAL]
+    "foam_depth": 0.3,                 // [OPTIONAL] metres
+    "foam_strength": 0.9,              // [OPTIONAL]
+    "has_ripples": true,               // [OPTIONAL]
+    "has_reflections": true            // [OPTIONAL]
+}
+```
+
+| Key | Value (default) | Meaning |
+|---|---|---|
+| `normal_a` | a texture asset (none: no large waves) | The larger waves: a tileable tangent-space normal map in OpenGL's convention (green toward the image's top), read as linear. |
+| `normal_a_tile_size` | metres, above 0 up to 10000 (5) | Metres per repeat of `normal_a` (along a river, texture coordinates per repeat). |
+| `normal_a_speed` | 0 to 10 (1) | How fast `normal_a` moves, as a share of the flow's speed. |
+| `normal_b` | a texture asset (none: no small waves) | The smaller waves, summed with the larger. |
+| `normal_b_tile_size` | metres, above 0 up to 10000 (1.7) | Metres per repeat of `normal_b`. |
+| `normal_b_speed` | 0 to 10 (0.6) | How fast `normal_b` moves, as a share of the flow's speed. |
+| `normal_b_turn` | degrees (35) | How far `normal_b`'s layout and its motion are turned from `normal_a`'s, so the two patterns never line up. |
+| `wave_strength` | 0 to 8 (1) | How strongly the summed maps tilt the surface in a 5 m/s breeze; 0 is a flat mirror. |
+| `wind_response` | 0 to 2 (1) | How much the wind moves and roughens the waves: their strength follows the wind's speed as a wind-driven sea's slopes do (about a third in still air, twice as strong in a 20 m/s gale), and with the `wind` flow they drift at this share of 3 % of the wind's speed. 0: the wind leaves the water as it is (a sheltered fountain). |
+| `flow` | `wind`, `fixed`, `uv` (`wind`) | Which way the waves move: along the wind (lakes, the sea); along `flow_angle` at `flow_speed` (a pond with a steady drift); or along the mesh's texture coordinates' +V at `flow_speed`, the maps laid on those coordinates (a river, a stream, a gutter: lay its V along the flow, in metres, so its tiles and speed are metres too). With `wind` and `fixed` the maps lie on the world's x and z, so a scaled mesh never stretches them. |
+| `flow_angle` | degrees (0) | With `fixed`: where the water flows toward, around the vertical: 0 toward +Z, 90 toward +X, as the wind's direction. |
+| `flow_speed` | metres a second, 0 to 100 (0.3) | With `fixed` and `uv`: how fast the water flows. |
+| `color` | a colour (`#1a3238`, a dark blue-green) | What the water scatters back: deep water's colour, lit by the sun, the moon and the sky, so it darkens at night by itself. Its alpha is ignored. |
+| `absorption` | [r, g, b] per metre, each 0 to 100 (0.45, 0.09, 0.06) | How fast the water takes the light of what lies under it over the view's path through it: low for clear water (the bottom shows far down), high for murky (it shows only near the shore). Red goes first in clear water. |
+| `roughness` | 0 to 1 (0.06) | The surface's roughness: the glints' size and how sharply it mirrors (at least 0.045 is drawn). |
+| `reflectance` | 0 to 5 (1) | The share of water's own reflectance (2 % facing it, all of it at grazing angles) it mirrors with. |
+| `foam` | a texture asset (none: no foam) | The foam's pattern: its red channel from 0 to 1, tileable. A texel shows foam while the water under it is shallower than `foam_depth` times its value, so foam thins out away from the shore. |
+| `foam_tile_size` | metres, above 0 up to 10000 (2) | Metres per repeat of the foam. It drifts with the flow itself. |
+| `foam_depth` | metres, 0 to 20 (0.3) | How deep the water may be and still show foam: at the shore all of the pattern shows, at this depth only its brightest texels. 0: no foam. |
+| `foam_strength` | 0 to 1 (0.9) | How much of the surface the foam covers where it shows. |
+| `has_ripples` | a boolean (true) | Whether the rain's rings show on it while it rains where the rain reaches. |
+| `has_reflections` | a boolean (true) | Whether it mirrors what the screen shows around it (the hills, the trees, a house); false mirrors the sky alone. |
+
+* **Maps.** Each is a texture asset with its own definition: give the normal maps and the foam `"color_space":
+  "linear"`, repeating wrap and mipmaps (trilinear filtering suits them). They repeat every tile: paint them so their
+  edges meet. Every map is optional: without both normal maps the water is a flat mirror, without the foam it has none.
+* **The bottom.** The water shows what lies under it straight through (no refraction), dimmed by `absorption` over the
+  view's path to it, while its `color` scatters in over that path; where nothing lies under it (it hangs over the sky,
+  or the game draws without what the water needs for its bottom) it is deep water, its colour alone.
+* Unknown keys are refused, and every rule is checked when the definition is read (`Water material "pond":
+  water_material.foam_depth ...`); a texture that does not load fails the material's load, naming its key and the
+  texture (`Water material "tbp:pond": its normal_b "tbp:no_such_ripples": ...`), and so the world model that names it.
+
+The placeholders, written by `asset_source/scripts/placeholder_water.py` (the Python standard library only), are in
+`water_materials/test_world/`: `test_sea` (15 m and 4.8 m waves, foam to 0.6 m), `test_pond` (6 m and 1.6 m waves,
+foam to 0.2 m), `test_stream` (the `uv` flow at 0.8 m/s, small waves at 1.4 m and 0.5 m, foam to 6 cm),
+`test_fountain_clear` and `test_fountain_murky` (still water, barely moved by the wind; the murky one absorbs twenty
+to a hundred and forty times faster, dark green, with fine ripples only: its one map is `normal_b`'s texture). They share the maps in `textures/water/`: `normal_a` and `normal_b` (tileable sums of
+waves running every way, the larger ones stronger) and `foam` (a tileable pattern spread evenly over its range).

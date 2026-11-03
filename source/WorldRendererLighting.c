@@ -604,6 +604,9 @@ void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFra
     UploadPbrFrame(self, frame, &self->_pbr._instanced, applyScreenAo, areReflectionsDeferred, ditherPixelScale);
     UploadPbrFrame(self, frame, &self->_crt._rigid, applyScreenAo, areReflectionsDeferred, ditherPixelScale);
     UploadPbrFrame(self, frame, &self->_crt._skinned, applyScreenAo, areReflectionsDeferred, ditherPixelScale);
+    UploadPbrFrame(self, frame, &self->_water._rigid._program, applyScreenAo, areReflectionsDeferred, ditherPixelScale);
+    UploadPbrFrame(self, frame, &self->_water._instanced._program, applyScreenAo, areReflectionsDeferred,
+        ditherPixelScale);
     WorldRendererCrt_UploadPass(self, frame, windowPixelScale);
     if (HasSprites)
     {

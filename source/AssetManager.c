@@ -1839,6 +1839,8 @@ Error AssetManager_CreateStandardAssetTypes(AssetManager* self, StandardAssetTyp
         { ASSET_TYPE_NAME_CLIMATE, ASSET_TYPE_DIRECTORY_CLIMATE, ClimateDefinition_Construct, &outTypes->Climate },
         { ASSET_TYPE_NAME_INPUT_ACTIONS, ASSET_TYPE_DIRECTORY_INPUT_ACTIONS, InputActionsDefinition_Construct,
             &outTypes->InputActions },
+        { ASSET_TYPE_NAME_WATER_MATERIAL, ASSET_TYPE_DIRECTORY_WATER_MATERIAL, WaterMaterialDefinition_Construct,
+            &outTypes->WaterMaterial },
     };
 
     for (size_t i = 0; i < (sizeof(Standard) / sizeof(Standard[0])); i++)
@@ -2777,6 +2779,13 @@ Error AssetManager_LoadInputActions(AssetManager* self, const unsigned char* nam
     InputActions** outAsset)
 {
     return LoadStandard(self, (self != NULL) ? self->_standardTypes.InputActions : ASSET_TYPE_ID_INVALID, name, user,
+        (void**)outAsset);
+}
+
+Error AssetManager_LoadWaterMaterial(AssetManager* self, const unsigned char* name, AssetUserID user,
+    WaterMaterial** outAsset)
+{
+    return LoadStandard(self, (self != NULL) ? self->_standardTypes.WaterMaterial : ASSET_TYPE_ID_INVALID, name, user,
         (void**)outAsset);
 }
 

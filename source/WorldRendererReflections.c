@@ -372,7 +372,7 @@ void WorldRendererReflections_Decide(WorldRenderer* self, WorldRenderFrame* fram
     WorldRendererReflectionState* State = &self->_reflections;
     frame->ReflectionMarch = WorldReflections_GetMarchSettings(State->_quality);
     frame->AreWetSurfacesMirroring = frame->IsRainActive && (frame->Weather.Wetness > 0.0f);
-    frame->MirroringObjectCount = CountMirroringObjects(self, frame);
+    frame->MirroringObjectCount = CountMirroringObjects(self, frame) + frame->WaterMirrorCount;
     frame->AreReflectionsActive = WorldRendererReflections_IsAvailable(self) && State->_hasData && State->_hasBlocks
         && State->_hasTarget && State->_isEnabled && (State->_quality != CONFIG_REFLECTION_QUALITY_OFF)
         && !IsSurfaceViewShowing(self, frame) && ((frame->MirroringObjectCount > 0U) || frame->AreWetSurfacesMirroring);

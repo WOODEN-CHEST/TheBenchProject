@@ -89,7 +89,9 @@ static bool IsSolidInGBuffer(float fade)
  * each draw. A model mid LOD cross-fade is drawn once, solid, as the LOD with the larger share (the same rule as the
  * fade's: no dither holes in the G-buffer). The normal shader writes RGB=view-space normal, A=surface/outline flag
  * (0.5 = surface, 1.0 = surface with outline); pixels the sky/grid leave untouched stay at the cleared 0 (not a
- * surface). */
+ * surface). A model's water slots (while water is drawn) follow as surfaces without an outline, so what lies under the
+ * water is not outlined through it and the clouds' march stops at it; rigid, as the water pass draws them (a skinned water
+ * mesh in its bind pose). */
 static void DrawNormalBufferModels(WorldRenderer* self, WorldRendererPixelFilter filter)
 {
     Shader NormalShader = GameShader_GetRaylibShader(self->_gbuffer._shader);
@@ -102,6 +104,7 @@ static void DrawNormalBufferModels(WorldRenderer* self, WorldRendererPixelFilter
     size_t VisibleCount = 0;
     const size_t* Visible = WorldVisibility_GetModels(&self->_visibility, &self->_cache, WorldVisibilityPass_Camera,
         &VisibleCount);
+    bool IsWaterDrawn = WorldRendererWater_IsAvailable(self);
     for (size_t Position = 0; Position < VisibleCount; Position++)
     {
         size_t Index = Visible[Position];
@@ -119,7 +122,17 @@ static void DrawNormalBufferModels(WorldRenderer* self, WorldRendererPixelFilter
             SetShaderValue(SkinnedShader, self->_gbuffer._skinnedLocOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
             SetShaderValue(SkinnedShader, self->_gbuffer._skinnedLocHazeMultiplier, &Entry->Haze, SHADER_UNIFORM_FLOAT);
         }
-        WorldRendererGeometry_DrawModel(self, Entry, WorldLodState_GetSolidLod(&Entry->Lod), &Shaders, false);
+        size_t Lod = WorldLodState_GetSolidLod(&Entry->Lod);
+        WorldRendererGeometry_DrawModel(self, Entry, Lod, &Shaders, false);
+        if (IsWaterDrawn && (Entry->Asset != NULL) && (WorldModel_GetWaterCount(Entry->Asset) > 0U))
+        {
+            float NoOutline = 0.0f;
+            SetShaderValue(NormalShader, self->_gbuffer._locOutlineFlag, &NoOutline, SHADER_UNIFORM_FLOAT);
+            WorldRendererMeshShaders WaterShaders = Shaders;
+            WaterShaders.Skinned = NULL;
+            WaterShaders.Meshes = WorldRendererMeshSet_Water;
+            WorldRendererGeometry_DrawModel(self, Entry, Lod, &WaterShaders, false);
+        }
     }
 }
 

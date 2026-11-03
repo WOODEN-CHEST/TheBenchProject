@@ -702,8 +702,7 @@ void WorldRendererRain_UploadLitFrame(const WorldRenderer* self, const WorldRend
         SetShaderValue(shader, locations->_locMapOffsets, Offsets, SHADER_UNIFORM_VEC2);
     }
 
-    // The puddles: their mask's place (the origin wrapped where its two reads repeat together), their coverage, and the
-    // rain's rings on them.
+    // The puddles: their mask's place (the origin wrapped where its two reads repeat together) and their coverage.
     bool IsPuddleActive = frame->IsRainActive && (frame->Rain.PuddleCoverage > 0.0f)
         && (State->_puddleMask._texture != NULL);
     int PuddleActive = IsPuddleActive ? 1 : 0;
@@ -714,10 +713,14 @@ void WorldRendererRain_UploadLitFrame(const WorldRenderer* self, const WorldRend
         WorldRain_GetPatternOrigin(frame->Origin, WORLD_RAIN_PATTERN_TILES * (double)frame->Rain.PuddleTile, Origin);
         float PuddleFrame[4] = { Origin[0], Origin[1], 1.0f / frame->Rain.PuddleTile, frame->Rain.PuddleCoverage };
         SetShaderValue(shader, locations->_locPuddleFrame, PuddleFrame, SHADER_UNIFORM_VEC4);
-        WorldRain_GetPatternOrigin(frame->Origin, WORLD_RAIN_RIPPLE_PERIOD, Origin);
-        float RippleFrame[4] = { Origin[0], Origin[1], (float)State->_drift.RippleCycles, frame->Rain.RippleStrength };
-        SetShaderValue(shader, locations->_locRippleFrame, RippleFrame, SHADER_UNIFORM_VEC4);
     }
+    // The rain's rings on still water (the puddles', and every water's that has ripples) while it rains: none while the
+    // rain is off.
+    float RippleOrigin[2];
+    WorldRain_GetPatternOrigin(frame->Origin, WORLD_RAIN_RIPPLE_PERIOD, RippleOrigin);
+    float RippleFrame[4] = { RippleOrigin[0], RippleOrigin[1], (float)State->_drift.RippleCycles,
+        frame->IsRainActive ? frame->Rain.RippleStrength : 0.0f };
+    SetShaderValue(shader, locations->_locRippleFrame, RippleFrame, SHADER_UNIFORM_VEC4);
 
     // While the rain is on, nothing above its top is rained on, and water mirrors the clear sky the sky view holds (the
     // gaps' share of it while the clouds are drawn: the table then holds the sky without them) and the clouds' deck with a

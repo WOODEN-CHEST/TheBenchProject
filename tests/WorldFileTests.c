@@ -1548,7 +1548,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 72U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 76U);
             // The terrain: one object placing the placeholder terrain around the ground slab.
             WorldComponent* Ground = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 51U, WorldComponentType_Terrain, &Ground)
@@ -1680,6 +1680,27 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
                     && ((Mirrors[Index].Variant == NULL)
                         || (WorldModelComponent_UsesVariant(MirrorModel) && AreNamesEqual(
                             WorldModelComponent_GetVariant(MirrorModel), (const unsigned char*)Mirrors[Index].Variant))));
+            }
+            // The water's examples: a stone gutter with its stream and two fountains past the slab's far edge (one clear,
+            // one its murky variant), and a pond over the valley's floor (the water plane scaled to it); none collides.
+            static const struct { uint64_t Id; const char* WorldModel; const char* Variant; } Waters[] =
+            {
+                { 73U, "tbp:test_gutter", NULL }, { 74U, "tbp:test_fountain", "clear" },
+                { 75U, "tbp:test_fountain", "murky" }, { 76U, "tbp:test_pond", NULL }
+            };
+            for (size_t Index = 0U; Index < (sizeof(Waters) / sizeof(Waters[0])); Index++)
+            {
+                WorldComponent* Water = NULL;
+                WorldComponent* WaterCollider = NULL;
+                const WorldModelComponent* WaterModel = World_TryGetComponent(&Loaded, Waters[Index].Id,
+                    WorldComponentType_Model, &Water) ? WorldModelComponent_FromComponent(Water) : NULL;
+                TEST_CHECK(run, (WaterModel != NULL)
+                    && AreNamesEqual(WorldModelComponent_GetWorldModel(WaterModel),
+                        (const unsigned char*)Waters[Index].WorldModel)
+                    && ((Waters[Index].Variant == NULL) ? !WorldModelComponent_UsesVariant(WaterModel)
+                        : (WorldModelComponent_UsesVariant(WaterModel) && AreNamesEqual(
+                            WorldModelComponent_GetVariant(WaterModel), (const unsigned char*)Waters[Index].Variant)))
+                    && !World_TryGetComponent(&Loaded, Waters[Index].Id, WorldComponentType_Collider, &WaterCollider));
             }
             // The test monitor: a screen on its table (a child of the table's pivot), showing on its surface "screen".
             WorldComponent* Monitor = NULL;

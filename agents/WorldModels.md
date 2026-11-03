@@ -3,14 +3,16 @@
 `include/WorldModel.h`, `source/WorldModel.c` (the asset's data functions: the default settings, variants by name and
 on one material), `source/WorldModelSurface.c` (the surfaces' data functions: by name, the texture coordinates at a
 point, where on the picture a point of the glass is, the ray that meets a placed surface) and `source/WorldModelDefinition.c` (the `world_model` asset type: the
-definition's parser and the loader; the `surfaces` section's in `source/WorldModelSurfaceDefinition.c`). The placements' side is the model component, `include/WorldModelComponent.h` and
+definition's parser and the loader; the `surfaces` section's in `source/WorldModelSurfaceDefinition.c`, the `water`
+section's in `source/WorldModelWaterDefinition.c`). The placements' side is the model component, `include/WorldModelComponent.h` and
 `source/WorldModelComponent.c` ([WorldData.md](WorldData.md)), and the model instances component, many copies
 of one world model with the model component's settings (`include/WorldModelInstancesComponent.h`; its LODs change in
 distance bands per copy, [WorldRuntime.md](WorldRuntime.md), "Model instances"). The definition format is in
 `references/asset_structure.md`, "World models". Tests: `tests/WorldModelTests.c`, the renderer's side in
 `tests/WorldRenderCacheTests.c` and `tests/WorldVisibilityTests.c`; the LOD maths in `tests/WorldLodTests.c`; the
 `collision` section ("Collision" below) in `tests/WorldColliderTests.c`; the `surfaces` section ("Surfaces" below) and
-pointing at a surface in `tests/WorldScreenTests.c`, a CRT's maths (`include/CrtScreen.h`) in `tests/CrtScreenTests.c`.
+pointing at a surface in `tests/WorldScreenTests.c`, a CRT's maths (`include/CrtScreen.h`) in `tests/CrtScreenTests.c`;
+the `water` section ("Water" below) and its variants' swaps in `tests/WaterTests.c`.
 
 A **world model** is everything that is the same for every placement of a thing: which model to draw at which distance
 (its LODs), how far it is seen, the default render settings of its placements, and its material variants. A **world
@@ -36,13 +38,14 @@ as dependencies; world sprites do the same for sprite animations: [WorldSprites.
   `sockets` (at most `WORLD_MODEL_MAX_SOCKETS`, 32, each a name of at most 64 bytes, an optional bone of at most 31, a
   position and a rotation) and `first_person` (`eyes`, one of its sockets; `hidden_bones`, at most 16; parsed in
   `source/WorldModelSocketDefinition.c`). **Unknown keys are refused** in every object
-  the definition defines: the root, each LOD, `render`, each variant, each material override, `bounds`, each socket and
-  `first_person`
+  the definition defines: the root, each LOD, `render`, each variant, each material override, `bounds`, each socket,
+  `first_person`, each surface and each water slot
   (`AssetJSON_RejectUnknownKeys`: the message names the key, where it is and the keys allowed there; a key from a file
   is shown as printable ASCII only). Values of the shared shapes (a vector, a colour) follow the shared GameJSON
   parsers, which ignore extra keys inside their own objects. Messages start with `World model "<name>": ` and name the place
   (`lods[1].max_distance`, `variants[0].material_overrides[2]`).
-- **Loading** (`WorldModelDefinition_LoadAsset`): the LOD models and the variants' textures load as **dependencies**,
+- **Loading** (`WorldModelDefinition_LoadAsset`): the LOD models, the variants' textures and the water materials (the
+  `water` section's and the variants': "Water" below) load as **dependencies**,
   under the world model's dependency user (`AssetManager_LoadAssetSingle`), so holding the world model holds them and
   they unload right after it. A dependency that fails fails the world model, naming it (`World model "desk": LOD 1
   (model "desk_lod1"): ...`, `... variant "red", slot 0: texture "red_albedo": ...`); the manager then releases what had
@@ -82,7 +85,8 @@ sky out, draw distance, fixed),
 first-person block,
 `_GetVariantCount`,
 `_GetVariantName(index)`, `WorldModel_TryFindVariant(name, &index)` and `WorldModel_ApplyVariant`; the surfaces'
-`_GetSurfaceCount`, `_GetSurface(index)` and `WorldModel_TryFindSurface(name, &index)`.
+`_GetSurfaceCount`, `_GetSurface(index)` and `WorldModel_TryFindSurface(name, &index)`; the water's `_GetWaterCount`,
+`_GetWater(index)`, `WorldModel_TryFindWater(materialSlot, &index)` and `WorldModel_GetWaterMaterial`.
 `WorldModelSettings_CreateDefault` is what a world model and a placement start from.
 
 ## Variants
@@ -90,7 +94,8 @@ first-person block,
 A variant is another look of the same meshes: a named list of material overrides, one per material slot (the
 material's index in each LOD's model: every LOD keeps the same slots). An override swaps in texture assets
 (albedo, normal, the packed occlusion/roughness/metallic map, emissive) and sets the PBR factors (tint, metallic,
-roughness, emissive colour and intensity) and the weather's (porosity, puddles: a paved variant pools rain water).
+roughness, emissive colour and intensity) and the weather's (porosity, puddles: a paved variant pools rain water); on a
+water slot it swaps the water material instead, and nothing else ("Water" below).
 - **Applied at draw time, never to an asset** (AGENTS.md rule 3): the renderer copies a mesh's material maps for every
   draw (`WorldRendererGeometry.c`) and `WorldModel_ApplyVariant(model, variant, materialIndex, material)` changes that copy:
   the textures first, then the factors through `GameMaterialFactors_Apply` ([GameAssets.md](GameAssets.md)), the same
@@ -339,6 +344,45 @@ computer is the first: its content is a `UIScreen` the code that owns it draws e
   ([WorldRuntime.md](WorldRuntime.md), "Surfaces' pictures"), never into the asset; a CRT's slot draws with the CRT
   program, and every glowing surface lights its surroundings ("CRT screens", "Screen light" there).
 
+## Water
+
+A world model may draw some of its material slots as **water**: each names a water material (a `water_material` asset:
+the waves and their flow, the colour, the absorption, the foam: `references/asset_structure.md`, "Water materials";
+[AssetManager.md](AssetManager.md)), and the renderer's water pass draws every mesh of that slot with it instead of the
+mesh's own material ([WorldRuntime.md](WorldRuntime.md), "Water"). A pond is a flat mesh placed at its water level, a
+fountain a basin whose water is its own slot, the sea a huge water plane; there is no global sea.
+```json
+"water": [
+    { "material_slot": 1, "water_material": "tbp:test_fountain_clear" }
+],
+"variants": [
+    { "name": "murky", "material_overrides": [ { "slot": 1, "water_material": "tbp:test_fountain_murky" } ] }
+]
+```
+- **The definition** (`source/WorldModelWaterDefinition.c`, unknown keys refused, every message naming the place): at
+  most `WORLD_MODEL_MAX_WATERS` (16) water slots; `material_slot` (required, 0 to 2147483647, one water slot a slot) and
+  `water_material` (required, a water material's asset name, kept in full: `pond` is `tbp:pond`). A slot is a surface or
+  water, never both (`water[0].material_slot 1 shows a surface's picture too`).
+- **A variant may swap a water slot's water material**: its material override for that slot takes `water_material` and
+  nothing else but `slot` (a water slot has no PBR material to change); a `water_material` on a slot the `water` section
+  does not draw as water is refused. So one basin comes as a clear and a murky fountain; a placement chooses the variant
+  as for any other look.
+- **Loaded with the world model** (`WorldModelWaterDefinition_Load`): each water slot needs a mesh of LOD 0 on its slot
+  (`water[0]: no mesh of LOD 0 uses material slot 4`), and its water material loads as a **dependency** (a variant's
+  too), so holding the world model holds them; one that fails fails the world model, naming the slot and the material
+  (`World model "fountain": water[0] (slot 1): water material "tbp:clear": ...`, `... variant "murky", slot 1: water
+  material ...`). Every LOD should keep the slot: whichever LOD is drawn, its meshes on the slot are water.
+- **Accessors**: `WorldModel_GetWaterCount`, `_GetWater(index)`, `WorldModel_TryFindWater(materialSlot, &index)` (a few
+  water slots searched; a world model without water answers at once) and `WorldModel_GetWaterMaterial(model,
+  hasVariant, variantIndex, water)` (the variant's swap, else the section's); a water slot's
+  `WorldModelWater_GetMaterialSlot`, `_GetMaterial` and `_GetMaterialName`.
+- **The renderer** draws the water slots in the water pass alone (and in the G-buffer, without an outline): they cast
+  no shadow and keep neither the sky nor the rain out, whatever the world model's `render` settings say. The meshes'
+  own material is never used; their texture coordinates matter only to a water material with the `uv` flow (a river's
+  coordinates run along it: V growing along the flow, in metres, so the maps' tile sizes and the flow's speed are
+  metres too). A world model with water is never drawn crisp: its `omit_pixelation` (and a placement's) is ignored, so
+  its water lies over the rest of it in the pixelated scene. On a skinned mesh a water slot draws in its bind pose.
+
 ## Hot reload (designed in, built later)
 
 Consumers keep only names and re-resolve when something changes: the render cache resolves a world model by name and
@@ -390,10 +434,24 @@ base colour, normal and metallic-roughness maps, 256 down to 32 pixels, packed a
 switching at 10, 35 and 90 m and seen 300 m, colliding as a 30 kg cylinder standing on its origin. The test world places
 one, pushable, in the start view.
 
+Water ("Water" above; the placeholders written by `asset_source/scripts/placeholder_water.py`): `test_sea` (the model
+`tbp:water_plane`, `models/placeholder_water/water_plane.obj`: a flat 1 km grid of 32 x 32 quads around its origin,
+its one material slot 0 the water, with the sea's water material `tbp:test_sea`; seen to 1000 km at a fixed draw
+distance; the test frame scales it to 200 km), `test_pond` (the same plane with `tbp:test_pond`, seen to 3 km, foam at
+its shore; the test world scales it to 60 x 220 m in the test terrain's valley), `test_gutter` (a stone channel 8 m
+long along +X, its water slot 1 17 cm deep, its texture coordinates in metres with V along it: `tbp:test_stream`, the
+`uv` flow at 0.8 m/s) and `test_fountain` (a round stone basin 3 m across, its water slot 1 a disc 30 cm deep, still
+water: `tbp:test_fountain_clear`; its variant `murky` swaps in `tbp:test_fountain_murky`, dark green, hiding the floor, with finer
+ripples: its one normal map is the smaller waves' texture).
+Their water materials (`water_materials/test_world/`) share the two placeholder normal maps and the foam pattern
+(`textures/water/`: tileable, linear). The test world places the gutter, both fountains and the pond (objects 73 to
+76); the sea is the test frame's (Shift with keypad +).
+
 ## Known limits
 
 - **A surface is pointed at on LOD 0's triangles in their bind pose**: a skinned screen (a laptop whose lid an animation
   opens) is met where its rest pose has it, and its light comes from where its rest pose holds its glass.
+- **A water slot on a skinned mesh draws in its bind pose** (logged once by the renderer): water does not bend.
 - **A CRT's mask tile needs an image file** for its mean colour: a texture built in code cannot be a mask.
 - **A missing dependency fails the whole world model** (every LOD and texture must load), so its objects draw nothing;
   a variant texture typo costs the model, not just the variant.

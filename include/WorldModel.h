@@ -19,6 +19,8 @@ typedef struct GameTextureStruct GameTexture;
 typedef struct AnimationLibraryStruct AnimationLibrary;
 /** @brief An animation graph asset (AnimationGraph.h); a world model names the one its placements play. */
 typedef struct AnimationGraphStruct AnimationGraph;
+/** @brief A water material asset (WaterMaterial.h); a world model names the ones its water slots draw with. */
+typedef struct WaterMaterialStruct WaterMaterial;
 
 
 /**
@@ -78,6 +80,12 @@ typedef struct AnimationGraphStruct AnimationGraph;
  * frame, and a ray finds where on the picture the player points (WorldModelSurface_Raycast): each surface keeps LOD 0's
  * triangles of its slot with their texture coordinates for that, and the place and size of its picture for its light.
  *
+ * WATER. Material slots drawn as water (WorldModelWater): each names a water material (WaterMaterial.h: the waves, the
+ * colour, the absorption, the foam), loaded as the world model's dependency, and its meshes are drawn by the renderer's
+ * water pass with it instead of their own material (and by no other pass but the G-buffer). A variant may swap a water
+ * slot's water material (WorldModel_GetWaterMaterial), so one basin comes as a clear and a murky fountain. A slot is a
+ * surface or water, never both.
+ *
  * Every field is read-only (underscore-prefixed): read them through the accessors.
  */
 
@@ -118,6 +126,8 @@ typedef struct AnimationGraphStruct AnimationGraph;
 #define WORLD_MODEL_MAX_HIDDEN_BONES ((size_t)16)
 /** @brief The most surfaces a world model may have. */
 #define WORLD_MODEL_MAX_SURFACES ((size_t)16)
+/** @brief The most water slots a world model may have. */
+#define WORLD_MODEL_MAX_WATERS ((size_t)16)
 /** @brief The most bytes a surface's name may have ([a-z][a-z0-9_.-]*, without the terminator). */
 #define WORLD_MODEL_SURFACE_NAME_MAX_LENGTH ((size_t)64)
 /** @brief The smallest side of a surface's picture, in pixels. */
@@ -259,6 +269,9 @@ typedef struct WorldModelMaterialOverrideStruct
     const GameTexture* _emissive;
     /** @brief Tint, metallic, roughness and emissive colour and intensity (GameMaterialFactors). */
     GameMaterialFactors _factors;
+    /** @brief The water material a water slot draws with under this variant (held under the world model's dependency
+     *  user), or NULL to keep the "water" section's; only on a water slot (the definition refuses it elsewhere). */
+    const WaterMaterial* _waterMaterial;
 } WorldModelMaterialOverride;
 
 /** @brief A named set of material overrides: one look of the same meshes (dark wood, a red car). */
@@ -407,6 +420,21 @@ typedef struct WorldModelSurfaceHitStruct
 } WorldModelSurfaceHit;
 
 /**
+ * @brief One water slot of a world model: a material slot whose meshes are drawn as water with a water material.
+ *        Read-only; part of its world model.
+ */
+typedef struct WorldModelWaterStruct
+{
+    /** @brief The material slot drawn as water (0 to INT32_MAX): every mesh of it, in every LOD. */
+    int32_t _materialSlot;
+    /** @brief The water material it draws with unless a variant swaps it (held under the world model's dependency
+     *  user). */
+    const WaterMaterial* _material;
+    /** @brief That material's asset name, in full (owned by the world model). */
+    const unsigned char* _materialName;
+} WorldModelWater;
+
+/**
  * @brief A loaded world model. Built and owned by the asset manager (the "world_model" type); read-only.
  */
 typedef struct WorldModelStruct
@@ -465,6 +493,9 @@ typedef struct WorldModelStruct
     /** @brief Its surfaces (owned), and how many (0 to WORLD_MODEL_MAX_SURFACES). */
     const WorldModelSurface* _surfaces;
     uint32_t _surfaceCount;
+    /** @brief Its water slots (owned), and how many (0 to WORLD_MODEL_MAX_WATERS). */
+    const WorldModelWater* _waters;
+    uint32_t _waterCount;
 } WorldModel;
 
 
@@ -1032,3 +1063,63 @@ bool WorldModelSurface_Raycast(const WorldModelSurface* self, const Matrix4Doubl
  * @returns The name (static), or NULL for a value that is not a kind.
  */
 const unsigned char* WorldModelSurfaceKind_GetName(WorldModelSurfaceKind kind);
+
+/** @brief Returns how many water slots the world model has. @param self The world model; must not be NULL. */
+static inline uint32_t WorldModel_GetWaterCount(const WorldModel* self)
+{
+    return self->_waterCount;
+}
+
+/**
+ * @brief Returns one of the world model's water slots.
+ * @param self The world model; must not be NULL.
+ * @param index The water slot's index (its place in the "water" section).
+ * @returns The water slot (valid while the world model is loaded), or NULL for an index past the last.
+ */
+static inline const WorldModelWater* WorldModel_GetWater(const WorldModel* self, uint32_t index)
+{
+    return (index < self->_waterCount) ? &self->_waters[index] : NULL;
+}
+
+/**
+ * @brief Finds the water slot drawn on a material slot (a linear search over a few water slots: every draw of a mesh
+ *        asks it, and a world model without water answers at once).
+ * @param self The world model; must not be NULL.
+ * @param materialSlot The material's index in a LOD's model.
+ * @param outIndex [out] Receives the water slot's index when found; may be NULL.
+ * @returns true when that material slot is drawn as water.
+ */
+bool WorldModel_TryFindWater(const WorldModel* self, int32_t materialSlot, uint32_t* outIndex);
+
+/**
+ * @brief Returns the water material a water slot draws with: the variant's, when it swaps that slot's water material,
+ *        else the "water" section's.
+ * @param self The world model; must not be NULL.
+ * @param hasVariant Whether a variant is drawn.
+ * @param variantIndex The variant's index (WorldModel_TryFindVariant), read only while @p hasVariant; one past the last
+ *        counts as none.
+ * @param water The water slot's index.
+ * @returns The water material (valid while the world model is loaded), or NULL for an index past the last water slot.
+ */
+const WaterMaterial* WorldModel_GetWaterMaterial(const WorldModel* self, bool hasVariant, size_t variantIndex,
+    uint32_t water);
+
+/** @brief Returns the material slot a water slot draws on. @param self The water slot; must not be NULL. */
+static inline int32_t WorldModelWater_GetMaterialSlot(const WorldModelWater* self)
+{
+    return self->_materialSlot;
+}
+
+/** @brief Returns the water material a water slot draws with unless a variant swaps it (valid while its world model is
+ *  loaded). @param self The water slot; must not be NULL. */
+static inline const WaterMaterial* WorldModelWater_GetMaterial(const WorldModelWater* self)
+{
+    return self->_material;
+}
+
+/** @brief Returns the asset name of that water material, in full (valid while its world model is loaded). @param self
+ *  The water slot; must not be NULL. */
+static inline const unsigned char* WorldModelWater_GetMaterialName(const WorldModelWater* self)
+{
+    return self->_materialName;
+}

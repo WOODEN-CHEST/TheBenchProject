@@ -197,6 +197,13 @@ void WorldRainTests_Run(TestRun* run);
  *  source/). */
 void WorldReflectionsTests_Run(TestRun* run);
 
+/** @brief Water: the water material's definitions (the defaults, every key, each rule refused, its maps as dependencies,
+ *  a missing map), a world model's "water" section and its variants' swaps (the rules, the slots found by material slot,
+ *  the materials as dependencies, a slot no mesh has, a material that does not load), and the C mirror of the water's
+ *  shader (the drift with the wind and the flows, the maps anchored to the world far out, the waves' strength in the
+ *  wind, the bottom's absorption and the foam) (WaterTests.c). */
+void WaterTests_Run(TestRun* run);
+
 /** @brief The night sky's maths: the star catalogue, limiting magnitude, air mass, star colours and the galaxy's
  *  orientation (NightSkyTests.c; a private module of source/). */
 void NightSkyTests_Run(TestRun* run);

@@ -242,6 +242,14 @@ bool TestAssets_AddAnimationGraph(TestRun* run, TestAssetFixture* fixture, const
 bool TestAssets_AddClimate(TestRun* run, TestAssetFixture* fixture, const char* json);
 
 /**
+ * @brief Builds a water material definition from @p json with the real "water_material" type
+ *        (AssetManager_BuildDefinition) and registers it. Its maps must be code-built textures (TestAssets_AddTexture)
+ *        for it to load without a GL context.
+ * @returns true when it was registered.
+ */
+bool TestAssets_AddWaterMaterial(TestRun* run, TestAssetFixture* fixture, const char* json);
+
+/**
  * @brief Builds an input actions definition from @p json with the real "input_actions" type and registers it (plain
  *        data: it loads without a GL context).
  * @returns true when it was built and registered.

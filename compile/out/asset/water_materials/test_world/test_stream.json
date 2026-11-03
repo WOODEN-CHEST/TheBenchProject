@@ -1,0 +1,20 @@
+{
+    "name": "tbp:test_stream",
+    "normal_a": "tbp:water_normal_a",
+    "normal_a_tile_size": 1.4,
+    "normal_a_speed": 1.0,
+    "normal_b": "tbp:water_normal_b",
+    "normal_b_tile_size": 0.5,
+    "normal_b_speed": 0.7,
+    "normal_b_turn": 20,
+    "wave_strength": 1.4,
+    "wind_response": 0.3,
+    "flow": "uv",
+    "flow_speed": 0.8,
+    "color": "#1d3838",
+    "absorption": [0.6, 0.15, 0.12],
+    "foam": "tbp:water_foam",
+    "foam_tile_size": 0.4,
+    "foam_depth": 0.06,
+    "foam_strength": 0.5
+}

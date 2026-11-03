@@ -23,6 +23,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | WorldWeatherLight | `source/WorldWeatherLight.h`, `source/WorldWeatherLight.c` (private) | The weather's look as pure maths (see "Weather"): the clouds' deck from the environment's weather values (their cover, the light they let through, their transmission), its light added to the sky's light at the camera, a lightning flash's light and direction, the wetness and the wind. |
 | WorldClouds | `source/WorldClouds.h`, `source/WorldClouds.c` (private) | The clouds as pure maths (see "Clouds"): the frame's three layers from the environment, the patterns' drift with the wind and their anchors (wrapped in double), the shadow map's frame on its texels, a ray's stretch through a layer's shell: the C mirror of `shaders/common/clouds.glsl`'s geometry. |
 | WorldRain | `source/WorldRain.h`, `source/WorldRain.c` (private) | The rain and the lightning's bolts as pure maths (see "Rain"): the rain rate and its mist, the streaks' drift and their copies around the camera (wrapped in double), the splashes' and the ripples' counted cycles, the rain map's box, lookups and keeping between draws, the splashes' grid and landing along the map's fall, the puddles' coverage and threshold, the bolt: the C mirror of `shaders/common/rain.glsl`, `common/puddles.glsl` and `shaders/rain/`. |
+| WorldWater | `source/WorldWater.h`, `source/WorldWater.c` (private) | Water as pure maths (see "Water"): the drift every water's patterns share (the flows' seconds, the wind's travel, in double), a water material's maps' frames for an origin (turned, wrapped by their tiles in double), the waves' strength in the wind, the bottom's transmittance and the foam: the C mirror of `shaders/common/water.glsl`. |
 | CloudNoise | `source/CloudNoise.h`, `source/CloudNoise.c` (private) | The clouds' noise (see "Clouds"): tileable gradient and Worley noise, and the three textures made from them at load (the shape volume, the erosion volume, the weather map), the same every time. |
 | WorldInterior | `source/WorldInterior.h`, `source/WorldInterior.c` (private) | Interior lighting as pure maths (see "Interior lighting"): ambient zones in render space, their weights, the draws' choice of zones and their composition, the haze inside them, the sky's occupancy volume (its map, slices and window) and the march through it, the camera's interior and the light the eye is in: the C mirror of `shaders/common/interior.glsl`. |
 | WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c`, `source/WorldTestCharacters.{h,c}` (private: walk mode and the test NPCs), `source/WorldTestAnimation.{h,c}` (private: the animation system and its keys), `source/WorldTestInstances.{h,c}` (private: the pebble field and the instancing A/B), `source/WorldTestScreens.{h,c}` (private: the test monitor's UI and its use) | A concrete GameFrame: a WASD + mouse-look flycam over a test world, and walk mode (the player as a character) and test NPCs. |
@@ -480,7 +481,9 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    occupancy volume's map and window (`WorldRendererSkyVisibility_PrepareFrame`), the rain (`WorldRendererRain_PrepareFrame`,
    see "Rain": the textures the world names, the rain's values and drift, the streaks, the splashes and a bolt, the rain
    map's box along the rain's mean fall), then the frame's visibility (what every
-   pass draws, see "Visibility"), then the rest (`DecidePasses`; the crisp overlay runs only for crisp objects in view).
+   pass draws, see "Visibility"), then the water's (`WorldRendererWater_PrepareFrame`, see "Water": the drift by the
+   frame's real seconds in the wind, the water in view and the share of it that mirrors, the copies made when first
+   needed), then the rest (`DecidePasses`; the crisp overlay runs only for crisp objects in view).
 3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the shadow strength and the forward-light
    candidates (every light except the cube-shadow light) with their linear radiance; then the screens' lights
    (`WorldRendererSurfaces_PrepareFrame`, see "Screen light").
@@ -501,7 +504,7 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    map's box, drawn from above into height slices, and its pyramid. Then the rain map (see "Rain"), while it rains or
    surfaces are wet: what keeps the rain out in its box, its depth along the rain.
 5. The normal/flag G-buffer (the camera's models, the LOD with the larger share, the copies the same way, terrain
-   chunks and cutout sprites, solid below half their fade), when the AO, the contact shadows, the sky's visibility or
+   chunks and cutout sprites, solid below half their fade; the water slots without an outline), when the AO, the contact shadows, the sky's visibility or
    the outlines run; then the ambient pre-pass and its blur (the AO, the contact shadows and the sky's visibility per
    pixel, see "G-buffer, AO and outlines"), when any but the outlines run (the G-buffer also while the clouds are drawn).
    Then the clouds (`WorldRendererClouds_Render`, see "Clouds"): their shadow map, their march into the cloud target
@@ -515,9 +518,10 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    flags; a CRT's glass with the CRT program: "CRT screens"), the camera's
    instance cells (lit like the models, the lights per cell, both LODs of a copy's band), the camera's terrain
    chunks (the `world_terrain` shader, lit as the models, with up to `WORLD_MAX_FORWARD_LIGHTS` lights per chunk;
-   before the sprites, so decals lie on it), the camera's cutout sprites; then, while it runs, the reflection pass
-   (see "Reflections": every lit draw so far hands it what it mirrors, and it adds the mirrored light to the scene's
-   colour); then the camera's other lit sprites (decals, then blended and additive ones back to front), the rain (a
+   before the sprites, so decals lie on it), the camera's cutout sprites; then the water (see "Water": the camera's
+   models' and copies' water slots over copies of the scene's colour and depth); then, while it runs, the reflection
+   pass (see "Reflections": every lit draw so far, the water's too, hands it what it mirrors, and it adds the mirrored
+   light to the scene's colour); then the camera's other lit sprites (decals, then blended and additive ones back to front), the rain (a
    lightning bolt, the splashes, the streaks: see "Rain"), light gizmos, the ambient zones'
    wireframes while that debug view is chosen, and collider wireframes and contact points while a collision world is
    set. The sky's glow and the models' and lit sprites' reflected light go through the
@@ -1152,7 +1156,8 @@ and mirror the sky, lightning's bolts and their light, and the rain's mist:
   `material_overrides`; terrain materials' blended as their other values; sprites none) and the world's
   `puddle_amount`. So puddles grow while it rains and shrink as the wetness dries. A puddle is still water over a
   bottom 30 % darker than wet ground, its normal the water's: straight up, rippled while it rains.
-- **Ripples** (`RainRippleSlope`): in each 25 cm cell around a puddle's point one ring at a time, at a random place,
+- **Ripples** (`RainRippleSlope`; on puddles, and on every water whose water material has ripples: see "Water"): in
+  each 25 cm cell around a puddle's point one ring at a time, at a random place,
   starting again 0.5 + 2.5 x `precipitation` times a second at a random phase: a wave packet spreading to 30 cm and
   fading; their slope by the square root of the precipitation. Procedural, no texture; the cells take the origin wrapped
   by 64 m, and their cycles are counted as the splashes' are (`WorldRainDrift.RippleCycles`).
@@ -1765,7 +1770,8 @@ ground's bounce) as the lit shaders always have:
   puddles, see "Rain"), and every model, model instance and CRT whose world model's `render.has_reflections` is on (a
   placement can override it: [WorldModels.md](WorldModels.md)) by its glossy reflectance for light from every direction
   (`FresnelSchlickRoughness`, times its occlusion), which its ambient's diffuse light loses (what mirrors is not
-  scattered too). Sprites never mirror (a cutout sprite hands over none). Crisp objects (OmitPixelation) draw after
+  scattered too); and the water (see "Water": every water slot whose water material's `has_reflections` is on, by
+  water's Fresnel reflectance). Sprites never mirror (a cutout sprite hands over none). Crisp objects (OmitPixelation) draw after
   the pixelated image, so they neither mirror their surroundings (their glossy surfaces mirror the sky alone) nor show
   in a reflection, unless the crisp overlay does not run and they draw in the scene pass.
 - **Handed over** (`common/reflection_output`): while the pass runs this frame, the opaque world's lit draws (models,
@@ -1824,8 +1830,86 @@ ground's bounce) as the lit shaders always have:
   not run they cost about 0.07 ms more than programs without the reflection code would (0.73 against 0.66 ms over the
   test room's walls and floor): the lit programs carry it, its branches unused.
 
-**Crisp overlay.** OmitPixelation models and cutout sprites render lit at window resolution and are composited over the
-pixelated image, depth-tested against the scene so they are occluded correctly (e.g. a readable in-world
+**Water** (`source/WorldRendererWater.c`, `shaders/water/`, `common/water`; the pure maths `source/WorldWater.{h,c}`,
+tested in `tests/WaterTests.c`; the looks are `water_material` assets and a world model's `water` section names the
+slots they cover: [WorldModels.md](WorldModels.md), "Water", and [AssetManager.md](AssetManager.md)). A world model's
+water slots are drawn as water, never with their own materials, in the water pass:
+- **The pass** (`WorldRendererWater_Render`, in the scene pass after the opaque world, the cutout sprites included, and
+  before the reflection pass): first the scene's colour and depth as the opaque world left them are copied
+  (`rlBlitFramebuffer`) into the water's copies (a target of the scene's size and formats, made the first frame water is
+  in view; released when the scene's targets are made again on a resize, and made again when next needed), bound on
+  units 30 and 31; then every model
+  and every copies' cell in view whose world model has water slots draws those slots' meshes with their water material
+  (the variant's where a variant swaps it), depth-tested against the scene and writing depth, dithered by their fades as
+  every draw. The copies' cells draw through the instanced twin (`world_water_instanced`), one copy at a time while
+  instancing is off or without the twin. A water slot on a skinned mesh draws rigid, in its bind pose (logged once;
+  rigid in the G-buffer too). A world model with water slots is never crisp (the render cache ignores its
+  `omit_pixelation`, and a placement's): its water lies over copies of the pixelated scene, which must hold the rest
+  of it.
+- **Every other pass leaves the water slots out** (`WorldRendererMeshSet`: each pass draws one set of a model's meshes):
+  the opaque lit pass and the unlit fallback, the shadow levels and the cube shadow (water casts no shadow), the sky's
+  occupancy volume and the rain map (water keeps neither the sky nor the rain out), the crisp overlay. **The G-buffer
+  draws them** (while the water program is loaded), as surfaces without an outline: what lies under the water is not
+  outlined through it, the ambient pre-pass and the clouds' march stop at it.
+- **The waves**: the two normal maps' texels read as slopes along the surface (each map's axes turned onto the world's by
+  its frame), summed, times the wave strength; while it rains and the material has ripples, the rain's rings
+  (`RainRippleSlope`) where the rain reaches, as on puddles (see "Rain"). Each map is laid in its own frame: the world's
+  x and z in render space (or, with the `uv` flow, the mesh's texture coordinates, V growing along the flow), turned by
+  its turn (the second map's `normal_b_turn`), moved by its offset and repeating every tile. The offset (the frame's
+  origin turned into the map's layout, less the map's drift) is wrapped by the tile in double on the CPU
+  (`WorldWater_GetFrame`), so the waves are anchored to the world (as steady 10 000 km out as at the origin), and a
+  scaled mesh (the sea) never stretches them.
+- **The flow**: the renderer keeps one drift for every water (`WorldWaterDrift`, in double): the seconds the flows have
+  run and how far the wind (its speed and gust, toward its direction) has moved the air, each frame by its real seconds.
+  A material's drift is a fixed multiple of one of them: along the wind (`wind`) 3 % of the wind's travel times its
+  `wind_response`, so a change of wind changes how fast the waves go from then on and never where they are; along
+  `flow_angle` (`fixed`) or along +V (`uv`) its `flow_speed` times the seconds. Each normal map moves at its speed's share
+  of that, the foam with the flow itself. The waves' strength follows the wind as wind-driven seas' slopes do (Cox and
+  Munk: the root of 0.003 + 0.00512 x the wind's speed, against a 5 m/s breeze, up to 40 m/s), mixed in by the
+  `wind_response`.
+- **The light**: lit as the PBR shader lights (`common/lighting`): the sun and the moon through the air with the shadow
+  levels' and the clouds' shadows (their glints at the material's low roughness, at least 0.045), point lights, a
+  screen's light, the sky's light with the ambient pre-pass's AO and sky visibility and interior lighting's zones, night
+  vision. It mirrors by water's Fresnel reflectance (Schlick's, F0 0.02 x the material's `reflectance`): while the
+  reflection pass runs and the material's `has_reflections` is on, it hands the pass its reflection (the weight, the
+  sky's light along the mirrored direction, its share by roughness) and the pass adds what the screen shows; otherwise
+  it adds the sky's light along that direction itself. Water that mirrors counts among the mirroring objects that make
+  the reflection pass run.
+- **Under the surface**: from the depth copy, the bottom's point behind the pixel (no refraction), the view's path
+  through the water to it and how deep the water is above it. The bottom's colour (the colour copy: lit and hazed
+  already) comes through by exp(-absorption x path) per channel (`WorldWater_GetTransmittance`) and by the share the
+  surface does not mirror; the water's `color`, lit as a surface, scatters in over the rest of the path. Where nothing
+  lies under the water (the sky's depth), or without copies, it is deep water: its colour alone.
+- **Foam**: where the water is shallow, a texel of the foam's pattern (its red channel) shows foam while the depth there
+  is under `foam_depth` times its value, softened over 5 % of the pattern's range, times `foam_strength`
+  (`WorldWater_GetFoam`): all of the pattern at the shore, its brightest texels only at the foam depth. Foam is a white,
+  rough surface (albedo 0.8, roughness 0.6) over the water; where it covers the water, the water neither mirrors nor
+  shows its bottom.
+- **The haze**: the water's own light is seen through the haze in front of it; the bottom in the copy is hazed already
+  (its path to the eye all but the surface's), so it lies under the water as under a blended surface: the haze's own
+  light counts by the share the water covers. Interior lighting's, the shadow levels' and the rain's debug views show on
+  water as on surfaces (the rain's counts it as pooled water).
+- **When it runs** (`WorldRendererWater_PrepareFrame`, before the passes' decisions): the feature "water" available (the
+  water program loaded) and a model or a copies' cell with water slots in view. The bottom is seen only in the scene's
+  HDR tier with a samplable depth, with its copies made. The status line gives the models and cells with water in view,
+  those that mirror, the draws, whether the bottom is seen and the wind the waves took.
+- **Limits**: the bottom is read straight behind the pixel: no refraction, no caustics, and no look from under the
+  water. A plane knows no shore: a water plane shows wherever it lies above the ground, so the sea floods every low place
+  of the terrain under its level, and from high up its edge shows where it ends. Foam follows the depth under the
+  surface alone: it lines a channel's walls as a shore. The rain map keeps the rain off nothing under the water: the
+  bottom counts as rained on and wet, and the splashes land on the bottom out of sight (rings only on water). What draws
+  after the water never shows under it: a decal on a fountain's floor, a blended or additive sprite below the surface
+  (the water's depth hides them, and the copies were taken before them). Under the water the bottom takes the water
+  surface's ambient pre-pass (the G-buffer holds the water there): its AO, contact shadows and sky visibility are the
+  open surface's, so a basin's corners lose their AO.
+- **Cost** (GTX 980 Ti at 1417 MHz, the scene 640 x 360, GL timer queries over 100 renders; the pass with its copies):
+  0.29 ms for the test terrain's pond seen from its shore (the reflection pass 0.36 ms with it), 0.10 ms in the fountains'
+  view (0.13 ms), 0.22 ms for the sea from the shore and 0.32 ms from 100 m up, 0.45 ms for the
+  pond in rain (the rings about 0.16 ms of it); without the pixelation (1280 x 720) 0.97 ms for the pond (the reflection
+  pass 2.12 ms).
+
+**Crisp overlay.** OmitPixelation models (never one with water slots: "Water") and cutout sprites render lit at window
+resolution and are composited over the pixelated image, depth-tested against the scene so they are occluded correctly (e.g. a readable in-world
 screen). When the overlay cannot run they fall back to the pixelated passes, so they never vanish. Crisp objects
 get no AO and no outlines.
 
@@ -1875,10 +1959,14 @@ get no AO and no outlines.
   the scene target's HDR tier with a samplable depth, or when its attachments or targets could not be made (logged
   once), when every surface mirrors the sky alone; inactive while switched off, at quality off, under a surface debug
   view, or with nothing in view that mirrors; the status adds the quality, the target's size (0 x 0 at quality off),
-  the mirroring objects and cells in view, whether wet surfaces mirror and the debug view). It also counts what the camera's passes
+  the mirroring objects and cells in view, whether wet surfaces mirror and the debug view), "water" the water pass
+  (unavailable without `world_water`, logged once by the loader, when no water slot is drawn at all; active while a model
+  or a copies' cell with water slots is in view; without the scene's HDR tier with a samplable depth, or when its copies
+  could not be made (logged once), the water shows no bottom, as deep water; the status adds the models and cells with
+  water in view, those that mirror, the draws, whether the bottom is seen and the wind the waves took). It also counts what the camera's passes
   drew and what culling and fading removed (see "Visibility"). The renderer logs the status once after its first
   render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame), with a line for the atmosphere's tables,
-  one for the haze, one for interior lighting, one for the clouds and one for the reflections.
+  one for the haze, one for interior lighting, one for the clouds, one for the reflections and one for the water.
 
 ### Renderer structure (keep it clean)
 
@@ -1888,7 +1976,7 @@ get no AO and no outlines.
 | `WorldRendererInternal.h` | The renderer state (one state struct per pass), `WorldRenderFrame`, fixed texture units, shared constants, and every internal function, documented. |
 | `WorldRendererCommon.c` | Config multipliers, colour conversion, shader loading, the textures and sprite animations the world names (asset slots: one asset user each, loaded when the name changes, a failed name logged once), one-time warnings, render-target constructors; the camera passes' depth (their depth buffers, the reversed state around them, the projection they load, the depth convention's uniform). |
 | `WorldRendererScene.c` | Scene target size, HDR tiers and recreation on resize (asks each pass to recreate its targets); the scene pass. |
-| `WorldRendererGeometry.c` | Model meshes one LOD at a time with per-draw materials (both LODs of a cross-fade in the lit passes; `WorldRendererGeometry_PrepareMaterial` builds each, the instanced draws use it too), each mesh with its pass's rigid shader or, posed and skinned, its skinned twin after the pose's palette; the unlit fallback's skinned shader; the LOD tinting, light gizmos, the pixelation filter. |
+| `WorldRendererGeometry.c` | Model meshes one LOD at a time with per-draw materials (both LODs of a cross-fade in the lit passes; `WorldRendererGeometry_PrepareMaterial` builds each, the instanced draws use it too), each mesh with its pass's rigid shader or, posed and skinned, its skinned twin after the pose's palette, of the set of meshes its pass draws (`WorldRendererMeshSet`: the water slots' for the water pass, with their water materials; every other mesh for every other pass; the G-buffer draws both); the unlit fallback's skinned shader; the LOD tinting, light gizmos, the pixelation filter. |
 | `WorldRendererInstances.c` | The model instances' copies (see "Model instances"): each entry's records buffer, the G-buffer's and the shadows' instanced twins (the lit one is the lighting file's), the instanced draw that mirrors `DrawMesh`, each pass's cells instanced or one at a time (the A/B and every fallback), the status line. |
 | `WorldRendererSprites.c` | The sprites: the unit quad, the lit sprite shader, each frame's sprite matrices (camera, the shadow levels' light, cube's lamp) and transparent draw order, the lit cutout / decal / sorted transparent draws. The G-buffer and shadow passes draw sprites with this file's quad and matrices. |
 | `WorldRendererLighting.c` | The PBR programs (rigid, skinned, instanced: `WorldRendererPbrProgram`) and their location tables, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: every PBR program, the sprite shader and the terrain shader, the night vision's and interior lighting's among them), forward point lights, each lit draw's place (`WorldRendererLighting_SetDrawPlace`: its haze multiplier and its ambient zones), per-material factors. |
@@ -1917,6 +2005,8 @@ get no AO and no outlines.
 | `WorldRendererCrisp.c` | The crisp overlay. |
 | `WorldRendererReflections.c` | The reflections (see "Reflections"): the scene target's reflection attachments (made, attached and released with the scene target), the switches around the opaque world's draws, the block image and the pass's target and programs, the decision, the pass with its composite, the debug views, the status line. |
 | `WorldReflections.c` (pure maths, not a pass) | The reflections' model: the qualities, the screen share by roughness, the direction's packing, the fades and the thickness, the distance a stored depth stands for, a block's nearest surface and the march (the C mirror of `common/reflections` and `shaders/reflections/`); see "Reflections". |
+| `WorldRendererWater.c` | The water (see "Water"): its program and the program's instanced twin (`world_water`, `world_water_instanced`: lit programs with their own uniforms, `WorldRendererWaterProgram`), the copies of the scene's colour and depth (made at the scene's size when first needed, copied and bound before the water draws), the frame's drift and the water in view (with the share that mirrors), each water material's uniforms and maps for a water slot's mesh (`WorldRendererWater_PrepareMaterial`: the geometry's and the copies' draws take it), the models' water draws (the copies' are `WorldRendererInstances_DrawWater`), the status line. |
+| `WorldWater.c` (pure maths, not a pass) | The water's model: the drift, a material's maps' frames for an origin, the waves' strength in the wind, the bottom's transmittance and the foam (the C mirror of `common/water`); see "Water". |
 | `WorldRendererSurfaces.c` | The surfaces' pictures (see "Surfaces' pictures"): the list handed over for one render, each put into its surface's material copy (a screen's or a CRT's emissive map, a paper's albedo map) with its rows' orientation, the status's counts; the screens' light (see "Screen light"): the render's lights from the shown glowing screens, each lit draw's nearest one and its upload. Not a pass: the lit passes' material copies and light uploads call it. |
 | `WorldRendererCrt.c` | The CRT programs (see "CRT screens"): `world_crt` and its skinned twin loaded as PBR programs, their own uniforms (the pass's window pixel scale, a CRT draw's shape, look, power with its flicker, mask and tile, the glass's reflection), the mask override. Not a pass: the lit passes draw a CRT's glass with it. |
 | `WorldRendererCollision.c` | Debug wireframes of a collision world's shapes and its contact points (`WorldRenderer_SetCollisionDebug`), drawn in the scene pass after the light gizmos from its read-only debug lists ([WorldCollision.md](WorldCollision.md)). |
@@ -1962,9 +2052,11 @@ The renderer keeps receiving features, so:
   | 19 | every lit program | The draw's screen light's picture (`sampler2D screenLightPicture`, `WorldRendererTextureUnit_ScreenLight`), bound per draw with the light (`WorldRendererSurfaces_UploadScreenLight`); read only while a screen lights the draw. |
   | 20 | the CRT programs (`world_crt`, `world_crt_skinned`) | A CRT's mask tile (`sampler2D crtMaskTile`, `WorldRendererTextureUnit_CrtMask`), bound per CRT draw while its mask is a texture. The CRT programs read 14 samplers (no normal map). |
   | 21–26 | the reflection pass (`world_reflections`; `world_reflection_blocks` reads 25) | Its inputs (`WorldRendererTextureUnit_Reflection*`): 21 the weights, 22 what the surfaces mirror where the screen has no answer, 23 the directions (the scene target's attachments 1 to 3), 24 the scene's colour, 25 the scene's depth, 26 the block image; bound by hand before its rectangles (the 2D batch binds only 0 to 4), between the opaque world and the transparent draws. No lit program reads these units, so the lit draws after the pass never meet them. |
+  | 27–31 | the water programs (`world_water`, `world_water_instanced`) | 27 and 28 the water material's normal maps, 29 its foam (`sampler2D waterNormalA`, `waterNormalB`, `waterFoam`, `WorldRendererTextureUnit_Water*`), bound per water material; 30 and 31 the copies of the scene's colour and depth (`waterSceneColor`, `waterSceneDepth`), bound once by the water pass after it copies them. The water's fragment stage reads none of the material maps (0–11), so with the lit programs' frame textures it reads at most 15 samplers. |
 
-  A new frame texture for the lit programs takes a unit from 27 up (16 to 20 are the rain's and the screens', 21 to 26
-  the reflection pass's, bound in the middle of the scene pass), or below 12 where no
+  A new frame texture for the lit programs takes a unit from 32 up (16 to 20 are the rain's and the screens', 21 to 26
+  the reflection pass's, bound in the middle of the scene pass, 27 to 31 the water's; GL 3.3 guarantees 48 combined
+  units, `WorldRendererInternal.h` asserts the last stays below), or below 12 where no
   material map the programs' materials use binds (the PBR materials use maps 0, 1, 2 and 5: albedo, the packed ORM,
   normal, emission; raylib's importers also fill 3 (roughness) and 4 (occlusion) in some formats (a glTF file's are
   packed into 1 and emptied when the model loads) and its OBJ import 6 (height) when the file has those maps), keeping
@@ -2083,13 +2175,19 @@ fragment stages (`pbr/fragment`, `crt/fragment`, `terrain/fragment`, `sprite/fra
 colour is `finalColor` at location 0), and `common/lighting` includes `common/reflections` (the share by roughness and
 the direction's packing, which the pass includes too).
 
+The water draws with `world_water` (`shaders/water/water.json`: the PBR's `pbr/vertex` with `water/fragment`) and its
+instanced twin `world_water_instanced` (`water/water_instanced.json`: `pbr/instanced` with the same fragment stage),
+which includes `common/lighting`, `common/reflection_output`, `common/dither`, `common/depth` and `common/water` (a
+place on a water material's maps, a map's tilt of the surface, the bottom's transmittance, the foam and water's Fresnel
+reflectance; the C mirror is `source/WorldWater.h`, see "Water").
+
 The sky's occupancy volume draws with `world_sky_slices` (`shaders/sky_slices/`: its fragment stage over raylib's
 default vertex stage; its twins `world_sky_slices_skinned` and `world_sky_slices_instanced` take the depth shaders'
 `depth/skinned` and `depth/instanced` vertex stages) and builds its pyramid with `world_sky_reduce`; the ambient
 pre-pass is `world_ao` and its blur `world_ao_blur`, full-screen passes over the G-buffer.
 
 The instanced twins (`world_pbr_instanced`, `world_normal_instanced`, `world_depth_instanced`,
-`world_cube_depth_instanced`) sit beside their rigid shaders as the skinned ones do, each an `instanced.vert` with the
+`world_cube_depth_instanced`, `world_water_instanced`) sit beside their rigid shaders as the skinned ones do, each an `instanced.vert` with the
 rigid shader's fragment stage, and their definitions add `"defines": ["WORLD_INSTANCED"]`: a shader definition's
 `defines` (at most 16 GLSL names) are written as `#define` lines after the main file's `#version` line in both stages
 (`ShaderSource.h`), so one fragment stage serves both twins and shared files test the name with `#ifdef`
@@ -2150,9 +2248,16 @@ at (-1.6, 0.05, -3.3) turned 155 degrees so the screen faces the start view, wit
 on the right of the start view (see "The test monitor" below).
 Its reflections (see "Reflections"): the test room's floor is a `room_polished_floor` (id 71, a child of the room: the
 `test` world model's `polished` variant, a dark smooth slab, mirroring its surroundings by its placement's
-`has_reflections`), a `mirror_box` (id 72, the `chrome` variant, 2 m wide, at (3.5, 0.55, -2) right of the start view,
+`has_reflections`), a `mirror_box` (id 72, the `chrome` variant, 2 m wide, at (3.5, 0.55, -2) left of the start view,
 with a collider) mirrors the slab and what stands around it, and the monitor's glass mirrors its surroundings too while
 the crisp overlay does not run (C).
+Its water (see "Water"; placeholders from `asset_source/scripts/placeholder_water.py`): just past the slab's far edge,
+about 19 m ahead of the start view, on either side behind the test room, a stone `gutter` (id 73, the `test_gutter` world model at (4, 0.05, 11.6): an 8 m channel
+whose stream flows along its texture coordinates, the `uv` flow, toward +X) and two round basins 3 m across of the
+`test_fountain` world model, `fountain_clear` (id 74, at (-5.5, 0.05, 11.6), the `clear` variant: still, clear water
+over the basin's floor) and `fountain_murky` (id 75, at (-9.5, 0.05, 11.6), the `murky` variant swapping the slot's
+water material for a dark green one that hides the floor); and a `pond` (id 76, the `test_pond` world model: the 1 km
+water plane scaled to 60 x 220 m) at y = -5 in the test terrain's valley, from x 60 to 120 and z 0 to 220: it mirrors the hills and shows its bottom and foam along its shore.
 Edit the file and restart to change the test world.
 The frame owns a `WorldCollision` too, created after the world, and a `WorldCharacters` (the character
 system, [Characters.md](Characters.md)) created after that, with its test characters (the private
@@ -2217,8 +2322,8 @@ mouse wheel (the flycam's speed, up faster and down slower, three notches to a d
 not while walking, and the UI takes it first while the pointer is over a widget) and the debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11, the
 digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/`, the backslash, Insert, Home, End, Page Up, Page Down, the
-keypad's digits, its `.`, `+`, `-`, `*`, `/` and Enter are taken already, and with Shift the grave key, keypad `-`, `/`
-and Enter; the keypad's `=` is free. Leave F12 free:
+keypad's digits, its `.`, `+`, `-`, `*`, `/` and Enter are taken already, and with Shift the grave key, keypad `-`, `/`,
+Enter and `+`; the keypad's `=` is free. Leave F12 free:
 raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
@@ -2244,7 +2349,7 @@ raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writi
   the far field (made when first shown, not saved with the world: a 12 km plain just under the slab and 24 towers of the
   test cube, 6 x 40 m at 300 m, 15 x 100 m at 1 km and 40 x 250 m at 3 km in eight directions, every ring a little
   turned, all seen to 20 km, around the terrain's object), keypad * the shadow levels' debug view; each logged, and the
-  I key's status says both;
+  I key's status says both. With Shift keypad + is the sea's (the water's keys below);
 - **the weather (see "Weather"; [WeatherSystem.md](WeatherSystem.md), "The test frame's weather"):** Insert moves into
   the climate's next preset in the file's order with its values at once (while the clock is held too: P and the
   number keys hold the rest of the weather, the wetness with it), Home locks and unlocks the weather,
@@ -2263,6 +2368,12 @@ raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writi
   mirrors the sky alone), Shift with keypad Enter steps their debug view (off, the weights, the answers), Shift with
   keypad / their quality (off, low, high); each logged, and the I key's status adds their line. Without Shift those
   keys are the rain's and the clouds';
+- **the water (see "Water"; `source/WorldTestWater.{h,c}`, test content):** Shift with keypad + shows and hides the sea
+  (made when first shown, not saved with the world: the `test_sea` world model, a 1 km water plane with the sea's water
+  material, scaled to 200 km a side around the terrain's object, its surface 0.3 m under it, so the terrain's outer
+  slope is its shore and the test world an island; its edge lies 100 km out, past the horizon from up to about 780 m;
+  a plane knows no shore, so the terrain's low places under its level fill with it too); logged, and the I key's status
+  says whether it is shown, beside the renderer's water line;
 - **the renderer and the sky:** O post effects, B bloom, G sun shafts, keypad . contact shadows, C crisp overlay, V
   night vision (logged), K
   sprite lighting (off draws every sprite unlit; logged), L light gizmos, N cycle the

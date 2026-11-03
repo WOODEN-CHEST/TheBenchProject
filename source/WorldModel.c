@@ -143,6 +143,45 @@ void WorldModel_ApplyVariant(const WorldModel* self, size_t variantIndex, int ma
     }
 }
 
+bool WorldModel_TryFindWater(const WorldModel* self, int32_t materialSlot, uint32_t* outIndex)
+{
+    for (uint32_t Index = 0U; Index < self->_waterCount; Index++)
+    {
+        if (self->_waters[Index]._materialSlot == materialSlot)
+        {
+            if (outIndex != NULL)
+            {
+                *outIndex = Index;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+const WaterMaterial* WorldModel_GetWaterMaterial(const WorldModel* self, bool hasVariant, size_t variantIndex,
+    uint32_t water)
+{
+    if (water >= self->_waterCount)
+    {
+        return NULL;
+    }
+    const WorldModelWater* Water = &self->_waters[water];
+    if (hasVariant && (variantIndex < self->_variantCount))
+    {
+        const WorldModelVariant* Variant = &self->_variants[variantIndex];
+        for (size_t Index = 0U; Index < Variant->_overrideCount; Index++)
+        {
+            const WorldModelMaterialOverride* Override = &Variant->_overrides[Index];
+            if ((Override->_slot == Water->_materialSlot) && (Override->_waterMaterial != NULL))
+            {
+                return Override->_waterMaterial;
+            }
+        }
+    }
+    return Water->_material;
+}
+
 bool WorldModel_TryFindSocket(const WorldModel* self, const unsigned char* name, uint32_t* outIndex)
 {
     if (name == NULL)

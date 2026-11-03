@@ -115,6 +115,8 @@ typedef struct AnimationGraphStruct AnimationGraph;
 typedef struct TerrainAssetStruct TerrainAsset;
 /** @brief A terrain material asset (TerrainMaterial.h). */
 typedef struct TerrainMaterialStruct TerrainMaterial;
+/** @brief A water material asset (WaterMaterial.h). */
+typedef struct WaterMaterialStruct WaterMaterial;
 /** @brief A climate asset (Climate.h). */
 typedef struct ClimateStruct Climate;
 /** @brief An input actions asset (InputActions.h). */
@@ -396,6 +398,9 @@ typedef struct StandardAssetTypesStruct
     /** @brief Input actions type id: one action category with its actions, and overrides of registered actions and
      *  categories, which the input registers at startup (InputActions.h). */
     AssetTypeID InputActions;
+    /** @brief Water material type id: the look of a body of water (its waves, colour, absorption, foam), its maps
+     *  loaded as texture dependencies, which world models name for their water slots (WaterMaterial.h). */
+    AssetTypeID WaterMaterial;
 } StandardAssetTypes;
 
 
@@ -1122,6 +1127,14 @@ Error AssetManager_LoadClimate(AssetManager* self, const unsigned char* name, As
  */
 Error AssetManager_LoadInputActions(AssetManager* self, const unsigned char* name, AssetUserID user,
     InputActions** outAsset);
+
+/**
+ * @brief Loads a water material by name (WaterMaterial.h): its settings, with the texture assets its maps name loaded as
+ *        its dependencies. A world model loads the water materials its water slots and variants name this way, as its
+ *        dependencies. See AssetManager_LoadSpriteSheet for semantics.
+ */
+Error AssetManager_LoadWaterMaterial(AssetManager* self, const unsigned char* name, AssetUserID user,
+    WaterMaterial** outAsset);
 
 /**
  * @brief Decodes the image file a texture asset's definition names into 8-bit RGBA pixels on the CPU, for a loader that

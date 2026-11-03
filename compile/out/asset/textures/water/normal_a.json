@@ -1,0 +1,6 @@
+{
+    "name": "tbp:water_normal_a",
+    "location": "water/normal_a",
+    "texture_properties": { "filtering": "trilinear", "wrap": "repeat", "mipmaps": true },
+    "color_space": "linear"
+}

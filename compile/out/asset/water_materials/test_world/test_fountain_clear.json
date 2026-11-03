@@ -1,0 +1,14 @@
+{
+    "name": "tbp:test_fountain_clear",
+    "normal_a": "tbp:water_normal_a",
+    "normal_a_tile_size": 2,
+    "normal_b": "tbp:water_normal_b",
+    "normal_b_tile_size": 0.75,
+    "wave_strength": 0.35,
+    "wind_response": 0.3,
+    "flow": "fixed",
+    "flow_speed": 0.0,
+    "color": "#1c3c44",
+    "absorption": [0.3, 0.06, 0.04],
+    "roughness": 0.04
+}

@@ -182,7 +182,9 @@ void WorldTestShadows_Construct(WorldTestShadows* self, World* world, WorldRende
 
 void WorldTestShadows_HandleInput(WorldTestShadows* self, const GameInput* input)
 {
-    if (GameInput_IsKeyPressed(input, GameKey_KeypadAdd))
+    // With Shift, keypad + is the sea's (WorldTestWater.h).
+    bool IsShiftDown = GameInput_IsKeyDown(input, GameKey_LeftShift) || GameInput_IsKeyDown(input, GameKey_RightShift);
+    if (!IsShiftDown && GameInput_IsKeyPressed(input, GameKey_KeypadAdd))
     {
         ToggleField(self);
     }

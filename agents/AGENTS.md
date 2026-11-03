@@ -57,7 +57,7 @@ Current module list:
 * Logger (Logger.md) - Writes timestamped, level-tagged messages to <base>/logs/latest.log and stdout, and rotates the previous log into <base>/logs/archived/ (keeping the newest 30).
 * AssetManager (AssetManager.md) - Loads, shares and unloads assets built from JSON definitions in prioritized search
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
-  caches failed loads, registers the sixteen standard types, and reads a texture asset's image file as CPU pixels
+  caches failed loads, registers the seventeen standard types, and reads a texture asset's image file as CPU pixels
   without loading it (AssetManager_LoadTexturePixels). Asset names are namespaced keys (`tbp:desk`; written without a
   namespace, `tbp`'s), accepted as written and kept, logged and listed in full (AssetManager_GetDefinitionNames by
   prefix). Read its lifetime rules before touching assets.
@@ -95,13 +95,21 @@ Current module list:
   and reach), a CRT's look (its "crt" block: CrtScreen.h, a texture mask loaded as a dependency), with LOD 0's triangles
   of the slot and their texture coordinates, which the pure WorldModelSurface_Raycast meets a ray on, giving where on the
   picture it points (WorldModelSurface_GetPicturePosition: through a CRT's curvature), and the glass's frame for its
-  light (its centre, its front, its width and height).
+  light (its centre, its front, its width and height). Its water (the section in source/WorldModelWaterDefinition.c)
+  names material slots drawn as water, never with their own materials, each with a water material loaded as a
+  dependency, which a variant may swap (one basin, a clear and a murky fountain); a slot is a surface or water.
   * CrtScreen - A CRT screen's look as pure maths (include/CrtScreen.h, source/CrtScreen.c): the settings of a world
     model's "crt" surface, the curvature that maps a point of the glass to the picture shown there (the one function the
     CRT shader and pointing share), the power animation's timing (CrtScreen_AdvancePower), shapes (a line opening
     into the picture; the picture collapsing into a line and a dot that fades) and turning around when switched half
     way (CrtScreen_GetSwitchedTransition), the scanlines' levels without moiré, the detail's fade by the picture's size,
     the flicker and a mask tile's mean (CrtScreen_GetMaskTileMean): the C twin of shaders/common/crt.glsl.
+  * WaterMaterial - The water_material asset type (a standard type, JSON in water_materials/; include/WaterMaterial.h,
+    source/WaterMaterial.c, the definition in source/WaterMaterialDefinition.c): the look of a body of water, read
+    through a property table (two normal maps with their tiles, speeds and turn, the waves' strength and the wind's
+    share in them, the flow: along the wind, along a set direction or along the mesh's texture coordinates, the colour
+    it scatters, its absorption per metre, roughness, reflectance, foam with its depth and strength, the rain's rings,
+    reflections), its maps loaded as texture dependencies; world models name it for their water slots.
 * World collision (WorldCollision.md) - Collision for the 3D world: shapes, layers, the collider component
   and the collision world with its step (moving and pushing). Covers:
   * CollisionShape - Collision shapes as plain values (sphere, capsule, box, cylinder, convex hull, plane bounded or
@@ -394,7 +402,11 @@ Current module list:
     world's lit draws hand what they mirror (water on wet surfaces, glossy objects with has_reflections) to extra
     attachments of the scene target, and a pass after them marches each mirroring pixel's ray over the scene's depth,
     block by block, adding what it meets (or the sky at its vanishing point, or the sky the surface handed over) to the
-    picture; the camera's passes in
+    picture; the water (source/WorldRendererWater.c, shaders/water/ and shaders/common/water.glsl): world models'
+    water slots drawn over the opaque world from copies of the scene's colour and depth, their waves two normal maps
+    anchored to the world that drift with the wind or a flow (or along a river's texture coordinates), with the rain's
+    rings, the bottom seen straight through them and dimmed by their absorption, foam in the shallows, glints, and
+    what they mirror handed to the reflection pass; the camera's passes in
     reversed 32-bit float
     depth with no far plane where the GPU has clip control (GLDepth), so whatever has the draw distance draws at any
     distance), in render space: the world's orientation with the camera at the origin, every position relative to the
@@ -496,6 +508,11 @@ Current module list:
     either convention, a block's nearest surface and the march itself (the ray projected with one over its distance
     linear along the screen, empty blocks skipped, each crossed pixel tested): the C mirror of
     shaders/common/reflections.glsl and shaders/reflections/ (WorldRuntime.md, "Reflections").
+  * WorldWater - Water as pure maths (private, source/WorldWater.h): the drift every water's patterns share (the
+    flows' seconds and the wind's travel, in double, so a change of wind never makes the waves jump), a water
+    material's maps' frames for the frame's origin (turned, less their drift, wrapped by their tiles in double), the
+    waves' strength in the wind (Cox and Munk's slopes), the bottom's transmittance and the foam: the C mirror of
+    shaders/common/water.glsl (WorldRuntime.md, "Water").
   * WorldInterior - Interior lighting as pure maths (private, source/WorldInterior.h): ambient zones in render space
     (placed by their objects' world matrices), their weights (the fade from the surface, surfaces facing in), the at
     most four a draw takes and their composition by priority, the haze inside them, the sky's visibility map on its
@@ -529,13 +546,16 @@ Current module list:
     pools water (a world model variant). A monitor on a small table in the start view shows a UI (the private
     source/WorldTestScreens.{h,c}): a CRT; pointing at its picture (the aim, or the free cursor) moves a pointer on it, E
     or a click uses it (typing and clicks show on it, each click steps its background colour), Escape or pointing away
-    lets go; the grave key turns it off and on, Shift with it steps every CRT's mask.
+    lets go; the grave key turns it off and on, Shift with it steps every CRT's mask. Its world has water: a pond in the
+    terrain's valley, a stone gutter whose stream flows along it and two fountains, one clear and one murky (a world
+    model variant); Shift with the keypad's + shows the sea around the test terrain (a runtime object, the private
+    source/WorldTestWater.{h,c}), which makes the test world an island.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
   keys by mode, migration hook) and write (defaults left out by default, integers in GHDF's smallest type), and get/set
   by key. The one module allowed to write `_` fields by offset. Clients: WorldEnvironment, GameClock, the world objects
-  and their components, the world sprite's settings, the character asset's settings; new data types get a table, not
+  and their components, the world sprite's settings, the character asset's settings, the water material's settings; new data types get a table, not
   hand-written codecs. AssetName rows keep names in full (read and set as written, `desk` is `tbp:desk`) and LocalName
   rows a name inside one object (a socket, a preset) that is never namespaced. A FloatList
   type (PropertyFloatList: an owned list of floats with a maximum count, per-value bounds and an optional rising rule)

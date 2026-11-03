@@ -1,0 +1,3 @@
+# The water plane's one material (slot 0, drawn as water).
+newmtl water_surface
+Kd 0.1000 0.2000 0.2500
