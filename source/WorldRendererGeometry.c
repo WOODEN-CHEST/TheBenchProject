@@ -309,7 +309,7 @@ void WorldRendererGeometry_DrawModels(WorldRenderer* self, WorldRendererPixelFil
             WorldRendererLighting_UploadObjectLights(self, Programs[Program]->_passShader, &Programs[Program]->_lit,
                 Entry->RenderCenter, Entry->Radius);
             WorldRendererLighting_SetDrawPlace(self, Programs[Program]->_passShader, &Programs[Program]->_lit,
-                Entry->RenderCenter, Entry->Radius, Entry->Haze, IsInPrepass);
+                Entry->RenderCenter, Entry->Radius, Entry->Haze, IsInPrepass, Entry->HasReflections);
         }
         WorldLodDraw Draws[WORLD_LOD_MAX_DRAWS];
         size_t DrawCount = WorldLodState_GetDraws(&Entry->Lod, Draws);

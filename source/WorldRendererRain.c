@@ -251,10 +251,11 @@ static void DrawModelOccluders(WorldRenderer* self, const WorldRendererMeshShade
 static void PrepareProgram(WorldRenderer* self, const WorldRenderFrame* frame, const WorldRendererRainProgram* program,
     Shader shader)
 {
-    WorldRendererLighting_UploadLitProgram(self, frame, shader, &program->_lit, true);
+    WorldRendererLighting_UploadLitProgram(self, frame, shader, &program->_lit, true, false);
     Vector3 CameraPlace = { 0.0f, 0.0f, 0.0f };
     WorldRendererLighting_UploadObjectLights(self, shader, &program->_lit, CameraPlace, RAIN_LIGHT_RADIUS);
-    WorldRendererLighting_SetDrawPlace(self, shader, &program->_lit, CameraPlace, RAIN_LIGHT_RADIUS, 1.0f, false);
+    WorldRendererLighting_SetDrawPlace(self, shader, &program->_lit, CameraPlace, RAIN_LIGHT_RADIUS, 1.0f, false,
+        false);
     SetShaderValueMatrix(shader, program->_locViewProjection, frame->ViewProjection);
 }
 

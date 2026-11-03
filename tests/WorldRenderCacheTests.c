@@ -443,7 +443,7 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
             "\"max_distance\": 20}], \"draw_distance\": 50, \"is_draw_distance_fixed\": true, \"render\": {"
             "\"has_outline\": false, \"omit_pixelation\": true, \"casts_shadows\": false, \"shadow_distance\": 40, "
             "\"is_shadow_distance_fixed\": true, \"is_shadow_only\": true, \"has_two_sided_shadows\": true, "
-            "\"shadow_lod\": 2, \"haze\": 0.5, \"occludes_sky\": false}}")
+            "\"shadow_lod\": 2, \"haze\": 0.5, \"occludes_sky\": false, \"has_reflections\": true}}")
         || ((ModelComponent = AddModel(run, &Fixture.World, "dark_box", Vector3Zero(), (Vector3){ 1.0f, 1.0f, 1.0f }))
             == NULL)
         || !CacheFixture_Sync(run, &Fixture))
@@ -455,7 +455,7 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
     const WorldRenderModel* Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
     TEST_CHECK(run, (Count == 1) && Models[0].IsDrawn && !Models[0].HasOutline && Models[0].OmitsPixelation
         && !Models[0].CastsShadows && (Models[0].DrawDistance == 50.0f) && Models[0].IsDrawDistanceFixed
-        && (Models[0].Haze == 0.5f) && !Models[0].OccludesSky);
+        && (Models[0].Haze == 0.5f) && !Models[0].OccludesSky && Models[0].HasReflections);
     TEST_CHECK(run, (Count == 1) && Models[0].HasShadowDistance && (Models[0].ShadowDistance == 40.0f)
         && Models[0].IsShadowDistanceFixed && Models[0].IsShadowOnly && Models[0].HasTwoSidedShadows
         && Models[0].HasShadowLod && (Models[0].ShadowLod == 2U));
@@ -476,7 +476,7 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
         Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
         TEST_CHECK(run, (Count == 1) && Models[0].HasOutline && !Models[0].OmitsPixelation && Models[0].CastsShadows
             && (Models[0].DrawDistance == 60.0f) && !Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.0f)
-            && Models[0].OccludesSky);
+            && Models[0].OccludesSky && !Models[0].HasReflections);
         TEST_CHECK(run, (Count == 1) && Models[0].HasShadowDistance && (Models[0].ShadowDistance == 12.5f)
             && !Models[0].IsShadowDistanceFixed && !Models[0].IsShadowOnly && !Models[0].HasTwoSidedShadows
             && Models[0].HasShadowLod && (Models[0].ShadowLod == 1U));
@@ -491,7 +491,8 @@ static void EntriesCarryTheSettingsInEffect(TestRun* run)
     {
         Models = WorldRenderCache_GetModels(&Fixture.Cache, &Count);
         TEST_CHECK(run, (Count == 1) && !Models[0].HasOutline && (Models[0].DrawDistance == 100.0f)
-            && Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.5f) && !Models[0].OccludesSky);
+            && Models[0].IsDrawDistanceFixed && (Models[0].Haze == 0.5f) && !Models[0].OccludesSky
+            && Models[0].HasReflections);
         TEST_CHECK(run, (Count == 1) && Models[0].HasShadowDistance && (Models[0].ShadowDistance == 20.0f)
             && Models[0].IsShadowDistanceFixed && Models[0].IsShadowOnly && Models[0].HasTwoSidedShadows
             && Models[0].HasShadowLod && (Models[0].ShadowLod == 2U));
@@ -2094,6 +2095,9 @@ static void InstanceEntriesFollowTheirComponents(TestRun* run)
                 TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Instances,
                     WorldModelSetting_OccludesSky, true));
                 TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOccludesSky(Instances, false));
+                TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Instances,
+                    WorldModelSetting_HasReflections, true));
+                TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetHasReflections(Instances, true));
                 break;
             case 3: TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetInstances(Instances, Copies, 2U)); break;
             case 4: TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(Owner, false)); break;
@@ -2139,13 +2143,13 @@ static void InstanceEntriesFollowTheirComponents(TestRun* run)
         {
             case 0: TEST_CHECK(run, IsResolved && (CellCount == 3U) && (Build == 1U)
                 && (Cells[0].DrawDistance == WORLD_MODEL_DEFAULT_DRAW_DISTANCE) && (Entries[0].Haze == 1.0f)
-                && Entries[0].OccludesSky && Cells[2].OccludesSky); break;
+                && Entries[0].OccludesSky && Cells[2].OccludesSky && !Entries[0].HasReflections); break;
             // Moved: the same records, the cells moved with the object.
             case 1: TEST_CHECK(run, IsResolved && (CellCount == 3U) && (Build == LastBuild)
                 && IsNearDouble(Cells[0].WorldMatrix.M[12], 5.0 + 16.0)); break;
             case 2: TEST_CHECK(run, IsResolved && (CellCount == 3U) && (Build == LastBuild)
                 && (Cells[0].DrawDistance == 25.0f) && (Entries[0].Haze == 2.5f) && !Entries[0].OccludesSky
-                && !Cells[0].OccludesSky && !Cells[2].OccludesSky); break;
+                && !Cells[0].OccludesSky && !Cells[2].OccludesSky && Entries[0].HasReflections); break;
             case 3: TEST_CHECK(run, IsResolved && (CellCount == 2U) && (Build > LastBuild)); break;
             case 4: TEST_CHECK(run, IsResolved && (CellCount == 0U) && (Build == LastBuild)); break;
             case 5: TEST_CHECK(run, IsResolved && (CellCount == 1U) && (Build > LastBuild)); break;

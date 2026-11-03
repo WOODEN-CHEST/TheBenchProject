@@ -68,10 +68,12 @@ uniform vec3 materialUvOffset[16];
 uniform vec3 ruleNoiseOffset[8];
 uniform float chunkHeight;
 
-out vec4 finalColor;
+layout(location = 0) out vec4 finalColor;
 
 // The frame's lights, shadows, ambient, haze and night vision, as world_pbr has them.
 #include "common/lighting"
+// What the wet ground hands the reflection pass while it runs.
+#include "common/reflection_output"
 // The draw's fade (its draw distance, the object's opacity) as a dither on the scene's pixel grid.
 #include "common/dither"
 // The rules' noise.
@@ -494,7 +496,18 @@ void main()
     float skyVisibility = SkyVisibilityAt(fragPosition, geometric);
     vec3 ambient = AmbientLight(light, n, fragPosition, geometric, skyVisibility)*albedo*occlusion*ScreenAo();
 
-    vec3 color = NightVisionOf(ambient + direct + pointTotal + WaterReflection(light, n, v, water));
+    // Water on the wet ground mirrors: the reflection pass's while it runs (handed over here), else the sky's, added here.
+    vec3 reflected = ambient + direct + pointTotal;
+    if (reflectionsDeferred)
+    {
+        WriteReflection(WetReflection(light, n, v, water, roughness), fragPosition);
+    }
+    else
+    {
+        reflected += WaterReflection(light, n, v, water);
+        WriteNoReflection();
+    }
+    vec3 color = NightVisionOf(reflected);
     color = ApplyAerialPerspective(color, fragPosition);
     color = InteriorViewColor(color, fragPosition, geometric, skyVisibility);
     color = ShadowLevelViewColor(color, fragPosition);

@@ -39,6 +39,11 @@
 #define CONFIG_CLOUD_QUALITY_OFF 0
 #define CONFIG_CLOUD_QUALITY_LOW 1
 #define CONFIG_CLOUD_QUALITY_HIGH 2
+/** @brief GameConfig.ReflectionQuality's values: no reflections of the screen (mirroring surfaces mirror the sky alone),
+ *  low (half the scene's resolution, fewer steps) and high (the scene's resolution). */
+#define CONFIG_REFLECTION_QUALITY_OFF 0
+#define CONFIG_REFLECTION_QUALITY_LOW 1
+#define CONFIG_REFLECTION_QUALITY_HIGH 2
 
 
 // Types.
@@ -123,6 +128,11 @@ typedef struct GameConfigStruct
      *  _LOW (half the scene's resolution, fewer steps: cheaper and softer) or _HIGH (the scene's resolution). Default
      *  high; another value takes the default. */
     int32_t CloudQuality;
+    // ---- Reflections (quality) ----
+    /** @brief How water, wet ground and mirroring objects reflect what is on screen: CONFIG_REFLECTION_QUALITY_OFF (not
+     *  at all: they mirror the sky alone), _LOW (half the scene's resolution, fewer steps: cheaper, coarser) or _HIGH
+     *  (the scene's resolution). Default high; another value takes the default. */
+    int32_t ReflectionQuality;
 } GameConfig;
 
 

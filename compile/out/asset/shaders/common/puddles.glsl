@@ -158,19 +158,31 @@ vec3 RainSkyRadiance(vec3 r, vec3 sunDir, vec3 moonDir, vec3 evenSky)
     return sky*rainReflectionClearShare + rainReflectionDeck*((1.0 + 2.0*r.y)/3.0);
 }
 
+// The direction water (normal n, unit; v toward the eye) mirrors along, kept above the horizon (a ripple's tilt would
+// otherwise mirror the ground the sky view holds below it).
+vec3 RainWaterDirection(vec3 n, vec3 v)
+{
+    vec3 r = reflect(-v, n);
+    return normalize(vec3(r.x, max(r.y, 0.02), r.z));
+}
+
+// Water's Fresnel reflectance seen along v (toward the eye) off the normal n (unit).
+float RainWaterFresnel(vec3 n, vec3 v)
+{
+    float facing = 1.0 - clamp(dot(n, v), 0.0, 1.0);
+    return RAIN_WATER_F0 + (1.0 - RAIN_WATER_F0)*facing*facing*facing*facing*facing;
+}
+
 // The sky mirrored by the share `water` of a surface (normal n, unit; v toward the eye): water's Fresnel reflectance
-// times the sky's light toward the reflected direction, kept above the horizon (a ripple's tilt would otherwise mirror the
-// ground the sky view holds below it).
+// times the sky's light toward the direction it mirrors along.
 vec3 RainWaterReflection(vec3 n, vec3 v, float water, vec3 sunDir, vec3 moonDir, vec3 evenSky)
 {
     if (!rainActive || !(water > 0.0))
     {
         return vec3(0.0);
     }
-    vec3 r = reflect(-v, n);
-    r = normalize(vec3(r.x, max(r.y, 0.02), r.z));
-    float facing = 1.0 - clamp(dot(n, v), 0.0, 1.0);
-    float fresnel = RAIN_WATER_F0 + (1.0 - RAIN_WATER_F0)*facing*facing*facing*facing*facing;
+    vec3 r = RainWaterDirection(n, v);
+    float fresnel = RainWaterFresnel(n, v);
     return RainSkyRadiance(r, sunDir, moonDir, evenSky)*fresnel*water;
 }
 

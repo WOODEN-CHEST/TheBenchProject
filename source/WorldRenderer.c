@@ -86,6 +86,8 @@ static void EnsureShaders(WorldRenderer* self)
     WorldRendererSkyVisibility_Load(self);
     // The instanced twins sit beside the lit, G-buffer, shadow and occupancy volume's programs loaded above.
     WorldRendererInstances_LoadShaders(self);
+    // The reflection pass, before the scene's targets (its attachments go onto the scene target when it loaded).
+    WorldRendererReflections_LoadShader(self);
 }
 
 // What each optional feature needs to be able to run at all (its shaders and targets), independent of whether it
@@ -400,6 +402,9 @@ static void DecidePasses(WorldRenderer* self, WorldRenderFrame* frame)
         && (frame->LimitingMagnitude > NIGHT_SKY_BRIGHTEST_MAGNITUDE);
     frame->IsMilkyWayActive = IsMilkyWayAvailable(self) && (frame->MilkyWayRadiance > 0.0f);
     frame->IsMoonActive = IsMoonAvailable(self) && WorldRendererSky_IsMoonVisible(frame);
+
+    // The reflections, while something the scene pass draws mirrors (needs the scene filter above and the rain).
+    WorldRendererReflections_Decide(self, frame);
 }
 
 /* A feature's state from what it needs (availability) and whether it ran. */
@@ -636,6 +641,7 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->Features[WorldRendererFeature_AmbientZones] = StateOf(true,
         frame->IsInteriorActive && (Status->AmbientZoneCount > 0U));
     WorldRendererRain_UpdateStatus(self, frame);
+    WorldRendererReflections_UpdateStatus(self, frame);
 }
 
 /* Appends the drawn models per LOD to the status line's LOD text, LOD 0 first, up to the coarsest LOD drawn: "9 / 3 / 1".
@@ -746,6 +752,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     WorldRendererInstances_Construct(Renderer);
     WorldRendererInterior_Construct(Renderer);
     WorldRendererRain_Construct(Renderer);
+    WorldRendererReflections_Construct(Renderer);
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardLights, INITIAL_FORWARD_LIGHT_CAPACITY,
         sizeof(WorldCullingLight));
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardRadiances, INITIAL_FORWARD_LIGHT_CAPACITY,
@@ -888,8 +895,9 @@ static Error RenderFrame(WorldRenderer* self, World* world, const GameCamera* ca
     {
         return TargetResult;
     }
-    // The cloud target follows the scene's size and the clouds' quality.
+    // The cloud target follows the scene's size and the clouds' quality, the reflection pass's its quality.
     WorldRendererClouds_EnsureTarget(self, self->_scene._width, self->_scene._height);
+    WorldRendererReflections_EnsureTarget(self);
 
     AdvanceRenderTime(self, deltaSeconds);
     WorldRenderFrame Frame;
@@ -1087,6 +1095,7 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_RainMap:          return (const unsigned char*)u8"rain map";
         case WorldRendererFeature_CrtScreens:       return (const unsigned char*)u8"CRT screens";
         case WorldRendererFeature_ScreenLight:      return (const unsigned char*)u8"screen light";
+        case WorldRendererFeature_Reflections:      return (const unsigned char*)u8"reflections";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -1151,6 +1160,7 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
     WorldRendererInterior_LogStatus(self);
     WorldRendererClouds_LogStatus(self);
     WorldRendererRain_LogStatus(self);
+    WorldRendererReflections_LogStatus(self);
 }
 
 void WorldRenderer_SetPixelationEnabled(WorldRenderer* self, bool enabled)
@@ -1282,6 +1292,52 @@ const unsigned char* WorldRenderer_GetRainViewName(WorldRendererRainView view)
         case WorldRendererRainView_Cover:   return (const unsigned char*)u8"cover";
         case WorldRendererRainView_Puddles: return (const unsigned char*)u8"puddles";
         case WorldRendererRainView_Count:   break;
+    }
+    return (const unsigned char*)u8"unknown";
+}
+
+void WorldRenderer_SetReflectionsEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_reflections._isEnabled = enabled;
+}
+
+bool WorldRenderer_AreReflectionsEnabled(const WorldRenderer* self)
+{
+    return self->_reflections._isEnabled;
+}
+
+void WorldRenderer_SetReflectionQuality(WorldRenderer* self, int32_t quality)
+{
+    self->_reflections._quality = ((quality >= CONFIG_REFLECTION_QUALITY_OFF) && (quality <= CONFIG_REFLECTION_QUALITY_HIGH))
+        ? quality : CONFIG_REFLECTION_QUALITY_HIGH;
+}
+
+int32_t WorldRenderer_GetReflectionQuality(const WorldRenderer* self)
+{
+    return self->_reflections._quality;
+}
+
+void WorldRenderer_SetReflectionView(WorldRenderer* self, WorldRendererReflectionView view)
+{
+    if ((unsigned int)view < (unsigned int)WorldRendererReflectionView_Count)
+    {
+        self->_reflections._view = view;
+    }
+}
+
+WorldRendererReflectionView WorldRenderer_GetReflectionView(const WorldRenderer* self)
+{
+    return self->_reflections._view;
+}
+
+const unsigned char* WorldRenderer_GetReflectionViewName(WorldRendererReflectionView view)
+{
+    switch (view)
+    {
+        case WorldRendererReflectionView_Off:     return (const unsigned char*)u8"off";
+        case WorldRendererReflectionView_Weights: return (const unsigned char*)u8"weights";
+        case WorldRendererReflectionView_Answers: return (const unsigned char*)u8"answers";
+        case WorldRendererReflectionView_Count:   break;
     }
     return (const unsigned char*)u8"unknown";
 }

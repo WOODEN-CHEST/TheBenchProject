@@ -120,6 +120,8 @@ static void CacheLitLocations(WorldRendererLitLocations* lit, Shader shader)
 
     lit->_locHazeViewProjection = GetShaderLocation(shader, "hazeViewProjection");
     lit->_locHazeMultiplier = GetShaderLocation(shader, "hazeMultiplier");
+    lit->_locReflectionsDeferred = GetShaderLocation(shader, "reflectionsDeferred");
+    lit->_locHasReflections = GetShaderLocation(shader, "hasReflections");
 
     lit->_locNightVisionFieldLuminance = GetShaderLocation(shader, "nightVisionFieldLuminance");
     lit->_locNightVisionHalfLuminance = GetShaderLocation(shader, "nightVisionHalfLuminance");
@@ -440,7 +442,7 @@ static void UploadShadowLevels(const WorldRenderer* self, const WorldRenderFrame
  * Positions and matrices are in render space, where the camera sits at the origin (so it needs no uniform). The
  * textures are bound once for every lit shader (BindFrameTextures). */
 static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
-    const WorldRendererLitLocations* lit, bool applyScreenAo)
+    const WorldRendererLitLocations* lit, bool applyScreenAo, bool areReflectionsDeferred)
 {
     // The two directional lights' directions (they light the ground haze too), and the sky's light: by height from the
     // volume's last row, or the camera's from these uniforms (the C mirror's).
@@ -479,6 +481,12 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     SetShaderValueMatrix(shader, lit->_locHazeViewProjection, frame->ViewProjection);
     float NoHazeChange = 1.0f;
     SetShaderValue(shader, lit->_locHazeMultiplier, &NoHazeChange, SHADER_UNIFORM_FLOAT);
+    // The reflections: the pass's surfaces hand theirs to the reflection pass, or add the sky's themselves. Each draw
+    // sets whether it mirrors its surroundings; none until the first does.
+    int Deferred = areReflectionsDeferred ? 1 : 0;
+    SetShaderValue(shader, lit->_locReflectionsDeferred, &Deferred, SHADER_UNIFORM_INT);
+    int NoReflections = 0;
+    SetShaderValue(shader, lit->_locHasReflections, &NoReflections, SHADER_UNIFORM_INT);
     // Interior lighting: the sky's visibility map and the debug view.
     WorldRendererInterior_UploadFrame(self, frame, shader, &lit->_interior);
     // The clouds' shadow on the sun (or the moon) at every surface.
@@ -574,39 +582,39 @@ static void BindFrameTextures(WorldRenderer* self, const WorldRenderFrame* frame
 
 /* Uploads the frame's lighting and the pass's dither pixel scale to a PBR program, when it loaded. */
 static void UploadPbrFrame(WorldRenderer* self, const WorldRenderFrame* frame, const WorldRendererPbrProgram* program,
-    bool applyScreenAo, Vector2 ditherPixelScale)
+    bool applyScreenAo, bool areReflectionsDeferred, Vector2 ditherPixelScale)
 {
     if (program->_shader == NULL)
     {
         return;
     }
     Shader RayShader = GameShader_GetRaylibShader(program->_shader);
-    UploadLitUniforms(self, frame, RayShader, &program->_lit, applyScreenAo);
+    UploadLitUniforms(self, frame, RayShader, &program->_lit, applyScreenAo, areReflectionsDeferred);
     WorldRendererCommon_SetDitherPixelScale(RayShader, &program->_dither, ditherPixelScale);
 }
 
 void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo,
-    Vector2 ditherPixelScale, float windowPixelScale)
+    bool areReflectionsDeferred, Vector2 ditherPixelScale, float windowPixelScale)
 {
     bool HasPbr = (self->_pbr._rigid._shader != NULL);
     bool HasSprites = (self->_sprites._shader != NULL);
     bool HasTerrain = (self->_terrain._shader != NULL);
-    UploadPbrFrame(self, frame, &self->_pbr._rigid, applyScreenAo, ditherPixelScale);
-    UploadPbrFrame(self, frame, &self->_pbr._skinned, applyScreenAo, ditherPixelScale);
-    UploadPbrFrame(self, frame, &self->_pbr._instanced, applyScreenAo, ditherPixelScale);
-    UploadPbrFrame(self, frame, &self->_crt._rigid, applyScreenAo, ditherPixelScale);
-    UploadPbrFrame(self, frame, &self->_crt._skinned, applyScreenAo, ditherPixelScale);
+    UploadPbrFrame(self, frame, &self->_pbr._rigid, applyScreenAo, areReflectionsDeferred, ditherPixelScale);
+    UploadPbrFrame(self, frame, &self->_pbr._skinned, applyScreenAo, areReflectionsDeferred, ditherPixelScale);
+    UploadPbrFrame(self, frame, &self->_pbr._instanced, applyScreenAo, areReflectionsDeferred, ditherPixelScale);
+    UploadPbrFrame(self, frame, &self->_crt._rigid, applyScreenAo, areReflectionsDeferred, ditherPixelScale);
+    UploadPbrFrame(self, frame, &self->_crt._skinned, applyScreenAo, areReflectionsDeferred, ditherPixelScale);
     WorldRendererCrt_UploadPass(self, frame, windowPixelScale);
     if (HasSprites)
     {
         Shader SpriteShader = GameShader_GetRaylibShader(self->_sprites._shader);
-        UploadLitUniforms(self, frame, SpriteShader, &self->_sprites._lit, applyScreenAo);
+        UploadLitUniforms(self, frame, SpriteShader, &self->_sprites._lit, applyScreenAo, areReflectionsDeferred);
         WorldRendererCommon_SetDitherPixelScale(SpriteShader, &self->_sprites._dither, ditherPixelScale);
     }
     if (HasTerrain)
     {
         Shader TerrainShader = GameShader_GetRaylibShader(self->_terrain._shader);
-        UploadLitUniforms(self, frame, TerrainShader, &self->_terrain._lit, applyScreenAo);
+        UploadLitUniforms(self, frame, TerrainShader, &self->_terrain._lit, applyScreenAo, areReflectionsDeferred);
         WorldRendererCommon_SetDitherPixelScale(TerrainShader, &self->_terrain._dither, ditherPixelScale);
     }
     if (HasPbr || HasSprites || HasTerrain)
@@ -616,9 +624,9 @@ void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFra
 }
 
 void WorldRendererLighting_UploadLitProgram(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
-    const WorldRendererLitLocations* locations, bool applyScreenAo)
+    const WorldRendererLitLocations* locations, bool applyScreenAo, bool areReflectionsDeferred)
 {
-    UploadLitUniforms(self, frame, shader, locations, applyScreenAo);
+    UploadLitUniforms(self, frame, shader, locations, applyScreenAo, areReflectionsDeferred);
 }
 
 void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader,
@@ -666,11 +674,14 @@ void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader
 }
 
 void WorldRendererLighting_SetDrawPlace(const WorldRenderer* self, Shader shader,
-    const WorldRendererLitLocations* locations, Vector3 center, float radius, float haze, bool isInPrepass)
+    const WorldRendererLitLocations* locations, Vector3 center, float radius, float haze, bool isInPrepass,
+    bool hasReflections)
 {
     SetShaderValue(shader, locations->_locHazeMultiplier, &haze, SHADER_UNIFORM_FLOAT);
     int InPrepass = isInPrepass ? 1 : 0;
     SetShaderValue(shader, locations->_locDrawInPrepass, &InPrepass, SHADER_UNIFORM_INT);
+    int Mirrors = hasReflections ? 1 : 0;
+    SetShaderValue(shader, locations->_locHasReflections, &Mirrors, SHADER_UNIFORM_INT);
     WorldRendererInterior_UploadZones(self, shader, &locations->_interior, center, radius);
 }
 

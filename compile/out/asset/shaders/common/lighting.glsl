@@ -3,9 +3,10 @@
 // this file), the Cook-Torrance BRDF, the sky's two directional lights (the sun and the moon) with the shadow levels'
 // shadow and a lightning bolt's light, forward point lights and the shadow-casting point light with its cube shadow, a
 // screen's light, the sky's ambient light with the screen-space AO and interior lighting (common/interior: what roofs
-// keep out, rooms' own light), what a glossy surface mirrors, the weather's wetness and puddles (common/rain: what keeps
-// the rain out; common/puddles: the puddles, the sky mirrored in water), the eye's night vision and the haze in front of
-// every surface (the aerial perspective and the ground haze, common/haze).
+// keep out, rooms' own light), what a glossy surface mirrors (and what it hands the reflection pass:
+// common/reflections), the weather's wetness and puddles (common/rain: what keeps the rain out; common/puddles: the
+// puddles, the sky mirrored in water), the eye's night vision and the haze in front of every surface (the aerial
+// perspective and the ground haze, common/haze).
 //
 // THE SKY'S LIGHT (one light scale): the sun and the moon reach a surface through the air (their light above the air
 // times the transmittance toward them at the surface's own height: reddened low over the horizon, gone once the disc has
@@ -33,6 +34,7 @@
 #include "common/night_vision"
 #include "common/distance_packing"
 #include "common/puddles"
+#include "common/reflections"
 
 // Lighting, set by WorldRenderer each frame. Light colours are LINEAR.
 uniform vec3 sunDirection;     // unit direction TO the sun, world space (also the ground haze's sun)
@@ -111,6 +113,14 @@ uniform float hazeMultiplier;
 
 // The weather's wetness of surfaces (0 dry .. 1 soaked; ApplyWetness).
 uniform float surfaceWetness;
+
+// Reflections (common/reflections, common/reflection_output): while reflectionsDeferred is on, the reflection pass adds
+// what this pass's mirroring surfaces mirror (the screen around them, the sky where it has nothing), and they hand it
+// their data instead of adding the sky's reflection themselves; off, they add the sky's. hasReflections, per draw: the
+// object's glossy surfaces mirror their surroundings (its placement's has_reflections); water on wet surfaces mirrors
+// whatever the draw.
+uniform bool reflectionsDeferred;
+uniform bool hasReflections;
 
 // The drawn clouds' shadow: a map around the camera of the share of the light that lights them (the sun, or the moon at
 // night) that passes them, for the points of a level plane at their base (shaders/clouds/shadow.frag: R through every
@@ -588,6 +598,82 @@ vec3 WaterReflection(SkyLightValues light, vec3 n, vec3 v, float water)
 {
     return RainWaterReflection(n, v, water, normalize(sunDirection), normalize(moonDirection), light.sky/PI)
         *ambientTint;
+}
+
+// What a surface mirrors at a pixel, as it hands it to the reflection pass (common/reflection_output): the weight (the
+// share of the mirrored light that reaches the eye, before the haze in front of the surface), what it mirrors where the
+// screen has no answer (the sky and the ground's bounce, linear), the direction it mirrors along (unit, render space) and
+// the share of its reflection the screen may answer (by its roughness: ReflectionScreenShare).
+struct SurfaceReflection
+{
+    vec3 weight;
+    vec3 sky;
+    vec3 direction;
+    float screenShare;
+};
+
+// A surface that mirrors nothing.
+SurfaceReflection NoReflection()
+{
+    SurfaceReflection reflection;
+    reflection.weight = vec3(0.0);
+    reflection.sky = vec3(0.0);
+    reflection.direction = vec3(0.0, 1.0, 0.0);
+    reflection.screenShare = 0.0;
+    return reflection;
+}
+
+// A glossy object's mirror (its has_reflections): the light from all around it mirrors by its Fresnel reflectance for
+// light from every direction (FresnelSchlickRoughness: a rough surface's grazing mirror stays dim), times its occlusion;
+// the sky's and the ground's light all around (EnvironmentRadiance) where the screen has no answer. fresnel receives the
+// reflectance, which the caller takes from its ambient's diffuse light (what mirrors is not scattered too).
+SurfaceReflection GlossyReflection(SkyLightValues light, vec3 n, vec3 v, vec3 f0, float rough, float occlusion,
+    vec3 worldPos, vec3 surfaceNormal, float skyVisibility, out vec3 fresnel)
+{
+    SurfaceReflection reflection;
+    fresnel = FresnelSchlickRoughness(clamp(dot(n, v), 0.0, 1.0), f0, rough);
+    reflection.direction = reflect(-v, n);
+    reflection.weight = fresnel*occlusion;
+    reflection.sky = EnvironmentRadiance(light, reflection.direction, worldPos, surfaceNormal, skyVisibility);
+    reflection.screenShare = ReflectionScreenShare(rough);
+    return reflection;
+}
+
+// The water on a wet surface (ApplyWetness's share `water`, roughness its roughness after it), as WaterReflection mirrors
+// the sky: water's Fresnel reflectance along the direction kept above the horizon; nothing while the rain is off or the
+// surface is dry.
+SurfaceReflection WetReflection(SkyLightValues light, vec3 n, vec3 v, float water, float roughness)
+{
+    if (!rainActive || !(water > 0.0))
+    {
+        return NoReflection();
+    }
+    SurfaceReflection reflection;
+    reflection.direction = RainWaterDirection(n, v);
+    reflection.weight = vec3(RainWaterFresnel(n, v)*water);
+    reflection.sky = RainSkyRadiance(reflection.direction, normalize(sunDirection), normalize(moonDirection),
+        light.sky/PI)*ambientTint;
+    reflection.screenShare = ReflectionScreenShare(roughness);
+    return reflection;
+}
+
+// Two reflections of one surface as one (a glossy object's mirror under a wet film): their weights added, what they
+// mirror where the screen has no answer by their weights, the direction of the stronger, their screen shares by their
+// weights.
+SurfaceReflection CombineReflections(SurfaceReflection a, SurfaceReflection b)
+{
+    float weightA = a.weight.r + a.weight.g + a.weight.b;
+    float weightB = b.weight.r + b.weight.g + b.weight.b;
+    if (!((weightA + weightB) > 0.0))
+    {
+        return NoReflection();
+    }
+    SurfaceReflection reflection;
+    reflection.weight = a.weight + b.weight;
+    reflection.sky = (a.weight*a.sky + b.weight*b.sky)/max(reflection.weight, vec3(1e-6));
+    reflection.direction = (weightB > weightA) ? b.direction : a.direction;
+    reflection.screenShare = mix(a.screenShare, b.screenShare, weightB/(weightA + weightB));
+    return reflection;
 }
 
 // The ambient light on a surface with the normal n at the point worldPos, per unit of its albedo (times its AO by the

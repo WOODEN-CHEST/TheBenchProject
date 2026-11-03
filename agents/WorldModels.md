@@ -130,6 +130,7 @@ and `PropertyTable_Check` enforces the pairing for every table ([PropertyDescrip
 | `ShadowLod` | `overrides_shadow_lod` | `shadow_lod` |
 | `Haze` | `overrides_haze` | `haze` |
 | `OccludesSky` | `overrides_occludes_sky` | `occludes_sky` |
+| `HasReflections` | `overrides_has_reflections` | `has_reflections` |
 | `DrawDistance` | `overrides_draw_distance` | `draw_distance` |
 | `IsDrawDistanceFixed` | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` |
 | `LodDistances` | `overrides_lod_distances` | `lod_distances` (a list) |
@@ -144,6 +145,12 @@ off what lies under it: on, it is drawn into the sky's visibility map ([WorldRun
 lighting"), so a roof, a wall or a tree's canopy shades what is under it; off for grass, small plants, people and poles,
 whose shade the AO and the shadows give. It is independent of `casts_shadows` (a roof that casts no sun shadow still
 keeps the sky out). The model instances component has the same pair for all its copies.
+`has_reflections` (default the world model's `render.has_reflections`, false) says whether the placement's glossy
+surfaces mirror what the screen shows around them (a polished floor, a car's paint, a window, chrome) rather than the sky
+alone ([WorldRuntime.md](WorldRuntime.md), "Reflections"): by their reflectance for light from every direction, the
+rougher a surface the more of its reflection the sky's alone (none of it from the screen from roughness 0.4). Turn it on
+only where a mirror image shows (its cost is the reflection pass's while one is in view); wet surfaces mirror their
+water whatever it says. The model instances component has the same pair for all its copies.
 `draw_distance_multiplier` (above 0, default 1) is a plain setting: it multiplies whichever draw distance is in effect;
 `shadow_distance_multiplier` likewise for the shadow distance ("Shadows" below), `lod_distance_multiplier` for the LOD
 switch distances, and `is_lod_forced` with `forced_lod` force a LOD (see "LODs").

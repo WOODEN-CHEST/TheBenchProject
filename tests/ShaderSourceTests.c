@@ -11,6 +11,7 @@
 #include "WorldInterior.h"
 #include "WorldLod.h"
 #include "WorldRain.h"
+#include "WorldReflections.h"
 #include "WorldShadowLevels.h"
 #include "WorldSkyLight.h"
 #include "WorldVisibility.h"
@@ -1587,7 +1588,7 @@ static void ShippedShadersDrawTheRain(TestRun* run)
                     == 1U));
             TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "ApplyWetness(albedo, rough, n, water, fragPosition, "
                     "surfaceNormal, materialPorosity*(1.0 - metal), materialPuddles);") == 1U)
-                && (CountOccurrences(&Fixture.Text, "+ WaterReflection(light, n, v, water);") == 1U));
+                && (CountOccurrences(&Fixture.Text, "reflected += WaterReflection(light, n, v, water);") == 1U));
         }
         if (ExpandShippedStage(run, &Fixture, "terrain/fragment"))
         {
@@ -1675,6 +1676,125 @@ static void ShippedShadersDrawTheCrt(TestRun* run)
     ShaderFixture_Deconstruct(run, &Fixture);
 }
 
+/* The reflections: the pass's march, its blocks and the lit shaders' share by roughness and direction's packing hold
+ * their C twin's constants (as floats where the C constants are floats) and steps (WorldReflections.h:
+ * WorldReflections_March and WorldReflections_GetBlockNearest mirror them); every lit stage drawn with the opaque world
+ * writes its colour at location 0 and hands the pass its reflection (a cutout sprite none), and adds the sky's reflection
+ * itself only while the pass does not run. */
+static void ShippedShadersMakeTheReflections(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (ShaderFixture_Construct(run, &Fixture)
+        && TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        && TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        GenericBuffer Definition;
+        GenericBuffer_AllocateVariable(&Definition, 0U, sizeof(unsigned char));
+        if (ReadShippedText(run, "reflections/reflections.json", &Definition))
+        {
+            TEST_CHECK(run, BufferContains(&Definition, "\"fragment_location\": \"reflections/fragment\""));
+        }
+        GenericBuffer_Clear(&Definition);
+        if (ReadShippedText(run, "reflections/blocks.json", &Definition))
+        {
+            TEST_CHECK(run, BufferContains(&Definition, "\"fragment_location\": \"reflections/blocks\""));
+        }
+        Memory_Free(Definition._data);
+        if (ExpandShippedStage(run, &Fixture, "reflections/blocks"))
+        {
+            // The nearest surface over a block's pixels on the screen, as WorldReflections_GetBlockNearest takes it.
+            TEST_CHECK(run, (GetConstIntValue(&Fixture.Text, "REFLECTION_BLOCK_SIZE") == WORLD_REFLECTIONS_BLOCK_SIZE)
+                && (CountOccurrences(&Fixture.Text, "if ((pixel.x >= sceneSize.x) || (pixel.y >= sceneSize.y))") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "nearest = isReversed ? max(nearest, depth) : min(nearest, depth);") == 1U));
+        }
+        if (ExpandShippedStage(run, &Fixture, "reflections/fragment"))
+        {
+            TEST_CHECK(run, BufferContains(&Fixture.SourceList, "\"common/reflections\"")
+                && BufferContains(&Fixture.SourceList, "\"common/depth\""));
+            TEST_CHECK(run, ((float)GetConstValue(&Fixture.Text, "REFLECTION_SHARP_ROUGHNESS") == WORLD_REFLECTIONS_SHARP_ROUGHNESS)
+                && ((float)GetConstValue(&Fixture.Text, "REFLECTION_ROUGH_ROUGHNESS") == WORLD_REFLECTIONS_ROUGH_ROUGHNESS)
+                && ((float)GetConstValue(&Fixture.Text, "REFLECTION_EDGE_FADE") == WORLD_REFLECTIONS_EDGE_FADE)
+                && ((float)GetConstValue(&Fixture.Text, "REFLECTION_FACING_FADE_START") == WORLD_REFLECTIONS_FACING_FADE_START)
+                && ((float)GetConstValue(&Fixture.Text, "REFLECTION_FACING_FADE_END") == WORLD_REFLECTIONS_FACING_FADE_END)
+                && ((float)GetConstValue(&Fixture.Text, "REFLECTION_THICKNESS") == WORLD_REFLECTIONS_THICKNESS)
+                && ((float)GetConstValue(&Fixture.Text, "REFLECTION_THICKNESS_SHARE") == WORLD_REFLECTIONS_THICKNESS_SHARE)
+                && ((float)GetConstValue(&Fixture.Text, "REFLECTION_RAY_LENGTH") == WORLD_REFLECTIONS_RAY_LENGTH)
+                && ((float)GetConstValue(&Fixture.Text, "REFLECTION_NEAR_MARGIN") == WORLD_REFLECTIONS_NEAR_MARGIN)
+                && ((float)GetConstValue(&Fixture.Text, "REFLECTION_START_OFFSET") == WORLD_REFLECTIONS_START_OFFSET)
+                && (GetConstIntValue(&Fixture.Text, "REFLECTION_BLOCK_SIZE") == WORLD_REFLECTIONS_BLOCK_SIZE)
+                && ((float)GetConstValue(&Fixture.Text, "REFLECTION_BLOCK_NUDGE") == WORLD_REFLECTIONS_BLOCK_NUDGE)
+                && (GetConstIntValue(&Fixture.Text, "REFLECTION_BLOCK_WALK") == WORLD_REFLECTIONS_BLOCK_WALK)
+                && (GetConstIntValue(&Fixture.Text, "REFLECTION_MAX_BLOCKS") == WORLD_REFLECTIONS_MAX_BLOCKS));
+            // The march, step for step as WorldReflections_March takes it.
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text,
+                    "float toNear = (start.w - nearFar.x*REFLECTION_NEAR_MARGIN)/-facing;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "float share = REFLECTION_START_OFFSET*pixelShare;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "if (!(share < endShare) || (visit >= maxBlocks))") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "float rayFar = max(1.0/(k0 + (k1 - k0)*share), 1.0/(k0 + (k1 - k0)*leaveBlock));") == 1U)
+                && (CountOccurrences(&Fixture.Text, "if (rayFar > ReflectionBlockDistance(blockCell))") == 1U)
+                && (CountOccurrences(&Fixture.Text, "for (int step = 0; step <= REFLECTION_BLOCK_WALK; step++)") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "&& (min(enter, leaving) < (surface + REFLECTION_THICKNESS + REFLECTION_THICKNESS_SHARE*surface)))")
+                    == 1U)
+                && (CountOccurrences(&Fixture.Text, "walk = max(leave, walk) + REFLECTION_BLOCK_NUDGE*pixelShare;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "share = max(leaveBlock, share) + REFLECTION_BLOCK_NUDGE*pixelShare;")
+                    == 1U)
+                && (CountOccurrences(&Fixture.Text, "if (isToInfinity && isEndOnScreen && (share >= endShare))") == 1U)
+                && (CountOccurrences(&Fixture.Text, "return (depth > 0.0) ? (nearFar.x/depth) : REFLECTION_SKY_DISTANCE;")
+                    == 1U)
+                && (CountOccurrences(&Fixture.Text, "float edge = clamp(nearest/REFLECTION_EDGE_FADE, 0.0, 1.0);") == 1U));
+            // The answer's pixel with the sky it handed over where it mirrors too, mixed in by the share.
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text,
+                    "+ texelFetch(reflectionWeightMap, answer.pixel, 0).rgb*texelFetch(reflectionSkyMap, answer.pixel, 0).rgb;")
+                    == 1U)
+                && (CountOccurrences(&Fixture.Text, "mirrored = mix(sky, answered, share);") == 1U));
+            // The direction's packing and the screen share.
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text,
+                    "return (n.z >= 0.0) ? n.xy : (1.0 - abs(n.yx))*ReflectionSignNotZero(n.xy);") == 1U)
+                && (CountOccurrences(&Fixture.Text, "n.xy = (1.0 - abs(encoded.yx))*ReflectionSignNotZero(encoded);") == 1U)
+                && (CountOccurrences(&Fixture.Text,
+                    "return 1.0 - smoothstep(REFLECTION_SHARP_ROUGHNESS, REFLECTION_ROUGH_ROUGHNESS, roughness);") == 1U));
+        }
+        const char* const Stages[] = { "pbr/fragment", "crt/fragment", "terrain/fragment", "sprite/fragment" };
+        for (size_t Index = 0U; Index < (sizeof(Stages) / sizeof(Stages[0])); Index++)
+        {
+            if (ExpandShippedStage(run, &Fixture, Stages[Index]))
+            {
+                TEST_CHECK(run, BufferContains(&Fixture.SourceList, "\"common/reflection_output\"")
+                    && (CountOccurrences(&Fixture.Text, "layout(location = 0) out vec4 finalColor;") == 1U)
+                    && (CountOccurrences(&Fixture.Text, "layout(location = 1) out vec4 reflectionWeight;") == 1U)
+                    && (CountOccurrences(&Fixture.Text, "layout(location = 3) out vec4 reflectionDirection;") == 1U));
+            }
+        }
+        if (ExpandShippedStage(run, &Fixture, "pbr/fragment"))
+        {
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text,
+                    "WriteReflection(CombineReflections(glossy, WetReflection(light, n, v, water, rough)), fragPosition);")
+                    == 1U)
+                && (CountOccurrences(&Fixture.Text, "reflected += glossy.weight*glossy.sky;") == 1U)
+                && (CountOccurrences(&Fixture.Text, "ambient *= vec3(1.0) - glossyFresnel;") == 1U));
+        }
+        if (ExpandShippedStage(run, &Fixture, "terrain/fragment"))
+        {
+            TEST_CHECK(run, CountOccurrences(&Fixture.Text,
+                "WriteReflection(WetReflection(light, n, v, water, roughness), fragPosition);") == 1U);
+        }
+        if (ExpandShippedStage(run, &Fixture, "crt/fragment"))
+        {
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "WriteReflection(wet, fragPosition);") == 1U)
+                && (CountOccurrences(&Fixture.Text, "reflected += mirrored;") == 2U));
+        }
+        if (ExpandShippedStage(run, &Fixture, "sprite/fragment"))
+        {
+            TEST_CHECK(run, (CountOccurrences(&Fixture.Text, "    WriteNoReflection();\n") == 1U)
+                && (CountOccurrences(&Fixture.Text, "WriteReflection(") == 1U)); // its definition alone
+        }
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
 // Public functions.
 void ShaderSourceTests_Run(TestRun* run)
 {
@@ -1708,6 +1828,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "shipped_shaders_draw_the_clouds", ShippedShadersDrawTheClouds },
         { "shipped_shaders_draw_the_rain", ShippedShadersDrawTheRain },
         { "shipped_shaders_draw_the_crt", ShippedShadersDrawTheCrt },
+        { "shipped_shaders_make_the_reflections", ShippedShadersMakeTheReflections },
     };
     TestRun_RunSuite(run, "ShaderSource", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

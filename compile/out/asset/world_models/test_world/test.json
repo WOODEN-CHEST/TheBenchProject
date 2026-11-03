@@ -4,7 +4,9 @@
         { "model": "tbp:test", "max_distance": 600 }
     ],
     "variants": [
-        { "name": "pavement", "material_overrides": [ { "slot": 0, "puddles": 1, "porosity": 0.6 } ] }
+        { "name": "pavement", "material_overrides": [ { "slot": 0, "puddles": 1, "porosity": 0.6 } ] },
+        { "name": "polished", "material_overrides": [ { "slot": 0, "tint": "#3a3f45", "roughness": 0.05 } ] },
+        { "name": "chrome", "material_overrides": [ { "slot": 0, "tint": "#e4e6e8", "metallic": 1, "roughness": 0.04 } ] }
     ],
     "collision": "bounds"
 }

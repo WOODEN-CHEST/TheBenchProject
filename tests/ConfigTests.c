@@ -169,6 +169,33 @@ static void ReadsTheCloudQuality(TestRun* run)
     }
 }
 
+/* reflection_quality: off, low or high, high by default; anything else keeps the default. */
+static void ReadsTheReflectionQuality(TestRun* run)
+{
+    GameConfig Config;
+    GameConfig_SetDefaults(&Config);
+    TEST_CHECK(run, Config.ReflectionQuality == CONFIG_REFLECTION_QUALITY_HIGH);
+    const char* const Texts[] = { "{ \"reflection_quality\": 0 }", "{ \"reflection_quality\": 1 }",
+        "{ \"reflection_quality\": 2 }" };
+    const int32_t Expected[] =
+    {
+        CONFIG_REFLECTION_QUALITY_OFF, CONFIG_REFLECTION_QUALITY_LOW, CONFIG_REFLECTION_QUALITY_HIGH
+    };
+    for (size_t Index = 0U; Index < (sizeof(Texts) / sizeof(Texts[0])); Index++)
+    {
+        TEST_CHECK_SUCCESS(run, LoadConfigText(run, "reflection_quality", Texts[Index], &Config));
+        TEST_CHECK(run, Config.ReflectionQuality == Expected[Index]);
+        TEST_CHECK(run, Config.CloudQuality == CONFIG_CLOUD_QUALITY_HIGH);
+    }
+    const char* const Broken[] = { "{ \"reflection_quality\": 3 }", "{ \"reflection_quality\": -1 }",
+        "{ \"reflection_quality\": 1.5 }", "{ \"reflection_quality\": \"low\" }" };
+    for (size_t Index = 0U; Index < (sizeof(Broken) / sizeof(Broken[0])); Index++)
+    {
+        TEST_CHECK_SUCCESS(run, LoadConfigText(run, "reflection_quality_broken", Broken[Index], &Config));
+        TEST_CHECK(run, Config.ReflectionQuality == CONFIG_REFLECTION_QUALITY_HIGH);
+    }
+}
+
 static void UnknownKeysAreIgnored(TestRun* run)
 {
     GameConfig Config;
@@ -206,6 +233,7 @@ void ConfigTests_Run(TestRun* run)
         { "out_of_range_values_fall_back_to_defaults", OutOfRangeValuesFallBackToDefaults },
         { "reads_the_shadow_quality", ReadsTheShadowQuality },
         { "reads_the_cloud_quality", ReadsTheCloudQuality },
+        { "reads_the_reflection_quality", ReadsTheReflectionQuality },
         { "unknown_keys_are_ignored", UnknownKeysAreIgnored },
         { "non_object_root_fails_with_defaults", NonObjectRootFailsWithDefaults },
         { "malformed_json_fails_with_defaults", MalformedJsonFailsWithDefaults },

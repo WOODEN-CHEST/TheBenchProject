@@ -74,7 +74,8 @@ WorldModelSettings WorldModelSettings_CreateDefault(void)
         .DrawDistance = WORLD_MODEL_DEFAULT_DRAW_DISTANCE,
         .IsDrawDistanceFixed = false,
         .Haze = 1.0f,
-        .OccludesSky = true
+        .OccludesSky = true,
+        .HasReflections = false
     };
 }
 

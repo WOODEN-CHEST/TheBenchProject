@@ -130,7 +130,7 @@ static bool AreSettingsEqual(const WorldModelSettings* a, const WorldModelSettin
         && (a->IsShadowOnly == b->IsShadowOnly) && (a->HasTwoSidedShadows == b->HasTwoSidedShadows)
         && (a->HasShadowLod == b->HasShadowLod) && (a->ShadowLod == b->ShadowLod)
         && (a->DrawDistance == b->DrawDistance) && (a->IsDrawDistanceFixed == b->IsDrawDistanceFixed)
-        && (a->Haze == b->Haze) && (a->OccludesSky == b->OccludesSky);
+        && (a->Haze == b->Haze) && (a->OccludesSky == b->OccludesSky) && (a->HasReflections == b->HasReflections);
 }
 
 
@@ -199,7 +199,7 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
         "  \"render\": { \"has_outline\": false, \"omit_pixelation\": true, \"casts_shadows\": false, "
         "\"has_shadow_distance\": true, \"shadow_distance\": 35, \"is_shadow_distance_fixed\": true, "
         "\"is_shadow_only\": true, \"has_two_sided_shadows\": true, \"has_shadow_lod\": true, \"shadow_lod\": 2, "
-        "\"haze\": 0.25, \"occludes_sky\": false },\n"
+        "\"haze\": 0.25, \"occludes_sky\": false, \"has_reflections\": true },\n"
         "  \"variants\": [\n"
         "    { \"name\": \"dark_wood\", \"material_overrides\": [ { \"slot\": 0, \"albedo\": \"dark_albedo\", "
         "\"tint\": \"#d0c0b0\" } ] },\n"
@@ -227,7 +227,7 @@ static void AFullDefinitionReadsEveryKey(TestRun* run)
         const WorldModelSettings* Settings = WorldModel_GetSettings(Loaded);
         TEST_CHECK(run, !Settings->HasOutline && Settings->OmitsPixelation
             && !Settings->CastsShadows && (Settings->DrawDistance == 120.0f) && Settings->IsDrawDistanceFixed
-            && (Settings->Haze == 0.25f) && !Settings->OccludesSky);
+            && (Settings->Haze == 0.25f) && !Settings->OccludesSky && Settings->HasReflections);
         TEST_CHECK(run, Settings->HasShadowDistance && (Settings->ShadowDistance == 35.0f)
             && Settings->IsShadowDistanceFixed && Settings->IsShadowOnly && Settings->HasTwoSidedShadows
             && Settings->HasShadowLod && (Settings->ShadowLod == 2U));
@@ -875,6 +875,7 @@ static void EveryOverrideIsAFlagNextToItsValue(TestRun* run)
         [WorldModelSetting_IsShadowOnly] = "is_shadow_only",
         [WorldModelSetting_HasTwoSidedShadows] = "has_two_sided_shadows",
         [WorldModelSetting_ShadowLod] = "shadow_lod",
+        [WorldModelSetting_HasReflections] = "has_reflections",
     };
     const PropertyTable* Table = WorldModelComponent_GetPropertyTable();
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(Table));
@@ -946,7 +947,7 @@ static void TheFlagsChooseBetweenTheWorldModelAndThePlacement(TestRun* run)
             .HasOutline = false, .OmitsPixelation = false, .CastsShadows = false, .HasShadowDistance = true,
             .ShadowDistance = 50.0f, .IsShadowDistanceFixed = true, .IsShadowOnly = false, .HasTwoSidedShadows = false,
             .HasShadowLod = false, .ShadowLod = 0U, .DrawDistance = 80.0f, .IsDrawDistanceFixed = true, .Haze = 0.5f,
-            .OccludesSky = false
+            .OccludesSky = false, .HasReflections = false
         };
         // The placement's own values, all different from the asset's; their flags stay off for now.
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHasOutline(Placement, true));
@@ -961,6 +962,7 @@ static void TheFlagsChooseBetweenTheWorldModelAndThePlacement(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetIsDrawDistanceFixed(Placement, false));
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHaze(Placement, 0.0f));
         TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOccludesSky(Placement, true));
+        TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHasReflections(Placement, true));
 
         WorldModelSettings Resolved = WorldModelComponent_ResolveSettings(Placement, &Asset);
         TEST_CHECK(run, AreSettingsEqual(&Resolved, &Asset));
@@ -986,6 +988,7 @@ static void TheFlagsChooseBetweenTheWorldModelAndThePlacement(TestRun* run)
             TEST_CHECK(run, Resolved.IsDrawDistanceFixed == (Setting != (int)WorldModelSetting_IsDrawDistanceFixed));
             TEST_CHECK(run, Resolved.Haze == ((Setting == (int)WorldModelSetting_Haze) ? 0.0f : 0.5f));
             TEST_CHECK(run, Resolved.OccludesSky == (Setting == (int)WorldModelSetting_OccludesSky));
+            TEST_CHECK(run, Resolved.HasReflections == (Setting == (int)WorldModelSetting_HasReflections));
             TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Placement, (WorldModelSetting)Setting, false));
         }
 
@@ -1057,7 +1060,7 @@ static void TheComponentStartsAtItsDefaults(TestRun* run)
             && (WorldModelComponent_GetDrawDistance(Placement) == WORLD_MODEL_DEFAULT_DRAW_DISTANCE)
             && (WorldModelComponent_GetDrawDistanceMultiplier(Placement) == 1.0f)
             && !WorldModelComponent_IsDrawDistanceFixed(Placement) && (WorldModelComponent_GetHaze(Placement) == 1.0f)
-            && WorldModelComponent_OccludesSky(Placement));
+            && WorldModelComponent_OccludesSky(Placement) && !WorldModelComponent_HasReflections(Placement));
         // No LOD distances of its own, a LOD multiplier of 1, the LOD chosen by distance (forced LOD 0 kept).
         size_t LodDistanceCount = 1U;
         TEST_CHECK(run, (WorldModelComponent_GetLodDistances(Placement, &LodDistanceCount) == NULL)
@@ -1447,6 +1450,8 @@ static void TheInstancesComponentResolvesLikeAModel(TestRun* run)
             TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetHaze(Instances, Haze));
             TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOccludesSky(Placement, Bits[7]));
             TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOccludesSky(Instances, Bits[7]));
+            TEST_CHECK_SUCCESS(run, WorldModelComponent_SetHasReflections(Placement, Bits[7] != Bits[2]));
+            TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetHasReflections(Instances, Bits[7] != Bits[2]));
             for (int Setting = 0; Setting < (int)WorldModelSetting_Count; Setting++)
             {
                 if (Setting == (int)WorldModelSetting_OmitPixelation)
@@ -1457,7 +1462,8 @@ static void TheInstancesComponentResolvesLikeAModel(TestRun* run)
                 TEST_CHECK_SUCCESS(run, WorldModelComponent_SetOverridden(Placement, (WorldModelSetting)Setting, IsOn));
                 TEST_CHECK_SUCCESS(run, WorldModelInstancesComponent_SetOverridden(Instances, (WorldModelSetting)Setting,
                     IsOn));
-                TEST_CHECK(run, WorldModelInstancesComponent_IsOverridden(Instances, (WorldModelSetting)Setting) == IsOn);
+                TEST_CHECK(run, (WorldModelComponent_IsOverridden(Placement, (WorldModelSetting)Setting) == IsOn)
+                    && (WorldModelInstancesComponent_IsOverridden(Instances, (WorldModelSetting)Setting) == IsOn));
             }
             WorldModelSettings FromModel = WorldModelComponent_ResolveSettings(Placement, Asset);
             WorldModelSettings FromInstances = WorldModelInstancesComponent_ResolveSettings(Instances, Asset);

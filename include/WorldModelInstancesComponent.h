@@ -24,7 +24,7 @@
  * SETTINGS. The component names a WORLD MODEL (WorldModel.h) and overrides its settings exactly as the model component
  * does (WorldModelComponent.h), with the same rows, keys, wire ids and rules (source/WorldModelComponentInternal.h): the
  * variant, the outline, casting shadows and the shadows' settings (the shadow distance and its multiplier and fixed
- * flag, shadow only, two-sided shadows, the shadow LOD), the haze, the draw distance and its multiplier and fixed flag,
+ * flag, shadow only, two-sided shadows, the shadow LOD), the haze, keeping the sky out, mirroring what is on screen, the draw distance and its multiplier and fixed flag,
  * the LOD distances and their multiplier, a forced LOD. Each override is an explicit flag, "overrides_" + the setting's
  * key, next to the placement's own value. Every copy shares them. Copies are never crisp: there is no omit_pixelation
  * row, and WorldModelSetting_OmitPixelation is refused.
@@ -38,8 +38,8 @@
  * overrides_casts_shadows, casts_shadows, overrides_shadow_distance, shadow_distance, shadow_distance_multiplier,
  * overrides_is_shadow_distance_fixed, is_shadow_distance_fixed, overrides_is_shadow_only, is_shadow_only,
  * overrides_has_two_sided_shadows, has_two_sided_shadows, overrides_shadow_lod, shadow_lod, overrides_haze, haze,
- * overrides_occludes_sky, occludes_sky, overrides_draw_distance, draw_distance, draw_distance_multiplier,
- * overrides_is_draw_distance_fixed, is_draw_distance_fixed, overrides_lod_distances, lod_distances,
+ * overrides_occludes_sky, occludes_sky, overrides_has_reflections, has_reflections, overrides_draw_distance,
+ * draw_distance, draw_distance_multiplier, overrides_is_draw_distance_fixed, is_draw_distance_fixed, overrides_lod_distances, lod_distances,
  * lod_distance_multiplier, is_lod_forced, forced_lod and instances. Older world files' shadow tier is read into the shadow
  * distance, as for the model component. Every change advances the component's revision
  * (WorldComponent_GetRevision); a change of the instances also advances their own revision
@@ -112,6 +112,10 @@ typedef struct WorldModelInstancesComponentStruct
     /** @brief This placement's "every copy keeps the sky's light off what lies under it" (default true; off for grass and
      *  small plants). */
     bool _occludesSky;
+    /** @brief Whether _hasReflections replaces the world model's (default false). */
+    bool _overridesHasReflections;
+    /** @brief This placement's "every copy mirrors what is on screen around it" (default false). */
+    bool _hasReflections;
     /** @brief Whether _drawDistance replaces the world model's draw distance (default false). */
     bool _overridesDrawDistance;
     /** @brief This placement's draw distance, in metres, above 0 (default WORLD_MODEL_DEFAULT_DRAW_DISTANCE). */
@@ -455,6 +459,27 @@ static inline bool WorldModelInstancesComponent_OccludesSky(const WorldModelInst
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
  */
 Error WorldModelInstancesComponent_SetOccludesSky(WorldModelInstancesComponent* self, bool occludesSky);
+
+/**
+ * @brief Returns this placement's own "mirrors what is on screen" (it applies while WorldModelSetting_HasReflections is
+ *        overridden).
+ * @param self The component; must not be NULL.
+ * @returns true if every copy's glossy surfaces mirror their surroundings.
+ */
+static inline bool WorldModelInstancesComponent_HasReflections(const WorldModelInstancesComponent* self)
+{
+    return self->_hasReflections;
+}
+
+/**
+ * @brief Sets this placement's own "mirrors what is on screen" (it applies while WorldModelSetting_HasReflections is
+ *        overridden): every copy's glossy surfaces mirror what the screen shows around them, and the sky where it shows
+ *        nothing.
+ * @param self The component; must not be NULL.
+ * @param hasReflections Whether every copy's glossy surfaces mirror their surroundings.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error WorldModelInstancesComponent_SetHasReflections(WorldModelInstancesComponent* self, bool hasReflections);
 
 /**
  * @brief Returns this placement's own draw distance (it applies while WorldModelSetting_DrawDistance is overridden).

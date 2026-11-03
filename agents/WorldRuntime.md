@@ -515,9 +515,10 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    flags; a CRT's glass with the CRT program: "CRT screens"), the camera's
    instance cells (lit like the models, the lights per cell, both LODs of a copy's band), the camera's terrain
    chunks (the `world_terrain` shader, lit as the models, with up to `WORLD_MAX_FORWARD_LIGHTS` lights per chunk;
-   before the sprites, so decals lie on it), the camera's lit sprites
-   (the cutout ones, then decals, then blended and additive ones back to front), the rain (a lightning bolt, the
-   splashes, the streaks: see "Rain"), light gizmos, the ambient zones'
+   before the sprites, so decals lie on it), the camera's cutout sprites; then, while it runs, the reflection pass
+   (see "Reflections": every lit draw so far hands it what it mirrors, and it adds the mirrored light to the scene's
+   colour); then the camera's other lit sprites (decals, then blended and additive ones back to front), the rain (a
+   lightning bolt, the splashes, the streaks: see "Rain"), light gizmos, the ambient zones'
    wireframes while that debug view is chosen, and collider wireframes and contact points while a collision world is
    set. The sky's glow and the models' and lit sprites' reflected light go through the
    eye's night vision; every lit surface is seen through the haze in front of it (and through interior lighting's debug
@@ -1756,6 +1757,73 @@ glows with a picture lights what is in front of it like a small window, in its p
   with the test monitor's light on the table (against its `light_intensity` 0); with no screen in the world the lit draws
   measure no slower than without the feature (the shader's branch is uniform).
 
+**Reflections** (`source/WorldRendererReflections.c`, `shaders/reflections/`, `common/reflection_output`,
+`common/reflections`; the pure maths `source/WorldReflections.h`). Screen-space reflections: what a mirroring surface
+sees is looked up in the opaque world drawn so far, and where the screen has no answer it mirrors the sky (and the
+ground's bounce) as the lit shaders always have:
+- **What mirrors**: the water on wet surfaces (models, model instances, terrain, a CRT's glass: the rain's wet film and
+  puddles, see "Rain"), and every model, model instance and CRT whose world model's `render.has_reflections` is on (a
+  placement can override it: [WorldModels.md](WorldModels.md)) by its glossy reflectance for light from every direction
+  (`FresnelSchlickRoughness`, times its occlusion), which its ambient's diffuse light loses (what mirrors is not
+  scattered too). Sprites never mirror (a cutout sprite hands over none). Crisp objects (OmitPixelation) draw after
+  the pixelated image, so they neither mirror their surroundings (their glossy surfaces mirror the sky alone) nor show
+  in a reflection, unless the crisp overlay does not run and they draw in the scene pass.
+- **Handed over** (`common/reflection_output`): while the pass runs this frame, the opaque world's lit draws (models,
+  copies, terrain, cutout sprites) write three more outputs into the scene target's colour attachments 1 to 3 (RGBA16F
+  at the scene's size, made with the scene target by `WorldRendererReflections_CreateTargets`, cleared with it): the
+  weight (the reflectance times the share that mirrors, times the haze's transmittance in front of the surface), what
+  it mirrors where the screen has no answer (the sky's and the ground's light along the direction, through night
+  vision), the direction (packed octahedrally, render space) and the share of the reflection the screen may answer (1
+  up to roughness 0.1, 0 from 0.4, a smoothstep between). They leave their own sky reflection out then: the pass adds
+  it. While the pass does not run they add the sky's reflection themselves, the picture the same as without the
+  feature. The scene pass draws into the attachments only between `WorldRendererReflections_BeginSurfaces` and
+  `_EndSurfaces` (paused around the terrain's debug wireframes).
+- **The pass** (`WorldRendererReflections_Render`, in the scene pass after the cutout sprites): first the block image
+  (`world_reflection_blocks`: each 4 x 4 block's nearest depth over its pixels on the screen); then, for every pixel
+  of the pass's target with a weight, its surface's point from the depth and its ray marched over the scene's depth
+  (`world_reflections`; `WorldReflections_March` is its C mirror, unit-tested): projected onto the screen, one over its
+  distance linear along it, to infinity (100 km) or, toward the camera, to just short of the near plane; it walks the
+  blocks along its screen line, skipping each block whose nearest surface lies behind the ray all through it, and in
+  the others each pixel its line crosses: a hit where the ray's distance across that pixel reaches behind the surface
+  and not past its thickness (0.3 m + 3 % of its distance). A ray that reaches its vanishing point on the screen behind
+  nothing takes the sky's pixel there, unless it looks into the sun's or the moon's disc (their glints are the lit
+  shaders'). An answer counts by its distance to the screen's edges (fading over the outer 8 %) and the ray's facing
+  (from -0.05 to -0.35 of the view's direction a ray back toward the camera fades out). The surface mirrors the
+  answer's scene colour (with the answer's own handed-over sky where that surface mirrors too: its own screen answer is
+  this pass's, not in the scene's colour yet) mixed with what it handed over by the answer's confidence times its screen
+  share, times its weight; the pass adds that to the scene's colour (additively, the scene's alpha kept; at low quality
+  each pass pixel covers the 2 x 2 scene pixels whose bottom left one it was computed for). Its inputs are bound on units
+  21 to 26 (`WorldRendererTextureUnit_Reflection*`) and it draws rectangles, without blending.
+- **Quality** (`reflection_quality`, `WorldRenderer_SetReflectionQuality`; Shift + keypad / in the test frame): 0 off
+  (the lit shaders' own sky reflections; the pass never runs, and the attachments, the block image and the pass's
+  target are released: `WorldRendererReflections_EnsureTarget` makes them again when another quality is chosen), 1 low
+  (half the scene's resolution, a scene pixel of four answering for all four, at most 128 blocks a ray), 2 high (the
+  scene's resolution, at most 256 blocks). At high they take 32 bytes a scene pixel (7.4 MB at 640 x 360), at low 26.
+- **When it runs** (`WorldRendererReflections_Decide`): the feature "reflections" available (both programs, the PBR and
+  terrain programs, a scene target in the HDR tier with a samplable depth, attachments and targets made), on
+  (`WorldRenderer_SetReflectionsEnabled`, Shift + keypad - in the test frame: the A/B), its quality not off, no debug
+  view drawn over the surfaces' colours (interior lighting's sky view, the shadow levels' view, the rain's views: the lit
+  shaders then mirror the sky themselves under them, as without the feature), and a model or a copies' cell in view
+  that mirrors, or wet surfaces (the rain active and the surfaces wet). The status line gives the quality, the target's size, the mirroring objects
+  and cells in view, whether wet surfaces mirror and the debug view.
+- **Debug views** (`WorldRenderer_SetReflectionView`; Shift + keypad Enter): the weights (white by the largest
+  channel), the answers (green a surface, blue the sky, red none, each by its share of the reflection).
+- **Limits** (it is screen space): only what is on the screen is mirrored. A ray that leaves the screen, turns back
+  toward the camera or passes behind a surface by more than the thickness has no answer and mirrors the sky it was
+  handed: a mirror facing the camera shows little but that sky, and indoors that sky is the sky's light while interior
+  lighting is off. A thin object the ray passes far behind (a desk's top seen over the floor) lets it through to what
+  lies beyond. What draws after the pass (decals, blended and additive sprites, the rain, the crisp overlay) is never
+  mirrored. A mirror seen in a reflection mirrors only the sky it handed over, not what the screen shows around it. The
+  mirrored colour is the scene's, already hazed from the hit to the eye.
+- **Cost** (GTX 980 Ti at 1417 MHz, the scene 640 x 360, GL timer queries over 100 renders): the pass with its block
+  image and its composite 0.67 ms at high quality in the rain's start view (0.65 in the wet test world's dusk view,
+  puddles over the lower half of the screen), 0.32 ms at low; 0.18 ms for the chrome box in view, 0.31 ms for the test
+  room's polished floor; without the pixelation (1280 x 720) 3.15 ms at high and 0.81 ms at low in the rain's start
+  view. The opaque world's draws are faster while they hand their reflections over (3.36 ms against 3.74 ms with the
+  pass off in the wet dusk view: the lit shaders' own sky reflections cost more than the handover); while the pass does
+  not run they cost about 0.07 ms more than programs without the reflection code would (0.73 against 0.66 ms over the
+  test room's walls and floor): the lit programs carry it, its branches unused.
+
 **Crisp overlay.** OmitPixelation models and cutout sprites render lit at window resolution and are composited over the
 pixelated image, depth-tested against the scene so they are occluded correctly (e.g. a readable in-world
 screen). When the overlay cannot run they fall back to the pixelated passes, so they never vanish. Crisp objects
@@ -1803,10 +1871,14 @@ get no AO and no outlines.
   deck; the status adds the quality, the target's size, the light that lights them and the pass's CPU time), "cloud
   shadows" their shadow map (unavailable without its shader or map; inactive while the clouds are not drawn or their
   light is below the horizon); without the clouds' composite shader (logged once by the loader) the clouds lie behind
-  every surface. It also counts what the camera's passes
+  every surface; "reflections" the reflection pass (unavailable without its two shaders, the PBR or terrain program,
+  the scene target's HDR tier with a samplable depth, or when its attachments or targets could not be made (logged
+  once), when every surface mirrors the sky alone; inactive while switched off, at quality off, under a surface debug
+  view, or with nothing in view that mirrors; the status adds the quality, the target's size (0 x 0 at quality off),
+  the mirroring objects and cells in view, whether wet surfaces mirror and the debug view). It also counts what the camera's passes
   drew and what culling and fading removed (see "Visibility"). The renderer logs the status once after its first
   render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame), with a line for the atmosphere's tables,
-  one for the haze, one for interior lighting and one for the clouds.
+  one for the haze, one for interior lighting, one for the clouds and one for the reflections.
 
 ### Renderer structure (keep it clean)
 
@@ -1843,6 +1915,8 @@ get no AO and no outlines.
 | `WorldRendererPost.c` | Outlines, bloom, sun shafts and the tonemap. |
 | `WorldRendererExposure.c` | The eye (see "Eye adaptation"): the meter's shader, target and readback, the meter pass after the sun shafts, the eye's update from the newest blocks (`EyeAdaptation`) and the exposure the tonemap takes. |
 | `WorldRendererCrisp.c` | The crisp overlay. |
+| `WorldRendererReflections.c` | The reflections (see "Reflections"): the scene target's reflection attachments (made, attached and released with the scene target), the switches around the opaque world's draws, the block image and the pass's target and programs, the decision, the pass with its composite, the debug views, the status line. |
+| `WorldReflections.c` (pure maths, not a pass) | The reflections' model: the qualities, the screen share by roughness, the direction's packing, the fades and the thickness, the distance a stored depth stands for, a block's nearest surface and the march (the C mirror of `common/reflections` and `shaders/reflections/`); see "Reflections". |
 | `WorldRendererSurfaces.c` | The surfaces' pictures (see "Surfaces' pictures"): the list handed over for one render, each put into its surface's material copy (a screen's or a CRT's emissive map, a paper's albedo map) with its rows' orientation, the status's counts; the screens' light (see "Screen light"): the render's lights from the shown glowing screens, each lit draw's nearest one and its upload. Not a pass: the lit passes' material copies and light uploads call it. |
 | `WorldRendererCrt.c` | The CRT programs (see "CRT screens"): `world_crt` and its skinned twin loaded as PBR programs, their own uniforms (the pass's window pixel scale, a CRT draw's shape, look, power with its flicker, mask and tile, the glass's reflection), the mask override. Not a pass: the lit passes draw a CRT's glass with it. |
 | `WorldRendererCollision.c` | Debug wireframes of a collision world's shapes and its contact points (`WorldRenderer_SetCollisionDebug`), drawn in the scene pass after the light gizmos from its read-only debug lists ([WorldCollision.md](WorldCollision.md)). |
@@ -1871,7 +1945,8 @@ The renderer keeps receiving features, so:
 - **Fixed texture units.** Renderer-owned samplers use `WorldRendererTextureUnit`. Point each sampler at its unit once
   at load and only bind textures per frame. Never leave a sampler on unit 0: OpenGL forbids samplers of different types
   on one unit. For 2D (`DrawTexturePro`) passes bind extra samplers with `SetShaderValueTexture` after
-  `BeginShaderMode`; manual `rlActiveTextureSlot` binds only work for 3D `DrawMesh` draws. **The budget** (GL 3.3
+  `BeginShaderMode`; manual `rlActiveTextureSlot` binds work for 3D `DrawMesh` draws, and for 2D draws only on units
+  the batch never binds (5 and up: the clouds' and the reflections' passes). **The budget** (GL 3.3
   guarantees 16 units; `WORLD_RENDERER_MATERIAL_MAP_COUNT` must match raylib's `MAX_MATERIAL_MAPS`, see BUILDING.md):
 
   | Units | Who | What |
@@ -1886,8 +1961,10 @@ The renderer keeps receiving features, so:
 
   | 19 | every lit program | The draw's screen light's picture (`sampler2D screenLightPicture`, `WorldRendererTextureUnit_ScreenLight`), bound per draw with the light (`WorldRendererSurfaces_UploadScreenLight`); read only while a screen lights the draw. |
   | 20 | the CRT programs (`world_crt`, `world_crt_skinned`) | A CRT's mask tile (`sampler2D crtMaskTile`, `WorldRendererTextureUnit_CrtMask`), bound per CRT draw while its mask is a texture. The CRT programs read 14 samplers (no normal map). |
+  | 21–26 | the reflection pass (`world_reflections`; `world_reflection_blocks` reads 25) | Its inputs (`WorldRendererTextureUnit_Reflection*`): 21 the weights, 22 what the surfaces mirror where the screen has no answer, 23 the directions (the scene target's attachments 1 to 3), 24 the scene's colour, 25 the scene's depth, 26 the block image; bound by hand before its rectangles (the 2D batch binds only 0 to 4), between the opaque world and the transparent draws. No lit program reads these units, so the lit draws after the pass never meet them. |
 
-  A new frame texture for the lit programs takes a unit from 21 up (16 to 20 are the rain's and the screens'), or below 12 where no
+  A new frame texture for the lit programs takes a unit from 27 up (16 to 20 are the rain's and the screens', 21 to 26
+  the reflection pass's, bound in the middle of the scene pass), or below 12 where no
   material map the programs' materials use binds (the PBR materials use maps 0, 1, 2 and 5: albedo, the packed ORM,
   normal, emission; raylib's importers also fill 3 (roughness) and 4 (occlusion) in some formats (a glTF file's are
   packed into 1 and emptied when the model loads) and its OBJ import 6 (height) when the file has those maps), keeping
@@ -1998,6 +2075,14 @@ skinned twin `world_crt_skinned` (`crt/crt_skinned.json`: `pbr/skinned` with the
 `common/lighting`, `common/dither` and `common/crt` (the CRT's picture: the curvature, the scanlines' levels, the masks,
 the vignette and the glow, and its uniforms; the C twin is `include/CrtScreen.h`, see "CRT screens").
 
+The reflections draw with `world_reflection_blocks` (each block's nearest depth) and `world_reflections` (the march
+and the mirrored light): `shaders/reflections/` (`blocks.json`, `reflections.json` with the fragment stages `blocks`
+and `fragment` over raylib's default vertex stage), full-screen passes into the reflection pass's targets. The lit
+fragment stages (`pbr/fragment`, `crt/fragment`, `terrain/fragment`, `sprite/fragment`) include
+`common/reflection_output` (their reflection outputs at locations 1 to 3 and the functions that write them; their
+colour is `finalColor` at location 0), and `common/lighting` includes `common/reflections` (the share by roughness and
+the direction's packing, which the pass includes too).
+
 The sky's occupancy volume draws with `world_sky_slices` (`shaders/sky_slices/`: its fragment stage over raylib's
 default vertex stage; its twins `world_sky_slices_skinned` and `world_sky_slices_instanced` take the depth shaders'
 `depth/skinned` and `depth/instanced` vertex stages) and builds its pyramid with `world_sky_reduce`; the ambient
@@ -2033,9 +2118,9 @@ world models: two cubes behind the centre row, `variant_cube_left` (red) and `va
 and the lamp are placement overrides (`overrides_omit_pixelation`, `overrides_shadow_distance`). Its LODs: a row of six
 `lod_test` spheres (`lod_test_1` to `_6`, ids 25 to 30) along the left edge of the ground, at x = 8 from z = -6 to 9,
 switching at 13 and 16 m, and beside it `lod_test_forced` (id 31, LOD 2 forced) and `lod_test_own_distances` (id 32, its
-own switch distances 3 and 6 m). Its collision ([WorldCollision.md](WorldCollision.md)): 48 colliders (the slab,
+own switch distances 3 and 6 m). Its collision ([WorldCollision.md](WorldCollision.md)): 49 colliders (the slab,
 the cubes, the desk's parts, the LOD spheres' hulls, the PBR cube's mesh, the cup's, the tree trunk's and the trash
-can's cylinders, the sign's plane, the test room's walls and roof, the monitor and its table), a `door` (id 33, the
+can's cylinders, the sign's plane, the test room's walls and roof, the monitor and its table, the mirror box), a `door` (id 33, the
 `test_door` world model with
 a `closed` and an `open` set; movable, a
 kinematic mover that stops when blocked) on the right of the start view, and a `desk_trigger_zone` (id 34, an own box,
@@ -2063,6 +2148,11 @@ CRT of 640 x 480 with the placeholder slot mask, crisp, emission 0.2; with a col
 table (`monitor_table`, id 66, a pivot
 at (-1.6, 0.05, -3.3) turned 155 degrees so the screen faces the start view, with its top and two sides, ids 67 to 69),
 on the right of the start view (see "The test monitor" below).
+Its reflections (see "Reflections"): the test room's floor is a `room_polished_floor` (id 71, a child of the room: the
+`test` world model's `polished` variant, a dark smooth slab, mirroring its surroundings by its placement's
+`has_reflections`), a `mirror_box` (id 72, the `chrome` variant, 2 m wide, at (3.5, 0.55, -2) right of the start view,
+with a collider) mirrors the slab and what stands around it, and the monitor's glass mirrors its surroundings too while
+the crisp overlay does not run (C).
 Edit the file and restart to change the test world.
 The frame owns a `WorldCollision` too, created after the world, and a `WorldCharacters` (the character
 system, [Characters.md](Characters.md)) created after that, with its test characters (the private
@@ -2127,7 +2217,8 @@ mouse wheel (the flycam's speed, up faster and down slower, three notches to a d
 not while walking, and the UI takes it first while the pointer is over a widget) and the debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11, the
 digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/`, the backslash, Insert, Home, End, Page Up, Page Down, the
-keypad's digits, its `.`, `+`, `-`, `*`, `/` and Enter are taken already; the keypad's `=` is free. Leave F12 free:
+keypad's digits, its `.`, `+`, `-`, `*`, `/` and Enter are taken already, and with Shift the grave key, keypad `-`, `/`
+and Enter; the keypad's `=` is free. Leave F12 free:
 raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
@@ -2168,6 +2259,10 @@ raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writi
   every surface wet alike, as the weather's wetness alone; logged), keypad Enter steps its debug view (off, how open
   every surface is to the rain, the puddles; logged), and the I key's status adds its line. The weather's keys bring
   the rain (Insert into the climate's rain or storm preset; Page Up a strike, whose bolt stands while its flash lasts);
+- **the reflections (see "Reflections"):** Shift with keypad - switches them off and on (the A/B: off, every surface
+  mirrors the sky alone), Shift with keypad Enter steps their debug view (off, the weights, the answers), Shift with
+  keypad / their quality (off, low, high); each logged, and the I key's status adds their line. Without Shift those
+  keys are the rain's and the clouds';
 - **the renderer and the sky:** O post effects, B bloom, G sun shafts, keypad . contact shadows, C crisp overlay, V
   night vision (logged), K
   sprite lighting (off draws every sprite unlit; logged), L light gizmos, N cycle the

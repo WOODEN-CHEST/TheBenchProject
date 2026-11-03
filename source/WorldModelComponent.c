@@ -44,6 +44,8 @@ typedef enum ModelPropertyEnum
     ModelProperty_Haze,
     ModelProperty_OverridesOccludesSky,
     ModelProperty_OccludesSky,
+    ModelProperty_OverridesHasReflections,
+    ModelProperty_HasReflections,
     ModelProperty_OverridesDrawDistance,
     ModelProperty_DrawDistance,
     ModelProperty_DrawDistanceMultiplier,
@@ -76,8 +78,8 @@ static const char* const LegacyShadowTierNames[LegacyShadowTier_Count] = { "both
  * (source/WorldModelComponentInternal.h). The wire ids are the save schema: never renumber or reuse one; a removed
  * property's id goes into the table's retired list. They do not follow the rows' order: 1 is world_model, 2, 3 and 5
  * the placement's own values behind the override flags 8, 9 and 11, 17 to 21 the LOD rows, 23 and 24 the haze's pair,
- * 25 and 26 the sky's and 27 to 37 the shadow rows, as in the model instances component, whose list is 22. 4 and 10,
- * the shadow tier's pair, are retired. The next free wire id is 38. */
+ * 25 and 26 the sky's, 27 to 37 the shadow rows and 38 and 39 the reflections' pair, as in the model instances
+ * component, whose list is 22. 4 and 10, the shadow tier's pair, are retired. The next free wire id is 40. */
 static const PropertyDescriptor ModelProperties[ModelProperty_Count] =
 {
     [ModelProperty_WorldModel] =
@@ -198,6 +200,16 @@ static const PropertyDescriptor ModelProperties[ModelProperty_Count] =
     {
         WORLD_MODEL_PLACEMENT_ROW_OCCLUDES_SKY, .WireId = 26U, PROPERTY_MEMBER(WorldModelComponent, _occludesSky),
         .SinceVersion = 1U
+    },
+    [ModelProperty_OverridesHasReflections] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_HAS_REFLECTIONS, .WireId = 38U,
+        PROPERTY_MEMBER(WorldModelComponent, _overridesHasReflections), .SinceVersion = 2U
+    },
+    [ModelProperty_HasReflections] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_HAS_REFLECTIONS, .WireId = 39U, PROPERTY_MEMBER(WorldModelComponent, _hasReflections),
+        .SinceVersion = 2U
     },
     [ModelProperty_OverridesDrawDistance] =
     {
@@ -415,6 +427,10 @@ static bool TryGetOverrideFlag(WorldModelComponent* self, WorldModelSetting sett
             *outFlag = &self->_overridesShadowLod;
             *outProperty = ModelProperty_OverridesShadowLod;
             return true;
+        case WorldModelSetting_HasReflections:
+            *outFlag = &self->_overridesHasReflections;
+            *outProperty = ModelProperty_OverridesHasReflections;
+            return true;
         case WorldModelSetting_Count:
             break;
     }
@@ -506,6 +522,7 @@ bool WorldModelComponent_IsOverridden(const WorldModelComponent* self, WorldMode
         case WorldModelSetting_IsShadowOnly:          return self->_overridesIsShadowOnly;
         case WorldModelSetting_HasTwoSidedShadows:    return self->_overridesHasTwoSidedShadows;
         case WorldModelSetting_ShadowLod:             return self->_overridesShadowLod;
+        case WorldModelSetting_HasReflections:        return self->_overridesHasReflections;
         case WorldModelSetting_Count:                 break;
     }
     // Only reachable with a value outside the enum: nothing is overridden.
@@ -625,6 +642,16 @@ Error WorldModelComponent_SetOccludesSky(WorldModelComponent* self, bool occlude
         return CreateNullSelfError("WorldModelComponent_SetOccludesSky");
     }
     SetBool(self, &self->_occludesSky, occludesSky, ModelProperty_OccludesSky);
+    return Error_CreateSuccess();
+}
+
+Error WorldModelComponent_SetHasReflections(WorldModelComponent* self, bool hasReflections)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldModelComponent_SetHasReflections");
+    }
+    SetBool(self, &self->_hasReflections, hasReflections, ModelProperty_HasReflections);
     return Error_CreateSuccess();
 }
 
@@ -813,6 +840,10 @@ WorldModelSettings WorldModelComponent_ResolveSettings(const WorldModelComponent
     if (self->_overridesOccludesSky)
     {
         Settings.OccludesSky = self->_occludesSky;
+    }
+    if (self->_overridesHasReflections)
+    {
+        Settings.HasReflections = self->_hasReflections;
     }
     if (self->_overridesDrawDistance)
     {

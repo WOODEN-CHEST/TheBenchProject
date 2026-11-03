@@ -35,9 +35,10 @@ uniform float lightWrap;      // how far light wraps around the sprite: 0 for ca
 uniform bool isCard;          // a card (a fixed sprite or decal), not a billboard
 uniform bool useScreenAo;     // whether the screen-space AO at this pixel is this sprite's (a cutout sprite, a decal)
 
-out vec4 finalColor;
+layout(location = 0) out vec4 finalColor;
 
 #include "common/lighting"
+#include "common/reflection_output"
 #include "common/dither"
 
 const int ALPHA_MODE_CUTOUT = 0;
@@ -56,6 +57,10 @@ vec3 FacingNormal(vec3 n, vec3 toward)
 
 void main()
 {
+    // A sprite mirrors nothing: a cutout one, drawn with the opaque world, hands the reflection pass none where it covers
+    // what lies behind it.
+    WriteNoReflection();
+
     vec4 texel = texture(texture0, fragTexCoord);
     if (((alphaMode == ALPHA_MODE_CUTOUT) && (texel.a < alphaCutoff)) || DitherDiscard())
     {

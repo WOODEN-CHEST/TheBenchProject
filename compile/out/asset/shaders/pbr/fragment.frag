@@ -31,11 +31,13 @@ uniform bool hasEmissiveMap;
 uniform bool isAlbedoMapBottomUp;
 uniform bool isEmissiveMapBottomUp;
 
-out vec4 finalColor;
+layout(location = 0) out vec4 finalColor;
 
 // The frame's lights, shadows, ambient, haze and night vision: shared with the sprite shader, which the renderer gives
 // the same values.
 #include "common/lighting"
+// What the surface hands the reflection pass while it runs.
+#include "common/reflection_output"
 // The draw's fade (its draw distance, the object's opacity) as a dither on the scene's pixel grid.
 #include "common/dither"
 
@@ -116,6 +118,17 @@ void main()
     float skyVisibility = SkyVisibilityAt(fragPosition, surfaceNormal);
     vec3 ambient = AmbientLight(light, n, fragPosition, surfaceNormal, skyVisibility)*albedo*occlusion*ScreenAo();
 
+    // An object that mirrors its surroundings (has_reflections): what it mirrors is taken from its ambient's diffuse
+    // light.
+    SurfaceReflection glossy = NoReflection();
+    if (hasReflections)
+    {
+        vec3 glossyFresnel;
+        glossy = GlossyReflection(light, n, v, f0, rough, occlusion, fragPosition, surfaceNormal, skyVisibility,
+            glossyFresnel);
+        ambient *= vec3(1.0) - glossyFresnel;
+    }
+
     vec3 emissive = emissiveColor*emissiveIntensity;
     if (hasEmissiveMap)
     {
@@ -125,8 +138,19 @@ void main()
     }
 
     // The eye sees the reflected light through its night vision (the sky mirrored in water with it); emissive light is
-    // added after it and keeps its colour.
-    vec3 reflected = ambient + direct + pointTotal + WaterReflection(light, n, v, water);
+    // added after it and keeps its colour. What the surface mirrors (water on it, a glossy object's surroundings) is the
+    // reflection pass's while it runs (handed over here); otherwise the sky's, added here.
+    vec3 reflected = ambient + direct + pointTotal;
+    if (reflectionsDeferred)
+    {
+        WriteReflection(CombineReflections(glossy, WetReflection(light, n, v, water, rough)), fragPosition);
+    }
+    else
+    {
+        reflected += WaterReflection(light, n, v, water);
+        reflected += glossy.weight*glossy.sky;
+        WriteNoReflection();
+    }
     reflected = NightVisionOf(reflected);
     vec3 color = reflected + emissive;
 

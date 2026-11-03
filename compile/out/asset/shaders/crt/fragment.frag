@@ -32,9 +32,10 @@ uniform bool isEmissiveMapBottomUp;
 // The share of a bare glass's reflectance the CRT's glass keeps (its anti-glare coating takes the rest), per CRT draw.
 uniform float crtReflection;
 
-out vec4 finalColor;
+layout(location = 0) out vec4 finalColor;
 
 #include "common/lighting"
+#include "common/reflection_output"
 #include "common/dither"
 #include "common/crt"
 
@@ -92,8 +93,31 @@ void main()
             *(vec3(1.0) - glass);
     }
 
-    // Reflected light through the eye's night vision; the picture's light keeps its colour.
-    vec3 reflected = ambient + direct + pointTotal + mirrored + WaterReflection(light, n, v, water);
+    // Reflected light through the eye's night vision; the picture's light keeps its colour. While the reflection pass
+    // runs, the water on the glass is its, and so is the glass's mirror for a CRT that mirrors its surroundings
+    // (has_reflections); otherwise the glass mirrors the sky here, and the water too while the pass does not run.
+    vec3 reflected = ambient + direct + pointTotal;
+    if (reflectionsDeferred)
+    {
+        SurfaceReflection wet = WetReflection(light, n, v, water, rough);
+        if (hasReflections)
+        {
+            vec3 glassFresnel;
+            WriteReflection(CombineReflections(GlossyReflection(light, n, v, f0, rough, occlusion, fragPosition,
+                surfaceNormal, skyVisibility, glassFresnel), wet), fragPosition);
+        }
+        else
+        {
+            reflected += mirrored;
+            WriteReflection(wet, fragPosition);
+        }
+    }
+    else
+    {
+        reflected += mirrored;
+        reflected += WaterReflection(light, n, v, water);
+        WriteNoReflection();
+    }
     vec3 color = NightVisionOf(reflected) + emissive;
 
     color = ApplyAerialPerspective(color, fragPosition);

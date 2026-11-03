@@ -172,7 +172,9 @@ Error WorldRendererScene_EnsureTargets(WorldRenderer* self, int windowWidth, int
     self->_scene._windowWidth = SafeWindowWidth;
     self->_scene._windowHeight = SafeWindowHeight;
 
-    // The passes' own targets depend on the scene target's size and depth tier, so they come after it.
+    // The passes' own targets depend on the scene target's size and depth tier, so they come after it (the reflections'
+    // attachments go onto the scene target itself).
+    WorldRendererReflections_CreateTargets(self, SceneWidth, SceneHeight);
     WorldRendererGBuffer_CreateTargets(self, SceneWidth, SceneHeight);
     WorldRendererPost_CreateTargets(self, SceneWidth, SceneHeight);
     WorldRendererCrisp_CreateTargets(self, SafeWindowWidth, SafeWindowHeight);
@@ -183,6 +185,7 @@ Error WorldRendererScene_EnsureTargets(WorldRenderer* self, int windowWidth, int
 
 void WorldRendererScene_ReleaseTargets(WorldRenderer* self)
 {
+    WorldRendererReflections_ReleaseTargets(self);
     WorldRendererCommon_UnloadTarget(&self->_scene._target, &self->_scene._hasTarget);
     self->_scene._isDepthSamplable = false;
     WorldRendererGBuffer_ReleaseTargets(self);
@@ -198,7 +201,9 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
 
     // Clear the depth buffer (and colour). When the atmospheric sky shader is present it overwrites every
     // pixel below, so the clear colour only matters as the fallback (the linearized CPU gradient) for when
-    // the sky shader is unavailable. The scene buffer is linear HDR; the tonemap pass maps it to display.
+    // the sky shader is unavailable. The scene buffer is linear HDR; the tonemap pass maps it to display. While the
+    // reflection pass runs, its attachments are cleared first: no reflection where nothing draws.
+    WorldRendererReflections_ClearData(frame);
     Color ClearColor = (self->_sky._shader != NULL)
         ? BLACK
         : LinearizeColorBytes(WorldEnvironment_ComputeSkyColor(frame->Environment));
@@ -220,7 +225,8 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
     // pixel scale is 1.
     // Each of its pixels spans window / scene window pixels (1 without pixelation).
     float WindowPixelScale = (frame->SceneWidth > 0) ? ((float)frame->WindowWidth / (float)frame->SceneWidth) : 1.0f;
-    WorldRendererLighting_UploadFrame(self, frame, true, (Vector2){ 1.0f, 1.0f }, WindowPixelScale);
+    WorldRendererLighting_UploadFrame(self, frame, true, frame->AreReflectionsActive, (Vector2){ 1.0f, 1.0f },
+        WindowPixelScale);
 
     // Render space: the camera at the origin, every position relative to it (the render cache's); with reversed depth the
     // frame's infinite projection in place of raylib's.
@@ -232,6 +238,8 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
         DrawDebugGrid(frame);
     }
 
+    // The opaque world. While the reflection pass runs, each of its lit surfaces also hands the pass what it mirrors.
+    WorldRendererReflections_BeginSurfaces(self, frame);
     // Model objects, shaded through the PBR shader (or each material's own default shader when it is
     // unavailable). Filtered by OmitPixelation: crisp objects are drawn by the crisp overlay pass instead.
     WorldRendererGeometry_DrawModels(self, frame->SceneFilter);
@@ -242,9 +250,27 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
     // The terrain's chunks (never crisp), before the sprites: decals lie on it.
     WorldRendererTerrain_DrawLit(self);
 
-    // Sprites, lit like the models: the cutout ones (opaque, writing depth), then the decals over the opaque world, then
-    // the blended and additive ones back to front.
-    WorldRendererSprites_DrawLit(self, frame->SceneFilter, true);
+    // The cutout sprites, lit like the models (opaque, writing depth).
+    WorldRendererSprites_DrawLitOpaque(self, frame->SceneFilter, true);
+    WorldRendererReflections_EndSurfaces(self);
+
+    // What the opaque world mirrors, added to its colour: the pass reads the scene's colour and depth, so it runs outside
+    // the scene's texture mode, which resumes after it.
+    if (frame->AreReflectionsActive)
+    {
+        EndMode3D();
+        WorldRendererCommon_EndCameraDepth(self, frame);
+        EndTextureMode();
+        WorldRendererReflections_Render(self, frame);
+        BeginTextureMode(self->_scene._target);
+        WorldRendererCommon_BeginCameraDepth(self, frame);
+        BeginMode3D(frame->RenderCamera);
+        WorldRendererCommon_LoadCameraProjection(frame);
+    }
+
+    // The see-through sprites over it: the decals (over what their surface mirrors), then the blended and additive ones
+    // back to front.
+    WorldRendererSprites_DrawLitTransparent(self, frame->SceneFilter, true);
 
     // The rain over everything: a lightning bolt, the splashes and the streaks (blended, writing no depth).
     WorldRendererRain_DrawScene(self, frame);

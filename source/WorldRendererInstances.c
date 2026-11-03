@@ -690,7 +690,8 @@ void WorldRendererInstances_DrawLit(WorldRenderer* self, const WorldRenderFrame*
             WorldRendererLighting_SetDrawPlace(self, Program->_passShader, &Program->_lit, Cell->RenderCenter,
                 Cell->Radius, (Cell->Entry < EntryCount) ? Entries[Cell->Entry].Haze : 1.0f,
                 WorldVisibility_GetInstanceCellFade(&self->_visibility, Visible[Position]).Combined
-                    < WORLD_VISIBILITY_GBUFFER_FADE_LIMIT);
+                    < WORLD_VISIBILITY_GBUFFER_FADE_LIMIT,
+                (Cell->Entry < EntryCount) && Entries[Cell->Entry].HasReflections);
         }
         if (DrawCell(self, &Pass, Cell, frame->ZoomFactor, DrawDistanceScale))
         {

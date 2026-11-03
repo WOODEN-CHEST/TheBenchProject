@@ -192,6 +192,11 @@ void WorldCloudsTests_Run(TestRun* run);
  *  module of source/). */
 void WorldRainTests_Run(TestRun* run);
 
+/** @brief The screen-space reflections: the screen share by roughness, the direction's packing, the answers' fades, the
+ *  distance a stored depth stands for and the march over synthetic scenes (WorldReflectionsTests.c; a private module of
+ *  source/). */
+void WorldReflectionsTests_Run(TestRun* run);
+
 /** @brief The night sky's maths: the star catalogue, limiting magnitude, air mass, star colours and the galaxy's
  *  orientation (NightSkyTests.c; a private module of source/). */
 void NightSkyTests_Run(TestRun* run);

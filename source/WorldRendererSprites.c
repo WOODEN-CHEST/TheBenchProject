@@ -191,7 +191,7 @@ static void DrawLitSprite(WorldRenderer* self, const WorldRenderSprite* sprite, 
     WorldRendererCommon_SetDither(RayShader, &self->_sprites._dither, DitherFade, 0.0f, false);
     // Lit or unlit, a sprite is seen through the haze at its own multiplier, and through the zones' air.
     WorldRendererLighting_SetDrawPlace(self, RayShader, &self->_sprites._lit, sprite->Shape.Position,
-        sprite->BoundsRadius, sprite->Haze, IsInAo);
+        sprite->BoundsRadius, sprite->Haze, IsInAo, false);
     if (IsLit)
     {
         WorldRendererLighting_UploadObjectLights(self, RayShader, &self->_sprites._lit, sprite->Shape.Position,
@@ -336,7 +336,7 @@ void WorldRendererSprites_DrawQuad(WorldRenderer* self, Shader shader, const Wor
     DrawMesh(self->_sprites._quad, QuadMaterial, transform);
 }
 
-void WorldRendererSprites_DrawLit(WorldRenderer* self, WorldRendererPixelFilter filter, bool applyScreenAo)
+void WorldRendererSprites_DrawLitOpaque(WorldRenderer* self, WorldRendererPixelFilter filter, bool applyScreenAo)
 {
     size_t SpriteCount = 0;
     const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(&self->_cache, &SpriteCount);
@@ -364,6 +364,22 @@ void WorldRendererSprites_DrawLit(WorldRenderer* self, WorldRendererPixelFilter 
                 WorldVisibility_GetSpriteFade(&self->_visibility, Index), applyScreenAo);
         }
     }
+    rlEnableBackfaceCulling();
+}
+
+void WorldRendererSprites_DrawLitTransparent(WorldRenderer* self, WorldRendererPixelFilter filter, bool applyScreenAo)
+{
+    size_t SpriteCount = 0;
+    const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(&self->_cache, &SpriteCount);
+    if (!WorldRendererSprites_IsAvailable(self) || (self->_sprites._frames._count != SpriteCount))
+    {
+        return;
+    }
+    size_t VisibleCount = 0;
+    const size_t* Visible = WorldVisibility_GetSprites(&self->_visibility, &self->_cache, WorldVisibilityPass_Camera,
+        &VisibleCount);
+    rlDrawRenderBatchActive();
+    rlDisableBackfaceCulling();
 
     // The decals, over the opaque world (depth tested, not written; lifted off their surface), in world order.
     rlDisableDepthMask();

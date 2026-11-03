@@ -38,6 +38,7 @@
 #define CONFIG_KEY_SHADOW_LEVEL_FACTOR ((const unsigned char*)u8"shadow_level_factor")
 #define CONFIG_KEY_SHADOW_MAP_SIZE ((const unsigned char*)u8"shadow_map_size")
 #define CONFIG_KEY_CLOUD_QUALITY ((const unsigned char*)u8"cloud_quality")
+#define CONFIG_KEY_REFLECTION_QUALITY ((const unsigned char*)u8"reflection_quality")
 #define CONFIG_KEY_SHADOW_UPDATE_PERIODS ((const unsigned char*)u8"shadow_update_periods")
 
 /** Index of the width element within the resolution array. */
@@ -70,6 +71,7 @@
 #define CONFIG_DEFAULT_SHADOW_LEVEL_FACTOR 4.0f
 #define CONFIG_DEFAULT_SHADOW_MAP_SIZE ((int32_t)2048)
 #define CONFIG_DEFAULT_CLOUD_QUALITY ((int32_t)CONFIG_CLOUD_QUALITY_HIGH)
+#define CONFIG_DEFAULT_REFLECTION_QUALITY ((int32_t)CONFIG_REFLECTION_QUALITY_HIGH)
 /** Default value for every post-effect config-side strength multiplier. */
 #define CONFIG_DEFAULT_EFFECT_STRENGTH (1.0f)
 /** Largest accepted effect strength multiplier; larger (or non-finite/negative) values fall back to the
@@ -294,6 +296,7 @@ static void ReadConfigValues(JSONCompound* root, GameConfig* config)
     ReadInt32(root, CONFIG_KEY_SHADOW_MAP_SIZE, &config->ShadowMapSize);
     ReadShadowUpdatePeriods(root, config);
     ReadInt32(root, CONFIG_KEY_CLOUD_QUALITY, &config->CloudQuality);
+    ReadInt32(root, CONFIG_KEY_REFLECTION_QUALITY, &config->ReflectionQuality);
 }
 
 /* Parses the raw file bytes as a JSON object and overlays its settings onto the config, then discards the
@@ -365,6 +368,7 @@ void GameConfig_SetDefaults(GameConfig* self)
         self->ShadowUpdatePeriods[Level] = Period;
     }
     self->CloudQuality = CONFIG_DEFAULT_CLOUD_QUALITY;
+    self->ReflectionQuality = CONFIG_DEFAULT_REFLECTION_QUALITY;
 }
 
 Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
@@ -408,6 +412,11 @@ Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
     if ((outConfig->CloudQuality < CONFIG_CLOUD_QUALITY_OFF) || (outConfig->CloudQuality > CONFIG_CLOUD_QUALITY_HIGH))
     {
         outConfig->CloudQuality = CONFIG_DEFAULT_CLOUD_QUALITY;
+    }
+    if ((outConfig->ReflectionQuality < CONFIG_REFLECTION_QUALITY_OFF)
+        || (outConfig->ReflectionQuality > CONFIG_REFLECTION_QUALITY_HIGH))
+    {
+        outConfig->ReflectionQuality = CONFIG_DEFAULT_REFLECTION_QUALITY;
     }
     return ParseResult;
 }

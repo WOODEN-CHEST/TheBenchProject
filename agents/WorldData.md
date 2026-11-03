@@ -278,7 +278,7 @@ table shares the model component's rows through the `WORLD_MODEL_PLACEMENT_ROW_*
 `source/WorldModelComponentInternal.h` (the names, wire ids, defaults, rules and categories are the model component's):
 `world_model`, `uses_variant` / `variant`, the override pairs `has_outline`, `casts_shadows`, `shadow_distance`,
 `is_shadow_distance_fixed`, `is_shadow_only`, `has_two_sided_shadows`, `shadow_lod`, `haze`, `occludes_sky`,
-`draw_distance`, `is_draw_distance_fixed`, the multipliers `draw_distance_multiplier` and `shadow_distance_multiplier`,
+`has_reflections`, `draw_distance`, `is_draw_distance_fixed`, the multipliers `draw_distance_multiplier` and `shadow_distance_multiplier`,
 the LOD rows (`lod_distances`
 with its flag, `lod_distance_multiplier`, `is_lod_forced` / `forced_lod`), **all but `omit_pixelation`**: copies are
 never crisp (`WorldModelInstancesComponent_SetOverridden(self, WorldModelSetting_OmitPixelation, ...)` is refused, and
@@ -599,6 +599,8 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 | | `haze` | 24 | Float in [0, 1000] | 1 |
 | | `overrides_occludes_sky` | 25 | Bool | false |
 | | `occludes_sky` | 26 | Bool | true |
+| | `overrides_has_reflections` | 38 | Bool | false |
+| | `has_reflections` | 39 | Bool | false |
 | | `overrides_draw_distance` | 12 | Bool | false |
 | | `draw_distance` | 13 | Float > 0 | 600 |
 | | `draw_distance_multiplier` | 14 | Float > 0 | 1 |
@@ -672,9 +674,10 @@ a test checks every table. Wire ids are the save schema: never renumber or reuse
 The model component's wire 1 is `world_model` and wires 2, 3 and 5 are the placement's own values behind their override
 flags (8, 9 and 11); the LOD rows are 17 to 21, 22 is the model instances component's `instances` (the two share their
 wire ids), 23 and 24 are the haze's pair, 25 and 26 the sky's (`occludes_sky`, whose default is the world model's own
-`render.occludes_sky`, true) and 27 to 37 the shadow rows; 4 and 10 are retired (the shadow tier pair of the tables'
-version 1, which their migrations read: [WorldFile.md](WorldFile.md), "Versions"). Both tables are at version 2, and
-their next free wire id is 38. The sprite component's wire 1 is `world_sprite`, wires 2 to 16 the placement's own values
+`render.occludes_sky`, true), 27 to 37 the shadow rows and 38 and 39 the reflections' (`has_reflections`, whose
+default is the world model's own `render.has_reflections`, false); 4 and 10 are retired (the shadow tier pair of the
+tables' version 1, which their migrations read: [WorldFile.md](WorldFile.md), "Versions"). Both tables are at version 2,
+and their next free wire id is 40. The sprite component's wire 1 is `world_sprite`, wires 2 to 16 the placement's own values
 behind their flags (wires 17 to 31), 32 to 36 the draw distance rows, 37 and 38 the haze's pair and 39 to 45 the shadow
 distance's rows, so its next free wire id is 46. The haze multiplies the haze in front of the placement
 ([WorldRuntime.md](WorldRuntime.md), "Haze"): 1 the real air's, 0 as if the air were clear (a sign that must read from far

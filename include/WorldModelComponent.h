@@ -41,14 +41,18 @@
  * cast from both faces, or cast with one LOD at every distance (overrides_shadow_lod with shadow_lod; without it the
  * renderer casts the drawn LOD near and coarser ones far out).
  *
+ * REFLECTIONS. With has_reflections a placement's glossy surfaces mirror what the screen shows around them (the world
+ * renderer's reflection pass), and the sky where it shows nothing; the rougher a surface, the more of its reflection is
+ * the sky's alone. Off by default: the cost is per mirroring pixel on screen.
+ *
  * Added with World_AddComponent(world, id, WorldComponentType_Model, &component); reach its fields with
  * WorldModelComponent_FromComponent. Its properties are the rows of its table ("model_component", version 2), in this
  * order: world_model, uses_variant, variant, overrides_has_outline, has_outline, overrides_omit_pixelation,
  * omit_pixelation, overrides_casts_shadows, casts_shadows, overrides_shadow_distance, shadow_distance,
  * shadow_distance_multiplier, overrides_is_shadow_distance_fixed, is_shadow_distance_fixed, overrides_is_shadow_only,
  * is_shadow_only, overrides_has_two_sided_shadows, has_two_sided_shadows, overrides_shadow_lod, shadow_lod,
- * overrides_haze, haze, overrides_occludes_sky, occludes_sky, overrides_draw_distance, draw_distance,
- * draw_distance_multiplier, overrides_is_draw_distance_fixed, is_draw_distance_fixed, overrides_lod_distances,
+ * overrides_haze, haze, overrides_occludes_sky, occludes_sky, overrides_has_reflections, has_reflections,
+ * overrides_draw_distance, draw_distance, draw_distance_multiplier, overrides_is_draw_distance_fixed, is_draw_distance_fixed, overrides_lod_distances,
  * lod_distances, lod_distance_multiplier, is_lod_forced and forced_lod. Older world files' shadow tier is read into the
  * shadow distance (source/WorldModelComponentInternal.h). Every change advances the component's revision
  * (WorldComponent_GetRevision).
@@ -94,6 +98,8 @@ typedef enum WorldModelSettingEnum
     WorldModelSetting_HasTwoSidedShadows,
     /** @brief The LOD it casts with (shadow_lod, flag overrides_shadow_lod). */
     WorldModelSetting_ShadowLod,
+    /** @brief Mirroring what is on screen around it (has_reflections, flag overrides_has_reflections). */
+    WorldModelSetting_HasReflections,
     /** @brief The number of settings; not a setting. */
     WorldModelSetting_Count
 } WorldModelSetting;
@@ -159,6 +165,10 @@ typedef struct WorldModelComponentStruct
     bool _overridesOccludesSky;
     /** @brief This placement's "keeps the sky's light off what lies under it" (default true). */
     bool _occludesSky;
+    /** @brief Whether _hasReflections replaces the world model's (default false). */
+    bool _overridesHasReflections;
+    /** @brief This placement's "mirrors what is on screen around it" (default false). */
+    bool _hasReflections;
     /** @brief Whether _drawDistance replaces the world model's draw distance (default false). */
     bool _overridesDrawDistance;
     /** @brief This placement's draw distance, in metres, above 0 (default WORLD_MODEL_DEFAULT_DRAW_DISTANCE). */
@@ -512,6 +522,26 @@ static inline bool WorldModelComponent_OccludesSky(const WorldModelComponent* se
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
  */
 Error WorldModelComponent_SetOccludesSky(WorldModelComponent* self, bool occludesSky);
+
+/**
+ * @brief Returns this placement's own "mirrors what is on screen" (it applies while WorldModelSetting_HasReflections is
+ *        overridden).
+ * @param self The model component; must not be NULL.
+ * @returns true if its glossy surfaces mirror their surroundings.
+ */
+static inline bool WorldModelComponent_HasReflections(const WorldModelComponent* self)
+{
+    return self->_hasReflections;
+}
+
+/**
+ * @brief Sets this placement's own "mirrors what is on screen" (it applies while WorldModelSetting_HasReflections is
+ *        overridden): its glossy surfaces mirror what the screen shows around them, and the sky where it shows nothing.
+ * @param self The model component; must not be NULL.
+ * @param hasReflections Whether its glossy surfaces mirror their surroundings.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error WorldModelComponent_SetHasReflections(WorldModelComponent* self, bool hasReflections);
 
 /**
  * @brief Returns this placement's own draw distance (it applies while WorldModelSetting_DrawDistance is overridden).

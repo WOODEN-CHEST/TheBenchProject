@@ -60,6 +60,7 @@ int main(void)
     CloudNoiseTests_Run(&Run);
     WorldCloudsTests_Run(&Run);
     WorldRainTests_Run(&Run);
+    WorldReflectionsTests_Run(&Run);
     NightSkyTests_Run(&Run);
     NightVisionTests_Run(&Run);
     EyeAdaptationTests_Run(&Run);

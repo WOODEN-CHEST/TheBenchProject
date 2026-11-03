@@ -234,6 +234,7 @@ static void UpdateModel(WorldRenderModel* entry, Vector3Double origin, AssetMana
     entry->ShadowLod = Settings.ShadowLod;
     entry->Haze = Settings.Haze;
     entry->OccludesSky = Settings.OccludesSky;
+    entry->HasReflections = Settings.HasReflections;
     entry->DrawDistance = Settings.DrawDistance;
     entry->IsDrawDistanceFixed = Settings.IsDrawDistanceFixed;
 
@@ -973,6 +974,7 @@ static Error UpdateInstancesEntry(WorldRenderCache* self, WorldRenderInstances* 
     entry->ShadowLod = Settings.ShadowLod;
     entry->Haze = Settings.Haze;
     entry->OccludesSky = Settings.OccludesSky;
+    entry->HasReflections = Settings.HasReflections;
     entry->DrawDistance = Settings.DrawDistance;
     entry->IsDrawDistanceFixed = Settings.IsDrawDistanceFixed;
     const WorldObject* Owner = WorldComponent_GetOwner(&Component->Base);

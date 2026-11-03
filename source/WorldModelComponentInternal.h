@@ -16,7 +16,8 @@
  * Both tables give a setting the same wire id. Instances are never crisp: the instances table leaves out the two
  * omit_pixelation rows (wire ids 3 and 9 are the model component's alone); the instances table's list is wire id 22,
  * which the model component leaves unused, the haze's pair is 23 and 24 in both, the sky's pair (occludes_sky) 25
- * and 26, and the shadow rows after casts_shadows 27 to 37 (the next free wire id is 38).
+ * and 26, the shadow rows after casts_shadows 27 to 37, and the reflections' pair (has_reflections) 38 and 39 (the next
+ * free wire id is 40).
  *
  * OLDER WORLD FILES. Both tables are at version 2 (WORLD_MODEL_PLACEMENT_TABLE_VERSION): version 1 had a shadow tier
  * (overrides_shadow_tier, wire id 10, and shadow_tier, wire id 4: "both", "near" or "far": which of two shadow maps a
@@ -253,6 +254,19 @@
     .Category = WORLD_MODEL_PLACEMENT_CATEGORY_RENDERING, .DisplayName = u8"Keeps the sky out", \
     .Description = u8"Whether the object keeps the sky's light and the rain off what lies under it (a roof, a wall, a " \
         u8"tree's canopy); off for grass, small plants, people and poles (while \"Override keeps the sky out\" is on)."
+
+#define WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_HAS_REFLECTIONS \
+    .Key = u8"overrides_has_reflections", .Type = PropertyType_Bool, .Default.BoolValue = false, \
+    .Flags = PROPERTY_FLAGS_SETTING, .Category = WORLD_MODEL_PLACEMENT_CATEGORY_RENDERING, \
+    .DisplayName = u8"Override mirrors its surroundings", \
+    .Description = u8"Uses this object's \"Mirrors its surroundings\" instead of its world model's."
+
+#define WORLD_MODEL_PLACEMENT_ROW_HAS_REFLECTIONS \
+    .Key = u8"has_reflections", .Type = PropertyType_Bool, .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, \
+    .Category = WORLD_MODEL_PLACEMENT_CATEGORY_RENDERING, .DisplayName = u8"Mirrors its surroundings", \
+    .Description = u8"Whether the object's glossy surfaces mirror what the screen shows around them (a polished floor, a " \
+        u8"car's paint, a window), and the sky where it shows nothing; the rougher a surface, the more of its reflection " \
+        u8"is the sky's alone (while \"Override mirrors its surroundings\" is on)."
 
 #define WORLD_MODEL_PLACEMENT_ROW_IS_LOD_FORCED \
     .Key = u8"is_lod_forced", .Type = PropertyType_Bool, .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, \

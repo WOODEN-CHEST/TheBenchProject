@@ -163,6 +163,9 @@ typedef struct WorldRenderModelStruct
     float Haze;
     /** @brief Whether it keeps the sky's light off what lies under it (in effect): the sky's occupancy volume draws it. */
     bool OccludesSky;
+    /** @brief Whether its glossy surfaces mirror what is on screen around them (in effect): the lit passes hand them to the
+     *  reflection pass. */
+    bool HasReflections;
     /** @brief The draw distance in effect, in metres, times the component's multiplier (>= 0: +infinity never fades, 0
      *  is never drawn), and whether the player's draw_distance_scale leaves it as it is (this frame). WorldVisibility
      *  applies the scale and the zoom. */
@@ -400,6 +403,7 @@ typedef struct WorldRenderInstancesStruct
     uint32_t ShadowLod;
     float Haze;
     bool OccludesSky;
+    bool HasReflections;
     float DrawDistance;
     bool IsDrawDistanceFixed;
     /** @brief The object's final tint colour (its alpha is the object's opacity: every copy's is multiplied by it). */

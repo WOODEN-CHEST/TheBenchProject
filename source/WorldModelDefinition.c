@@ -137,7 +137,7 @@ static const unsigned char* const RenderKeys[] =
 {
     u8"has_outline", u8"omit_pixelation", u8"casts_shadows", u8"has_shadow_distance", u8"shadow_distance",
     u8"is_shadow_distance_fixed", u8"is_shadow_only", u8"has_two_sided_shadows", u8"has_shadow_lod", u8"shadow_lod",
-    u8"haze", u8"occludes_sky", u8"shadow_tier"
+    u8"haze", u8"occludes_sky", u8"has_reflections", u8"shadow_tier"
 };
 /* The names an older definition's render.shadow_tier may hold: which of two shadow maps the model cast into. */
 static const char* const LegacyShadowTierNames[] = { "both", "near", "far" };
@@ -627,6 +627,11 @@ static Error ParseRender(const ParseContext* context, JSONCompound* root)
     {
         Result = ReadBoolean(context, Render, (const unsigned char*)u8"occludes_sky", Settings->OccludesSky, "render",
             &Settings->OccludesSky);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadBoolean(context, Render, (const unsigned char*)u8"has_reflections", Settings->HasReflections,
+            "render", &Settings->HasReflections);
     }
     if (Result.Code == ErrorCode_Success)
     {

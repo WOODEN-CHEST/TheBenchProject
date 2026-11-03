@@ -123,6 +123,7 @@ are no "inherit" values.
 | The LOD it casts with | `overrides_shadow_lod` | `shadow_lod`: an integer >= 0, 0 the finest; past the last LOD, the last (default 0) |
 | The haze in front of it | `overrides_haze` | `haze`: in [0, 1000], times the air's haze (default 1; 0 as if the air were clear: a sign that must read from far away) |
 | Keeping the sky's light off what lies under it | `overrides_occludes_sky` | `occludes_sky` (default true: a roof, a wall, a canopy; false for grass, small plants, people and poles) |
+| Mirroring what the screen shows around it | `overrides_has_reflections` | `has_reflections` (default false: true for a polished floor, a car's paint, a window, chrome) |
 | The draw distance | `overrides_draw_distance` | `draw_distance`: metres, above 0 (default 600) |
 | Keeping it fixed against the quality setting | `overrides_is_draw_distance_fixed` | `is_draw_distance_fixed` (default false) |
 | The LOD switch distances | `overrides_lod_distances` | `lod_distances`: metres, finest LOD first, each above 0 and above the one before, at most 8 (default `[]`) |

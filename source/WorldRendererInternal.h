@@ -29,6 +29,7 @@
 #include "WorldWeatherLight.h"
 #include "WorldClouds.h"
 #include "WorldRain.h"
+#include "WorldReflections.h"
 #include "SpriteTransform.h"
 #include "WorldRenderSpace.h"
 #include "WorldShadowLevels.h"
@@ -73,6 +74,9 @@
  *   WorldRendererRain.c      the rain (WorldRain.h): the rain map (what keeps the rain out, a one-layer shadow array
  *                            through GLShadowArray.h), the lit shaders' rain uniforms (the map, the puddles, the sky
  *                            mirrored in water, the bolt's light), the streaks, the splashes and the lightning's bolt
+ *   WorldRendererReflections.c the screen-space reflections (WorldReflections.h): the scene target's reflection
+ *                            attachments the lit surfaces hand their data to, the switches around the opaque world's
+ *                            draws, and the pass that marches every mirroring pixel's ray and adds what it mirrors
  * The camera's passes (the scene, the G-buffer, the crisp overlay) draw with reversed depth where the GPU has clip
  * control (GLDepth.h, direct GL calls; WorldRendererCommon_BeginCameraDepth and the rest): a 32-bit float depth
  * from 1 at the near plane to 0 at infinity and no far plane, so whatever has a long draw distance draws at any distance.
@@ -182,6 +186,15 @@ typedef enum
     // the CRT programs, bound per CRT draw. Past the rain's units, where nothing else binds.
     WorldRendererTextureUnit_ScreenLight = 19,  // sampler2D screenLightPicture
     WorldRendererTextureUnit_CrtMask = 20,      // sampler2D crtMaskTile
+    // The reflection pass's inputs (its two programs draw rectangles and bind these by hand: the 2D batch binds units 0
+    // to 4), past every unit a lit program reads, so the sprites and the rain drawn after the pass find their frame
+    // textures as the lit passes bound them.
+    WorldRendererTextureUnit_ReflectionWeights = 21,     // sampler2D reflectionWeightMap
+    WorldRendererTextureUnit_ReflectionSky = 22,         // sampler2D reflectionSkyMap
+    WorldRendererTextureUnit_ReflectionDirections = 23,  // sampler2D reflectionDirectionMap
+    WorldRendererTextureUnit_ReflectionSceneColor = 24,  // sampler2D sceneColor
+    WorldRendererTextureUnit_ReflectionSceneDepth = 25,  // sampler2D sceneDepth (the march and the blocks)
+    WorldRendererTextureUnit_ReflectionBlocks = 26,      // sampler2D reflectionBlocks
 } WorldRendererTextureUnit;
 
 _Static_assert(WorldRendererTextureUnit_ShadowLevels >= WORLD_RENDERER_MATERIAL_MAP_COUNT,
@@ -203,6 +216,8 @@ _Static_assert((WorldRendererTextureUnit_RainMap >= WORLD_RENDERER_MATERIAL_MAP_
 _Static_assert((WorldRendererTextureUnit_ScreenLight > WorldRendererTextureUnit_RainSkyView)
     && (WorldRendererTextureUnit_CrtMask > WorldRendererTextureUnit_ScreenLight),
     "the screens' units sit above the rain's");
+_Static_assert(WorldRendererTextureUnit_ReflectionWeights > WorldRendererTextureUnit_CrtMask,
+    "the reflection pass's units sit above every lit program's");
 
 /* Which objects a draw pass should include, by their OmitPixelation flag. The pixelated scene pass draws only
  * pixelated objects (when the crisp overlay is active), the crisp overlay pass draws only the flagged ones, and
@@ -514,6 +529,15 @@ typedef struct WorldRenderFrameStruct
     float CameraSceneLuminance;
     float CameraDayLuminance;
     float ExposureBias;
+    /** @brief Whether the reflection pass runs this frame (WorldRendererReflections_Decide: it is available, switched on,
+     *  the player's quality is not off and something in view mirrors: an object with has_reflections, or wet surfaces
+     *  while the rain is on): the scene pass's opaque world then hands each mirroring pixel's data to the scene target's
+     *  reflection attachments, and the pass adds what it mirrors. With it the march's settings at the player's quality,
+     *  the shown objects that mirror, and whether wet surfaces do. */
+    bool AreReflectionsActive;
+    WorldReflectionsMarchSettings ReflectionMarch;
+    size_t MirroringObjectCount;
+    bool AreWetSurfacesMirroring;
 } WorldRenderFrame;
 
 /**
@@ -808,6 +832,11 @@ typedef struct WorldRendererLitLocationsStruct
      *  WorldRendererLighting_SetDrawPlace). */
     int _locHazeViewProjection;
     int _locHazeMultiplier;
+    /** @brief The reflections: whether the pass's reflection pass adds what its surfaces mirror (they hand it their data;
+     *  uploaded per pass) and whether the draw mirrors its surroundings (its placement's has_reflections, set before every
+     *  lit draw: WorldRendererLighting_SetDrawPlace). */
+    int _locReflectionsDeferred;
+    int _locHasReflections;
     /** @brief The night vision: the field luminance, the calibration (uploaded once at load), the strength and the rods'
      *  grey. */
     int _locNightVisionFieldLuminance;
@@ -2060,6 +2089,66 @@ typedef struct WorldRendererMapOrientationStruct
     bool IsEmissiveBottomUp;
 } WorldRendererMapOrientation;
 
+/** @brief The number of reflection attachments the scene target gets (attachments 1 to 3: the weights, the sky, the
+ *  directions with the screen's share; common/reflection_output). */
+#define WORLD_RENDERER_REFLECTION_DATA_COUNT 3
+
+/** @brief The screen-space reflections (WorldRendererReflections.c; the march's maths are WorldReflections.h's). */
+typedef struct WorldRendererReflectionStateStruct
+{
+    /** @brief The pass's program (world_reflections; NULL: unavailable) and its uniforms' locations (-1 when absent). */
+    GameShader* _shader;
+    int _locSceneSize;
+    int _locBlockCount;
+    int _locViewProjection;
+    int _locInvViewProjection;
+    int _locCameraForward;
+    int _locNearFar;
+    int _locResolutionDivisor;
+    int _locMaxBlocks;
+    int _locSunDirection;
+    int _locSunDiscCos;
+    int _locMoonDirection;
+    int _locMoonDiscCos;
+    int _locView;
+    int _locViewScale;
+    int _locDepthReversed;
+    /** @brief The scene target's reflection attachments (RGBA16F at the scene's size: colour attachments 1 to 3 of its
+     *  framebuffer, owned here: raylib's unload frees only the colour and the depth), 0 while not made, and whether all
+     *  of them are attached (only in the scene's HDR tier with a samplable depth). */
+    unsigned int _dataTextures[WORLD_RENDERER_REFLECTION_DATA_COUNT];
+    bool _hasData;
+    /** @brief The block pass's program (world_reflection_blocks; NULL: the reflections are unavailable) and its uniforms'
+     *  locations. */
+    GameShader* _blockShader;
+    int _blockLocSceneSize;
+    int _blockLocDepthReversed;
+    /** @brief The block image (R32F, a texel a WORLD_REFLECTIONS_BLOCK_SIZE-pixel block of the scene: each block's
+     *  nearest surface's depth) and whether it exists. */
+    RenderTexture2D _blocks;
+    bool _hasBlocks;
+    /** @brief The pass's target (RGBA16F, the scene's size over the divisor it was made for) and whether it exists. */
+    RenderTexture2D _target;
+    bool _hasTarget;
+    int32_t _targetDivisor;
+    /** @brief The scene's size (the attachments, the block image and the target are made for it). */
+    int _width;
+    int _height;
+    /** @brief Set when making the attachments or the targets failed for this scene size (no retry until the scene
+     *  target is made again or the quality goes off and back on). */
+    bool _isMakeFailed;
+    /** @brief The player's quality (CONFIG_REFLECTION_QUALITY_*), the A/B switch (on by default) and the debug view. */
+    int32_t _quality;
+    bool _isEnabled;
+    WorldRendererReflectionView _view;
+    /** @brief Whether the opaque world's draws are writing the attachments now (between BeginSurfaces and EndSurfaces,
+     *  outside a pause), and whether a pause stopped them (PauseSurfaces, until ResumeSurfaces). */
+    bool _areSurfacesWriting;
+    bool _areSurfacesPaused;
+    /** @brief Set once a failure (the attachments, the target) has been logged. */
+    bool _isFailureReported;
+} WorldRendererReflectionState;
+
 /** @brief The crisp overlay (un-pixelated OmitPixelation objects composited over the pixelated frame). */
 typedef struct WorldRendererCrispStateStruct
 {
@@ -2161,6 +2250,7 @@ struct WorldRendererStruct
     WorldRendererRainState _rain;
     WorldRendererSurfaceState _surfaces;
     WorldRendererCrtState _crt;
+    WorldRendererReflectionState _reflections;
 };
 
 
@@ -2736,18 +2826,27 @@ void WorldRendererSprites_DrawQuad(WorldRenderer* self, Shader shader, const Wor
     Matrix transform);
 
 /**
- * @brief The lit sprite draws of a scene or crisp pass, for the camera's sprites passing @p filter: the cutout sprites
- *        (opaque, writing depth), then the decals (over the opaque world, writing no depth), then the blended and
- *        additive sprites back to front (writing no depth). Cutout sprites dither by their fade; blended and additive
- *        ones take their draw-distance fade into their alpha. Call after the opaque models, with the frame's lighting
- *        uploaded (WorldRendererLighting_UploadFrame), inside BeginMode3D. Restores culling, the depth mask and the blend
- *        mode.
+ * @brief The opaque part of the lit sprite draws of a scene or crisp pass, for the camera's sprites passing @p filter: the
+ *        cutout sprites (opaque, writing depth, dithered by their fade), with the opaque world. Call after the opaque
+ *        models, with the frame's lighting uploaded (WorldRendererLighting_UploadFrame), inside BeginMode3D. Restores
+ *        culling.
  * @param self The renderer (its sprite matrices prepared for this frame: WorldRendererSprites_PrepareFrame).
  * @param filter Which sprites (by their effective OmitPixelation).
  * @param applyScreenAo Whether the pass's AO map lines up with it (the scene pass; not the window-resolution crisp
  *        pass).
  */
-void WorldRendererSprites_DrawLit(WorldRenderer* self, WorldRendererPixelFilter filter, bool applyScreenAo);
+void WorldRendererSprites_DrawLitOpaque(WorldRenderer* self, WorldRendererPixelFilter filter, bool applyScreenAo);
+
+/**
+ * @brief The see-through part of the lit sprite draws of a scene or crisp pass: the decals (over the opaque world,
+ *        writing no depth), then the blended and additive sprites back to front (writing no depth, their draw-distance
+ *        fade in their alpha). Call after the opaque world (in the scene pass after the reflections, so a decal covers
+ *        what its surface mirrors), inside BeginMode3D. Restores culling, the depth mask and the blend mode.
+ * @param self The renderer (its sprite matrices prepared for this frame).
+ * @param filter Which sprites (by their effective OmitPixelation).
+ * @param applyScreenAo As WorldRendererSprites_DrawLitOpaque's.
+ */
+void WorldRendererSprites_DrawLitTransparent(WorldRenderer* self, WorldRendererPixelFilter filter, bool applyScreenAo);
 
 
 // WorldRendererLighting.c
@@ -2811,9 +2910,11 @@ void WorldRendererLighting_PrepareFrame(WorldRenderer* self, WorldRenderFrame* f
  * window resolution, where the low-res AO map would not line up; for the same reason its @p ditherPixelScale is window /
  * scene (the scene pass's is 1), which keeps the dither on the scene's pixel grid, and its @p windowPixelScale 1 (the
  * scene pass's is window / scene: how many window pixels one of its pixels spans, which a CRT's mask needs).
+ * @p areReflectionsDeferred: the pass's mirroring surfaces hand their reflections to the reflection pass (the scene pass
+ * while it runs) instead of adding the sky's themselves (every other pass).
  */
 void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFrame* frame, bool applyScreenAo,
-    Vector2 ditherPixelScale, float windowPixelScale);
+    bool areReflectionsDeferred, Vector2 ditherPixelScale, float windowPixelScale);
 
 /**
  * @brief Uploads the frame's lighting uniforms to one more lit program (the rain's), as WorldRendererLighting_UploadFrame
@@ -2823,9 +2924,10 @@ void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFra
  * @param shader The program.
  * @param locations Its locations (WorldRendererLighting_PrepareLitShader).
  * @param applyScreenAo Whether the pass reads the ambient pre-pass at the scene's pixels.
+ * @param areReflectionsDeferred Whether its mirroring surfaces hand their reflections to the reflection pass.
  */
 void WorldRendererLighting_UploadLitProgram(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
-    const WorldRendererLitLocations* locations, bool applyScreenAo);
+    const WorldRendererLitLocations* locations, bool applyScreenAo, bool areReflectionsDeferred);
 
 /**
  * @brief Reach-culls the frame's forward lights against a bounding sphere in render space and uploads the strongest few
@@ -2845,8 +2947,9 @@ void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader
  *        real air's, 0 none), the ambient zones its sphere touches (WorldRendererInterior_UploadZones) and whether the
  *        ambient pre-pass saw its surface (the G-buffer drew it: solid below WORLD_VISIBILITY_GBUFFER_FADE_LIMIT; a
  *        decal lies on the surface it saw): if not, the draw takes no screen AO or contact shadow and reads the sky
- *        straight above itself. Every lit draw sets them, lit or not (an unlit sprite is hazed too), as the uniforms
- *        keep the last draw's values.
+ *        straight above itself; and whether its glossy surfaces mirror their surroundings (its placement's resolved
+ *        has_reflections). Every lit draw sets them, lit or not (an unlit sprite is hazed too), as the uniforms keep the
+ *        last draw's values.
  * @param self The renderer.
  * @param shader The lit shader (its program).
  * @param locations Its locations (WorldRendererLighting_PrepareLitShader).
@@ -2854,9 +2957,11 @@ void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader
  * @param radius Its radius.
  * @param haze The multiplier (>= 0; a negative or NaN one counts as 0 in the shader).
  * @param isInPrepass Whether the ambient pre-pass saw the draw's surface.
+ * @param hasReflections Whether the draw mirrors its surroundings (false for sprites, the terrain and the rain).
  */
 void WorldRendererLighting_SetDrawPlace(const WorldRenderer* self, Shader shader,
-    const WorldRendererLitLocations* locations, Vector3 center, float radius, float haze, bool isInPrepass);
+    const WorldRendererLitLocations* locations, Vector3 center, float radius, float haze, bool isInPrepass,
+    bool hasReflections);
 
 /**
  * @brief Uploads one material's PBR scalar factors and map-presence flags to a PBR program, for its meshes drawn next.
@@ -3623,6 +3728,85 @@ void WorldRendererCrisp_Render(WorldRenderer* self, const WorldRenderFrame* fram
  *        tonemapped at frame->Exposure and depth-tested against the scene so occlusion stays correct.
  */
 void WorldRendererCrisp_Composite(WorldRenderer* self, const WorldRenderFrame* frame, RenderTexture2D target);
+
+
+// WorldRendererReflections.c
+/** @brief Starts the reflections' state: no program, attachments or target, switched on, the config's quality (high
+ *  without a config), no debug view. */
+void WorldRendererReflections_Construct(WorldRenderer* self);
+
+/** @brief Loads the pass's programs (world_reflections, world_reflection_blocks), caches their uniforms and points their
+ *  samplers at their units; a missing one is logged by the loader and leaves the reflections unavailable. Needs a live
+ *  GL context. */
+void WorldRendererReflections_LoadShader(WorldRenderer* self);
+
+/**
+ * @brief Takes the scene's new size, after WorldRendererScene_EnsureTargets made the scene target, and while the
+ *        player's quality is not off gives the scene target its reflection attachments (in the HDR tier with a samplable
+ *        depth only; others take none) and makes the block image and the pass's target (the scene's size over the
+ *        quality's divisor). A failure is logged once and leaves the reflections unavailable for this size.
+ * @param self The renderer (its scene target made).
+ * @param width The scene's width, in pixels.
+ * @param height The scene's height, in pixels.
+ */
+void WorldRendererReflections_CreateTargets(WorldRenderer* self, int width, int height);
+
+/** @brief Takes the attachments off the scene target and unloads them, the block image and the pass's target (before the
+ *  scene target goes). */
+void WorldRendererReflections_ReleaseTargets(WorldRenderer* self);
+
+/** @brief Follows the player's quality each render, after the scene's targets: off releases the attachments and the
+ *  targets, another quality makes them (once per scene size after a failure) and makes the pass's target again when its
+ *  divisor changed. */
+void WorldRendererReflections_EnsureTarget(WorldRenderer* self);
+
+/** @brief Whether the reflections can run at all, whatever the quality: their programs (the pass's and the blocks'), PBR
+ *  lighting, the terrain's shader, a scene target in the HDR tier with a samplable depth, and attachments and targets
+ *  that could be made for its size. */
+bool WorldRendererReflections_IsAvailable(const WorldRenderer* self);
+
+/**
+ * @brief Decides whether the pass runs this frame and with what (the frame's AreReflectionsActive, ReflectionMarch,
+ *        MirroringObjectCount and AreWetSurfacesMirroring): available with its attachments and targets made, switched
+ *        on, the player's quality not off, no debug view drawn over the surfaces' colours (interior lighting's sky view,
+ *        the shadow levels' view, the rain's views: the lit shaders then mirror the sky themselves under them), and
+ *        something in view mirrors (a model or a copies' component with has_reflections in the camera's lists, or wet
+ *        surfaces while the rain is on). Needs the frame's visibility, its rain and the camera's interior.
+ */
+void WorldRendererReflections_Decide(WorldRenderer* self, WorldRenderFrame* frame);
+
+/** @brief Clears the scene target's reflection attachments to "no reflection" while the pass runs this frame; call inside
+ *  the scene target's texture mode, before its colour is cleared (it clears the depth too). */
+void WorldRendererReflections_ClearData(const WorldRenderFrame* frame);
+
+/** @brief Starts the opaque world's draws into the attachments while the pass runs (every draw until
+ *  WorldRendererReflections_EndSurfaces must write them: the lit programs with common/reflection_output). */
+void WorldRendererReflections_BeginSurfaces(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief Ends the opaque world's draws into the attachments: the draws after draw the colour alone. */
+void WorldRendererReflections_EndSurfaces(WorldRenderer* self);
+
+/** @brief Pauses the opaque world's writes into the attachments for a draw that does not write them (a debug wireframe:
+ *  it would leave undefined values there); WorldRendererReflections_ResumeSurfaces resumes them. Nothing while they are
+ *  not being written. */
+void WorldRendererReflections_PauseSurfaces(WorldRenderer* self);
+
+/** @brief Resumes the writes WorldRendererReflections_PauseSurfaces paused. */
+void WorldRendererReflections_ResumeSurfaces(WorldRenderer* self);
+
+/**
+ * @brief Runs the reflection pass while the frame has it: the block image from the scene's depth, then every mirroring
+ *        pixel's ray marched over the depth block by block into the pass's target (or its debug view), then added to the
+ *        scene target's colour (the debug view laid over it). Call after the opaque world (and the water), outside the
+ *        scene target's texture mode.
+ */
+void WorldRendererReflections_Render(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief The status's "reflections" feature and the reflections' fields, from the last render. */
+void WorldRendererReflections_UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief Logs one line about the reflections (with the status, WorldRenderer_LogStatus). */
+void WorldRendererReflections_LogStatus(const WorldRenderer* self);
 
 
 // WorldRendererRain.c

@@ -786,7 +786,7 @@ void WorldRendererTerrain_DrawLit(WorldRenderer* self)
                 Entry->Radius);
             float Fade = WorldVisibility_GetTerrainChunkFade(&self->_visibility, Index).Combined;
             WorldRendererLighting_SetDrawPlace(self, Draw.shader, &self->_terrain._lit, Entry->RenderCenter,
-                Entry->Radius, Entry->Haze, Fade < WORLD_VISIBILITY_GBUFFER_FADE_LIMIT);
+                Entry->Radius, Entry->Haze, Fade < WORLD_VISIBILITY_GBUFFER_FADE_LIMIT, false);
             WorldRendererCommon_SetDither(Draw.shader, &self->_terrain._dither, Fade, 0.0f, false);
             float Tint[4] = { (float)Key.r / 255.0f, (float)Key.g / 255.0f, (float)Key.b / 255.0f,
                 IsKeyed ? CHUNK_KEY_STRENGTH : 0.0f };
@@ -802,7 +802,10 @@ void WorldRendererTerrain_DrawLit(WorldRenderer* self)
     }
     if (IsKeyed)
     {
+        // Lines with raylib's own shader, which hands the reflection pass nothing: the attachments keep the chunks' data.
+        WorldRendererReflections_PauseSurfaces(self);
         DrawWireframes(self, Chunks, Visible, VisibleCount);
+        WorldRendererReflections_ResumeSurfaces(self);
     }
 }
 

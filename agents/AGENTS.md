@@ -389,7 +389,12 @@ Current module list:
     shaders/crt/ and shaders/common/crt.glsl): a CRT's glass drawn with its own program, its picture through the tube's
     curvature with scanlines, a mask, a glow, a vignette, a flicker and the power animation, behind glossy glass that
     mirrors the sky; the screens' light: every shown glowing screen lights what is in front of it in its picture's
-    colour, one per lit draw (common/lighting's ScreenLight); the camera's passes in
+    colour, one per lit draw (common/lighting's ScreenLight); screen-space reflections
+    (source/WorldRendererReflections.c, shaders/reflections/, shaders/common/reflection_output.glsl): the opaque
+    world's lit draws hand what they mirror (water on wet surfaces, glossy objects with has_reflections) to extra
+    attachments of the scene target, and a pass after them marches each mirroring pixel's ray over the scene's depth,
+    block by block, adding what it meets (or the sky at its vanishing point, or the sky the surface handed over) to the
+    picture; the camera's passes in
     reversed 32-bit float
     depth with no far plane where the GPU has clip control (GLDepth), so whatever has the draw distance draws at any
     distance), in render space: the world's orientation with the camera at the origin, every position relative to the
@@ -485,6 +490,12 @@ Current module list:
     grid, where a drop lands along the map's fall and the frame of the splash animation an age shows, the patterns'
     anchors, the puddles' threshold and the bolt standing toward a strike (a frame of the bolt animation): the C mirror of shaders/common/rain.glsl, shaders/common/puddles.glsl and
     shaders/rain/ (WorldRuntime.md, "Rain").
+  * WorldReflections - The screen-space reflections as pure maths (private, source/WorldReflections.h): the qualities'
+    march settings, the share of a reflection the screen may answer by roughness, the direction's octahedral packing,
+    the answers' fades (the screen's edges, the ray's facing), the thickness, the distance a stored depth stands for in
+    either convention, a block's nearest surface and the march itself (the ray projected with one over its distance
+    linear along the screen, empty blocks skipped, each crossed pixel tested): the C mirror of
+    shaders/common/reflections.glsl and shaders/reflections/ (WorldRuntime.md, "Reflections").
   * WorldInterior - Interior lighting as pure maths (private, source/WorldInterior.h): ambient zones in render space
     (placed by their objects' world matrices), their weights (the fade from the surface, surfaces facing in), the at
     most four a draw takes and their composition by priority, the haze inside them, the sky's visibility map on its

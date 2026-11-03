@@ -224,6 +224,13 @@ typedef enum WorldRendererFeatureEnum
     /** @brief The screens' light: a glowing screen lights what is in front of it in its picture's colour. Unavailable
      *  without PBR lighting; active while a shown screen with a picture gives off light. */
     WorldRendererFeature_ScreenLight,
+    /** @brief Screen-space reflections: water on wet surfaces and objects that mirror their surroundings
+     *  (has_reflections) mirror what the screen shows around them, and the sky where it shows nothing. Unavailable without
+     *  their shader (world_reflections), PBR lighting, the terrain's shader, an HDR scene target with a samplable depth
+     *  or the target's reflection attachments (logged once): then they mirror the sky alone, as with the player's
+     *  quality off; active while something in view mirrors (and they are switched on:
+     *  WorldRenderer_SetReflectionsEnabled), inactive otherwise. */
+    WorldRendererFeature_Reflections,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -276,6 +283,22 @@ typedef enum WorldRendererRainViewEnum
     /** @brief The number of views; not a view. */
     WorldRendererRainView_Count = 3
 } WorldRendererRainView;
+
+/**
+ * @brief What the reflections' debug view shows over the mirroring surfaces (a debug aid: WorldRenderer_SetReflectionView).
+ */
+typedef enum WorldRendererReflectionViewEnum
+{
+    /** @brief No debug view: the scene (the default). */
+    WorldRendererReflectionView_Off = 0,
+    /** @brief Each mirroring pixel's weight, white for a full mirror (the share of the mirrored light it shows). */
+    WorldRendererReflectionView_Weights = 1,
+    /** @brief Each mirroring pixel's answer: green where the screen showed a surface, blue where the sky at the ray's
+     *  vanishing point, red where nothing (the sky the surface handed over), mixed by how much the answer counts. */
+    WorldRendererReflectionView_Answers = 2,
+    /** @brief The number of views; not a view. */
+    WorldRendererReflectionView_Count = 3
+} WorldRendererReflectionView;
 
 /**
  * @brief What interior lighting's debug view shows (a debug aid: WorldRenderer_SetInteriorView).
@@ -453,6 +476,17 @@ typedef struct WorldRendererStatusStruct
     bool IsRainMapActive;
     bool IsBoltVisible;
     WorldRendererRainView RainView;
+    /** @brief The reflections as drawn: whether they were on (WorldRenderer_SetReflectionsEnabled), the player's quality
+     *  (CONFIG_REFLECTION_QUALITY_*), the pass's target size (pixels; 0 while it does not exist), the shown models and
+     *  copies' components that mirror their surroundings, whether wet surfaces mirrored (the rain on, surfaces wet), and
+     *  the debug view. */
+    bool AreReflectionsEnabled;
+    int32_t ReflectionQuality;
+    int32_t ReflectionTargetWidth;
+    int32_t ReflectionTargetHeight;
+    size_t MirroringObjectCount;
+    bool AreWetSurfacesMirroring;
+    WorldRendererReflectionView ReflectionView;
     /** @brief The eye: the luminance it was adapted to (the view's log-average in the game's light units: the sky
      *  light's anchor before the first measurement), the real luminance that stands for (cd/m^2, on night vision's scale
      *  at the camera's mix of daylight and the night's lights), and whether a measurement of the picture set it. */
@@ -780,6 +814,57 @@ void WorldRenderer_SetCloudQuality(WorldRenderer* self, int32_t quality);
  * @returns The quality the renderer draws them at.
  */
 int32_t WorldRenderer_GetCloudQuality(const WorldRenderer* self);
+
+/**
+ * @brief Switches the reflections of the screen on or off (a debug A/B): off, water and objects that mirror their
+ *        surroundings mirror the sky alone, as with the player's reflection quality off. Default on. Applied on the next
+ *        render.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true for the reflections.
+ */
+void WorldRenderer_SetReflectionsEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether the reflections of the screen are on (see WorldRenderer_SetReflectionsEnabled).
+ * @param self The renderer; must not be NULL.
+ * @returns true when on.
+ */
+bool WorldRenderer_AreReflectionsEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Sets how the reflections are made: CONFIG_REFLECTION_QUALITY_OFF (none of the screen: the sky alone), _LOW (half
+ *        the scene's resolution, fewer steps) or _HIGH (the scene's resolution). Starts at the config's
+ *        reflection_quality; another value is taken as high. The pass's target is made again on the next render.
+ * @param self The renderer; must not be NULL.
+ * @param quality The quality.
+ */
+void WorldRenderer_SetReflectionQuality(WorldRenderer* self, int32_t quality);
+
+/**
+ * @brief Reports the reflections' quality (CONFIG_REFLECTION_QUALITY_*).
+ * @param self The renderer; must not be NULL.
+ * @returns The quality the renderer makes them at.
+ */
+int32_t WorldRenderer_GetReflectionQuality(const WorldRenderer* self);
+
+/**
+ * @brief Chooses the reflections' debug view over the mirroring surfaces: the scene, their weights, or their answers.
+ *
+ * A debug aid. Default WorldRendererReflectionView_Off. Applied on the next render. A view outside the enum is ignored.
+ * @param self The renderer; must not be NULL.
+ * @param view The view.
+ */
+void WorldRenderer_SetReflectionView(WorldRenderer* self, WorldRendererReflectionView view);
+
+/**
+ * @brief Reports the reflections' debug view (see WorldRenderer_SetReflectionView).
+ * @param self The renderer; must not be NULL.
+ * @returns The view.
+ */
+WorldRendererReflectionView WorldRenderer_GetReflectionView(const WorldRenderer* self);
+
+/** @brief A name for a reflections debug view, for logs ("off", "weights", "answers"; "unknown" outside the enum). */
+const unsigned char* WorldRenderer_GetReflectionViewName(WorldRendererReflectionView view);
 
 /**
  * @brief Switches the shadow levels' debug view: every lit surface tinted by the level its shadow comes from (red, green,

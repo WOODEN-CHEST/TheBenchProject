@@ -834,6 +834,47 @@ static void SaveWorldAs(WorldTestFrame* frame, WorldFileFormat format)
 
 /* The renderer's and the sky's debug keys (A/B toggles, the light pollution steps, status lines), and F5 (save the
  * world). Called from Update with the tick's input (what the UI above did not consume). */
+/* Shift with keypad - switches the reflections of the screen off and on (the A/B: off, water and mirroring objects
+ * mirror the sky alone), with keypad Enter steps their debug view (off, the weights, the answers), with keypad / steps
+ * their quality (off, low, high). */
+static void UpdateReflectionKeys(WorldTestFrame* frame, const GameInput* input)
+{
+    if (GameInput_IsKeyPressed(input, GameKey_KeypadSubtract))
+    {
+        bool Enabled = !WorldRenderer_AreReflectionsEnabled(frame->_renderer);
+        WorldRenderer_SetReflectionsEnabled(frame->_renderer, Enabled);
+        LogLine(frame, Enabled ? "reflections ON." : "reflections OFF (the sky alone).");
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_KeypadEnter))
+    {
+        WorldRendererReflectionView View = (WorldRendererReflectionView)
+            (((int)WorldRenderer_GetReflectionView(frame->_renderer) + 1) % (int)WorldRendererReflectionView_Count);
+        WorldRenderer_SetReflectionView(frame->_renderer, View);
+        if (frame->_services->Logger != NULL)
+        {
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: reflection view %s.",
+                (const char*)WorldRenderer_GetReflectionViewName(View));
+            Error_Deconstruct(&LogResult);
+        }
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_KeypadDivide))
+    {
+        int32_t Quality = (WorldRenderer_GetReflectionQuality(frame->_renderer) + 1) % (CONFIG_REFLECTION_QUALITY_HIGH + 1);
+        WorldRenderer_SetReflectionQuality(frame->_renderer, Quality);
+        if (frame->_services->Logger != NULL)
+        {
+            static const char* const QualityNames[CONFIG_REFLECTION_QUALITY_HIGH + 1] =
+            {
+                "off (the sky alone)", "low (half the resolution)", "high"
+            };
+            Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+                (const unsigned char*)u8"WorldTest: reflections' quality %s.", QualityNames[Quality]);
+            Error_Deconstruct(&LogResult);
+        }
+    }
+}
+
 static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
 {
     WorldEnvironment* Environment = World_GetEnvironment(&frame->_world);
@@ -878,8 +919,15 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         }
     }
 
+    // With Shift, keypad /, - and Enter drive the reflections (the next block); alone, the clouds and the rain.
+    bool IsShiftDown = GameInput_IsKeyDown(input, GameKey_LeftShift) || GameInput_IsKeyDown(input, GameKey_RightShift);
+    if (IsShiftDown)
+    {
+        UpdateReflectionKeys(frame, input);
+    }
+
     // Keypad / steps the clouds' quality: off (the weather's clouds as one even deck), low, high.
-    if (GameInput_IsKeyPressed(input, GameKey_KeypadDivide))
+    if (!IsShiftDown && GameInput_IsKeyPressed(input, GameKey_KeypadDivide))
     {
         int32_t Quality = (WorldRenderer_GetCloudQuality(frame->_renderer) + 1) % (CONFIG_CLOUD_QUALITY_HIGH + 1);
         WorldRenderer_SetCloudQuality(frame->_renderer, Quality);
@@ -898,7 +946,7 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
     // Keypad - switches the rain off and on (the A/B: off, no streaks, splashes, bolts or rain map, and every surface wet
     // alike, as the weather's wetness alone); keypad Enter steps its debug view (off, how open every surface is to the
     // rain, the puddles).
-    if (GameInput_IsKeyPressed(input, GameKey_KeypadSubtract))
+    if (!IsShiftDown && GameInput_IsKeyPressed(input, GameKey_KeypadSubtract))
     {
         bool Enabled = !WorldRenderer_IsRainEnabled(frame->_renderer);
         WorldRenderer_SetRainEnabled(frame->_renderer, Enabled);
@@ -909,7 +957,7 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
             Error_Deconstruct(&LogResult);
         }
     }
-    if (GameInput_IsKeyPressed(input, GameKey_KeypadEnter))
+    if (!IsShiftDown && GameInput_IsKeyPressed(input, GameKey_KeypadEnter))
     {
         WorldRendererRainView View = (WorldRendererRainView)(((int)WorldRenderer_GetRainView(frame->_renderer) + 1)
             % (int)WorldRendererRainView_Count);

@@ -203,6 +203,10 @@ typedef struct WorldModelSettingsStruct
      *  (true, the default); false for things that hardly shade anything from the sky, such as grass, small plants,
      *  people and poles, which would otherwise darken the ground around them. */
     bool OccludesSky;
+    /** @brief Whether the model's glossy surfaces mirror what the screen shows around them (a polished floor, a car's
+     *  paint, a window), and the sky where it shows nothing; false (the default) leaves them as glossy as their roughness
+     *  makes them, without a mirror. The rougher a surface, the more of its reflection is the sky's alone. */
+    bool HasReflections;
 } WorldModelSettings;
 
 /**

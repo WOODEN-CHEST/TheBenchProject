@@ -38,6 +38,8 @@ typedef enum InstancesPropertyEnum
     InstancesProperty_Haze,
     InstancesProperty_OverridesOccludesSky,
     InstancesProperty_OccludesSky,
+    InstancesProperty_OverridesHasReflections,
+    InstancesProperty_HasReflections,
     InstancesProperty_OverridesDrawDistance,
     InstancesProperty_DrawDistance,
     InstancesProperty_DrawDistanceMultiplier,
@@ -57,8 +59,8 @@ typedef enum InstancesPropertyEnum
 /* Every property, in inspector order: the model component's rows with the model component's wire ids (shared through
  * source/WorldModelComponentInternal.h; no omit_pixelation, 3 and 9: copies are never crisp), then the copies. The wire
  * ids are the save schema: never renumber or reuse one; a removed property's id goes into the table's retired list. The
- * haze's pair is 23 and 24, the sky's 25 and 26 and the shadow rows 27 to 37, as in the model component, and the copies
- * 22; 4 and 10, the shadow tier's pair, are retired. The next free wire id is 38. */
+ * haze's pair is 23 and 24, the sky's 25 and 26, the shadow rows 27 to 37 and the reflections' pair 38 and 39, as in
+ * the model component, and the copies 22; 4 and 10, the shadow tier's pair, are retired. The next free wire id is 40. */
 static const PropertyDescriptor InstancesProperties[InstancesProperty_Count] =
 {
     [InstancesProperty_WorldModel] =
@@ -170,6 +172,16 @@ static const PropertyDescriptor InstancesProperties[InstancesProperty_Count] =
     {
         WORLD_MODEL_PLACEMENT_ROW_OCCLUDES_SKY, .WireId = 26U,
         PROPERTY_MEMBER(WorldModelInstancesComponent, _occludesSky), .SinceVersion = 1U
+    },
+    [InstancesProperty_OverridesHasReflections] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_OVERRIDES_HAS_REFLECTIONS, .WireId = 38U,
+        PROPERTY_MEMBER(WorldModelInstancesComponent, _overridesHasReflections), .SinceVersion = 2U
+    },
+    [InstancesProperty_HasReflections] =
+    {
+        WORLD_MODEL_PLACEMENT_ROW_HAS_REFLECTIONS, .WireId = 39U,
+        PROPERTY_MEMBER(WorldModelInstancesComponent, _hasReflections), .SinceVersion = 2U
     },
     [InstancesProperty_OverridesDrawDistance] =
     {
@@ -388,6 +400,10 @@ static bool TryGetOverrideFlag(WorldModelInstancesComponent* self, WorldModelSet
             *outFlag = &self->_overridesOccludesSky;
             *outProperty = InstancesProperty_OverridesOccludesSky;
             return true;
+        case WorldModelSetting_HasReflections:
+            *outFlag = &self->_overridesHasReflections;
+            *outProperty = InstancesProperty_OverridesHasReflections;
+            return true;
         case WorldModelSetting_ShadowDistance:
             *outFlag = &self->_overridesShadowDistance;
             *outProperty = InstancesProperty_OverridesShadowDistance;
@@ -499,6 +515,7 @@ bool WorldModelInstancesComponent_IsOverridden(const WorldModelInstancesComponen
         case WorldModelSetting_IsShadowOnly:          return self->_overridesIsShadowOnly;
         case WorldModelSetting_HasTwoSidedShadows:    return self->_overridesHasTwoSidedShadows;
         case WorldModelSetting_ShadowLod:             return self->_overridesShadowLod;
+        case WorldModelSetting_HasReflections:        return self->_overridesHasReflections;
         case WorldModelSetting_OmitPixelation:
         case WorldModelSetting_Count:
             break;
@@ -611,6 +628,16 @@ Error WorldModelInstancesComponent_SetOccludesSky(WorldModelInstancesComponent* 
         return CreateNullSelfError("WorldModelInstancesComponent_SetOccludesSky");
     }
     SetBool(self, &self->_occludesSky, occludesSky, InstancesProperty_OccludesSky);
+    return Error_CreateSuccess();
+}
+
+Error WorldModelInstancesComponent_SetHasReflections(WorldModelInstancesComponent* self, bool hasReflections)
+{
+    if (self == NULL)
+    {
+        return CreateNullSelfError("WorldModelInstancesComponent_SetHasReflections");
+    }
+    SetBool(self, &self->_hasReflections, hasReflections, InstancesProperty_HasReflections);
     return Error_CreateSuccess();
 }
 
@@ -768,6 +795,10 @@ WorldModelSettings WorldModelInstancesComponent_ResolveSettings(const WorldModel
     if (self->_overridesOccludesSky)
     {
         Settings.OccludesSky = self->_occludesSky;
+    }
+    if (self->_overridesHasReflections)
+    {
+        Settings.HasReflections = self->_hasReflections;
     }
     if (self->_overridesDrawDistance)
     {
