@@ -20,6 +20,7 @@
 #include "GLSliceMap.h"
 #include "GLShadowArray.h"
 #include "GLTexture3D.h"
+#include "GLFloatArray.h"
 #include "Config.h"
 #include "EyeAdaptation.h"
 #include "NightVision.h"
@@ -35,6 +36,7 @@
 #include "SpriteTransform.h"
 #include "WorldRenderSpace.h"
 #include "WorldShadowLevels.h"
+#include "WorldFarShadows.h"
 #include "WorldVisibility.h"
 #include "raylib/raylib.h"
 // rlgl supplies RL_MAX_SHADER_LOCATIONS and the scene near/far cull distances.
@@ -208,6 +210,15 @@ typedef enum
     WorldRendererTextureUnit_WaterFoam = 29,             // sampler2D waterFoam
     WorldRendererTextureUnit_WaterSceneColor = 30,       // sampler2D waterSceneColor
     WorldRendererTextureUnit_WaterSceneDepth = 31,       // sampler2D waterSceneDepth
+    // The lit programs' far shadows (the terrain's shadows at any distance: WorldRendererFarShadows.c): the finished
+    // sweep's maps, one layer each.
+    WorldRendererTextureUnit_FarShadows = 32,            // sampler2DArray farShadowMaps
+    // The far shadows' sweep program (world_far_shadow_sweep), before the scene pass: the heights, the pass before's
+    // shadow heights and the coarser map's, on the reflection pass's units (their array target: that pass binds 2D
+    // textures there, and no lit program reads them).
+    WorldRendererTextureUnit_FarSweepHeights = 21,       // sampler2DArray farSweepHeights
+    WorldRendererTextureUnit_FarSweepSource = 22,        // sampler2DArray farSweepSource
+    WorldRendererTextureUnit_FarSweepCoarser = 23,       // sampler2DArray farSweepCoarser
 } WorldRendererTextureUnit;
 
 _Static_assert(WorldRendererTextureUnit_ShadowLevels >= WORLD_RENDERER_MATERIAL_MAP_COUNT,
@@ -231,6 +242,9 @@ _Static_assert((WorldRendererTextureUnit_ScreenLight > WorldRendererTextureUnit_
     "the screens' units sit above the rain's");
 _Static_assert(WorldRendererTextureUnit_ReflectionWeights > WorldRendererTextureUnit_CrtMask,
     "the reflection pass's units sit above every lit program's");
+_Static_assert((WorldRendererTextureUnit_FarShadows > WorldRendererTextureUnit_WaterSceneDepth)
+    && (WorldRendererTextureUnit_FarShadows < 48),
+    "the far shadows' maps take the lit programs' next unit, within GL 3.3's guaranteed 48 combined units");
 _Static_assert((WorldRendererTextureUnit_WaterNormalA > WorldRendererTextureUnit_ReflectionBlocks)
     && (WorldRendererTextureUnit_WaterSceneDepth < 48),
     "the water's units sit above the reflection pass's, within the 48 combined units GL 3.3 guarantees");
@@ -333,6 +347,13 @@ typedef struct WorldRenderFrameStruct
     /** @brief The camera's frustum in render space (from ViewProjection): what the camera's passes (scene, G-buffer,
      *  crisp) cull against. */
     WorldFrustum CameraFrustum;
+    /** @brief The planet's curve in the camera's passes (shaders/common/curvature.glsl, WorldRenderSpace.h): the scale
+     *  every point's drop is its horizontal distance squared times (WORLD_RENDER_SPACE_CURVATURE_SCALE of the
+     *  atmosphere's planet while the environment's IsCurvatureEnabled; 0: a flat picture), and the camera's clip-space
+     *  image of the world's up (WorldRenderSpace_GetClipUp of ViewProjection), which the vertex stages scale by the drop
+     *  and subtract from their clip positions. */
+    float CurvatureScale;
+    Vector4 CurvatureClipUp;
     /** @brief The sky's sun: unit direction to it (the sky, the haze, the sun shafts and the outlines' creases use it),
      *  and how much daylight there is (1 day .. 0 night). */
     Vector3 SunDirection;
@@ -406,6 +427,14 @@ typedef struct WorldRenderFrameStruct
     WorldShadowLevelsSettings ShadowLevelSettings;
     uint32_t ShadowLevelCount;
     WorldRendererShadowLevelFrame ShadowLevels[WORLD_RENDERER_MAX_SHADOW_LEVELS];
+    /** @brief The terrain's far shadows this frame (WorldRendererFarShadows_PrepareFrame): whether they run for the shadow
+     *  light (their maps drawn and swept as their schedule says: FarShadowWork), and whether the lit shaders read a
+     *  finished sweep (drawn in FarShadowFrame); while they run the shadow light's fade applies to them as to the
+     *  levels. */
+    bool AreFarShadowsRunning;
+    bool AreFarShadowsActive;
+    WorldFarShadowsWork FarShadowWork;
+    WorldFarShadowFrame FarShadowFrame;
     /** @brief The cube shadow's light: its position in render space (its RenderPosition), and the far range its packed
      *  distances are normalized by (its reach, at least twice the faces' near plane), which is also the reach its
      *  casters must touch; valid while IsPointShadowActive. */
@@ -808,6 +837,38 @@ typedef struct WorldRendererScreenLightLocationsStruct
 } WorldRendererScreenLightLocations;
 
 /**
+ * @brief The far shadows' uniform locations in a shader that includes shaders/common/lighting.glsl (common/far_shadow):
+ *        whether a finished sweep is read, its maps' sampler, the camera's offset from their frame's centre, their half
+ *        sides, the curve their heights were lowered with, and where a map's lookups end and its band starts. -1 for a
+ *        uniform the shader lacks.
+ *
+ * Filled by WorldRendererFarShadows_PrepareLitShader, which also points the sampler at
+ * WorldRendererTextureUnit_FarShadows; WorldRendererFarShadows_UploadLitFrame uploads a frame's values.
+ */
+typedef struct WorldRendererFarShadowLocationsStruct
+{
+    int _locActive;
+    int _locMaps;
+    int _locOffset;
+    int _locHalfWidths;
+    int _locCurvature;
+    int _locEdge;
+    int _locBandStart;
+} WorldRendererFarShadowLocations;
+
+/**
+ * @brief The uniform locations of a vertex stage that includes shaders/common/curvature.glsl (every program the camera's
+ *        passes draw with): the curve's scale and the pass's clip-space up. -1 for a uniform the shader lacks.
+ *
+ * Filled by WorldRendererCommon_PrepareCurvature; WorldRendererCommon_UploadCurvature uploads a frame's values.
+ */
+typedef struct WorldRendererCurvatureLocationsStruct
+{
+    int _locScale;
+    int _locClipUp;
+} WorldRendererCurvatureLocations;
+
+/**
  * @brief The uniform locations of a shader that includes shaders/common/lighting.glsl (the PBR and the sprite
  *        shaders): the frame's lights, shadows, AO, haze and night vision, and the per-object forward point lights and
  *        haze multiplier.
@@ -908,6 +969,12 @@ typedef struct WorldRendererLitLocationsStruct
     /** @brief The draw's screen light (common/lighting's ScreenLight): its picture on WorldRendererTextureUnit_ScreenLight,
      *  uploaded with the forward point lights. */
     WorldRendererScreenLightLocations _screenLight;
+    /** @brief The planet's curve in its vertex stage (common/curvature), uploaded with the frame (every lit program is a
+     *  camera pass's). */
+    WorldRendererCurvatureLocations _curvature;
+    /** @brief The terrain's far shadows (common/far_shadow): the finished sweep's maps on
+     *  WorldRendererTextureUnit_FarShadows and their frame. */
+    WorldRendererFarShadowLocations _farShadow;
 } WorldRendererLitLocations;
 
 /** @brief One PBR program that shades model objects, and its uniform locations: the rigid one (world_pbr) or the skinned
@@ -971,9 +1038,11 @@ typedef struct WorldRendererPbrStateStruct
  *  (raylib's default), and skinned meshes with this one, which shades as raylib's default does. */
 typedef struct WorldRendererUnlitStateStruct
 {
-    /** @brief The shader (world_unlit_skinned) and its palette; NULL = skinned meshes draw their bind pose unlit. */
+    /** @brief The shader (world_unlit_skinned), its palette and its curve; NULL = skinned meshes draw their bind pose
+     *  unlit. (The rigid meshes' raylib shader draws them flat.) */
     GameShader* _skinnedShader;
     WorldRendererPalette _skinnedPalette;
+    WorldRendererCurvatureLocations _skinnedCurvature;
 } WorldRendererUnlitState;
 
 /** @brief Reversed depth for the camera's passes (GLDepth.h). */
@@ -1604,6 +1673,10 @@ typedef struct WorldRendererGBufferStateStruct
      *  object solid below WORLD_VISIBILITY_GBUFFER_FADE_LIMIT and skips it above). */
     WorldRendererDitherLocations _dither;
     WorldRendererDitherLocations _spriteDither;
+    /** @brief The planet's curve in the model, skinned and sprite shaders (common/curvature), uploaded per frame. */
+    WorldRendererCurvatureLocations _curvature;
+    WorldRendererCurvatureLocations _skinnedCurvature;
+    WorldRendererCurvatureLocations _spriteCurvature;
     /** @brief The model shader's skinned twin (world_normal_skinned), its outline flag, its dither (solid like the
      *  model shader's) and its palette; NULL = skinned meshes draw their bind pose into the G-buffer. */
     GameShader* _skinnedShader;
@@ -1950,6 +2023,7 @@ typedef struct WorldRendererInstanceStateStruct
     int _normalLocHazeMultiplier;
     WorldRendererDitherLocations _normalDither;
     WorldRendererInstancingLocations _normalInstancing;
+    WorldRendererCurvatureLocations _normalCurvature;
     /** @brief The shadow levels' twin (world_depth_instanced); NULL = copies cast one at a time into the levels. */
     GameShader* _depthShader;
     WorldRendererDitherLocations _depthDither;
@@ -2323,6 +2397,60 @@ typedef struct WorldRendererCrispStateStruct
     bool _isTargetFailureReported;
 } WorldRendererCrispState;
 
+_Static_assert(WORLD_RENDERER_STATUS_FAR_SHADOW_MAP_COUNT == WORLD_FAR_SHADOW_MAP_COUNT,
+    "the status counts the chunks of every far-shadow map");
+
+/**
+ * @brief The terrain's shadows at any distance (WorldRendererFarShadows.c; the pure maths and the schedule
+ *        WorldFarShadows.h): the programs that draw the height maps and sweep them, the float arrays they live in
+ *        (GLFloatArray.h, direct GL calls: made at the first frame that runs them, for the config's size), the schedule,
+ *        the A/B and the counts the status reports.
+ */
+typedef struct WorldRendererFarShadowStateStruct
+{
+    /** @brief The heights' program (world_far_shadow_heights) and its curve; NULL = unavailable. */
+    GameShader* _heightShader;
+    WorldRendererCurvatureLocations _heightCurvature;
+    /** @brief The sweep's program (world_far_shadow_sweep) and its uniforms (shaders/far_shadow/sweep.frag); NULL =
+     *  unavailable. */
+    GameShader* _sweepShader;
+    int _locLayer;
+    int _locIsFirst;
+    int _locIsCopy;
+    int _locHasCoarser;
+    int _locSize;
+    int _locToward;
+    int _locSlopes;
+    int _locWidth;
+    int _locRun;
+    int _locCoarserWidth;
+    int _locCoarserExclusion;
+    /** @brief The GL functions of the float arrays (loaded with the programs). */
+    GLFloatArrayApi _api;
+    /** @brief Whether the arrays below are made, their texels a side, and a size whose arrays could not be made (logged
+     *  once; 0: none). */
+    bool _hasTextures;
+    int _textureSize;
+    int _failedTextureSize;
+    /** @brief The heights (one channel, a layer per map, with a depth), each map's sweep (two channels, one layer: the
+     *  passes' own target and, finished, what the next finer map continues in), the passes' shared scratch, and the
+     *  finished sweep the lit programs read (two channels, a layer per map). */
+    GLFloatArray _heights;
+    GLFloatArray _sweeps[WORLD_FAR_SHADOW_MAP_COUNT];
+    GLFloatArray _scratch;
+    GLFloatArray _result;
+    /** @brief The schedule across frames, and the world it was drawn for (another world starts it afresh). */
+    WorldFarShadows _schedule;
+    const World* _world;
+    /** @brief The A/B (WorldRenderer_SetFarShadowsEnabled; on by default). */
+    bool _isEnabled;
+    /** @brief How often the maps were drawn and sweeps finished, and the terrain chunks the last drawing drew into each
+     *  map. */
+    uint64_t _mapDrawCount;
+    uint64_t _sweepCount;
+    size_t _mapChunkCounts[WORLD_FAR_SHADOW_MAP_COUNT];
+} WorldRendererFarShadowState;
+
 struct WorldRendererStruct
 {
     /** @brief Asset manager used to resolve shaders and models; borrowed. */
@@ -2386,6 +2514,7 @@ struct WorldRendererStruct
     WorldRendererStarState _stars;
     WorldRendererSpriteState _sprites;
     WorldRendererShadowLevelState _shadowLevels;
+    WorldRendererFarShadowState _farShadows;
     WorldRendererPointShadowState _pointShadow;
     WorldRendererGBufferState _gbuffer;
     WorldRendererAoState _ao;
@@ -2474,6 +2603,24 @@ void WorldRendererCommon_SetRunDither(Shader shader, const WorldRendererDitherLo
  */
 void WorldRendererCommon_SetDitherPixelScale(Shader shader, const WorldRendererDitherLocations* locations,
     Vector2 pixelScale);
+
+/**
+ * @brief Caches a camera pass program's curve locations (shaders/common/curvature.glsl). Its scale stays at its
+ *        link-time 0 (a flat picture) until the first upload.
+ * @param shader The program.
+ * @param outLocations [out] Its locations; must not be NULL.
+ */
+void WorldRendererCommon_PrepareCurvature(Shader shader, WorldRendererCurvatureLocations* outLocations);
+
+/**
+ * @brief Uploads the frame's curve to a camera pass program: the scale (WorldRenderFrame.CurvatureScale) and the
+ *        camera's clip-space up (WorldRenderFrame.CurvatureClipUp).
+ * @param shader The program.
+ * @param locations Its locations (WorldRendererCommon_PrepareCurvature); must not be NULL.
+ * @param frame The frame; must not be NULL.
+ */
+void WorldRendererCommon_UploadCurvature(Shader shader, const WorldRendererCurvatureLocations* locations,
+    const WorldRenderFrame* frame);
 
 /**
  * @brief Draws one mesh into a depth pass (the shadow levels, the cube shadow, the sky's occupancy volume) as raylib's
@@ -3286,6 +3433,70 @@ void WorldRendererShadows_UpdateStatus(WorldRenderer* self, const WorldRenderFra
  *  maps' size, the reach); nothing before the first render or without a logger. */
 void WorldRendererShadows_LogStatus(const WorldRenderer* self);
 
+
+
+// WorldRendererFarShadows.c
+/** @brief Loads the far shadows' two programs (world_far_shadow_heights, world_far_shadow_sweep), points the sweep's
+ *  samplers at their units and loads the float arrays' GL functions; each missing piece logged once (the far shadows are
+ *  then unavailable). Their arrays are made at the first frame that runs them. */
+void WorldRendererFarShadows_Load(WorldRenderer* self);
+
+/** @brief Releases the far shadows' arrays (the schedule starts afresh when they are made again). */
+void WorldRendererFarShadows_Unload(WorldRenderer* self);
+
+/** @brief Whether the far shadows can run at all: both programs and the float arrays' GL functions, and PBR lighting. */
+bool WorldRendererFarShadows_IsAvailable(const WorldRenderer* self);
+
+/**
+ * @brief Decides the frame's far shadows and plans their work: they run while available, switched on (the A/B), the
+ *        player's quality and the world allow them (are_far_shadows_enabled, are_far_terrain_shadows_enabled, the
+ *        world's shadows with a strength above 0), there is a shadow light and a terrain is listed. Their arrays are
+ *        made for the config's size (again when it changes; a failure logged once leaves them off); another world, or
+ *        new arrays, start the schedule afresh. Then the schedule's frame (WorldFarShadows_BeginFrame: the maps drawn
+ *        again when due, the sweep's passes) into WorldRenderFrame.FarShadowWork, and whether the lit shaders read a
+ *        finished sweep this frame (AreFarShadowsActive, FarShadowFrame). Needs the shadow light (after
+ *        WorldRendererLighting_PrepareSkyLight) and the cache's sync.
+ * @param self The renderer.
+ * @param frame The frame being built.
+ */
+void WorldRendererFarShadows_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame);
+
+/** @brief Runs the frame's far-shadow work while they run: the height maps drawn from above when due (every terrain chunk
+ *  that casts and lies within its shadow distance, into each map it overlaps), then the sweep's passes of the frame (the
+ *  last frame of a sweep copies it into the maps the lit shaders read). Before the lit passes. */
+void WorldRendererFarShadows_Render(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief Binds the finished sweep's maps on WorldRendererTextureUnit_FarShadows for the lit passes, while the lit
+ *  shaders read them this frame. */
+void WorldRendererFarShadows_Bind(const WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Fills a lit shader's far-shadow locations (common/far_shadow) and points its maps' sampler at
+ *        WorldRendererTextureUnit_FarShadows. Call once at load (from WorldRendererLighting_PrepareLitShader).
+ * @param shader The lit shader.
+ * @param outLocations [out] Its locations.
+ */
+void WorldRendererFarShadows_PrepareLitShader(Shader shader, WorldRendererFarShadowLocations* outLocations);
+
+/**
+ * @brief Uploads the frame's far shadows to a lit shader: whether a finished sweep is read and, while one is, the camera's
+ *        offset from its frame's centre (subtracted in double), the maps' half sides, its curve and the lookups' edge and
+ *        band.
+ * @param shader The lit shader.
+ * @param locations Its locations (WorldRendererFarShadows_PrepareLitShader); must not be NULL.
+ * @param frame The frame.
+ */
+void WorldRendererFarShadows_UploadLitFrame(Shader shader, const WorldRendererFarShadowLocations* locations,
+    const WorldRenderFrame* frame);
+
+/** @brief Records the frame's far shadows and the picture's curve in the renderer's status. */
+void WorldRendererFarShadows_UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/** @brief Logs the far shadows' status line (the switches, the maps' size, how often they were drawn and swept, the
+ *  chunks the last drawing drew, the frame's centre's distance from the camera, the sweep under way, the curve); nothing
+ *  before the first render or without a logger. */
+void WorldRendererFarShadows_LogStatus(const WorldRenderer* self);
+
 /** @brief Renders the shadow levels that render this frame (IsRendered) from the frame's shadow light into their layers of
  *  the maps, with depth clamping. Each draws its visibility list (the casters in its box large enough for its texels):
  *  models, the copies of model instances and terrain chunks (their faces turned away from the light, or both faces for
@@ -3852,6 +4063,21 @@ void WorldRendererTerrain_DrawNormals(WorldRenderer* self, Shader shader, int lo
  * @param dither Its dither locations.
  * @param pass The shadow pass.
  */
+/**
+ * @brief Draws every listed terrain chunk that casts shadows, lies within its shadow distance of the camera (scaled as the
+ *        shadow levels' casters', without the zoom) and overlaps a far-shadow map's square into it, with @p shader
+ *        (world_far_shadow_heights): each chunk's world matrix relative to the maps' frame's centre (subtracted in
+ *        double), through WorldRendererCommon_DrawDepthMesh with the program bound once. Inside the map's matrices.
+ * @param self The renderer.
+ * @param shader The heights' program.
+ * @param center The maps' frame's centre in the world.
+ * @param halfWidth The map's half side, metres.
+ * @param shadowDistanceScale The player's shadow distance scale.
+ * @param outDrawnCount [out] How many chunks it drew; must not be NULL.
+ */
+void WorldRendererTerrain_DrawFarShadowHeights(WorldRenderer* self, Shader shader, Vector3Double center, double halfWidth,
+    float shadowDistanceScale, size_t* outDrawnCount);
+
 void WorldRendererTerrain_DrawCasters(WorldRenderer* self, Shader shader, const WorldRendererDitherLocations* dither,
     WorldVisibilityPass pass);
 

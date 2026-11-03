@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "WorldRendererInternal.h"
+#include "GameMath.h"
 #include "Logger.h"
 #include "TerrainBlend.h"
 #include "raylib/raymath.h"
@@ -954,6 +955,55 @@ void WorldRendererTerrain_DrawNormals(WorldRenderer* self, Shader shader, int lo
         }
     }
     WorldRendererCommon_EndMeshRun();
+}
+
+void WorldRendererTerrain_DrawFarShadowHeights(WorldRenderer* self, Shader shader, Vector3Double center, double halfWidth,
+    float shadowDistanceScale, size_t* outDrawnCount)
+{
+    *outDrawnCount = 0U;
+    size_t ChunkCount = 0U;
+    const WorldRenderTerrainChunk* Chunks = WorldRenderCache_GetTerrainChunks(&self->_cache, &ChunkCount);
+    float DrawDistanceScale = WorldRendererCommon_ConfigDrawDistanceScale(self);
+    const WorldRendererTerrainMeshes* Record = NULL;
+    rlEnableShader(shader.id);
+    for (size_t Index = 0U; Index < ChunkCount; Index++)
+    {
+        const WorldRenderTerrainChunk* Chunk = &Chunks[Index];
+        if (!Chunk->CastsShadows)
+        {
+            continue;
+        }
+        // Within its shadow distance, as the levels' casters are (without the zoom: the maps outlive a zoom).
+        float DrawDistance = WorldVisibility_ScaleDrawDistance(Chunk->DrawDistance, Chunk->IsDrawDistanceFixed,
+            DrawDistanceScale);
+        float ShadowDistance = WorldVisibility_ScaleShadowDistance(DrawDistance, Chunk->HasShadowDistance,
+            Chunk->ShadowDistance, Chunk->IsDrawDistanceFixed, Chunk->IsShadowDistanceFixed, DrawDistanceScale,
+            shadowDistanceScale);
+        if (!(WorldVisibility_GetEntryDistance((Vector3){ 0.0f, 0.0f, 0.0f }, Chunk->RenderCenter, Chunk->Radius)
+            < ShadowDistance))
+        {
+            continue;
+        }
+        // Over the map's square (the chunk's sphere against it, in double: the frame's centre may lie far out).
+        double Reach = halfWidth + (double)Chunk->Radius;
+        if ((fabs(Chunk->Center.X - center.X) > Reach) || (fabs(Chunk->Center.Z - center.Z) > Reach))
+        {
+            continue;
+        }
+        Record = GetChunkRecord(self, Chunk, Record);
+        const WorldRendererTerrainChunkMesh* Gpu = GetChunkMesh(Record, Chunk);
+        if (Gpu == NULL)
+        {
+            continue;
+        }
+        Matrix Placement = GameMath_ToMatrixRelative(&Chunk->WorldMatrix, center);
+        for (uint32_t Part = 0U; Part < Gpu->_partCount; Part++)
+        {
+            WorldRendererCommon_DrawDepthMesh(shader, Gpu->_parts[Part]._mesh, Placement);
+        }
+        (*outDrawnCount)++;
+    }
+    WorldRendererCommon_EndDepthMeshes();
 }
 
 void WorldRendererTerrain_DrawCasters(WorldRenderer* self, Shader shader, const WorldRendererDitherLocations* dither,

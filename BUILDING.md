@@ -110,7 +110,7 @@ skinning (the test world's figures bend, no warning).
 
 ## Direct OpenGL calls
 
-Everything draws through raylib, with six exceptions, each in a private module of its own and nowhere else:
+Everything draws through raylib, with seven exceptions, each in a private module of its own and nowhere else:
 - **texture arrays** (`GL_TEXTURE_2D_ARRAY`, `source/GLTextureArray.{h,c}`), which raylib does not have and the
   terrain's materials need (up to sixteen materials blended per pixel, one array layer each);
 - **readbacks that do not wait** (`source/GLReadback.{h,c}`): raylib reads a texture back only by stalling until
@@ -149,7 +149,16 @@ Everything draws through raylib, with six exceptions, each in a private module o
   with the hardware's trilinear filtering, repeating on every axis; raylib has no 3D textures (`glGenTextures`,
   `glDeleteTextures`, `glBindTexture`, `glTexImage3D`, `glGenerateMipmap`, `glTexParameteri`, `glPixelStorei`,
   `glGetIntegerv`, `glGetError`: OpenGL 3.0 core; a missing one, or a volume the GPU refuses, leaves the sky without
-  drawn clouds, the weather's clouds showing as one even deck, logged once).
+  drawn clouds, the weather's clouds showing as one even deck, logged once);
+- **float colour arrays** (`source/GLFloatArray.{h,c}`): the far terrain shadows' height maps and their sweeps are
+  texture arrays of one or two 32-bit floats a texel (heights of kilometres, "no ground" at -1e9), drawn a layer at a
+  time with exact float clear values and read through one `sampler2DArray`; raylib has no texture arrays, no two-channel
+  float format, no layer attachments and no float clear values (`glGenTextures`, `glDeleteTextures`, `glBindTexture`,
+  `glTexImage3D`, `glTexParameteri`, `glGenFramebuffers`, `glDeleteFramebuffers`, `glBindFramebuffer`,
+  `glFramebufferTextureLayer`, `glGenRenderbuffers`, `glDeleteRenderbuffers`, `glBindRenderbuffer`,
+  `glRenderbufferStorage`, `glFramebufferRenderbuffer`, `glCheckFramebufferStatus`, `glClearBufferfv`, `glGetIntegerv`,
+  `glGetError`: OpenGL 3.0 core; a missing one, or maps the GPU refuses, leave terrain casting only within the shadow
+  levels' reach, logged once).
 
 The texture arrays' module, as the pattern all six follow:
 - the function pointers (`glGenTextures`, `glDeleteTextures`, `glBindTexture`, `glTexImage3D`, `glTexSubImage3D`,

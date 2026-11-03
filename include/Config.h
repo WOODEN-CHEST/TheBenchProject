@@ -34,6 +34,9 @@
 #define CONFIG_MAX_SHADOW_MAP_SIZE 8192
 /** @brief The longest shadow level update period, in frames. */
 #define CONFIG_MAX_SHADOW_UPDATE_PERIOD 256
+/** @brief The bounds of GameConfig.FarShadowMapSize (a power of two). */
+#define CONFIG_MIN_FAR_SHADOW_MAP_SIZE 256
+#define CONFIG_MAX_FAR_SHADOW_MAP_SIZE 2048
 /** @brief GameConfig.CloudQuality's values: no clouds drawn (the weather's clouds as one even deck), low (half the
  *  scene's resolution, fewer steps) and high (the scene's resolution). */
 #define CONFIG_CLOUD_QUALITY_OFF 0
@@ -123,6 +126,14 @@ typedef struct GameConfigStruct
      *  camera that moved far renders it at once). Default 1, 1, 2, 4, 8, 16, 32, 64; each in [1,
      *  CONFIG_MAX_SHADOW_UPDATE_PERIOD]. Longer periods cost less; a moving thing's shadow there lags by up to a period. */
     int32_t ShadowUpdatePeriods[CONFIG_MAX_SHADOW_LEVELS];
+    /** @brief Whether terrain casts the sun's and the moon's shadows past the shadow levels' reach, at any distance
+     *  (where the world allows it): far ridges shade valleys at sunset. Default true; false saves the far shadows'
+     *  maps and their sweeps. */
+    bool AreFarShadowsEnabled;
+    /** @brief The far shadows' height maps' texels along each side (three nested maps of 8, 32 and 128 km): a power of
+     *  two in [CONFIG_MIN_FAR_SHADOW_MAP_SIZE, CONFIG_MAX_FAR_SHADOW_MAP_SIZE]. Default 1024 (8 m texels near the
+     *  camera, 72 MB of maps); 512 quarters the memory and blurs far shadows' edges. */
+    int32_t FarShadowMapSize;
     // ---- Clouds (quality) ----
     /** @brief How the clouds are drawn: CONFIG_CLOUD_QUALITY_OFF (none: the weather's clouds as one even grey deck),
      *  _LOW (half the scene's resolution, fewer steps: cheaper and softer) or _HIGH (the scene's resolution). Default

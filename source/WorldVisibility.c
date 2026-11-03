@@ -5,6 +5,7 @@
 #include <float.h>
 #include <math.h>
 #include "WorldVisibility.h"
+#include "WorldRenderSpace.h"
 #include "raylib/raymath.h"
 
 
@@ -103,6 +104,21 @@ static bool IsInVolume(const WorldVisibilityView* view, const WorldFrustum* volu
     return !view->IsCullingEnabled || WorldVisibility_IsSphereInFrustum(volume, center, radius);
 }
 
+/* Whether a sphere is in the camera's view where the camera's passes draw it (lower by the planet's curve), or culling
+ * is off. */
+static bool IsInCameraView(const WorldVisibilityView* view, Vector3 center, float radius)
+{
+    float Scale = view->CurvatureScale;
+    if (!(Scale > 0.0f) || !isfinite(Scale))
+    {
+        return IsInVolume(view, &view->CameraFrustum, center, radius);
+    }
+    Vector3 DrawnCenter;
+    float DrawnRadius = 0.0f;
+    WorldRenderSpace_CurveSphere(center, radius, Scale, &DrawnCenter, &DrawnRadius);
+    return IsInVolume(view, &view->CameraFrustum, DrawnCenter, DrawnRadius);
+}
+
 /* Whether a sphere lies wholly inside a shadow level's four sides (never with culling off): the level after it then
  * leaves it out. A NaN counts as outside. */
 static bool IsInsideSides(const WorldVisibilityView* view, const WorldFrustum* box, Vector3 center, float radius)
@@ -185,7 +201,7 @@ static bool AddSkyOccluder(GenericBuffer* lists, const WorldVisibilityView* view
 static bool AddToCamera(WorldVisibility* self, GenericBuffer* cameraList, const WorldVisibilityView* view,
     Vector3 center, float radius, float fade, bool omitsPixelation, size_t index, size_t* drawnCount, bool* outIsInView)
 {
-    if (!IsInVolume(view, &view->CameraFrustum, center, radius))
+    if (!IsInCameraView(view, center, radius))
     {
         self->_counts.OutsideViewCount++;
         return true;
@@ -315,7 +331,7 @@ static bool AddTerrainChunk(WorldVisibility* self, const WorldVisibilityView* vi
     {
         return true;
     }
-    if (IsInVolume(view, &view->CameraFrustum, chunk->RenderCenter, chunk->Radius))
+    if (IsInCameraView(view, chunk->RenderCenter, chunk->Radius))
     {
         if (!AddIndex(&self->_terrainChunks[WorldVisibilityPass_Camera], index))
         {
@@ -356,7 +372,7 @@ static bool AddInstanceCell(WorldVisibility* self, const WorldVisibilityView* vi
         return true;
     }
     // Copies that are only shadows cast and keep the sky out, but the camera's passes do not draw them.
-    bool IsInView = !cell->IsShadowOnly && IsInVolume(view, &view->CameraFrustum, cell->RenderCenter, cell->Radius);
+    bool IsInView = !cell->IsShadowOnly && IsInCameraView(view, cell->RenderCenter, cell->Radius);
     if (IsInView)
     {
         if (!AddIndex(&self->_instanceCells[WorldVisibilityPass_Camera], index))

@@ -219,7 +219,7 @@ Current module list:
     (weights, rules with their periodic value noise, height blending, triplanar projections) and the material at a point
     of a terrain (a triangle and barycentrics: footsteps, the scattering's limits).
   * GLTextureArray - Texture arrays (private, source/GLTextureArray.{h,c}): direct OpenGL calls (the
-    project's only ones with GLReadback, GLDepth, GLSliceMap, GLShadowArray and GLTexture3D), through the function pointers raylib's rlGetProcAddress resolves
+    project's only ones with GLReadback, GLDepth, GLSliceMap, GLShadowArray, GLTexture3D and GLFloatArray), through the function pointers raylib's rlGetProcAddress resolves
     (no raylib rebuild), with their GL constants; used by the renderer's terrain pass. Anything else that needs GL raylib
     lacks belongs in a module like it, never in a pass (BUILDING.md, "Direct OpenGL calls").
   * GLReadback - Reading a small target back without waiting for the GPU (private, source/GLReadback.{h,c}): a
@@ -244,6 +244,11 @@ Current module list:
     mipmaps, filtered trilinearly and repeating on every axis, bound to a unit's GL_TEXTURE_3D target; direct OpenGL
     calls in GLTextureArray's manner. Used by the clouds' noise (WorldRendererClouds.c); without them no clouds are
     drawn (the weather's clouds show as one even deck).
+  * GLFloatArray - Float colour texture arrays (private, source/GLFloatArray.{h,c}): one or two 32-bit floats a texel,
+    filtered linearly and clamped, each layer drawn into through a framebuffer of their own (with a depth renderbuffer
+    when asked) with exact float clear values; direct OpenGL calls in GLTextureArray's manner. Used by the terrain's far
+    shadows (WorldRendererFarShadows.c: their height maps and sweeps); without them terrain casts only within the shadow
+    levels' reach.
 * World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
   animation stands, is lit and is seen in the world, kept apart from its placements. WorldSprite (include/WorldSprite.h,
   source/WorldSprite.c) holds the animation it plays (loaded as its dependency) and the defaults of its placements
@@ -406,7 +411,13 @@ Current module list:
     water slots drawn over the opaque world from copies of the scene's colour and depth, their waves two normal maps
     anchored to the world that drift with the wind or a flow (or along a river's texture coordinates), with the rain's
     rings, the bottom seen straight through them and dimmed by their absorption, foam in the shallows, glints, and
-    what they mirror handed to the reflection pass; the camera's passes in
+    what they mirror handed to the reflection pass; the terrain's far shadows (source/WorldRendererFarShadows.c,
+    shaders/far_shadow/ and shaders/common/far_shadow.glsl): every terrain's top surface drawn from above into nested
+    height maps around the camera (8, 32 and 128 km), swept along the shadow light over a few frames for the heights
+    below which each texel lies in shadow at the top and the bottom of the light's disc, and read by every lit surface
+    (the darker of it and the levels': ridges shade valleys at any distance, with the disc's penumbra); the planet's
+    curve in the camera's passes (shaders/common/curvature.glsl): every drawn vertex d^2 / 2R lower, the flat world lit
+    as it is; the camera's passes in
     reversed 32-bit float
     depth with no far plane where the GPU has clip control (GLDepth), so whatever has the draw distance draws at any
     distance), in render space: the world's orientation with the camera at the origin, every position relative to the
@@ -441,7 +452,15 @@ Current module list:
     its closed-form inverse), the C mirror of the sky shader's ray, and the
     shadow levels' boxes with their centres snapped to their texel grids in double, each grid kept from frame to frame
     (anchored to the last frame's box), and a kept level's box built again from its stored centre and light.
-    WorldRuntime.md's "Render space" has the rule every pass and shader follows.
+    WorldRuntime.md's "Render space" has the rule every pass and shader follows; also the planet's curve in the
+    picture (a point's drop, a pass's clip-space up, a culling sphere where it is drawn: the C mirror of
+    shaders/common/curvature.glsl).
+  * WorldFarShadows - The terrain's shadows at any distance as pure maths (private, source/WorldFarShadows.h): the
+    nested height maps' sizes and their frame (a centre on the coarsest texel grid, heights lowered by the curve), the
+    maps drawn from above, the light's two disc edges, the sweep's passes (a doubling along the light, rays continued in
+    the coarser map) and their schedule across frames (the maps drawn again when the camera moved or a terrain changed,
+    a sweep when the light turned), the map a point reads and the disc's share, and the sweep on the CPU: the C mirror
+    of shaders/far_shadow/sweep.frag and shaders/common/far_shadow.glsl (WorldRuntime.md, "Far terrain shadows").
   * WorldShadowLevels - The sun's and the moon's shadow levels as pure maths (private, source/WorldShadowLevels.h): the
     nested boxes around the camera (their sizes and texels from the player's quality settings, the levels the world's
     reach needs, their depth range), which level a point reads and the blend over its band (the C mirror of
@@ -549,7 +568,10 @@ Current module list:
     lets go; the grave key turns it off and on, Shift with it steps every CRT's mask. Its world has water: a pond in the
     terrain's valley, a stone gutter whose stream flows along it and two fountains, one clear and one murky (a world
     model variant); Shift with the keypad's + shows the sea around the test terrain (a runtime object, the private
-    source/WorldTestWater.{h,c}), which makes the test world an island.
+    source/WorldTestWater.{h,c}), which makes the test world an island. Shift with the keypad's * shows the far terrain
+    around it (a coast: hills and mountains to 40 km to the north, the sea floor to the south; runtime objects of the
+    tbp:test_far_terrain_* definitions, the private source/WorldTestFarTerrain.{h,c}), Scroll Lock switches the world's
+    curve and Pause the terrain's far shadows (the A/B).
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown

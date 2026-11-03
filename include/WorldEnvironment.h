@@ -374,6 +374,11 @@ typedef struct WorldEnvironmentStruct
      *  which the sky sees below the horizon (lit, hazy toward the horizon), and its sea level: the sky is seen from the
      *  camera's height above it. Finite and within +-WORLD_ENVIRONMENT_MAX_DISTANCE. */
     float HorizonGroundHeight;
+    /** @brief Whether what the camera sees curves with the planet (default true): everything drawn lies lower the farther
+     *  it is from the camera (by d^2 / 2R, R the atmosphere's planet: 8 m at 10 km, 126 m at 40 km), so flat ground meets
+     *  the far ground at the horizon at any distance and a sea bends down to the true horizon; the world itself, its
+     *  collision and its lighting stay flat. false: the picture is as flat as the world. */
+    bool IsCurvatureEnabled;
 
     // ---- Weather: what it is now (the weather system writes these; a world file's are its starting weather) ----
     /** @brief How much of the sky has clouds, 0 none (the default) .. 1 overcast. Finite and in [0, 1]. */
@@ -536,6 +541,11 @@ typedef struct WorldEnvironmentStruct
      *  tenth); in [0, WORLD_ENVIRONMENT_MAX_SHADOW_REACH], 0 for none. The player's shadow levels may end them nearer.
      *  Default 4000. */
     float ShadowReach;
+    /** @brief Whether terrain casts the sun's and the moon's shadows at any distance (default true): beyond the shadow
+     *  reach, through height maps of every terrain around the camera swept along the light, with the soft edge the
+     *  light's disc gives; far ridges then shade valleys and each other at sunset. false: terrain casts only within the
+     *  reach, as everything else. The player's quality may switch them off too. */
+    bool AreFarTerrainShadowsEnabled;
 
     /** @brief When false, this world suppresses screen-space ambient occlusion regardless of the config. */
     bool IsAmbientOcclusionEnabled;

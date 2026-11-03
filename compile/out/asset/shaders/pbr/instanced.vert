@@ -5,6 +5,7 @@
 // (common/instancing). The fragment stage is world_pbr's own, its dither the copy's (WORLD_INSTANCED).
 
 #include "common/instancing"
+#include "common/curvature"
 
 // Vertex attributes (Raylib binds these by name from the mesh).
 in vec3 vertexPosition;
@@ -18,7 +19,7 @@ uniform mat4 matModel;   // the cell's matrix (into render space: the world's or
 uniform mat4 matNormal;  // transpose(inverse(matModel)), for correct normal transform
 
 // Interpolated outputs consumed by the fragment stage.
-out vec3 fragPosition;   // render-space surface position (relative to the camera)
+out vec3 fragPosition;   // render-space surface position (relative to the camera; the flat world's, common/curvature)
 out vec2 fragTexCoord;
 out vec3 fragNormal;     // world-space surface normal
 out vec4 fragColor;
@@ -39,5 +40,5 @@ void main()
     fragPosition = vec3(matModel*vec4(position, 1.0));
     fragNormal = normalize(vec3(matNormal*vec4(Instancing_TurnNormal(vertexNormal), 0.0)));
 
-    gl_Position = mvp*vec4(position, 1.0);
+    gl_Position = CurvedClipPosition(mvp*vec4(position, 1.0), fragPosition);
 }

@@ -40,6 +40,8 @@
 #define CONFIG_KEY_CLOUD_QUALITY ((const unsigned char*)u8"cloud_quality")
 #define CONFIG_KEY_REFLECTION_QUALITY ((const unsigned char*)u8"reflection_quality")
 #define CONFIG_KEY_SHADOW_UPDATE_PERIODS ((const unsigned char*)u8"shadow_update_periods")
+#define CONFIG_KEY_ARE_FAR_SHADOWS_ENABLED ((const unsigned char*)u8"are_far_shadows_enabled")
+#define CONFIG_KEY_FAR_SHADOW_MAP_SIZE ((const unsigned char*)u8"far_shadow_map_size")
 
 /** Index of the width element within the resolution array. */
 #define CONFIG_RESOLUTION_WIDTH_INDEX ((size_t)0)
@@ -72,6 +74,9 @@
 #define CONFIG_DEFAULT_SHADOW_MAP_SIZE ((int32_t)2048)
 #define CONFIG_DEFAULT_CLOUD_QUALITY ((int32_t)CONFIG_CLOUD_QUALITY_HIGH)
 #define CONFIG_DEFAULT_REFLECTION_QUALITY ((int32_t)CONFIG_REFLECTION_QUALITY_HIGH)
+/** The default far shadows: on, 1024 texels a side. */
+#define CONFIG_DEFAULT_ARE_FAR_SHADOWS_ENABLED true
+#define CONFIG_DEFAULT_FAR_SHADOW_MAP_SIZE ((int32_t)1024)
 /** Default value for every post-effect config-side strength multiplier. */
 #define CONFIG_DEFAULT_EFFECT_STRENGTH (1.0f)
 /** Largest accepted effect strength multiplier; larger (or non-finite/negative) values fall back to the
@@ -250,6 +255,11 @@ static void ClampShadowSettings(GameConfig* config)
             *Period = Default;
         }
     }
+    if (!IsPowerOfTwo(config->FarShadowMapSize) || (config->FarShadowMapSize < CONFIG_MIN_FAR_SHADOW_MAP_SIZE)
+        || (config->FarShadowMapSize > CONFIG_MAX_FAR_SHADOW_MAP_SIZE))
+    {
+        config->FarShadowMapSize = CONFIG_DEFAULT_FAR_SHADOW_MAP_SIZE;
+    }
 }
 
 /* Reads the resolution array; only overwrites the defaults when both components are present and numeric. */
@@ -295,6 +305,8 @@ static void ReadConfigValues(JSONCompound* root, GameConfig* config)
     ReadFloat(root, CONFIG_KEY_SHADOW_LEVEL_FACTOR, &config->ShadowLevelFactor);
     ReadInt32(root, CONFIG_KEY_SHADOW_MAP_SIZE, &config->ShadowMapSize);
     ReadShadowUpdatePeriods(root, config);
+    ReadBool(root, CONFIG_KEY_ARE_FAR_SHADOWS_ENABLED, &config->AreFarShadowsEnabled);
+    ReadInt32(root, CONFIG_KEY_FAR_SHADOW_MAP_SIZE, &config->FarShadowMapSize);
     ReadInt32(root, CONFIG_KEY_CLOUD_QUALITY, &config->CloudQuality);
     ReadInt32(root, CONFIG_KEY_REFLECTION_QUALITY, &config->ReflectionQuality);
 }
@@ -367,6 +379,8 @@ void GameConfig_SetDefaults(GameConfig* self)
         Period = (Level < 2U) ? 1 : (Period * 2);
         self->ShadowUpdatePeriods[Level] = Period;
     }
+    self->AreFarShadowsEnabled = CONFIG_DEFAULT_ARE_FAR_SHADOWS_ENABLED;
+    self->FarShadowMapSize = CONFIG_DEFAULT_FAR_SHADOW_MAP_SIZE;
     self->CloudQuality = CONFIG_DEFAULT_CLOUD_QUALITY;
     self->ReflectionQuality = CONFIG_DEFAULT_REFLECTION_QUALITY;
 }

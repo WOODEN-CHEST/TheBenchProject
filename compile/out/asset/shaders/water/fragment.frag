@@ -23,6 +23,8 @@ layout(location = 0) out vec4 finalColor;
 #include "common/dither"
 // The copies' depth as the camera's passes store it.
 #include "common/depth"
+// The bottom read back from the copy of the camera's depth is where the picture's curve drew it.
+#include "common/curvature"
 #include "common/water"
 
 // The water material, set per material (WorldRendererWater.c). Its maps: whether it has each, the samplers, each map's
@@ -120,7 +122,8 @@ void main()
     }
 
     // Under the surface: the bottom's point from the copy of the scene's depth, the view's path through the water to it
-    // and how deep the water is above it; nothing under the water (the sky), or no copies, is deep water.
+    // and how deep the water is above it (both in the flat world: the depth holds the bottom where the planet's curve
+    // drew it); nothing under the water (the sky), or no copies, is deep water.
     bool hasBottom = false;
     float path = 0.0;
     float depthBelow = 0.0;
@@ -133,7 +136,7 @@ void main()
         {
             vec2 ndc = gl_FragCoord.xy/vec2(textureSize(waterSceneDepth, 0))*2.0 - 1.0;
             vec4 point = waterInvViewProjection*vec4(ndc, depthToNdc(depth), 1.0);
-            vec3 bottom = point.xyz/point.w;
+            vec3 bottom = CurvatureFlatten(point.xyz/point.w);
             path = max(length(bottom) - length(fragPosition), 0.0);
             depthBelow = max(dot(fragPosition - bottom, surfaceNormal), 0.0);
             bottomColor = texelFetch(waterSceneColor, pixel, 0).rgb;

@@ -5,6 +5,7 @@
 // is world_normal's own, its dither the copy's (solid in the G-buffer; WORLD_INSTANCED).
 
 #include "common/instancing"
+#include "common/curvature"
 
 // Vertex attributes (Raylib binds these by name from the mesh).
 in vec3 vertexPosition;
@@ -31,5 +32,6 @@ void main()
     vec3 worldNormal = normalize(vec3(matNormal*vec4(Instancing_TurnNormal(vertexNormal), 0.0)));
     fragNormalView = normalize(vec3(matView*vec4(worldNormal, 0.0)));
 
-    gl_Position = mvp*vec4(Instancing_MoveVertex(vertexPosition), 1.0);
+    vec3 position = Instancing_MoveVertex(vertexPosition);
+    gl_Position = CurvedClipPosition(mvp*vec4(position, 1.0), vec3(matModel*vec4(position, 1.0)));
 }

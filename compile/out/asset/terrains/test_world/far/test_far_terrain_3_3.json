@@ -1,0 +1,50 @@
+{
+    "name": "tbp:test_far_terrain_3_3",
+    "source": "model",
+    "model": "test_world/far/test_far_terrain_3_3",
+    "materials": [
+        "tbp:grass",
+        "tbp:dirt",
+        "tbp:rock",
+        "tbp:gravel"
+    ],
+    "chunk_size": 4096.0,
+    "render": {
+        "draw_distance": 100000.0
+    },
+    "collision": {
+        "is_enabled": false
+    },
+    "rules": [
+        {
+            "material": "tbp:rock",
+            "slope": {
+                "min": 30.0,
+                "blend": 8.0
+            },
+            "only_on": [
+                "tbp:grass"
+            ]
+        },
+        {
+            "material": "tbp:rock",
+            "height": {
+                "min": 1100.0,
+                "blend": 300.0
+            },
+            "only_on": [
+                "tbp:grass"
+            ]
+        },
+        {
+            "material": "tbp:gravel",
+            "height": {
+                "max": 5.0,
+                "blend": 4.0
+            },
+            "only_on": [
+                "tbp:grass"
+            ]
+        }
+    ]
+}

@@ -96,6 +96,9 @@ typedef struct WorldRendererStruct WorldRenderer;
 #define WORLD_RENDERER_HAZE_SLICE_COUNT 32
 /** @brief The most shadow levels the status reports on (the most there may be). */
 #define WORLD_RENDERER_STATUS_MAX_SHADOW_LEVELS 8U
+/** @brief How many far-shadow maps the status counts chunks for (WorldRendererStatus.FarShadowMapChunkCounts): the far
+ *  shadows' nested maps. */
+#define WORLD_RENDERER_STATUS_FAR_SHADOW_MAP_COUNT 3U
 
 
 // Types.
@@ -236,6 +239,17 @@ typedef enum WorldRendererFeatureEnum
      *  then no water slot is drawn at all; active while a model or a copies' cell with water slots is in view. Without
      *  an HDR scene target with a samplable depth (or copies of it) the water shows no bottom, as deep water. */
     WorldRendererFeature_Water,
+    /** @brief The terrain's shadows at any distance: past the shadow levels' reach far ridges shade valleys and each
+     *  other, softly as the light's disc does (height maps of every terrain around the camera, swept along the sun's or
+     *  the moon's light). Unavailable without their two shaders (world_far_shadow_heights, world_far_shadow_sweep), the
+     *  GL functions of their float maps or PBR lighting, or when the maps could not be made (logged once); active while
+     *  the lit surfaces read a finished sweep (switched on, the player's quality and the world allow them, a shadow light
+     *  and a terrain), inactive otherwise. */
+    WorldRendererFeature_FarShadows,
+    /** @brief The planet's curve in the picture: everything the camera sees lies lower the farther it is (d^2 / 2R), so
+     *  flat ground meets the far ground at the horizon; always available, active while the world asks for it
+     *  (is_curvature_enabled). */
+    WorldRendererFeature_Curvature,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -531,6 +545,23 @@ typedef struct WorldRendererStatusStruct
     float ShadowLevelSizes[WORLD_RENDERER_STATUS_MAX_SHADOW_LEVELS];
     size_t ShadowLevelCasterCounts[WORLD_RENDERER_STATUS_MAX_SHADOW_LEVELS];
     bool IsShadowLevelViewEnabled;
+    /** @brief The terrain's far shadows: whether they are switched on (WorldRenderer_SetFarShadowsEnabled), their maps'
+     *  texels a side (0 while none are made), how often the maps were drawn and sweeps finished, whether a sweep was under
+     *  way in the last render and how many of its passes had run of how many, the terrain chunks the last drawing drew
+     *  into each map (finest first), and how far the camera stood from the read maps' centre (metres; 0 while none were
+     *  read). */
+    bool AreFarShadowsEnabled;
+    int FarShadowMapSize;
+    uint64_t FarShadowMapDrawCount;
+    uint64_t FarShadowSweepCount;
+    bool IsFarShadowSweeping;
+    uint32_t FarShadowSweepPassesDone;
+    uint32_t FarShadowSweepPassCount;
+    size_t FarShadowMapChunkCounts[WORLD_RENDERER_STATUS_FAR_SHADOW_MAP_COUNT];
+    double FarShadowCenterDistance;
+    /** @brief The picture's curve in the last render: metres of drop per square metre of horizontal distance from the
+     *  camera (1 / 2R; 0 while the world is drawn flat). */
+    float CurvatureScale;
     /** @brief How long the render took on the CPU, in milliseconds (WorldRenderer_RenderToTarget from its start to its
      *  return; the GPU works on after it, and its share shows in the frame time when it is the slower), and the time
      *  since the render before, as the caller gave it (its deltaSeconds; 0 when that was not above 0). */
@@ -896,6 +927,23 @@ void WorldRenderer_SetShadowLevelViewEnabled(WorldRenderer* self, bool enabled);
  * @returns true if on.
  */
 bool WorldRenderer_IsShadowLevelViewEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Switches the terrain's far shadows (an A/B; on by default): off, terrain casts the sun's and the moon's shadows
+ *        only within the shadow levels' reach, as everything else. The player's quality and the world may switch them
+ *        off too. Applied on the next render; switched on again, they read their last finished sweep until the next one
+ *        finishes.
+ * @param self The renderer; must not be NULL.
+ * @param enabled true to run them.
+ */
+void WorldRenderer_SetFarShadowsEnabled(WorldRenderer* self, bool enabled);
+
+/**
+ * @brief Reports whether the terrain's far shadows are switched on (see WorldRenderer_SetFarShadowsEnabled).
+ * @param self The renderer; must not be NULL.
+ * @returns true if on.
+ */
+bool WorldRenderer_AreFarShadowsEnabled(const WorldRenderer* self);
 
 /**
  * @brief Enables or disables the eye's night vision: dim reflected and scattered light losing its colour into a faintly

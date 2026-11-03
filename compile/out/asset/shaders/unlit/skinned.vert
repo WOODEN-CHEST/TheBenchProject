@@ -5,12 +5,14 @@
 // shades as raylib's default does (unlit/fragment) after moving the position by the object's pose (common/skinning).
 
 #include "common/skinning"
+#include "common/curvature"
 
 in vec3 vertexPosition;
 in vec2 vertexTexCoord;
 in vec4 vertexColor;
 
 uniform mat4 mvp;
+uniform mat4 matModel;   // model -> render space (the camera at the origin)
 
 out vec2 fragTexCoord;
 out vec4 fragColor;
@@ -23,5 +25,6 @@ void main()
     Skinning_GetRows(row0, row1, row2);
     fragTexCoord = vertexTexCoord;
     fragColor = vertexColor;
-    gl_Position = mvp*vec4(Skinning_MovePoint(row0, row1, row2, vertexPosition), 1.0);
+    vec3 position = Skinning_MovePoint(row0, row1, row2, vertexPosition);
+    gl_Position = CurvedClipPosition(mvp*vec4(position, 1.0), vec3(matModel*vec4(position, 1.0)));
 }

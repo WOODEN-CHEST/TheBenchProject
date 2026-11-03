@@ -562,6 +562,15 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .SinceVersion = 1U
     },
     {
+        .Key = u8"is_curvature_enabled", .WireId = 114U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldEnvironment, IsCurvatureEnabled), .Default.BoolValue = true,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_HAZE, .DisplayName = u8"Curved horizon",
+        .Description = u8"When on, what the camera sees curves with the planet: far things lie lower the farther they are "
+            u8"(8 m at 10 km, 126 m at 40 km), so flat ground meets the far ground at the horizon and a sea bends down to "
+            u8"it. The world itself, its collision and its light stay flat.",
+        .SinceVersion = 1U
+    },
+    {
         .Key = u8"cloud_coverage", .WireId = 64U, .Type = PropertyType_Float,
         PROPERTY_MEMBER(WorldEnvironment, CloudCoverage), .Default.FloatValue = 0.0f,
         .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_WEATHER,
@@ -988,6 +997,15 @@ static const PropertyDescriptor EnvironmentProperties[] =
         .Category = CATEGORY_EFFECTS, .DisplayName = u8"Shadow reach",
         .Description = u8"How far from the camera the sun's and the moon's shadows reach, in metres (they fade out over "
             u8"its last tenth; 0: none). The player's shadow quality may end them nearer.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"are_far_terrain_shadows_enabled", .WireId = 115U, .Type = PropertyType_Bool,
+        PROPERTY_MEMBER(WorldEnvironment, AreFarTerrainShadowsEnabled), .Default.BoolValue = true,
+        .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_EFFECTS, .DisplayName = u8"Far terrain shadows",
+        .Description = u8"When on, terrain casts the sun's and the moon's shadows at any distance, past the shadow reach "
+            u8"(far ridges shade valleys at sunset, softly as the light's disc does). When off, terrain casts only within "
+            u8"the reach. The player's quality may switch them off too.",
+        .SinceVersion = 1U
     },
     {
         .Key = u8"is_ambient_occlusion_enabled", .WireId = 24U, .Type = PropertyType_Bool,

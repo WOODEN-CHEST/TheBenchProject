@@ -188,7 +188,8 @@ void WorldTestShadows_HandleInput(WorldTestShadows* self, const GameInput* input
     {
         ToggleField(self);
     }
-    if (GameInput_IsKeyPressed(input, GameKey_KeypadMultiply))
+    // With Shift, keypad * is the far terrain's (WorldTestFarTerrain.h).
+    if (!IsShiftDown && GameInput_IsKeyPressed(input, GameKey_KeypadMultiply))
     {
         bool Enabled = !WorldRenderer_IsShadowLevelViewEnabled(self->_renderer);
         WorldRenderer_SetShadowLevelViewEnabled(self->_renderer, Enabled);

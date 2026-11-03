@@ -1,0 +1,5 @@
+{
+    "name": "tbp:world_far_shadow_heights",
+    "vertex_location": "far_shadow/heights_vertex",
+    "fragment_location": "far_shadow/heights"
+}

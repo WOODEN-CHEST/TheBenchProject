@@ -1,12 +1,12 @@
 // The world's lighting, shared by the lit shaders (world_pbr, world_crt, world_sprite, world_terrain), for #include
 // "common/lighting": the frame's lighting uniforms (the renderer uploads the same values to every shader that includes
 // this file), the Cook-Torrance BRDF, the sky's two directional lights (the sun and the moon) with the shadow levels'
-// shadow and a lightning bolt's light, forward point lights and the shadow-casting point light with its cube shadow, a
-// screen's light, the sky's ambient light with the screen-space AO and interior lighting (common/interior: what roofs
-// keep out, rooms' own light), what a glossy surface mirrors (and what it hands the reflection pass:
-// common/reflections), the weather's wetness and puddles (common/rain: what keeps the rain out; common/puddles: the
-// puddles, the sky mirrored in water), the eye's night vision and the haze in front of every surface (the aerial
-// perspective and the ground haze, common/haze).
+// shadow and the terrain's shadow at any distance (common/far_shadow) and a lightning bolt's light, forward point
+// lights and the shadow-casting point light with its cube shadow, a screen's light, the sky's ambient light with the
+// screen-space AO and interior lighting (common/interior: what roofs keep out, rooms' own light), what a glossy surface
+// mirrors (and what it hands the reflection pass: common/reflections), the weather's wetness and puddles (common/rain:
+// what keeps the rain out; common/puddles: the puddles, the sky mirrored in water), the eye's night vision and the haze
+// in front of every surface (the aerial perspective and the ground haze, common/haze).
 //
 // THE SKY'S LIGHT (one light scale): the sun and the moon reach a surface through the air (their light above the air
 // times the transmittance toward them at the surface's own height: reddened low over the horizon, gone once the disc has
@@ -35,6 +35,7 @@
 #include "common/distance_packing"
 #include "common/puddles"
 #include "common/reflections"
+#include "common/far_shadow"
 
 // Lighting, set by WorldRenderer each frame. Light colours are LINEAR.
 uniform vec3 sunDirection;     // unit direction TO the sun, world space (also the ground haze's sun)
@@ -70,8 +71,9 @@ uniform sampler2DArrayShadow shadowLevels; // the levels' maps, one layer each (
 uniform bool shadowLevelView;         // the debug view: every lit surface tinted by the level its shadow comes from
 uniform float shadowStrength;  // 0..1, how much a shadowed light is darkened (the levels and the point shadow)
 uniform vec3 shadowLightDirection; // unit direction TO the light the levels were rendered from
-uniform float sunShadowFade;   // 0..1, how much the levels shadow the sun: 0 while the moon casts them or neither
-uniform float moonShadowFade;  // 0..1, how much they shadow the moon. Both 0: the levels are not sampled at all
+uniform float sunShadowFade;   // 0..1, how much the levels and the far shadows shadow the sun: 0 while the moon casts them
+                               // or neither
+uniform float moonShadowFade;  // 0..1, how much they shadow the moon. Both 0: no map is sampled at all
 
 // Screen-space ambient occlusion, computed in a pre-pass (shaders/ao) and applied to ONLY the ambient term (so it never
 // dims the direct sun / point lights). aoMapActive false => no SSAO this frame.
@@ -404,13 +406,15 @@ vec3 ShadowLevelViewColor(vec3 color, vec3 worldPos)
     return color*mix(vec3(0.1), hue, reachFade);
 }
 
-// How much the levels darken the light that cast them at a point (0..1): their shadow times the shadow strength.
-// shadowPos is where the shadow map is read: the fragment's own position, or for a billboard the matching point of the
-// sprite as the light sees it (its shadow-map entry faces the light); shadowNormal the geometric normal there (unit), and
-// nDotL its cosine toward the shadow light (clamped at 0), which set how far the lookup moves off the surface.
+// How much the shadow light is darkened at a point (0..1): the darker of the levels' shadow and the terrain's far
+// shadow (common/far_shadow: the near casters are the levels', the far terrain the far shadows'), times the shadow
+// strength. shadowPos is where the shadow maps are read: the fragment's own position, or for a billboard the matching
+// point of the sprite as the light sees it (its shadow-map entry faces the light); shadowNormal the geometric normal there
+// (unit), and nDotL its cosine toward the shadow light (clamped at 0), which set how far the levels' lookup moves off the
+// surface.
 float SkyShadowAmount(vec3 shadowPos, vec3 shadowNormal, float nDotL)
 {
-    float shadow = ComputeShadow(shadowPos, shadowNormal, nDotL);
+    float shadow = max(ComputeShadow(shadowPos, shadowNormal, nDotL), FarShadowAt(shadowPos));
     return shadow*clamp(shadowStrength, 0.0, 1.0);
 }
 
@@ -435,13 +439,13 @@ float ScreenContactShadow()
     return (aoMapActive && drawInPrepass) ? 1.0 - texture(ambientOcclusionMap, gl_FragCoord.xy/aoResolution).b : 0.0;
 }
 
-// How much the levels darken the light that cast them on a model's or the terrain's surface (0..1), read off the
-// triangle's own face (FaceNormal): the maps hold the faces turned away from the light, so such a face lies in its own
-// shadow and takes all of it, and any other is read off its face. An interpolated or normal-mapped normal can lean
-// toward the light where its face leans away, and read the face's own entry in the map as lit: specks and bands of light
-// inside shade. (So a rounded low-poly shape's terminator follows its faces.) The screen's contact shadow darkens it too,
-// where the levels' texels leave a seam at the foot of what casts a shadow. Nothing while the levels shadow neither
-// light.
+// How much the shadow light is darkened on a model's or the terrain's surface (0..1), read off the triangle's own face
+// (FaceNormal): the levels' maps hold the faces turned away from the light, so such a face lies in its own shadow and
+// takes all of it, and any other is read off its face. An interpolated or normal-mapped normal can lean toward the light
+// where its face leans away, and read the face's own entry in the map as lit: specks and bands of light inside shade.
+// (So a rounded low-poly shape's terminator follows its faces.) The screen's contact shadow darkens it too, where the
+// levels' texels leave a seam at the foot of what casts a shadow, and the terrain's far shadow (SkyShadowAmount).
+// Nothing while neither light is shadowed.
 float FaceShadowAmount(vec3 worldPos, vec3 faceNormal)
 {
     if ((shadowStrength <= 0.0) || ((sunShadowFade <= 0.0) && (moonShadowFade <= 0.0)))

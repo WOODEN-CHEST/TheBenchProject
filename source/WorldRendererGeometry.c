@@ -150,6 +150,8 @@ void WorldRendererGeometry_LoadShaders(WorldRenderer* self)
     {
         WorldRendererCommon_PreparePalette(GameShader_GetRaylibShader(self->_unlit._skinnedShader),
             &self->_unlit._skinnedPalette);
+        WorldRendererCommon_PrepareCurvature(GameShader_GetRaylibShader(self->_unlit._skinnedShader),
+            &self->_unlit._skinnedCurvature);
     }
 }
 

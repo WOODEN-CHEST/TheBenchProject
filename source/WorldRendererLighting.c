@@ -129,6 +129,7 @@ static void CacheLitLocations(WorldRendererLitLocations* lit, Shader shader)
     lit->_locNightVisionSteepness = GetShaderLocation(shader, "nightVisionSteepness");
     lit->_locNightVisionStrength = GetShaderLocation(shader, "nightVisionStrength");
     lit->_locNightVisionTint = GetShaderLocation(shader, "nightVisionTint");
+    WorldRendererCommon_PrepareCurvature(shader, &lit->_curvature);
 }
 
 /* Caches a PBR program's per-material scalar-factor and map-presence locations, uploaded per material by the mesh draw
@@ -264,8 +265,9 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
     // read the haze's volume where the sky pass has the table.
     WorldRendererRain_PrepareLitShader(shader, &outLocations->_rain);
     AssignSamplerUnit(shader, outLocations->_atmosphere._locSkyViewTable, WorldRendererTextureUnit_RainSkyView);
-    // A screen's light, its picture on a unit of its own.
+    // A screen's light, its picture on a unit of its own; the terrain's far shadows, their maps on theirs.
     WorldRendererSurfaces_PrepareLitShader(shader, &outLocations->_screenLight);
+    WorldRendererFarShadows_PrepareLitShader(shader, &outLocations->_farShadow);
 
     // The shader's point-light arrays must hold the WORLD_MAX_FORWARD_LIGHTS the culling may select; with fewer,
     // upload only as many as fit (the shader also clamps its loop to its own array size).
@@ -503,11 +505,11 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     SetShaderValue(shader, lit->_locNightVisionStrength, &frame->NightVisionStrength, SHADER_UNIFORM_FLOAT);
     SetShaderValue(shader, lit->_locNightVisionTint, frame->NightVisionTint, SHADER_UNIFORM_VEC3);
 
-    // The levels darken the light they were rendered from (the sun or the moon), by the frame's shadow fade; with both
-    // fades 0, or no level read (they did not run), the shader samples no map at all.
+    // The levels and the far shadows darken the light they were made for (the sun or the moon), by the frame's shadow
+    // fade; with both fades 0 (neither ran) the shader samples no map at all.
     float SunShadowFade = 0.0f;
     float MoonShadowFade = 0.0f;
-    if (frame->AreShadowLevelsActive)
+    if (frame->AreShadowLevelsActive || frame->AreFarShadowsActive)
     {
         SunShadowFade = (frame->ShadowLight == WorldShadowLight_Sun) ? frame->ShadowFade : 0.0f;
         MoonShadowFade = (frame->ShadowLight == WorldShadowLight_Moon) ? frame->ShadowFade : 0.0f;
@@ -517,6 +519,7 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     float ShadowDir[3] = { frame->ShadowDirection.x, frame->ShadowDirection.y, frame->ShadowDirection.z };
     SetShaderValue(shader, lit->_locShadowLightDirection, ShadowDir, SHADER_UNIFORM_VEC3);
     UploadShadowLevels(self, frame, shader, lit);
+    WorldRendererFarShadows_UploadLitFrame(shader, &lit->_farShadow, frame);
 
     // Screen-space AO: the crisp overlay passes applyScreenAo=false (its full-res gl_FragCoord would mis-sample this
     // low-res map). aoMapActive false => the shader leaves the ambient term unoccluded.
@@ -557,6 +560,8 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
     }
 
     SetShaderValue(shader, lit->_locShadowStrength, &frame->ShadowStrength, SHADER_UNIFORM_FLOAT);
+    // The planet's curve in the vertex stage: every lit program draws a camera pass.
+    WorldRendererCommon_UploadCurvature(shader, &lit->_curvature, frame);
 }
 
 /* Binds the frame's shadow maps, AO map, shadow cube and the haze's volume to their fixed units (the lit shaders'
@@ -567,6 +572,7 @@ static void BindFrameTextures(WorldRenderer* self, const WorldRenderFrame* frame
     WorldRendererAtmosphere_BindVolume(self, frame);
     WorldRendererSkyVisibility_BindMap(self, frame);
     WorldRendererShadows_BindLevels(self, frame);
+    WorldRendererFarShadows_Bind(self, frame);
     WorldRendererClouds_BindShadow(self, frame);
     WorldRendererRain_BindFrameTextures(self, frame);
     if (applyScreenAo && frame->IsAmbientPrepassActive)
@@ -609,6 +615,12 @@ void WorldRendererLighting_UploadFrame(WorldRenderer* self, const WorldRenderFra
     UploadPbrFrame(self, frame, &self->_water._instanced._program, applyScreenAo, areReflectionsDeferred,
         ditherPixelScale);
     WorldRendererCrt_UploadPass(self, frame, windowPixelScale);
+    // The unlit fallback's skinned program curves as the lit ones do (the materials' own raylib shaders draw flat).
+    if (self->_unlit._skinnedShader != NULL)
+    {
+        WorldRendererCommon_UploadCurvature(GameShader_GetRaylibShader(self->_unlit._skinnedShader),
+            &self->_unlit._skinnedCurvature, frame);
+    }
     if (HasSprites)
     {
         Shader SpriteShader = GameShader_GetRaylibShader(self->_sprites._shader);

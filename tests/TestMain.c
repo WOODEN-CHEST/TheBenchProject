@@ -71,6 +71,7 @@ int main(void)
     WorldRenderSpaceTests_Run(&Run);
     WorldLodTests_Run(&Run);
     WorldShadowLevelsTests_Run(&Run);
+    WorldFarShadowsTests_Run(&Run);
     WorldInstancingTests_Run(&Run);
     WorldAtmosphereTests_Run(&Run);
     WorldSkyLightTests_Run(&Run);

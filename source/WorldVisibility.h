@@ -190,6 +190,10 @@ typedef struct WorldVisibilityViewStruct
     Vector3 CameraPosition;
     /** @brief The camera's frustum. */
     WorldFrustum CameraFrustum;
+    /** @brief The planet's curve in the camera's passes (WorldRenderFrame.CurvatureScale: 0 for a flat picture): the
+     *  camera's frustum tests each sphere where its points are drawn (WorldRenderSpace_CurveSphere). Every other test
+     *  (the shadow passes', the distances) is the flat world's. Anything not finite or below 0 counts as 0. */
+    float CurvatureScale;
     /** @brief Whether the camera's frustum and the shadow levels' boxes and rings cull (false: an A/B toggle that keeps
      *  everything the draw distances and opacities leave; the size cut, the shadow reach and the cube's reach stay). */
     bool IsCullingEnabled;

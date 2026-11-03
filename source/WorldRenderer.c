@@ -77,6 +77,8 @@ static void EnsureShaders(WorldRenderer* self)
     WorldRendererSprites_LoadShaders(self);
     WorldRendererGBuffer_LoadShaders(self);
     WorldRendererShadows_LoadShaders(self);
+    // The terrain's far shadows: their height maps' and sweep's programs.
+    WorldRendererFarShadows_Load(self);
     WorldRendererSky_LoadShader(self);
     WorldRendererClouds_Load(self);
     // The rain's programs are lit programs (after the lighting's) and the bolt draws with the sprites' quad; its map
@@ -273,6 +275,10 @@ static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera
     // No far plane with reversed depth: the draw distances alone decide how far the camera sees.
     outFrame->CameraFrustum = outFrame->IsDepthReversed ? WorldVisibility_ExtractReversedFrustum(outFrame->ViewProjection)
         : WorldVisibility_ExtractFrustum(outFrame->ViewProjection);
+    // What the camera sees curves with the atmosphere's planet while the world asks for it.
+    outFrame->CurvatureScale = outFrame->Environment->IsCurvatureEnabled
+        ? WORLD_RENDER_SPACE_CURVATURE_SCALE(WORLD_ATMOSPHERE_PLANET_RADIUS) : 0.0f;
+    outFrame->CurvatureClipUp = WorldRenderSpace_GetClipUp(outFrame->ViewProjection);
 }
 
 /* Picks every model's LOD for this frame (the camera's distance to it, the camera's zoom, the player's lod_distance_scale)
@@ -325,6 +331,7 @@ static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
     {
         .CameraPosition = { 0.0f, 0.0f, 0.0f },
         .CameraFrustum = frame->CameraFrustum,
+        .CurvatureScale = frame->CurvatureScale,
         .IsCullingEnabled = self->_isCullingEnabled,
         .ShadowLevelCount = frame->AreShadowLevelsActive ? frame->ShadowLevelCount : 0U,
         .ShadowReach = frame->ShadowLevelSettings.Reach,
@@ -446,6 +453,9 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
         frame->AreShadowLevelsActive && (frame->ShadowLight == WorldShadowLight_Moon));
     Status->Features[WorldRendererFeature_PointLightShadow] = StateOf(IsPointShadowAvailable(self),
         frame->IsPointShadowActive);
+    Status->Features[WorldRendererFeature_FarShadows] = StateOf(WorldRendererFarShadows_IsAvailable(self)
+        && (self->_farShadows._failedTextureSize == 0), frame->AreFarShadowsActive);
+    Status->Features[WorldRendererFeature_Curvature] = StateOf(true, frame->CurvatureScale > 0.0f);
     Status->Features[WorldRendererFeature_AmbientOcclusion] = StateOf(IsAoAvailable(self), frame->IsAoActive);
     Status->Features[WorldRendererFeature_ContactShadows] = StateOf(IsAoAvailable(self), frame->AreContactShadowsActive);
     Status->Features[WorldRendererFeature_Clouds] = StateOf(WorldRendererClouds_IsAvailable(self),
@@ -637,6 +647,7 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
     Status->ExposureBias = frame->ExposureBias;
     Status->InteriorView = self->_interior._view;
     WorldRendererShadows_UpdateStatus(self, frame);
+    WorldRendererFarShadows_UpdateStatus(self, frame);
     Status->Features[WorldRendererFeature_SkyVisibility] = StateOf(WorldRendererSkyVisibility_IsAvailable(self),
         frame->IsSkyVisibilityActive);
     // The terrain's and the sprites' shaders take the zones too, so they run without the PBR shader as well.
@@ -736,6 +747,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     Renderer->_pixelationEnabled = true;
     Renderer->_postfxEnabled = true;
     Renderer->_areContactShadowsEnabled = true;
+    Renderer->_farShadows._isEnabled = true;
     Renderer->_isNightVisionEnabled = true;
     Renderer->_isSpriteLightingEnabled = true;
     Renderer->_nightVision = NightVision_GetCalibration();
@@ -788,6 +800,7 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     WorldRendererAtmosphere_Unload(self);
     WorldRendererAtmosphere_Deconstruct(self);
     WorldRendererShadows_Unload(self);
+    WorldRendererFarShadows_Unload(self);
     WorldRendererSkyVisibility_Unload(self);
     WorldRendererClouds_Unload(self);
     WorldRendererRain_Unload(self);
@@ -930,14 +943,18 @@ static Error RenderFrame(WorldRenderer* self, World* world, const GameCamera* ca
     UpdateLods(self, &Frame, deltaSeconds);
     DecideShadows(self, &Frame);
     WorldRendererShadows_PrepareFrame(self, &Frame);
+    // The terrain's far shadows for the shadow light: their maps drawn again when due, their sweep's passes this frame.
+    WorldRendererFarShadows_PrepareFrame(self, &Frame);
     WorldRendererSkyVisibility_PrepareFrame(self, &Frame);
     // The rain: its streaks, splashes and bolt, and the rain map's box along the rain's fall.
     WorldRendererRain_PrepareFrame(self, &Frame, deltaSeconds);
     Error VisibilityResult = BuildVisibility(self, &Frame);
     if (VisibilityResult.Code != ErrorCode_Success)
     {
-        // The shadow levels were told they render this frame: they will not, so none of their maps is what it says.
+        // The shadow levels were told they render this frame: they will not, so none of their maps is what it says; nor
+        // will the far shadows' passes the schedule counted.
         WorldShadowLevels_Invalidate(&self->_shadowLevels._levels);
+        WorldFarShadows_Invalidate(&self->_farShadows._schedule);
         return VisibilityResult;
     }
     // The water in view and its drift, before the passes' decisions (the reflections count the water that mirrors).
@@ -961,6 +978,8 @@ static Error RenderFrame(WorldRenderer* self, World* world, const GameCamera* ca
     {
         WorldRendererShadows_RenderPointLight(self, &Frame);
     }
+    // The terrain's far shadows: the height maps when due and the sweep's passes of the frame.
+    WorldRendererFarShadows_Render(self, &Frame);
     // The sky's occupancy volume: the ambient pre-pass and the lit passes read it for every surface's share of the sky's
     // light.
     if (Frame.IsSkyVisibilityActive)
@@ -1103,6 +1122,8 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_ScreenLight:      return (const unsigned char*)u8"screen light";
         case WorldRendererFeature_Reflections:      return (const unsigned char*)u8"reflections";
         case WorldRendererFeature_Water:            return (const unsigned char*)u8"water";
+        case WorldRendererFeature_FarShadows:       return (const unsigned char*)u8"far shadows";
+        case WorldRendererFeature_Curvature:        return (const unsigned char*)u8"curvature";
         case WorldRendererFeature_Count:            break;
     }
     return (const unsigned char*)u8"unknown";
@@ -1164,6 +1185,7 @@ void WorldRenderer_LogStatus(const WorldRenderer* self)
     WorldRendererAtmosphere_LogStatus(self);
     WorldRendererLighting_LogStatus(self);
     WorldRendererShadows_LogStatus(self);
+    WorldRendererFarShadows_LogStatus(self);
     WorldRendererInterior_LogStatus(self);
     WorldRendererClouds_LogStatus(self);
     WorldRendererRain_LogStatus(self);
@@ -1385,6 +1407,16 @@ int32_t WorldRenderer_GetCloudQuality(const WorldRenderer* self)
 void WorldRenderer_SetShadowLevelViewEnabled(WorldRenderer* self, bool enabled)
 {
     self->_shadowLevels._isLevelViewEnabled = enabled;
+}
+
+void WorldRenderer_SetFarShadowsEnabled(WorldRenderer* self, bool enabled)
+{
+    self->_farShadows._isEnabled = enabled;
+}
+
+bool WorldRenderer_AreFarShadowsEnabled(const WorldRenderer* self)
+{
+    return self->_farShadows._isEnabled;
 }
 
 bool WorldRenderer_IsShadowLevelViewEnabled(const WorldRenderer* self)

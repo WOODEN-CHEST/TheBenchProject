@@ -581,6 +581,7 @@ void WorldRendererInstances_LoadShaders(WorldRenderer* self)
             "outlineFlag");
         State->_normalLocHazeMultiplier = GetShaderLocation(GameShader_GetRaylibShader(State->_normalShader),
             "hazeMultiplier");
+        WorldRendererCommon_PrepareCurvature(GameShader_GetRaylibShader(State->_normalShader), &State->_normalCurvature);
     }
     State->_depthShader = (self->_shadowLevels._depthShader != NULL) ? LoadTwin(self, DEPTH_INSTANCED_SHADER_ASSET_NAME,
         WorldInstancePass_Shadow, &State->_depthDither, &State->_depthInstancing) : NULL;

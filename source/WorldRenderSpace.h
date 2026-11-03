@@ -36,7 +36,18 @@
  * shadow matrices are relative to the camera, which is at (0, 0, 0). A shader never receives the absolute origin as
  * floats; a pattern anchored to the world (noise, waves, rain) gets the origin wrapped by the pattern's period, computed
  * in double on the CPU (agents/WorldRuntime.md, "Render space").
+ *
+ * THE PLANET'S CURVE (WorldRenderSpace_GetCurvatureDrop). The world is flat; what the camera sees curves with the
+ * planet: the camera's passes draw every point d^2 / 2R lower than it stands (d its horizontal distance from the camera,
+ * R the planet's radius), in their vertex stages (shaders/common/curvature.glsl, whose C mirror these functions are),
+ * by subtracting the drop times the pass's clip-space image of the world's up (WorldRenderSpace_GetClipUp) from the clip
+ * position. Everything else (fragment positions, lights, shadow maps, collision) stays the flat world's. The camera's
+ * frustum culls each sphere where its points are drawn (WorldRenderSpace_CurveSphere).
  */
+
+/** @brief The scale of the planet's curve for a planet's radius: 1 / (2 R), the drop in metres per square metre of
+ *  horizontal distance (curvatureScale in shaders/common/curvature.glsl). */
+#define WORLD_RENDER_SPACE_CURVATURE_SCALE(radius) ((float)(0.5 / (radius)))
 
 
 // Types.
@@ -220,3 +231,32 @@ bool WorldRenderSpace_HasSameCascadeUp(Vector3 a, Vector3 b);
  */
 WorldRenderCascade WorldRenderSpace_GetCascadeAt(Vector3Double origin, Vector3Double center, Vector3 towardLight,
     const WorldRenderCascadeShape* shape);
+
+/**
+ * @brief How far the camera's passes draw a render-space point below where it stands: its horizontal distance from the
+ *        camera squared, times the scale (common/curvature's CurvatureDrop, in float as the shader computes it).
+ * @param position The point in render space (the camera at the origin).
+ * @param scale The frame's curvature scale (WORLD_RENDER_SPACE_CURVATURE_SCALE of the planet's radius; 0: flat).
+ * @returns The drop in metres, >= 0 for a scale >= 0.
+ */
+float WorldRenderSpace_GetCurvatureDrop(Vector3 position, float scale);
+
+/**
+ * @brief A pass's clip-space image of the world's up direction (0, 1, 0, 0): the second column of its view-projection,
+ *        which the vertex stages scale by a point's drop and subtract from its clip position (curvatureClipUp).
+ * @param viewProjection The pass's view x projection (raymath's order: MatrixMultiply(View, Projection)).
+ * @returns The four clip components.
+ */
+Vector4 WorldRenderSpace_GetClipUp(Matrix viewProjection);
+
+/**
+ * @brief A bounding sphere where the camera's passes draw what it holds: its centre dropped by its own drop, its radius
+ *        grown by the most the drop varies over it ((2 |c_xz| r + r^2) x scale), so every dropped point of the sphere
+ *        lies in the result. Equal to the input at a scale of 0.
+ * @param center The sphere's centre in render space.
+ * @param radius Its radius (>= 0).
+ * @param scale The frame's curvature scale (>= 0).
+ * @param outCenter [out] The dropped centre; must not be NULL.
+ * @param outRadius [out] The grown radius; must not be NULL.
+ */
+void WorldRenderSpace_CurveSphere(Vector3 center, float radius, float scale, Vector3* outCenter, float* outRadius);

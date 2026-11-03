@@ -4,7 +4,11 @@
 // world_sprite_cube_depth). A sprite is one unit quad: x and y in [0, 1] (the image from left to right and bottom to
 // top), z 0, normal +Z. The renderer draws it with the sprite's matrix for the pass (source/SpriteTransform.h): its
 // orientation (facing the camera, or in a shadow pass the light), size, pivot and flips. The matrix's third column is
-// the quad's unit normal, so no inverse transpose is needed.
+// the quad's unit normal, so no inverse transpose is needed. In the camera's passes the picture curves with the planet
+// (common/curvature; fragPosition stays the flat world's); the shadow passes' programs never set its scale, so their
+// maps hold the flat world.
+
+#include "common/curvature"
 
 in vec3 vertexPosition;
 in vec2 vertexTexCoord;   // (x, 1 - y): v is 0 at the image's top row, as raylib textures are stored
@@ -54,11 +58,11 @@ void main()
         float side = (dot(normal, -world) >= 0.0) ? 1.0 : -1.0;
         world += normal*(side*decalOffset);
         fragPosition = world;
-        gl_Position = matProjection*(matView*vec4(world, 1.0));
+        gl_Position = CurvedClipPosition(matProjection*(matView*vec4(world, 1.0)), world);
     }
     else
     {
         fragPosition = world;
-        gl_Position = mvp*local;
+        gl_Position = CurvedClipPosition(mvp*local, world);
     }
 }

@@ -127,6 +127,21 @@ void WorldRendererCommon_SetDitherPixelScale(Shader shader, const WorldRendererD
     SetShaderValue(shader, locations->_locPixelScale, Scale, SHADER_UNIFORM_VEC2);
 }
 
+void WorldRendererCommon_PrepareCurvature(Shader shader, WorldRendererCurvatureLocations* outLocations)
+{
+    outLocations->_locScale = GetShaderLocation(shader, "curvatureScale");
+    outLocations->_locClipUp = GetShaderLocation(shader, "curvatureClipUp");
+}
+
+void WorldRendererCommon_UploadCurvature(Shader shader, const WorldRendererCurvatureLocations* locations,
+    const WorldRenderFrame* frame)
+{
+    SetShaderValue(shader, locations->_locScale, &frame->CurvatureScale, SHADER_UNIFORM_FLOAT);
+    float ClipUp[4] = { frame->CurvatureClipUp.x, frame->CurvatureClipUp.y, frame->CurvatureClipUp.z,
+        frame->CurvatureClipUp.w };
+    SetShaderValue(shader, locations->_locClipUp, ClipUp, SHADER_UNIFORM_VEC4);
+}
+
 void WorldRendererCommon_DrawDepthMesh(Shader shader, Mesh mesh, Matrix transform)
 {
     if ((shader.locs == NULL) || (mesh.vaoId == 0U))

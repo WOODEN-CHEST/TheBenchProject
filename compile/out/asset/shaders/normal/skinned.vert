@@ -4,6 +4,7 @@
 // normal moved by the object's pose first (common/skinning). The fragment stage is world_normal's own.
 
 #include "common/skinning"
+#include "common/curvature"
 
 // Vertex attributes (Raylib binds these by name from the mesh).
 in vec3 vertexPosition;
@@ -11,6 +12,7 @@ in vec3 vertexNormal;
 
 // Matrices supplied automatically by Raylib's DrawMesh path.
 uniform mat4 mvp;        // model-view-projection
+uniform mat4 matModel;   // model -> render space (the camera at the origin)
 uniform mat4 matNormal;  // transpose(inverse(matModel)): model -> world normal transform
 uniform mat4 matView;    // world -> view (camera) space
 
@@ -29,5 +31,5 @@ void main()
     vec3 worldNormal = normalize(vec3(matNormal*vec4(normal, 0.0)));
     fragNormalView = normalize(vec3(matView*vec4(worldNormal, 0.0)));
 
-    gl_Position = mvp*vec4(position, 1.0);
+    gl_Position = CurvedClipPosition(mvp*vec4(position, 1.0), vec3(matModel*vec4(position, 1.0)));
 }

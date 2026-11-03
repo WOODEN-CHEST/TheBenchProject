@@ -788,6 +788,7 @@ no ground haze, every distance as it is. Absent keys read as their defaults.
 | `ground_haze_albedo` | 58 | colour | (250, 250, 250) | The mist's colour: the share of the light it takes that it scatters (near white for mist, darker or tinted for smoke and dust). |
 | `ground_haze_glow` | 59 | [0, 0.99] | 0.8 | How strongly the mist scatters light forward (its phase function's g): its glow around the sun and the moon. |
 | `horizon_ground_height` | 60 | [-1e7, 1e7] m | 0 | "Far ground height": the world Y of the far ground the sky shows below the horizon, beyond the world's own ground; the sky is seen from the camera's height above it. |
+| `is_curvature_enabled` | 114 | bool | true | "Curved horizon": what the camera sees curves with the planet (everything drawn lies d^2 / 2R lower, d its distance from the camera, R the atmosphere's planet: 8 m at 10 km, 126 m at 40 km), so flat ground at `horizon_ground_height` meets the far ground at any distance and a sea bends down to the true horizon; the world itself, its collision and its lighting stay flat ([WorldRuntime.md](WorldRuntime.md), "Render space"). |
 
 `WORLD_ENVIRONMENT_MAX_AERIAL_DISTANCE_SCALE`, `_MAX_DISTANCE`, `_MAX_GROUND_HAZE_DENSITY`, `_MIN_GROUND_HAZE_THICKNESS`
 and `_MAX_GROUND_HAZE_THICKNESS` (WorldEnvironment.h) are the rules' bounds; `WorldAtmosphere_GetHaze` clamps to them and
@@ -890,7 +891,10 @@ surface's own: a material's `puddles` and `porosity` ([GameAssets.md](GameAssets
 The sun's and the moon's shadows ([WorldRuntime.md](WorldRuntime.md), "Sun and moon shadows"): `are_shadows_enabled`
 (default true) and `shadow_reach` (wire id 63, [0, 20000] m, default 4000: how far from the camera they reach, fading out
 over the last tenth; 0 none; `WORLD_ENVIRONMENT_MAX_SHADOW_REACH`, the levels' depth precision). How sharp they are is
-the player's ([Config.md](Config.md)).
+the player's ([Config.md](Config.md)). `are_far_terrain_shadows_enabled` (wire id 115, default true): terrain casts the
+sun's and the moon's shadows at any distance, past the reach, through height maps swept along the light
+([WorldRuntime.md](WorldRuntime.md), "Far terrain shadows"); off, terrain casts only within the reach. The player's quality
+may switch them off too.
 
 The night vision settings (the eye's dim-light vision, [WorldRuntime.md](WorldRuntime.md), "Night vision"):
 `night_vision_strength` ([0, 1], default 1: the eye; 0 keeps every colour, a long-exposure photo's night) and

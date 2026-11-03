@@ -287,6 +287,13 @@ void WorldLodTests_Run(TestRun* run);
  *  they were rendered, near the origin and 10 000 km out (WorldShadowLevelsTests.c; a private module of source/). */
 void WorldShadowLevelsTests_Run(TestRun* run);
 
+/** @brief The terrain's shadows at any distance: the nested maps' sizes and their frame on the coarsest texel grid, the
+ *  maps drawn from above, the light's two disc edges, the sweep's passes and their schedule across frames, the map a
+ *  point reads with its height lowered by the curve, the disc's share, and the sweep's doubling against a brute-force
+ *  march, ridges' shadows with the exclusion and a ray continued in the coarser map (WorldFarShadowsTests.c; a private
+ *  module of source/). */
+void WorldFarShadowsTests_Run(TestRun* run);
+
 /** @brief Instanced drawing's pure maths: cells (every copy in one, grid order, records composing back to the copies,
  *  spheres holding them, stable random values), LOD bands (around the switch distances, stopping at the middle,
  *  complementary and continuous, the zoom and the scales, a forced LOD), fades by the models' rule, the passes' rules

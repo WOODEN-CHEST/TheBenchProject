@@ -160,3 +160,20 @@ WorldRenderCascade WorldRenderSpace_StepCascade(WorldRenderCascadeGrid* grid, Ve
     grid->HasAnchor = true;
     return Cascade;
 }
+
+float WorldRenderSpace_GetCurvatureDrop(Vector3 position, float scale)
+{
+    return ((position.x * position.x) + (position.z * position.z)) * scale;
+}
+
+Vector4 WorldRenderSpace_GetClipUp(Matrix viewProjection)
+{
+    return (Vector4){ viewProjection.m4, viewProjection.m5, viewProjection.m6, viewProjection.m7 };
+}
+
+void WorldRenderSpace_CurveSphere(Vector3 center, float radius, float scale, Vector3* outCenter, float* outRadius)
+{
+    *outCenter = (Vector3){ center.x, center.y - WorldRenderSpace_GetCurvatureDrop(center, scale), center.z };
+    float Horizontal = sqrtf((center.x * center.x) + (center.z * center.z));
+    *outRadius = radius + (((2.0f * Horizontal * radius) + (radius * radius)) * scale);
+}

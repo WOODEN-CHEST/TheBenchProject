@@ -7,6 +7,7 @@
 #include "SkeletalAnimation.h"
 #include "WorldAtmosphere.h"
 #include "WorldClouds.h"
+#include "WorldFarShadows.h"
 #include "WorldInstancing.h"
 #include "WorldInterior.h"
 #include "WorldLod.h"
@@ -1850,6 +1851,72 @@ static void ShippedShadersDrawTheWater(TestRun* run)
 }
 
 // Public functions.
+/* The planet's curve and the terrain's far shadows: every camera pass's vertex stage drops its clip position by the curve
+ * (the lit, G-buffer and unlit twins, the terrain, the sprites, the bolt) and the far shadows' heights draw with it,
+ * while the shadow passes' stages stay flat (their maps hold the flat world); the water reads its bottom back flattened;
+ * every lit surface takes the darker of the levels' and the far shadow; the far shadows' map count and their sweep's "no
+ * ground" are the C side's. */
+static void ShippedShadersCurveAndCastFarShadows(TestRun* run)
+{
+    ShaderFixture Fixture;
+    if (!ShaderFixture_Construct(run, &Fixture)
+        || !TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, SHIPPED_ASSET_ROOT, &Fixture.Root))
+        || !TEST_CHECK_SUCCESS(run, AssetManager_AddSearchRoot(Fixture.Manager, Fixture.Root._data)))
+    {
+        ShaderFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    static const char* const Curved[] = { "pbr/vertex", "pbr/skinned", "normal/vertex", "normal/skinned",
+        "terrain/vertex", "unlit/skinned", "rain/bolt_vertex", "far_shadow/heights_vertex" };
+    for (size_t Index = 0U; Index < (sizeof(Curved) / sizeof(Curved[0])); Index++)
+    {
+        if (ExpandShippedStage(run, &Fixture, Curved[Index]))
+        {
+            TEST_CHECK(run, CountOccurrences(&Fixture.Text, "gl_Position = CurvedClipPosition(") == 1U);
+        }
+    }
+    static const char* const Instanced[] = { "WORLD_INSTANCED" };
+    static const char* const CurvedInstanced[] = { "pbr/instanced", "normal/instanced" };
+    for (size_t Index = 0U; Index < (sizeof(CurvedInstanced) / sizeof(CurvedInstanced[0])); Index++)
+    {
+        if (ExpandShippedStageWithDefines(run, &Fixture, CurvedInstanced[Index], Instanced, 1U))
+        {
+            TEST_CHECK(run, CountOccurrences(&Fixture.Text, "gl_Position = CurvedClipPosition(") == 1U);
+        }
+    }
+    if (ExpandShippedStage(run, &Fixture, "sprite/vertex"))
+    {
+        TEST_CHECK(run, CountOccurrences(&Fixture.Text, "gl_Position = CurvedClipPosition(") == 2U);
+    }
+    static const char* const Flat[] = { "depth/skinned", "cube_depth/vertex", "cube_depth/skinned" };
+    for (size_t Index = 0U; Index < (sizeof(Flat) / sizeof(Flat[0])); Index++)
+    {
+        if (ExpandShippedStage(run, &Fixture, Flat[Index]))
+        {
+            TEST_CHECK(run, CountOccurrences(&Fixture.Text, "Curved") == 0U);
+        }
+    }
+    if (ExpandShippedStageWithDefines(run, &Fixture, "depth/instanced", Instanced, 1U))
+    {
+        TEST_CHECK(run, CountOccurrences(&Fixture.Text, "Curved") == 0U);
+    }
+    if (ExpandShippedStage(run, &Fixture, "water/fragment"))
+    {
+        TEST_CHECK(run, CountOccurrences(&Fixture.Text, "vec3 bottom = CurvatureFlatten(point.xyz/point.w);") == 1U);
+    }
+    if (ExpandShippedStage(run, &Fixture, "pbr/fragment"))
+    {
+        TEST_CHECK(run, GetConstIntValue(&Fixture.Text, "FAR_SHADOW_MAP_COUNT") == (long)WORLD_FAR_SHADOW_MAP_COUNT);
+        TEST_CHECK(run, CountOccurrences(&Fixture.Text,
+            "float shadow = max(ComputeShadow(shadowPos, shadowNormal, nDotL), FarShadowAt(shadowPos));") == 1U);
+    }
+    if (ExpandShippedStage(run, &Fixture, "far_shadow/sweep"))
+    {
+        TEST_CHECK(run, GetConstValue(&Fixture.Text, "FAR_SWEEP_NO_GROUND") == (double)WORLD_FAR_SHADOW_NO_GROUND);
+    }
+    ShaderFixture_Deconstruct(run, &Fixture);
+}
+
 void ShaderSourceTests_Run(TestRun* run)
 {
     static const TestCase Cases[] =
@@ -1867,6 +1934,7 @@ void ShaderSourceTests_Run(TestRun* run)
         { "defines_follow_the_version_line", DefinesFollowTheVersionLine },
         { "define_names_are_checked", DefineNamesAreChecked },
         { "shipped_sky_and_pbr_share_one_atmosphere", ShippedSkyAndPbrShareOneAtmosphere },
+        { "shipped_shaders_curve_and_cast_far_shadows", ShippedShadersCurveAndCastFarShadows },
         { "shipped_atmosphere_matches_its_mirror", ShippedAtmosphereMatchesItsMirror },
         { "shipped_sky_light_matches_its_mirror", ShippedSkyLightMatchesItsMirror },
         { "shipped_shaders_share_one_haze", ShippedShadersShareOneHaze },

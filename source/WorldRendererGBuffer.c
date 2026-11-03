@@ -191,6 +191,7 @@ void WorldRendererGBuffer_LoadShaders(WorldRenderer* self)
         self->_gbuffer._spriteLocUvRect = GetShaderLocation(RayShader, "uvRect");
         self->_gbuffer._spriteLocAlphaCutoff = GetShaderLocation(RayShader, "alphaCutoff");
         WorldRendererCommon_PrepareDither(RayShader, &self->_gbuffer._spriteDither); // stays solid (IsSolidInGBuffer)
+        WorldRendererCommon_PrepareCurvature(RayShader, &self->_gbuffer._spriteCurvature);
     }
 
     // Model normal/mask shader: without it neither outlines nor AO can run (both read the G-buffer).
@@ -201,6 +202,7 @@ void WorldRendererGBuffer_LoadShaders(WorldRenderer* self)
         self->_gbuffer._locOutlineFlag = GetShaderLocation(RayShader, "outlineFlag");
         self->_gbuffer._locHazeMultiplier = GetShaderLocation(RayShader, "hazeMultiplier");
         WorldRendererCommon_PrepareDither(RayShader, &self->_gbuffer._dither); // stays solid (IsSolidInGBuffer)
+        WorldRendererCommon_PrepareCurvature(RayShader, &self->_gbuffer._curvature);
     }
 
     // Its skinned twin. Optional: without it skinned meshes draw their bind pose into the G-buffer.
@@ -214,6 +216,7 @@ void WorldRendererGBuffer_LoadShaders(WorldRenderer* self)
         self->_gbuffer._skinnedLocHazeMultiplier = GetShaderLocation(RayShader, "hazeMultiplier");
         WorldRendererCommon_PrepareDither(RayShader, &self->_gbuffer._skinnedDither); // stays solid like its twin
         WorldRendererCommon_PreparePalette(RayShader, &self->_gbuffer._skinnedPalette);
+        WorldRendererCommon_PrepareCurvature(RayShader, &self->_gbuffer._skinnedCurvature);
     }
 
     // AO pre-pass shader and its blur. Optional (without both, or without a samplable-depth G-buffer, AO is simply
@@ -318,8 +321,34 @@ void WorldRendererGBuffer_ReleaseTargets(WorldRenderer* self)
  * gets outlined). Colour blending is DISABLED so the encoded normal (RGB) and the flag (A, which is 0.5 for
  * non-outline surfaces) are written verbatim — with blending on, an alpha of 0.5 would blend the normal with the
  * cleared background and corrupt it. */
+/* Uploads the frame's curve to every G-buffer program that loaded: the picture curves as the scene's does. */
+static void UploadCurvature(WorldRenderer* self, const WorldRenderFrame* frame)
+{
+    WorldRendererGBufferState* State = &self->_gbuffer;
+    if (State->_shader != NULL)
+    {
+        WorldRendererCommon_UploadCurvature(GameShader_GetRaylibShader(State->_shader), &State->_curvature, frame);
+    }
+    if (State->_skinnedShader != NULL)
+    {
+        WorldRendererCommon_UploadCurvature(GameShader_GetRaylibShader(State->_skinnedShader), &State->_skinnedCurvature,
+            frame);
+    }
+    if (State->_spriteShader != NULL)
+    {
+        WorldRendererCommon_UploadCurvature(GameShader_GetRaylibShader(State->_spriteShader), &State->_spriteCurvature,
+            frame);
+    }
+    if (self->_instances._normalShader != NULL)
+    {
+        WorldRendererCommon_UploadCurvature(GameShader_GetRaylibShader(self->_instances._normalShader),
+            &self->_instances._normalCurvature, frame);
+    }
+}
+
 void WorldRendererGBuffer_RenderNormals(WorldRenderer* self, const WorldRenderFrame* frame)
 {
+    UploadCurvature(self, frame);
     BeginTextureMode(self->_gbuffer._target);
     WorldRendererCommon_BeginCameraDepth(self, frame); // the scene's depth convention
     ClearBackground(BLANK); // RGBA (0,0,0,0): A=0 = "not a surface" everywhere the geometry does not draw

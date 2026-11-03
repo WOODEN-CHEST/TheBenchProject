@@ -1,5 +1,7 @@
 #version 330
 
+#include "common/curvature"
+
 // Vertex attributes (Raylib binds these by name from the mesh).
 in vec3 vertexPosition;
 in vec2 vertexTexCoord;
@@ -12,7 +14,7 @@ uniform mat4 matModel;   // model matrix (into render space: the world's orienta
 uniform mat4 matNormal;  // transpose(inverse(matModel)), for correct normal transform
 
 // Interpolated outputs consumed by the fragment stage.
-out vec3 fragPosition;   // render-space surface position (relative to the camera)
+out vec3 fragPosition;   // render-space surface position (relative to the camera; the flat world's, common/curvature)
 out vec2 fragTexCoord;
 out vec3 fragNormal;     // world-space surface normal
 out vec4 fragColor;
@@ -24,5 +26,5 @@ void main()
     fragColor = vertexColor;
     fragNormal = normalize(vec3(matNormal*vec4(vertexNormal, 0.0)));
 
-    gl_Position = mvp*vec4(vertexPosition, 1.0);
+    gl_Position = CurvedClipPosition(mvp*vec4(vertexPosition, 1.0), fragPosition);
 }

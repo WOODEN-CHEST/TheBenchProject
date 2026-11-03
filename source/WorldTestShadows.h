@@ -17,7 +17,7 @@
  * runtime object (never saved) and its children, made when it is first shown, around the terrain's object.
  *
  * Keys (raw debug keys, read in Update after the UI had first refusal): keypad + shows and hides the far field (with
- * Shift it is the sea's: WorldTestWater.h); keypad *
+ * Shift it is the sea's: WorldTestWater.h); keypad * (with Shift it is the far terrain's: WorldTestFarTerrain.h)
  * switches the shadow levels' debug view (WorldRenderer_SetShadowLevelViewEnabled: every lit surface tinted by the level
  * its shadow comes from). Each is logged.
  */

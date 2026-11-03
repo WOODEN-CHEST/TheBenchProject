@@ -4,7 +4,10 @@
 // matrix places. The palette's sixteen weights come four normalized bytes at a time at attribute locations 9 to 12:
 // raylib's instance-matrix locations, free here because a terrain is never instanced nor skinned (agents/WorldRuntime.md,
 // "Vertex attributes"); location 13 carries the vertex's flags. A face material's vertices carry that material's
-// weight alone and the face-material flag, so its faces take it outright and the rules leave them as they are.
+// weight alone and the face-material flag, so its faces take it outright and the rules leave them as they are. The
+// picture curves with the planet (common/curvature); fragPosition stays the flat world's.
+
+#include "common/curvature"
 
 in vec3 vertexPosition;
 in vec3 vertexNormal;
@@ -43,5 +46,5 @@ void main()
     fragWeights2 = vertexWeights2;
     fragWeights3 = vertexWeights3;
     fragFaceMaterial = vertexFlags.x;
-    gl_Position = mvp*vec4(vertexPosition, 1.0);
+    gl_Position = CurvedClipPosition(mvp*vec4(vertexPosition, 1.0), fragPosition);
 }

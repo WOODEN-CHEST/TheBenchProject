@@ -145,6 +145,19 @@ static void ReadsTheShadowQuality(TestRun* run)
     TEST_CHECK_SUCCESS(run, LoadConfigText(run, "shadow_map_size_bounds",
         "{ \"shadow_map_size\": 128, \"shadow_level_factor\": 9 }", &Config));
     TEST_CHECK(run, (Config.ShadowMapSize == 2048) && (Config.ShadowLevelFactor == 4.0f));
+
+    // The far shadows: on with 1024 texels by default; both read; a size out of range or not a power of two keeps it.
+    TEST_CHECK(run, Defaults.AreFarShadowsEnabled && (Defaults.FarShadowMapSize == 1024));
+    TEST_CHECK_SUCCESS(run, LoadConfigText(run, "far_shadows",
+        "{ \"are_far_shadows_enabled\": false, \"far_shadow_map_size\": 512 }", &Config));
+    TEST_CHECK(run, !Config.AreFarShadowsEnabled && (Config.FarShadowMapSize == 512));
+    const char* const BadSizes[] = { "{ \"far_shadow_map_size\": 128 }", "{ \"far_shadow_map_size\": 4096 }",
+        "{ \"far_shadow_map_size\": 1000 }" };
+    for (size_t Index = 0U; Index < (sizeof(BadSizes) / sizeof(BadSizes[0])); Index++)
+    {
+        TEST_CHECK_SUCCESS(run, LoadConfigText(run, "far_shadow_map_size_bounds", BadSizes[Index], &Config));
+        TEST_CHECK(run, Config.AreFarShadowsEnabled && (Config.FarShadowMapSize == 1024));
+    }
 }
 
 /* cloud_quality: off, low or high, high by default; anything else keeps the default. */

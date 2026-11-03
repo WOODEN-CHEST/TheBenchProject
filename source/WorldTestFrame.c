@@ -17,6 +17,7 @@
 #include "WorldTestScreens.h"
 #include "WorldTestShadows.h"
 #include "WorldTestWater.h"
+#include "WorldTestFarTerrain.h"
 #include "WorldTestWeather.h"
 #include "WorldFile.h"
 #include "WorldObject.h"
@@ -242,6 +243,9 @@ typedef struct WorldTestFrameStruct
     WorldTestShadows _testShadows;
     /** The water's test content: the sea (Shift + keypad +). */
     WorldTestWater _testWater;
+    /** The far terrain's test content: the coast (Shift + keypad *), the picture's curve (Scroll Lock) and the far
+     *  shadows' switch (Pause). */
+    WorldTestFarTerrain _testFarTerrain;
     /** The weather: the test world's climate run on the frame's clock, and its keys (Insert, Home, End, Page Up, Page
      *  Down, the backslash). */
     WorldTestWeather _testWeather;
@@ -1054,6 +1058,7 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         WorldTestInstances_LogStatus(&frame->_testInstances);
         WorldTestShadows_LogStatus(&frame->_testShadows);
         WorldTestWater_LogStatus(&frame->_testWater);
+        WorldTestFarTerrain_LogStatus(&frame->_testFarTerrain);
         WorldTestWeather_LogStatus(&frame->_testWeather);
         LogCameraStatus(frame);
         LogFrameTimes(frame);
@@ -1812,6 +1817,7 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
     WorldTestInstances_HandleInput(&frame->_testInstances, input);
     WorldTestShadows_HandleInput(&frame->_testShadows, input);
     WorldTestWater_HandleInput(&frame->_testWater, input);
+    WorldTestFarTerrain_HandleInput(&frame->_testFarTerrain, input);
     WorldTestWeather_HandleInput(&frame->_testWeather, input, &frame->_clock);
     WorldTestScreens_HandleInput(&frame->_testScreens, input, frame->_renderer);
 }
@@ -2198,6 +2204,8 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         services->Logger);
     WorldTestShadows_Construct(&Frame->_testShadows, &Frame->_world, Frame->_renderer, services->Logger);
     WorldTestWater_Construct(&Frame->_testWater, &Frame->_world, services->Logger);
+    WorldTestFarTerrain_Construct(&Frame->_testFarTerrain, &Frame->_world, Frame->_renderer, services->Assets,
+        services->AssetTypes.Terrain, services->Logger);
     WorldTestWeather_Construct(&Frame->_testWeather, &Frame->_world, services->Assets, services->Logger);
 
     Frame->_services = services;

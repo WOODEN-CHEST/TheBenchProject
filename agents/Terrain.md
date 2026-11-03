@@ -322,6 +322,16 @@ placed again when the object moves. Characters stand and walk on it as on any me
   built, its forward lights, screen light, haze, flags and zones uploaded only where they differ from the chunk before
   (`WorldRendererLitRun`), its dither only when its fade does, the key's tint and its object's tint likewise; the
   terrain's record looked up once per terrain. The pictures are `DrawMesh`'s bit for bit.
+- **Shadows at any distance** ([WorldRuntime.md](WorldRuntime.md), "Far terrain shadows"): past the shadow levels' reach
+  only terrain casts, through nested height maps of every terrain's top surface around the camera (the chunks that cast
+  shadows, within their shadow distance, drawn from above: `WorldRendererTerrain_DrawFarShadowHeights`) swept along the
+  sun's or the moon's light: a ridge 15 km away shades the valley at sunset, softly as the light's disc does. Far
+  terrain needs no setting of its own for it: its shadow distance (its draw distance when it gives none) is how far it
+  casts.
+- **The picture's curve** ([WorldRuntime.md](WorldRuntime.md), "Render space"): the terrain's vertex stage drops every
+  vertex by the planet's curve as every camera pass does, so a flat terrain's edge at the far ground's height meets it at
+  any distance. A face bends only at its vertices: far terrain's faces of 2 % of their distance stray from the curve by
+  a few centimetres at most (2.5 cm for an 800 m face 40 km out).
 - **The chunk key** (minus in the test frame, `WorldRenderer_SetTerrainKeyEnabled`): each chunk mixes a colour by its
   cell (X and Z each modulo 3: neighbours always differ) into its lit colour, and the wireframe of the chunks in view is
   drawn over it, scaled 0.999 toward the camera so it lies on the surface.
@@ -360,6 +370,16 @@ slot as Blender exports them; object 51 of the test world places it at the origi
 
 It loads as 30 976 vertices and 61 174 triangles (6 of them holes, 72 the dirt patch) in 256 chunks; the start view
 draws about 90 of them.
+
+**The far terrain** (`asset_source/scripts/placeholder_far_terrain.py`, the standard library only; shown by Shift with the
+keypad's * in the test frame: [WorldRuntime.md](WorldRuntime.md), "WorldTestFrame") is a coast around the town for the
+far shadows and the curve: hills 3 to 8 km out and ridged mountains 10 to 40 km out to the north (-Z), peaks to about
+1.5 km, the sea floor 40 m below sea level to the south (with the test frame's sea, a shore along a wavy coast through
+the town), the ground falling to the far ground's height at its inner edge, 2.5 km out. A polar grid whose rings and
+segments are 2 % of their radius (50 m at 2.5 km, 800 m at 40 km), cut into 26 terrains on a 14 km pitch
+(`compile/out/asset/terrains/test_world/far/test_far_terrain_<a>_<b>`, each placed at ((a - 4) x 14 km, 0,
+(b - 4) x 14 km)), 63 000 triangles in 4 km chunks, drawn to 100 km, without collision; grass, with rock on slopes over
+30 degrees and above 1100 m and gravel on the shore.
 
 ## Tests
 
@@ -410,6 +430,9 @@ draws about 90 of them.
   denser or larger far terrain needs it (ask the owner).
 - **Large chunks share their forward lights** (8 per chunk by its sphere) and are culled whole: ground with lamps keeps
   small chunks.
+- **Coarse faces show a faceted terminator at a low sun**: a face turned away from the light takes the whole shadow
+  ([WorldRuntime.md](WorldRuntime.md), "Sun and moon shadows", "Off the surface"), so far terrain's faces of hundreds of
+  metres darken one by one across a smooth slope's terminator, where a finer mesh's would form an even edge.
 - **Far terrain's cost is its density**: faces may be any size, so far terrain is authored coarse, an edge of 1 to 2 % of
   its distance from the player (`references/asset_structure.md`, "Density"). Measured on a GTX 980 Ti at 640 x 360, an
   80 km ring of mountains 3.5 to 40 km out in 4 km chunks: seen whole from 900 m up it costs 0.4 ms with edges of 2 %
