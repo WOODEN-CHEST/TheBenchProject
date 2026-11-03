@@ -86,9 +86,11 @@ typedef struct CollisionMeshStruct CollisionMesh;
 /** @brief The grid every position lies on, in metres (1/1024 m): chunk positions relative to their centres are exact in
  *  float on it. */
 #define TERRAIN_POSITION_QUANTUM (1.0 / 1024.0)
-/** @brief The smallest, largest and default chunk sizes, in metres. */
+/** @brief The smallest, largest and default chunk sizes, in metres. Large chunks are for far terrain: a pass draws each
+ *  chunk in its view, so a 16 km stretch of distant hills costs 16 draws in 4 km chunks and 4096 in 256 m ones; small
+ *  ones for the ground near the camera (each chunk takes its own forward lights and is culled on its own). */
 #define TERRAIN_MIN_CHUNK_SIZE 8.0f
-#define TERRAIN_MAX_CHUNK_SIZE 256.0f
+#define TERRAIN_MAX_CHUNK_SIZE 4096.0f
 #define TERRAIN_DEFAULT_CHUNK_SIZE 32.0f
 /** @brief Triangle flags: a hole (not drawn, no collision). */
 #define TERRAIN_TRIANGLE_FLAG_HOLE ((uint8_t)0x1U)

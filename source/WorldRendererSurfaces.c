@@ -284,19 +284,29 @@ void WorldRendererSurfaces_UploadScreenLight(const WorldRenderer* self, Shader s
     {
         return;
     }
-    const WorldRendererScreenLight* Nearest = WorldRendererSurfaces_FindScreenLight(self, center, radius);
-    int Active = (Nearest != NULL) ? 1 : 0;
-    SetShaderValue(shader, locations->_locActive, &Active, SHADER_UNIFORM_INT);
-    if (Nearest == NULL)
+    WorldRendererSurfaces_UploadFoundScreenLight(shader, locations,
+        WorldRendererSurfaces_FindScreenLight(self, center, radius));
+}
+
+void WorldRendererSurfaces_UploadFoundScreenLight(Shader shader, const WorldRendererScreenLightLocations* locations,
+    const WorldRendererScreenLight* light)
+{
+    if (locations->_locActive < 0)
     {
         return;
     }
-    float Shape[4] = { Nearest->Area, Nearest->Range, Nearest->Level, Nearest->Whiteness };
-    SetShaderValue(shader, locations->_locPosition, &Nearest->Position, SHADER_UNIFORM_VEC3);
-    SetShaderValue(shader, locations->_locNormal, &Nearest->Normal, SHADER_UNIFORM_VEC3);
+    int Active = (light != NULL) ? 1 : 0;
+    SetShaderValue(shader, locations->_locActive, &Active, SHADER_UNIFORM_INT);
+    if (light == NULL)
+    {
+        return;
+    }
+    float Shape[4] = { light->Area, light->Range, light->Level, light->Whiteness };
+    SetShaderValue(shader, locations->_locPosition, &light->Position, SHADER_UNIFORM_VEC3);
+    SetShaderValue(shader, locations->_locNormal, &light->Normal, SHADER_UNIFORM_VEC3);
     SetShaderValue(shader, locations->_locShape, Shape, SHADER_UNIFORM_VEC4);
-    SetShaderValue(shader, locations->_locGlow, &Nearest->Glow, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(shader, locations->_locGlow, &light->Glow, SHADER_UNIFORM_FLOAT);
     rlActiveTextureSlot(WorldRendererTextureUnit_ScreenLight);
-    rlEnableTexture(Nearest->Picture.id);
+    rlEnableTexture(light->Picture.id);
     rlActiveTextureSlot(0);
 }

@@ -308,6 +308,16 @@ typedef struct WorldRenderTerrainStruct
     /** @brief The resolved terrain, held under the model user passed to Sync; NULL when the component names none or it
      *  failed to load (then the object draws no terrain). Read-only: the renderer reads its mesh, never writes it. */
     const TerrainAsset* Asset;
+    /** @brief What its chunks were last listed from: whether they were, the terrain and its mesh's revision (which a new
+     *  chunk layout changes too), the component revision, and its object's world matrix, final tint and whether it was
+     *  shown. While none of it changes for any terrain, Sync only moves the listed chunks to the frame's origin. */
+    bool IsListed;
+    const TerrainAsset* ListedAsset;
+    uint32_t ListedMeshRevision;
+    uint32_t ListedRevision;
+    Matrix4Double ListedWorld;
+    Color ListedTint;
+    bool WasListedShown;
 } WorldRenderTerrain;
 
 /** @brief One chunk of a placed terrain as the passes draw it this frame: every chunk with a surface of a terrain
@@ -493,10 +503,14 @@ typedef struct WorldRenderCacheStruct
      *  order. */
     GenericBuffer _ambientZones;
     /** @brief WorldRenderTerrain entries, one per terrain component, in the world's component order; a scratch
-     *  buffer for re-matching them; and this frame's WorldRenderTerrainChunk entries. */
+     *  buffer for re-matching them; and this frame's WorldRenderTerrainChunk entries. Whether the chunk list holds
+     *  every entry's chunks as listed for them (re-matching the entries makes it stale), and how many times the chunks
+     *  were listed afresh since construction (WorldRenderCache_GetTerrainListingCount). */
     GenericBuffer _terrains;
     GenericBuffer _terrainRematch;
     GenericBuffer _terrainChunks;
+    bool _areTerrainChunksListed;
+    uint64_t _terrainListingCount;
     /** @brief WorldRenderInstances entries, one per model instances component, in the world's component order; a
      *  scratch buffer for re-matching them; this frame's WorldRenderInstanceCell entries; the next cells' build id. */
     GenericBuffer _instances;
@@ -702,6 +716,18 @@ static inline const WorldRenderTerrainChunk* WorldRenderCache_GetTerrainChunks(c
     const void* Entries = self->_terrainChunks._data;
     *outCount = self->_terrainChunks._count;
     return Entries;
+}
+
+/**
+ * @brief Returns how many times Sync listed the terrain chunks afresh since the cache was made. A Sync where no terrain's
+ *        asset, mesh, component, object placement, tint or visibility changed only moves the listed chunks to its origin
+ *        and leaves the count as it was.
+ * @param self The cache; must not be NULL.
+ * @returns The count.
+ */
+static inline uint64_t WorldRenderCache_GetTerrainListingCount(const WorldRenderCache* self)
+{
+    return self->_terrainListingCount;
 }
 
 /**

@@ -10,8 +10,14 @@
 // the materials' CPU pixels (the asset is read, never written) and bound to their units before the terrain's chunks draw,
 // with the materials' and rules' uniforms. Per chunk the shader gets the chunk's centre in the terrain's own space
 // wrapped by each material's tile size and by each rule's noise period, in double (the maps and the noise lie in the
-// terrain's space, so they move with its object; the shader adds each vertex's exact offset from the centre), and its
-// centre's height in the world (the rules' height is absolute).
+// terrain's space, so they move with its object; the shader adds each vertex's exact offset from the centre; worked out
+// when the chunk's mesh is built), and its centre's height in the world (the rules' height is absolute).
+//
+// THE DRAWS. A pass draws many chunks in one program, so it draws them as one run (WorldRendererCommon_BeginMeshRun):
+// the program bound once, each chunk's matrices as raylib's DrawMesh works them out, and of its other uniforms only those
+// that differ from the chunk before (its lights, its place's haze and flags, its dither, its tint): the program holds
+// for every draw what DrawMesh and the uploads before it gave it, at a fraction of the cost. Only the unlit fallback and
+// the key's wireframe still go through DrawMesh.
 
 #include <math.h>
 #include <stdio.h>
@@ -210,12 +216,42 @@ static void UploadPart(const TerrainMesh* mesh, const TerrainChunk* chunk, const
     outPart->_mesh = Part;
 }
 
-/* Builds a chunk's GPU mesh from the terrain's chunk (replacing the one it had). */
-static void BuildChunkMesh(const TerrainMesh* mesh, uint32_t chunk, WorldRendererTerrainChunkMesh* outMesh)
+/* A chunk's place for the lit shader (WorldRendererTerrainChunkMesh): its centre in the terrain's own space wrapped by
+ * each palette material's tile size and by each rule's noise period, in double. */
+static void BuildChunkPlace(const TerrainChunk* chunk, const WorldRendererTerrainUniforms* uniforms,
+    WorldRendererTerrainChunkMesh* outMesh)
+{
+    Vector3Double Own = TerrainChunk_GetCenter(chunk);
+    double Center[3] = { Own.X, Own.Y, Own.Z };
+    int MaterialCount = (uniforms->_materialCount > 0) ? uniforms->_materialCount : 1;
+    for (int Index = 0; Index < MaterialCount; Index++)
+    {
+        for (int Axis = 0; Axis < 3; Axis++)
+        {
+            outMesh->_uvOffsets[(Index * 3) + Axis] = (float)TerrainBlend_WrapCoordinate(Center[Axis],
+                uniforms->_tileSizes[Index]);
+        }
+    }
+    for (int Index = 0; Index < uniforms->_ruleCount; Index++)
+    {
+        for (int Axis = 0; Axis < 3; Axis++)
+        {
+            double Period = uniforms->_noisePeriods[Index];
+            outMesh->_noiseOffsets[(Index * 3) + Axis] = (Period > 0.0)
+                ? (float)TerrainBlend_WrapCoordinate(Center[Axis], Period) : 0.0f;
+        }
+    }
+}
+
+/* Builds a chunk's GPU mesh from the terrain's chunk (replacing the one it had), with its place for its terrain's
+ * materials and rules. */
+static void BuildChunkMesh(const TerrainMesh* mesh, uint32_t chunk, const WorldRendererTerrainUniforms* uniforms,
+    WorldRendererTerrainChunkMesh* outMesh)
 {
     FreeChunkMesh(outMesh);
     const TerrainChunk* Source = TerrainMesh_GetChunk(mesh, chunk);
     outMesh->_revision = TerrainChunk_GetRevision(Source);
+    BuildChunkPlace(Source, uniforms, outMesh);
     GenericBuffer Parts;
     GenericBuffer_AllocateVariable(&Parts, 1U, sizeof(TerrainChunkPart));
     GenericBuffer Vertices;
@@ -445,44 +481,28 @@ static void UploadTerrain(WorldRenderer* self, Shader shader, const WorldRendere
     }
 }
 
-/* A chunk's place for its maps and its rules' noise: its centre in the terrain's space wrapped by each material's tile
- * size and by each rule's noise period (in double: what the shader adds its offset from the centre to), and its centre's
- * height in the world. */
-static void UploadChunkPlace(const WorldRenderer* self, Shader shader, const WorldRendererTerrainMeshes* record,
-    const WorldRenderTerrainChunk* chunk)
+/* Uploads a chunk's place into the lit program, bound: its centre in the terrain's space wrapped by each material's tile
+ * size and by each rule's noise period (worked out when its mesh was built: what the shader adds its offset from the
+ * centre to), and its centre's height in the world. */
+static void UploadChunkPlace(const WorldRenderer* self, const WorldRendererTerrainMeshes* record,
+    const WorldRendererTerrainChunkMesh* gpu, const WorldRenderTerrainChunk* chunk)
 {
     const WorldRendererTerrainState* State = &self->_terrain;
     const WorldRendererTerrainUniforms* Uniforms = &record->_uniforms;
-    Vector3Double Own = TerrainChunk_GetCenter(TerrainMesh_GetChunk(TerrainAsset_GetMesh(chunk->Asset),
-        chunk->ChunkIndex));
-    double Center[3] = { Own.X, Own.Y, Own.Z };
-    float UvOffsets[TERRAIN_MAX_MATERIALS * 3U];
     int MaterialCount = (Uniforms->_materialCount > 0) ? Uniforms->_materialCount : 1;
-    for (int Index = 0; Index < MaterialCount; Index++)
+    if (State->_locMaterialUvOffset > -1)
     {
-        for (int Axis = 0; Axis < 3; Axis++)
-        {
-            UvOffsets[(Index * 3) + Axis] = (float)TerrainBlend_WrapCoordinate(Center[Axis],
-                Uniforms->_tileSizes[Index]);
-        }
+        rlSetUniform(State->_locMaterialUvOffset, gpu->_uvOffsets, SHADER_UNIFORM_VEC3, MaterialCount);
     }
-    SetShaderValueV(shader, State->_locMaterialUvOffset, UvOffsets, SHADER_UNIFORM_VEC3, MaterialCount);
-    if (Uniforms->_ruleCount > 0)
+    if ((Uniforms->_ruleCount > 0) && (State->_locRuleNoiseOffset > -1))
     {
-        float NoiseOffsets[WORLD_RENDERER_TERRAIN_MAX_RULES * 3U];
-        for (int Index = 0; Index < Uniforms->_ruleCount; Index++)
-        {
-            for (int Axis = 0; Axis < 3; Axis++)
-            {
-                double Period = Uniforms->_noisePeriods[Index];
-                NoiseOffsets[(Index * 3) + Axis] = (Period > 0.0)
-                    ? (float)TerrainBlend_WrapCoordinate(Center[Axis], Period) : 0.0f;
-            }
-        }
-        SetShaderValueV(shader, State->_locRuleNoiseOffset, NoiseOffsets, SHADER_UNIFORM_VEC3, Uniforms->_ruleCount);
+        rlSetUniform(State->_locRuleNoiseOffset, gpu->_noiseOffsets, SHADER_UNIFORM_VEC3, Uniforms->_ruleCount);
     }
     float Height = (float)chunk->WorldMatrix.M[13];
-    SetShaderValue(shader, State->_locChunkHeight, &Height, SHADER_UNIFORM_FLOAT);
+    if (State->_locChunkHeight > -1)
+    {
+        rlSetUniform(State->_locChunkHeight, &Height, SHADER_UNIFORM_FLOAT, 1);
+    }
 }
 
 
@@ -523,21 +543,31 @@ static const WorldRendererTerrainMeshes* FindRecord(const WorldRenderer* self, c
     return NULL;
 }
 
+/* The record of a listed chunk's terrain: @p current when it is that terrain's (a pass draws a terrain's chunks one after
+ * another), else found; NULL before it has one. */
+static const WorldRendererTerrainMeshes* GetChunkRecord(const WorldRenderer* self, const WorldRenderTerrainChunk* chunk,
+    const WorldRendererTerrainMeshes* current)
+{
+    return ((current != NULL) && (current->_asset == chunk->Asset)) ? current : FindRecord(self, chunk->Asset);
+}
+
+/* A listed chunk's GPU mesh in its terrain's record, when it has been built; NULL otherwise. */
+static const WorldRendererTerrainChunkMesh* GetChunkMesh(const WorldRendererTerrainMeshes* record,
+    const WorldRenderTerrainChunk* chunk)
+{
+    if ((record == NULL) || (chunk->ChunkIndex >= record->_chunkCount))
+    {
+        return NULL;
+    }
+    const WorldRendererTerrainChunkMesh* Gpu = &record->_chunks[chunk->ChunkIndex];
+    return (Gpu->_revision != 0U) ? Gpu : NULL;
+}
+
 /* A listed chunk's GPU mesh, when it has been built; NULL otherwise. */
 static const WorldRendererTerrainChunkMesh* FindChunkMesh(const WorldRenderer* self,
     const WorldRenderTerrainChunk* chunk)
 {
-    const WorldRendererTerrainMeshes* Entries = (const WorldRendererTerrainMeshes*)(const void*)
-        self->_terrain._meshes._data;
-    for (size_t Index = 0U; Index < self->_terrain._meshes._count; Index++)
-    {
-        if ((Entries[Index]._asset == chunk->Asset) && (chunk->ChunkIndex < Entries[Index]._chunkCount))
-        {
-            const WorldRendererTerrainChunkMesh* Gpu = &Entries[Index]._chunks[chunk->ChunkIndex];
-            return (Gpu->_revision != 0U) ? Gpu : NULL;
-        }
-    }
-    return NULL;
+    return GetChunkMesh(FindRecord(self, chunk->Asset), chunk);
 }
 
 
@@ -596,6 +626,115 @@ static void DrawWireframes(WorldRenderer* self, const WorldRenderTerrainChunk* c
     rlDisableWireMode();
 }
 
+
+/* Uploads a material colour as DrawMesh does (its bytes over 255) into the bound program, where it has the uniform. */
+static void UploadMaterialColor(Shader shader, int location, Color color)
+{
+    if ((shader.locs == NULL) || (shader.locs[location] == -1))
+    {
+        return;
+    }
+    float Values[4] = { (float)color.r / 255.0f, (float)color.g / 255.0f, (float)color.b / 255.0f,
+        (float)color.a / 255.0f };
+    rlSetUniform(shader.locs[location], Values, SHADER_UNIFORM_VEC4, 1);
+}
+
+/* Uploads the colours DrawMesh uploads for a material whose maps are all zeroed (the G-buffer's): a diffuse and a
+ * specular colour of zero, where the program has them. */
+static void UploadNoMaterialColors(Shader shader)
+{
+    UploadMaterialColor(shader, SHADER_LOC_COLOR_DIFFUSE, BLANK);
+    UploadMaterialColor(shader, SHADER_LOC_COLOR_SPECULAR, BLANK);
+}
+
+/* The camera's chunks with the lit terrain shader, in one run: each terrain's arrays and uniforms when the run turns to
+ * its chunks; per chunk its place and matrices, and its lights, its draw place, its dither, the key's tint and its
+ * object's tint (DrawMesh's diffuse colour) only where they differ from the chunk before. */
+static void DrawLitChunks(WorldRenderer* self, const WorldRenderTerrainChunk* chunks, const size_t* visible,
+    size_t visibleCount, bool isKeyed)
+{
+    WorldRendererTerrainState* State = &self->_terrain;
+    Shader Program = GameShader_GetRaylibShader(State->_shader);
+    WorldRendererCommon_BeginMeshRun(Program);
+    // The material DrawMesh drew with: no maps (the terrain shader samples none of raylib's: its arrays sit on 9-11), a
+    // diffuse colour per chunk (its object's tint, below), no specular colour.
+    UploadMaterialColor(Program, SHADER_LOC_COLOR_SPECULAR, BLANK);
+    int View = (int)State->_view;
+    SetShaderValue(Program, State->_locTerrainView, &View, SHADER_UNIFORM_INT);
+    WorldRendererLitRun LitRun = { 0 };
+    WorldRendererDitherRun DitherRun = { 0 };
+    bool HasTint = false;
+    float LastTint[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    bool HasColor = false;
+    Color LastColor = BLANK;
+    // Chunks come terrain by terrain: each terrain's arrays and uniforms go up when the run turns to its chunks.
+    const TerrainAsset* Current = NULL;
+    const WorldRendererTerrainMeshes* Record = NULL;
+    for (size_t Position = 0U; Position < visibleCount; Position++)
+    {
+        size_t Index = visible[Position];
+        const WorldRenderTerrainChunk* Entry = &chunks[Index];
+        if (Entry->Asset != Current)
+        {
+            Current = Entry->Asset;
+            Record = FindRecord(self, Current);
+            if (Record != NULL)
+            {
+                UploadTerrain(self, Program, Record);
+                State->_wereArraysDrawn = State->_wereArraysDrawn || Record->_hasArrays;
+            }
+        }
+        const WorldRendererTerrainChunkMesh* Gpu = GetChunkMesh(Record, Entry);
+        if (Gpu == NULL)
+        {
+            continue; // nothing to draw (a terrain without its record or a chunk not built)
+        }
+        UploadChunkPlace(self, Record, Gpu, Entry);
+        // Each chunk takes the forward lights and the ambient zones its sphere reaches, its haze multiplier, and dithers
+        // by its fade (its draw distance, its object's opacity).
+        WorldRendererLighting_UploadRunLights(self, Program, &State->_lit, &LitRun, Entry->RenderCenter, Entry->Radius);
+        float Fade = WorldVisibility_GetTerrainChunkFade(&self->_visibility, Index).Combined;
+        WorldRendererLighting_SetRunDrawPlace(self, Program, &State->_lit, &LitRun, Entry->RenderCenter, Entry->Radius,
+            Entry->Haze, Fade < WORLD_VISIBILITY_GBUFFER_FADE_LIMIT, false);
+        WorldRendererCommon_SetRunDither(Program, &State->_dither, &DitherRun, Fade);
+        Color Key = isKeyed ? GetChunkKeyColor(Entry) : WHITE;
+        float Tint[4] = { (float)Key.r / 255.0f, (float)Key.g / 255.0f, (float)Key.b / 255.0f,
+            isKeyed ? CHUNK_KEY_STRENGTH : 0.0f };
+        if (!HasTint || (memcmp(Tint, LastTint, sizeof(Tint)) != 0))
+        {
+            SetShaderValue(Program, State->_locChunkTint, Tint, SHADER_UNIFORM_VEC4);
+            Memory_Copy(Tint, LastTint, sizeof(Tint));
+            HasTint = true;
+        }
+        if (!HasColor || (memcmp(&Entry->Tint, &LastColor, sizeof(Color)) != 0))
+        {
+            UploadMaterialColor(Program, SHADER_LOC_COLOR_DIFFUSE, Entry->Tint);
+            LastColor = Entry->Tint;
+            HasColor = true;
+        }
+        for (uint32_t Part = 0U; Part < Gpu->_partCount; Part++)
+        {
+            WorldRendererCommon_DrawRunMesh(Program, Gpu->_parts[Part]._mesh, Entry->RenderMatrix);
+        }
+    }
+    WorldRendererCommon_EndMeshRun();
+}
+
+/* The camera's chunks unlit and solid through raylib's default shader (no lit terrain shader), as models are without
+ * theirs: each its object's tint (and the key's colour) times a plain ground colour. */
+static void DrawUnlitChunks(WorldRenderer* self, const WorldRenderTerrainChunk* chunks, const size_t* visible,
+    size_t visibleCount, bool isKeyed)
+{
+    MaterialMap Maps[WORLD_RENDERER_MATERIAL_MAP_COUNT];
+    Material Draw = MakeDefaultMaterial(Maps, UNLIT_COLOR);
+    for (size_t Position = 0U; Position < visibleCount; Position++)
+    {
+        const WorldRenderTerrainChunk* Entry = &chunks[visible[Position]];
+        Color Key = isKeyed ? GetChunkKeyColor(Entry) : WHITE;
+        Maps[MATERIAL_MAP_ALBEDO].color = MultiplyColor(MultiplyColor(UNLIT_COLOR, Key), Entry->Tint);
+        DrawChunk(self, Entry, Draw, Entry->RenderMatrix);
+    }
+}
 
 // Internal functions (declared in WorldRendererInternal.h).
 void WorldRendererTerrain_Construct(WorldRenderer* self)
@@ -714,12 +853,17 @@ void WorldRendererTerrain_PrepareFrame(WorldRenderer* self)
             GenericBuffer_RemoveAt(&self->_terrain._meshes, Index - 1U);
         }
     }
-    // The listed chunks (those of shown terrains) are uploaded when they are new or changed.
+    // The listed chunks (those of shown terrains) are uploaded when they are new or changed. They come terrain by
+    // terrain: each terrain's record is looked up once.
     size_t ChunkCount = 0U;
     const WorldRenderTerrainChunk* Chunks = WorldRenderCache_GetTerrainChunks(&self->_cache, &ChunkCount);
+    WorldRendererTerrainMeshes* Meshes = NULL;
     for (size_t Index = 0U; Index < ChunkCount; Index++)
     {
-        WorldRendererTerrainMeshes* Meshes = GetMeshes(self, Chunks[Index].Asset);
+        if ((Meshes == NULL) || (Meshes->_asset != Chunks[Index].Asset))
+        {
+            Meshes = GetMeshes(self, Chunks[Index].Asset);
+        }
         if ((Meshes == NULL) || (Chunks[Index].ChunkIndex >= Meshes->_chunkCount))
         {
             continue;
@@ -728,7 +872,7 @@ void WorldRendererTerrain_PrepareFrame(WorldRenderer* self)
         WorldRendererTerrainChunkMesh* Gpu = &Meshes->_chunks[Chunks[Index].ChunkIndex];
         if (Gpu->_revision != TerrainChunk_GetRevision(TerrainMesh_GetChunk(Ground, Chunks[Index].ChunkIndex)))
         {
-            BuildChunkMesh(Ground, Chunks[Index].ChunkIndex, Gpu);
+            BuildChunkMesh(Ground, Chunks[Index].ChunkIndex, &Meshes->_uniforms, Gpu);
         }
     }
 }
@@ -745,60 +889,14 @@ void WorldRendererTerrain_DrawLit(WorldRenderer* self)
     {
         return;
     }
-    bool IsLit = self->_terrain._shader != NULL;
     bool IsKeyed = self->_terrain._isDebugEnabled;
-    MaterialMap Maps[WORLD_RENDERER_MATERIAL_MAP_COUNT];
-    Material Draw = MakeDefaultMaterial(Maps, UNLIT_COLOR);
-    if (IsLit)
+    if (self->_terrain._shader != NULL)
     {
-        Draw.shader = GameShader_GetRaylibShader(self->_terrain._shader);
-        Maps[MATERIAL_MAP_ALBEDO].texture.id = 0U; // the terrain shader samples no raylib map: its arrays sit on 9-11
-        int View = (int)self->_terrain._view;
-        SetShaderValue(Draw.shader, self->_terrain._locTerrainView, &View, SHADER_UNIFORM_INT);
+        DrawLitChunks(self, Chunks, Visible, VisibleCount, IsKeyed);
     }
-    // Chunks come terrain by terrain: each terrain's arrays and uniforms go up when the pass turns to its chunks.
-    const TerrainAsset* Current = NULL;
-    const WorldRendererTerrainMeshes* Record = NULL;
-    for (size_t Position = 0U; Position < VisibleCount; Position++)
+    else
     {
-        size_t Index = Visible[Position];
-        const WorldRenderTerrainChunk* Entry = &Chunks[Index];
-        Color Key = IsKeyed ? GetChunkKeyColor(Entry) : WHITE;
-        if (IsLit && (Entry->Asset != Current))
-        {
-            Current = Entry->Asset;
-            Record = FindRecord(self, Current);
-            if (Record != NULL)
-            {
-                UploadTerrain(self, Draw.shader, Record);
-                self->_terrain._wereArraysDrawn = self->_terrain._wereArraysDrawn || Record->_hasArrays;
-            }
-        }
-        if (IsLit && (Record != NULL))
-        {
-            UploadChunkPlace(self, Draw.shader, Record, Entry);
-        }
-        if (IsLit)
-        {
-            // Each chunk takes the forward lights and the ambient zones its sphere reaches, its haze multiplier, and
-            // dithers by its fade (its draw distance, its object's opacity).
-            WorldRendererLighting_UploadObjectLights(self, Draw.shader, &self->_terrain._lit, Entry->RenderCenter,
-                Entry->Radius);
-            float Fade = WorldVisibility_GetTerrainChunkFade(&self->_visibility, Index).Combined;
-            WorldRendererLighting_SetDrawPlace(self, Draw.shader, &self->_terrain._lit, Entry->RenderCenter,
-                Entry->Radius, Entry->Haze, Fade < WORLD_VISIBILITY_GBUFFER_FADE_LIMIT, false);
-            WorldRendererCommon_SetDither(Draw.shader, &self->_terrain._dither, Fade, 0.0f, false);
-            float Tint[4] = { (float)Key.r / 255.0f, (float)Key.g / 255.0f, (float)Key.b / 255.0f,
-                IsKeyed ? CHUNK_KEY_STRENGTH : 0.0f };
-            SetShaderValue(Draw.shader, self->_terrain._locChunkTint, Tint, SHADER_UNIFORM_VEC4);
-            Maps[MATERIAL_MAP_ALBEDO].color = Entry->Tint;
-        }
-        else
-        {
-            // Unlit and solid, as models are without their lit shader.
-            Maps[MATERIAL_MAP_ALBEDO].color = MultiplyColor(MultiplyColor(UNLIT_COLOR, Key), Entry->Tint);
-        }
-        DrawChunk(self, Entry, Draw, Entry->RenderMatrix);
+        DrawUnlitChunks(self, Chunks, Visible, VisibleCount, IsKeyed);
     }
     if (IsKeyed)
     {
@@ -816,9 +914,17 @@ void WorldRendererTerrain_DrawNormals(WorldRenderer* self, Shader shader, int lo
     size_t VisibleCount = 0U;
     const size_t* Visible = WorldVisibility_GetTerrainChunks(&self->_visibility, &self->_cache,
         WorldVisibilityPass_Camera, &VisibleCount);
-    MaterialMap Maps[WORLD_RENDERER_MATERIAL_MAP_COUNT];
-    Memory_Zero(Maps, sizeof(Maps));
-    Material Draw = { .shader = shader, .maps = Maps };
+    if (VisibleCount == 0U)
+    {
+        return;
+    }
+    // One run in the G-buffer's program: no material maps, so no colours (zeros, as DrawMesh's material without maps).
+    WorldRendererCommon_BeginMeshRun(shader);
+    UploadNoMaterialColors(shader);
+    bool HasPlace = false;
+    float LastOutlineFlag = 0.0f;
+    float LastHaze = 0.0f;
+    const WorldRendererTerrainMeshes* Record = NULL;
     for (size_t Position = 0U; Position < VisibleCount; Position++)
     {
         size_t Index = Visible[Position];
@@ -829,10 +935,25 @@ void WorldRendererTerrain_DrawNormals(WorldRenderer* self, Shader shader, int lo
             continue;
         }
         float OutlineFlag = Chunks[Index].HasOutline ? 1.0f : 0.0f;
-        SetShaderValue(shader, locOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
-        SetShaderValue(shader, locHazeMultiplier, &Chunks[Index].Haze, SHADER_UNIFORM_FLOAT);
-        DrawChunk(self, &Chunks[Index], Draw, Chunks[Index].RenderMatrix);
+        if (!HasPlace || (memcmp(&OutlineFlag, &LastOutlineFlag, sizeof(float)) != 0))
+        {
+            SetShaderValue(shader, locOutlineFlag, &OutlineFlag, SHADER_UNIFORM_FLOAT);
+            LastOutlineFlag = OutlineFlag;
+        }
+        if (!HasPlace || (memcmp(&Chunks[Index].Haze, &LastHaze, sizeof(float)) != 0))
+        {
+            SetShaderValue(shader, locHazeMultiplier, &Chunks[Index].Haze, SHADER_UNIFORM_FLOAT);
+            LastHaze = Chunks[Index].Haze;
+        }
+        HasPlace = true;
+        Record = GetChunkRecord(self, &Chunks[Index], Record);
+        const WorldRendererTerrainChunkMesh* Gpu = GetChunkMesh(Record, &Chunks[Index]);
+        for (uint32_t Part = 0U; (Gpu != NULL) && (Part < Gpu->_partCount); Part++)
+        {
+            WorldRendererCommon_DrawRunMesh(shader, Gpu->_parts[Part]._mesh, Chunks[Index].RenderMatrix);
+        }
     }
+    WorldRendererCommon_EndMeshRun();
 }
 
 void WorldRendererTerrain_DrawCasters(WorldRenderer* self, Shader shader, const WorldRendererDitherLocations* dither,
@@ -846,13 +967,15 @@ void WorldRendererTerrain_DrawCasters(WorldRenderer* self, Shader shader, const 
     // by their fade. One program for every chunk: bound once.
     bool IsShadowPass = WorldVisibility_IsShadowPass(pass);
     WorldRendererDitherRun Run = { 0 };
+    const WorldRendererTerrainMeshes* Record = NULL;
     rlEnableShader(shader.id);
     for (size_t Position = 0U; Position < CasterCount; Position++)
     {
         size_t Index = Casters[Position];
         WorldVisibilityFade Fade = WorldVisibility_GetTerrainChunkFade(&self->_visibility, Index);
         WorldRendererCommon_SetRunDither(shader, dither, &Run, IsShadowPass ? Fade.Shadow : Fade.Combined);
-        const WorldRendererTerrainChunkMesh* Gpu = FindChunkMesh(self, &Chunks[Index]);
+        Record = GetChunkRecord(self, &Chunks[Index], Record);
+        const WorldRendererTerrainChunkMesh* Gpu = GetChunkMesh(Record, &Chunks[Index]);
         for (uint32_t Part = 0U; (Gpu != NULL) && (Part < Gpu->_partCount); Part++)
         {
             WorldRendererCommon_DrawDepthMesh(shader, Gpu->_parts[Part]._mesh, Chunks[Index].RenderMatrix);

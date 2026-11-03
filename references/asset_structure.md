@@ -1134,7 +1134,7 @@ under `terrains/`, next to their `.glb` or their binary file; a world places one
 | `densities` | at most one mapping per density channel | The same for the density channels. |
 | `normals` | `smooth` (default) or `imported`; `source: model` only | `smooth`: computed by the game over the whole welded mesh (no seams between chunks). `imported`: the file's own normals, so hard edges modelled in Blender stay hard (vertices at one position with different normals stay apart). |
 | `blend_slot` | a material slot's name (default `blend`); `source: model` only | The slot whose faces use the painted weights, matched exactly. It may not be `hole` or name a palette material (`dirt` names `tbp:dirt`). |
-| `chunk_size` | metres, 8 to 256 (default 32) | The side of the chunks' square cells in the terrain's X and Z. |
+| `chunk_size` | metres, 8 to 4096 (default 32) | The side of the chunks' square cells in the terrain's X and Z. Every pass draws each chunk in its view as one draw, and a draw costs more than its triangles: small chunks (32 to 64 m) for the ground near the player (each takes its own 8 forward lights and is culled on its own), large ones (1 to 4 km) for far terrain, which a 16 km terrain then draws in a handful of draws. |
 | `render.has_outline` | boolean (true) | Whether the renderer outlines it. |
 | `render.casts_shadows` | boolean (true) | Off: it casts no shadow; it still receives them. |
 | `render.has_shadow_distance` | boolean (false; on when `shadow_distance` is given) | Whether `shadow_distance` applies; off, the chunks cast as far as they are drawn. |
@@ -1199,6 +1199,13 @@ fails the load, naming the mesh and the attribute. The binary form is read with 
 names. Unknown keys are
 rejected everywhere in the definition, and a definition that breaks a rule is rejected when it is read, with a message
 naming the rule (`Terrain "hills": weights[0].g is "dirtt", which is not one of its "materials".`).
+
+**Density.** Faces may have any size (an edge up to 8192 m): there is no grid. A face's edge of 1 to 2 % of its distance
+from where the player sees it from is 3 to 6 pixels at the game's 640 x 360, the size that keeps silhouettes and
+lighting and costs little: 35 to 70 m on hills 3.5 km out, 400 to 800 m on mountains 40 km out. Faces much smaller than a
+pixel cost without showing; much larger ones show as flat lighting and angular ridgelines. Far terrain is best its own
+terrain objects, in large chunks (`chunk_size` 2048 or 4096) with collision off, coloured by rules (slope, height,
+noise) rather than paint, which a coarse mesh carries only at its vertices.
 
 **From Blender 5.** Model the terrain as mesh objects in Blender's usual space (+Z up); the exporter turns
 it into glTF's +Y up, which is the game's.

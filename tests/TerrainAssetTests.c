@@ -489,9 +489,9 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
             "material another name or set another \"blend_slot\"." },
         // The chunk size.
         { MODEL_HEAD "\"materials\": [\"g\"], \"chunk_size\": 4}", ErrorCode_InvalidAssetDefinition,
-            "\"chunk_size\" is 4; it must be 8 to 256 metres." },
-        { MODEL_HEAD "\"materials\": [\"g\"], \"chunk_size\": 300}", ErrorCode_InvalidAssetDefinition,
-            "\"chunk_size\" is 300; it must be 8 to 256 metres." },
+            "\"chunk_size\" is 4; it must be 8 to 4096 metres." },
+        { MODEL_HEAD "\"materials\": [\"g\"], \"chunk_size\": 4100}", ErrorCode_InvalidAssetDefinition,
+            "\"chunk_size\" is 4100; it must be 8 to 4096 metres." },
         { MODEL_HEAD "\"materials\": [\"g\"], \"chunk_size\": true}", ErrorCode_InvalidAssetDefinition,
             "\"chunk_size\" must be a number of metres." },
         // The render block.
@@ -610,7 +610,7 @@ static void EachRuleIsRefusedWithAClearMessage(TestRun* run)
             "\"n\", \"o\", \"p\"], \"density_channels\": [\"a\", \"b\", \"c\", \"d\", \"e\", \"f\", \"g\", \"h\"], "
             "\"chunk_size\": 8, \"collision\": {\"collides_with\": []}}"));
         TEST_CHECK_SUCCESS(run, BuildDefinition(&Fixture, "{\"name\": \"t\", \"source\": \"data\", \"data\": \"t\", "
-            "\"materials\": [\"a\"], \"chunk_size\": 256}"));
+            "\"materials\": [\"a\"], \"chunk_size\": 4096}"));
         // "blend" is a palette name like any other once the painted faces use another slot, and the binary form has no
         // slots at all.
         TEST_CHECK_SUCCESS(run, BuildDefinition(&Fixture, "{\"name\": \"t\", \"source\": \"model\", \"model\": \"t\", "

@@ -1,5 +1,6 @@
 #include <inttypes.h>
 #include <math.h>
+#include <string.h>
 #include "WorldRenderCache.h"
 #include "WorldObject.h"
 #include "WorldTransform.h"
@@ -644,6 +645,8 @@ static Error RematchTerrains(WorldRenderCache* self, World* world)
         }
     }
     GenericBuffer_Clear(&self->_terrains);
+    // The entries' chunks may now lie elsewhere in the list, or belong to no entry: listed afresh at the next update.
+    self->_areTerrainChunksListed = false;
     if ((self->_terrainRematch._count > 0)
         && !GenericBuffer_AddLastRange(&self->_terrains, self->_terrainRematch._data, self->_terrainRematch._count))
     {
@@ -652,22 +655,69 @@ static Error RematchTerrains(WorldRenderCache* self, World* world)
     return Error_CreateSuccess();
 }
 
+/* Whether listing a terrain entry's chunks now would give what is listed for it, but for the origin: the same terrain
+ * and mesh revision (it changes with any chunk rebuilt, a new layout among them), the same component revision (its
+ * settings), and its object's world matrix, final tint and visibility as they were. */
+static bool IsTerrainListingCurrent(const WorldRenderTerrain* entry)
+{
+    if (!entry->IsListed || (entry->ListedAsset != entry->Asset) || (entry->ListedRevision != entry->Revision))
+    {
+        return false;
+    }
+    if ((entry->Asset != NULL) && (TerrainMesh_GetRevision(TerrainAsset_GetMesh(entry->Asset))
+        != entry->ListedMeshRevision))
+    {
+        return false;
+    }
+    const WorldObject* Owner = WorldComponent_GetOwner(&entry->Component->Base);
+    Matrix4Double ObjectWorld = WorldObject_GetWorldMatrix(Owner);
+    Color Tint = RenderColor_GetFinalColor(WorldObject_GetTint(Owner));
+    return (IsObjectShown(Owner) == entry->WasListedShown)
+        && (memcmp(&ObjectWorld, &entry->ListedWorld, sizeof(ObjectWorld)) == 0)
+        && (memcmp(&Tint, &entry->ListedTint, sizeof(Tint)) == 0);
+}
+
+/* Moves every listed terrain chunk to @p origin: its world matrix and its sphere's centre in render space again, as
+ * AddTerrainChunks places them. */
+static void MoveTerrainChunks(WorldRenderCache* self, Vector3Double origin)
+{
+    WorldRenderTerrainChunk* Chunks = (WorldRenderTerrainChunk*)(void*)self->_terrainChunks._data;
+    for (size_t Index = 0U; Index < self->_terrainChunks._count; Index++)
+    {
+        Chunks[Index].RenderMatrix = GameMath_ToMatrixRelative(&Chunks[Index].WorldMatrix, origin);
+        Chunks[Index].RenderCenter = GameMath_ToVector3Relative(Chunks[Index].Center, origin);
+    }
+}
+
+/* Empties the terrain chunk list (it holds no entry's chunks then). */
+static void ClearTerrainChunks(WorldRenderCache* self)
+{
+    GenericBuffer_Clear(&self->_terrainChunks);
+    self->_areTerrainChunksListed = false;
+}
+
 /* Lists the chunks of a resolved terrain whose object is shown, with the settings in effect and each chunk's placement:
  * the object's world matrix times the translation to the chunk's centre (in double, and in render space for @p origin)
- * and the chunk's sphere through it. Chunks of holes only are left out. */
-static Error AddTerrainChunks(WorldRenderCache* self, const WorldRenderTerrain* entry, Vector3Double origin)
+ * and the chunk's sphere through it. Chunks of holes only are left out. Records in the entry what it listed from. */
+static Error AddTerrainChunks(WorldRenderCache* self, WorldRenderTerrain* entry, Vector3Double origin)
 {
     const WorldObject* Owner = WorldComponent_GetOwner(&entry->Component->Base);
-    if ((entry->Asset == NULL) || !IsObjectShown(Owner))
+    entry->IsListed = true;
+    entry->ListedAsset = entry->Asset;
+    entry->ListedRevision = entry->Revision;
+    entry->ListedWorld = WorldObject_GetWorldMatrix(Owner);
+    entry->ListedTint = RenderColor_GetFinalColor(WorldObject_GetTint(Owner));
+    entry->WasListedShown = IsObjectShown(Owner);
+    entry->ListedMeshRevision = (entry->Asset != NULL) ? TerrainMesh_GetRevision(TerrainAsset_GetMesh(entry->Asset))
+        : 0U;
+    if ((entry->Asset == NULL) || !entry->WasListedShown)
     {
         return Error_CreateSuccess();
     }
     TerrainSettings Settings = WorldTerrainComponent_ResolveSettings(entry->Component,
         TerrainAsset_GetSettings(entry->Asset));
     const TerrainMesh* Ground = TerrainAsset_GetMesh(entry->Asset);
-    Matrix4Double ObjectWorld = WorldObject_GetWorldMatrix(Owner);
-    double MaxScale = WorldTransform_GetMaxScale(&ObjectWorld);
-    Color Tint = RenderColor_GetFinalColor(WorldObject_GetTint(Owner));
+    double MaxScale = WorldTransform_GetMaxScale(&entry->ListedWorld);
     for (uint32_t Chunk = 0U; Chunk < TerrainMesh_GetChunkCount(Ground); Chunk++)
     {
         const TerrainChunk* Source = TerrainMesh_GetChunk(Ground, Chunk);
@@ -688,8 +738,8 @@ static Error AddTerrainChunks(WorldRenderCache* self, const WorldRenderTerrain* 
             .IsShadowDistanceFixed = Settings.Render.IsShadowDistanceFixed,
             .Haze = Settings.Render.Haze, .DrawDistance = Settings.Render.DrawDistance,
             .IsDrawDistanceFixed = Settings.Render.IsDrawDistanceFixed,
-            .WorldMatrix = Matrix4Double_Multiply(&ToCenter, &ObjectWorld), .Radius = (float)((double)SphereRadius
-                * MaxScale), .Tint = Tint
+            .WorldMatrix = Matrix4Double_Multiply(&ToCenter, &entry->ListedWorld),
+            .Radius = (float)((double)SphereRadius * MaxScale), .Tint = entry->ListedTint
         };
         Entry.Center = Matrix4Double_TransformPoint(&Entry.WorldMatrix, GameMath_FromVector3(SphereCenter));
         Entry.RenderMatrix = GameMath_ToMatrixRelative(&Entry.WorldMatrix, origin);
@@ -704,26 +754,29 @@ static Error AddTerrainChunks(WorldRenderCache* self, const WorldRenderTerrain* 
 }
 
 /* Brings every terrain entry up to date (resolving it again when its name changed) and lists this frame's chunks, in
- * render space for @p origin. The n-th terrain component must own the n-th entry; when one does not (or the counts
- * differ) it stops with *outAreEntriesAligned false so the caller re-matches. */
+ * render space for @p origin: afresh when any entry would list differently than it did (another terrain or mesh revision,
+ * a property, its object moved, tinted, shown or hidden), otherwise the listed chunks only moved to @p origin. The n-th
+ * terrain component must own the n-th entry; when one does not (or the counts differ) it stops with
+ * *outAreEntriesAligned false so the caller re-matches. */
 static Error UpdateTerrains(WorldRenderCache* self, World* world, Vector3Double origin, AssetManager* assets,
     AssetUserID modelUser, Logger* logger, bool* outAreEntriesAligned)
 {
     *outAreEntriesAligned = false;
-    GenericBuffer_Clear(&self->_terrainChunks);
     size_t TerrainCount = 0;
     WorldComponent* const* Terrains = World_GetComponents(world, WorldComponentType_Terrain, &TerrainCount);
     if (TerrainCount != self->_terrains._count)
     {
+        ClearTerrainChunks(self);
         return Error_CreateSuccess();
     }
+    bool IsListCurrent = self->_areTerrainChunksListed;
     for (size_t Index = 0; Index < TerrainCount; Index++)
     {
         WorldRenderTerrain* Entry = GenericBuffer_GetPointerToElement(&self->_terrains, Index);
         if ((Entry->Component != WorldTerrainComponent_FromComponent(Terrains[Index]))
             || (Entry->Serial != WorldComponent_GetSerial(Terrains[Index])))
         {
-            GenericBuffer_Clear(&self->_terrainChunks);
+            ClearTerrainChunks(self);
             return Error_CreateSuccess();
         }
         uint32_t Revision = WorldComponent_GetRevision(Terrains[Index]);
@@ -734,12 +787,25 @@ static Error UpdateTerrains(WorldRenderCache* self, World* world, Vector3Double 
             ResolveTerrain(Entry, assets, modelUser, logger);
         }
         Entry->Revision = Revision;
-        Error Result = AddTerrainChunks(self, Entry, origin);
+        IsListCurrent = IsListCurrent && IsTerrainListingCurrent(Entry);
+    }
+    if (IsListCurrent)
+    {
+        MoveTerrainChunks(self, origin);
+        *outAreEntriesAligned = true;
+        return Error_CreateSuccess();
+    }
+    ClearTerrainChunks(self);
+    for (size_t Index = 0; Index < TerrainCount; Index++)
+    {
+        Error Result = AddTerrainChunks(self, GenericBuffer_GetPointerToElement(&self->_terrains, Index), origin);
         if (Result.Code != ErrorCode_Success)
         {
             return Result;
         }
     }
+    self->_areTerrainChunksListed = true;
+    self->_terrainListingCount++;
     *outAreEntriesAligned = true;
     return Error_CreateSuccess();
 }
@@ -1142,6 +1208,8 @@ void WorldRenderCache_Construct(WorldRenderCache* self)
     GenericBuffer_AllocateVariable(&self->_terrains, INITIAL_LIST_CAPACITY, sizeof(WorldRenderTerrain));
     GenericBuffer_AllocateVariable(&self->_terrainRematch, INITIAL_LIST_CAPACITY, sizeof(WorldRenderTerrain));
     GenericBuffer_AllocateVariable(&self->_terrainChunks, INITIAL_LIST_CAPACITY, sizeof(WorldRenderTerrainChunk));
+    self->_areTerrainChunksListed = false;
+    self->_terrainListingCount = 0U;
     GenericBuffer_AllocateVariable(&self->_instances, INITIAL_LIST_CAPACITY, sizeof(WorldRenderInstances));
     GenericBuffer_AllocateVariable(&self->_instancesRematch, INITIAL_LIST_CAPACITY, sizeof(WorldRenderInstances));
     GenericBuffer_AllocateVariable(&self->_instanceCells, INITIAL_LIST_CAPACITY, sizeof(WorldRenderInstanceCell));
@@ -1183,7 +1251,7 @@ void WorldRenderCache_Reset(WorldRenderCache* self)
     GenericBuffer_Clear(&self->_lights);
     GenericBuffer_Clear(&self->_ambientZones);
     GenericBuffer_Clear(&self->_terrains);
-    GenericBuffer_Clear(&self->_terrainChunks);
+    ClearTerrainChunks(self);
     FreeInstanceList(&self->_instances);
     GenericBuffer_Clear(&self->_instances);
     GenericBuffer_Clear(&self->_instanceCells);

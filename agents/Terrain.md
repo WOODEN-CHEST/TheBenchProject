@@ -52,10 +52,13 @@ vertices at one position with different normals; they still join their neighbour
 over the whole mesh, so both sides of a chunk border agree) or imported (`TerrainNormalMode_Imported`: the file's, never
 recomputed).
 
-**Chunks.** A grid of square cells of the chunk size (8 to 256 m, 32 by default) in the terrain's X and Z; each triangle
-goes to the cell of its centre, so an overhang and the ground under it share a column. Each non-empty cell is a chunk
-(`TerrainChunk`), in row order (Z, then X; `TerrainMesh_TryFindChunk` finds one by its cell, `TerrainMesh_GetCell` gives
-a point's cell). A chunk keeps:
+**Chunks.** A grid of square cells of the chunk size (8 to 4096 m, 32 by default) in the terrain's X and Z; each triangle
+goes to the cell of its centre, so an overhang and the ground under it share a column. Every pass draws a chunk in view
+as one draw, and a draw costs more than its triangles at the game's resolution ("Rendering"), so the size is a choice
+by distance: small chunks (32 to 64 m) for the ground around the player (each takes its own forward lights and is culled
+on its own), large ones (1 to 4 km) for far terrain, which a 16 km terrain then draws in a handful of draws. Each
+non-empty cell is a chunk (`TerrainChunk`), in row order (Z, then X; `TerrainMesh_TryFindChunk` finds one by its cell,
+`TerrainMesh_GetCell` gives a point's cell). A chunk keeps:
 - its triangles (holes too) and its cell;
 - its centre (`TerrainChunk_GetCenter`, a `Vector3Double`: the middle of the box around its triangles, on the grid);
 - its **surface**, what the renderer and the collision world build from: its own vertex list (a vertex shared across a
@@ -273,6 +276,10 @@ placed again when the object moves. Characters stand and walk on it as on any me
 - **Visibility** puts the chunks in every pass's list as models: the camera's frustum, each shadow level as a caster
   (its box, ring and size cut, within the chunk's shadow distance and the shadow reach), the cube's reach, the draw
   distance with the zoom, and the fade.
+- **The cache's listing** follows the terrains, not the frame: the chunks are listed afresh (their world matrices and
+  spheres in double, their settings) only when a terrain would list differently (another asset or mesh revision, a
+  property, its object moved, tinted, shown or hidden, a terrain added or removed); otherwise each frame only moves the
+  listed chunks to its origin (`WorldRenderCache_GetTerrainListingCount` counts the fresh listings).
 - **GPU meshes** (`WorldRendererTerrain.c`) are the renderer's own, one record per terrain asset with one mesh per chunk,
   built from the chunk's surface in parts of at most 65536 vertices: positions (relative to the chunk's centre),
   normals (the terrain vertices'), the 16 weights as four normalized `u8 x 4` attributes at locations 9 to 12 (the
@@ -286,8 +293,9 @@ placed again when the object moves. Characters stand and walk on it as on any me
   array. They sit on texture units 9, 10 and 11 (`WorldRendererTextureUnit_Terrain*`: the terrain program uses none of
   raylib's material maps), bound when the lit pass turns to the terrain's chunks, with its materials' and rules'
   uniforms (worked out once per record); per chunk the shader gets its centre in the terrain's space wrapped by each
-  tile size and noise period, and its height. When the arrays cannot be made (a GL function missing, which raylib's
-  loader may hide behind a stub: the GL error after the creation catches that too; out of GPU memory) it is logged once
+  tile size and noise period (worked out when the chunk's mesh is built), and its height. When the arrays cannot be
+  made (a GL function missing, which raylib's loader may hide behind a stub: the GL error after the creation catches that
+  too; out of GPU memory) it is logged once
   and the terrain shows its materials' mean colours, still ruled and height-blended on flat heights (the C mirror keeps
   the real heights: what gameplay asks of the ground never depends on the GPU, so there the picture's dominant material
   can differ from the mirror's). The indices stay on the CPU beside the GPU copy: raylib's `DrawMesh` draws a mesh whose index
@@ -308,6 +316,12 @@ placed again when the object moves. Characters stand and walk on it as on any me
   cube shadow (`world_cube_depth`) draw the chunks with the shared shaders (the depth passes through
   `WorldRendererCommon_DrawDepthMesh`, the program bound once for all the chunks). Terrain is never crisp, never skinned, never
   instanced.
+- **Every pass draws its chunks as one run**, since a draw costs more than its triangles: the lit pass and the G-buffer
+  through `WorldRendererCommon_BeginMeshRun` and `_DrawRunMesh` (the program bound once, each chunk's matrices worked out
+  as raylib's `DrawMesh` works them out, nothing unbound between chunks), with each chunk's place cached when its mesh is
+  built, its forward lights, screen light, haze, flags and zones uploaded only where they differ from the chunk before
+  (`WorldRendererLitRun`), its dither only when its fade does, the key's tint and its object's tint likewise; the
+  terrain's record looked up once per terrain. The pictures are `DrawMesh`'s bit for bit.
 - **The chunk key** (minus in the test frame, `WorldRenderer_SetTerrainKeyEnabled`): each chunk mixes a colour by its
   cell (X and Z each modulo 3: neighbours always differ) into its lit colour, and the wireframe of the chunks in view is
   drawn over it, scaled 0.999 toward the camera so it lies on the surface.
@@ -388,8 +402,19 @@ draws about 90 of them.
   speckled edge rather than stones.
 - **Terrain sections** join seamlessly only when their origins lie a whole number of every tile size and noise period
   apart (the maps and the noise lie in each terrain's own space).
-- **No LOD**: every chunk draws all its triangles out to its 4 km draw distance; whether and how terrain gets one is
-  open (ask the owner).
+- **No simplified meshes**: every chunk draws all its triangles out to its draw distance. At the game's 640 x 360 a draw
+  costs more than its triangles (a drawn chunk about 1.2 microseconds in the lit pass and 1 in the G-buffer on a GTX
+  980 Ti; a 2 x 2 km terrain at 2 m, 881 000 triangles in view, costs less in 256 m chunks than the test terrain in its
+  88): choose the chunk size by distance. Far terrain in 4 km chunks (2.45 M triangles 3.5 to 40 km out at 64 m between
+  vertices) costs 1 to 3 ms, most of it triangles under a pixel; merged, simplified chunks would win that back, if a
+  denser or larger far terrain needs it (ask the owner).
+- **Large chunks share their forward lights** (8 per chunk by its sphere) and are culled whole: ground with lamps keeps
+  small chunks.
+- **Far terrain's cost is its density**: faces may be any size, so far terrain is authored coarse, an edge of 1 to 2 % of
+  its distance from the player (`references/asset_structure.md`, "Density"). Measured on a GTX 980 Ti at 640 x 360, an
+  80 km ring of mountains 3.5 to 40 km out in 4 km chunks: seen whole from 900 m up it costs 0.4 ms with edges of 2 %
+  (78 000 triangles) and 0.6 ms with 1 % (308 000), where 64 m everywhere (2.45 M triangles, most under a pixel far out)
+  cost 2.7 ms; from 40 m up 0.5, 1.1 and 1.5 ms.
 - **Densities are kept, unused** until scattering is built.
 - **At most 8 rules** per terrain (the shader's uniform budget; `TERRAIN_MAX_RULES`).
 - **One-sided collision:** a shape whose centre ends up under the surface gets no contact from it and falls through

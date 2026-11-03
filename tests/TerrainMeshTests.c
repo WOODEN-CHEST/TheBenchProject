@@ -146,13 +146,18 @@ static void ATriangleBelongsToTheCellOfItsCentre(TestRun* run)
 
 static void ChunkPositionsPlusTheirCentreGiveTheTerrainBackExactly(TestRun* run)
 {
-    // Off the whole metres and far from the terrain's origin, where the floats are coarse.
-    const float Origins[3][2] = { { -32.3f, 17.77f }, { 7000.123f, -8100.5f }, { -8150.0f, 8130.0f } };
-    for (size_t Case = 0U; Case < 3U; Case++)
+    // Off the whole metres and far from the terrain's origin, where the floats are coarse; the last case far terrain's:
+    // a coarse grid across most of the extent in the largest chunks, whose vertices lie up to kilometres from their
+    // centres.
+    const float Origins[4][2] = { { -32.3f, 17.77f }, { 7000.123f, -8100.5f }, { -8150.0f, 8130.0f },
+        { -8180.3f, -8100.77f } };
+    const float Spacings[4] = { 1.37f, 1.37f, 1.37f, 401.37f };
+    const float ChunkSizes[4] = { 16.0f, 16.0f, 16.0f, TERRAIN_MAX_CHUNK_SIZE };
+    for (size_t Case = 0U; Case < 4U; Case++)
     {
         TestTerrainGrid Grid;
-        TestTerrain_BuildGrid(&Grid, 40U, 40U, 1.37f, Origins[Case][0], Origins[Case][1], Hills);
-        TerrainMesh* Terrain = TestTerrain_CreateMesh(run, &Grid, 1U, 0U, 16.0f);
+        TestTerrain_BuildGrid(&Grid, 40U, 40U, Spacings[Case], Origins[Case][0], Origins[Case][1], Hills);
+        TerrainMesh* Terrain = TestTerrain_CreateMesh(run, &Grid, 1U, 0U, ChunkSizes[Case]);
         bool IsExact = (Terrain != NULL);
         for (uint32_t Chunk = 0U; IsExact && (Chunk < TerrainMesh_GetChunkCount(Terrain)); Chunk++)
         {
@@ -345,6 +350,9 @@ static void EveryLimitIsRefusedWithAMessage(TestRun* run)
     CheckRefused(run, &Data, "9 density channels");
     Data = Good;
     Data.ChunkSize = 4.0f;
+    CheckRefused(run, &Data, "chunk size");
+    Data = Good;
+    Data.ChunkSize = TERRAIN_MAX_CHUNK_SIZE + 1.0f;
     CheckRefused(run, &Data, "chunk size");
     Data = Good;
     Data.NormalMode = TerrainNormalMode_Imported;

@@ -24,6 +24,7 @@
 #include "wr/WRFileSystem.h"
 #include "wr/WRPath.h"
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 
@@ -1967,6 +1968,147 @@ static void TerrainEntriesFollowTheirComponents(TestRun* run)
     Memory_Free(Directory._data);
 }
 
+/* Whether two values' bytes are the same (a listed chunk's fields compared one by one: their padding aside). */
+static bool IsSameBits(const void* a, const void* b, size_t size)
+{
+    return memcmp(a, b, size) == 0;
+}
+
+/* Whether two listed terrain chunks are the same, field by field and bit for bit. */
+static bool AreTerrainChunksSame(const WorldRenderTerrainChunk* a, const WorldRenderTerrainChunk* b)
+{
+    return IsSameBits(&a->ObjectId, &b->ObjectId, sizeof(a->ObjectId))
+        && IsSameBits(&a->Serial, &b->Serial, sizeof(a->Serial)) && (a->Asset == b->Asset)
+        && (a->ChunkIndex == b->ChunkIndex) && (a->TriangleCount == b->TriangleCount)
+        && (a->HasOutline == b->HasOutline) && (a->CastsShadows == b->CastsShadows)
+        && (a->HasShadowDistance == b->HasShadowDistance)
+        && IsSameBits(&a->ShadowDistance, &b->ShadowDistance, sizeof(a->ShadowDistance))
+        && (a->IsShadowDistanceFixed == b->IsShadowDistanceFixed) && IsSameBits(&a->Haze, &b->Haze, sizeof(a->Haze))
+        && IsSameBits(&a->DrawDistance, &b->DrawDistance, sizeof(a->DrawDistance))
+        && (a->IsDrawDistanceFixed == b->IsDrawDistanceFixed)
+        && IsSameBits(&a->WorldMatrix, &b->WorldMatrix, sizeof(a->WorldMatrix))
+        && IsSameBits(&a->Center, &b->Center, sizeof(a->Center)) && IsSameBits(&a->Radius, &b->Radius, sizeof(a->Radius))
+        && IsSameBits(&a->RenderMatrix, &b->RenderMatrix, sizeof(a->RenderMatrix))
+        && IsSameBits(&a->RenderCenter, &b->RenderCenter, sizeof(a->RenderCenter))
+        && IsSameBits(&a->Tint, &b->Tint, sizeof(a->Tint));
+}
+
+/* Whether @p cache lists the terrain chunks a fresh cache synced for @p origin lists, bit for bit. */
+static bool ListsTheChunksOfAFreshCache(TestRun* run, CacheFixture* fixture, AssetUserID freshUser,
+    Vector3Double origin)
+{
+    WorldRenderCache Fresh;
+    WorldRenderCache_Construct(&Fresh);
+    bool IsSame = TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fresh, &fixture->World, origin,
+        fixture->Assets.Manager, freshUser, NULL));
+    size_t Count = 0U;
+    size_t FreshCount = 0U;
+    const WorldRenderTerrainChunk* Chunks = WorldRenderCache_GetTerrainChunks(&fixture->Cache, &Count);
+    const WorldRenderTerrainChunk* FreshChunks = WorldRenderCache_GetTerrainChunks(&Fresh, &FreshCount);
+    IsSame = IsSame && (Count == FreshCount);
+    for (size_t Index = 0U; IsSame && (Index < Count); Index++)
+    {
+        IsSame = AreTerrainChunksSame(&Chunks[Index], &FreshChunks[Index]);
+    }
+    WorldRenderCache_Deconstruct(&Fresh);
+    return IsSame;
+}
+
+/* The terrain chunks are listed afresh only when a terrain would list differently: a camera that moves only moves the
+ * listed chunks to its origin; an object moved (or its parent), tinted, hidden or shown, a property, a rebuilt chunk, a
+ * name that fails or resolves again, a terrain added or removed list them again. Every time the list is the one a fresh
+ * cache makes, bit for bit. */
+static void TerrainChunksAreListedAgainOnlyWhenTheyWouldChange(TestRun* run)
+{
+    CacheFixture Fixture;
+    WorldTerrainComponent* First = NULL;
+    WorldTerrainComponent* Second = NULL;
+    AssetUserID FreshUser = 0;
+    if (CacheFixture_Construct(run, &Fixture) && AddFieldTerrain(run, &Fixture, "field")
+        && AddFieldTerrain(run, &Fixture, "meadow")
+        && TEST_CHECK_SUCCESS(run, AssetManager_GetNewUserID(Fixture.Assets.Manager, &FreshUser)))
+    {
+        First = AddTerrainObject(run, &Fixture.World, "field", (Vector3){ 100.25f, 2.0f, -50.0f });
+        Second = AddTerrainObject(run, &Fixture.World, "meadow", (Vector3){ -30.0f, 0.0f, 12.5f });
+    }
+    WorldObject* FirstOwner = (First != NULL) ? WorldComponent_GetOwner(&First->Base) : NULL;
+    WorldObject* SecondOwner = (Second != NULL) ? WorldComponent_GetOwner(&Second->Base) : NULL;
+    WorldObject* Parent = NULL;
+    WorldObject* Third = NULL;
+    bool IsRun = (FirstOwner != NULL) && (SecondOwner != NULL)
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(FirstOwner, (Vector3){ 0.0f, 0.7f, 0.0f }))
+        && TEST_CHECK_SUCCESS(run, World_CreateObject(&Fixture.World, NULL, &Parent))
+        && TEST_CHECK_SUCCESS(run, World_SetParent(&Fixture.World, WorldObject_GetId(SecondOwner),
+            WorldObject_GetId(Parent), false));
+    uint64_t Listings = 0U;
+    for (int Step = 0; IsRun && (Step < 16); Step++)
+    {
+        bool IsListedAgain = true;
+        switch (Step)
+        {
+            case 1: case 5: case 10: IsListedAgain = false; break; // only the camera moved
+            case 2: TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(FirstOwner, (Vector3Double){ .X = 101.5, .Y = 2.0,
+                .Z = -48.0 })); break;
+            case 3: TEST_CHECK_SUCCESS(run, WorldObject_SetTint(SecondOwner, (RenderColor){ .Tint = { 200, 180, 160,
+                255 }, .Brightness = 1.0f, .Opacity = 0.5f })); break;
+            case 4: TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(FirstOwner, false)); break;
+            case 6: TEST_CHECK_SUCCESS(run, WorldObject_SetVisible(FirstOwner, true)); break;
+            case 7:
+                TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetOverridden(Second, WorldTerrainSetting_Haze, true));
+                TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetHaze(Second, 3.0f));
+                break;
+            case 8:
+            {
+                // A vertex raised: the chunks around it are rebuilt (new revisions, new spheres).
+                size_t TerrainCount = 0U;
+                const WorldRenderTerrain* Terrains = WorldRenderCache_GetTerrains(&Fixture.Cache, &TerrainCount);
+                TerrainMesh* Ground = TerrainAsset_GetMesh(Terrains[0].Asset);
+                uint32_t Vertex = 3U;
+                Vector3 Raised = TerrainMesh_GetPosition(Ground, Vertex);
+                Raised.y += 1.5f;
+                TEST_CHECK_SUCCESS(run, TerrainMesh_SetVertexPositions(Ground, &Vertex, &Raised, 1U));
+                TEST_CHECK(run, TerrainMesh_RebuildDirtyChunks(Ground) > 0U);
+                break;
+            }
+            case 9: TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetTerrain(First, (const unsigned char*)u8"nowhere"));
+                break;
+            case 11: TEST_CHECK_SUCCESS(run, WorldTerrainComponent_SetTerrain(First, (const unsigned char*)u8"field"));
+                break;
+            case 12: TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Parent, (Vector3Double){ .X = 0.5, .Y = -1.0,
+                .Z = 2.0 })); break;
+            case 13:
+            {
+                WorldTerrainComponent* Added = AddTerrainObject(run, &Fixture.World, "field",
+                    (Vector3){ 7.0f, 0.0f, 7.0f });
+                Third = (Added != NULL) ? WorldComponent_GetOwner(&Added->Base) : NULL;
+                break;
+            }
+            case 14:
+                TEST_CHECK(run, (Third != NULL) && TEST_CHECK_SUCCESS(run, World_RemoveComponent(&Fixture.World,
+                    WorldObject_GetId(Third), WorldComponentType_Terrain)));
+                break;
+            case 15: IsListedAgain = false; break; // the same origin again, nothing changed
+            default: break;
+        }
+        // The camera moves every step but the last, off the whole metres.
+        int Moves = (Step < 15) ? Step : 14;
+        Vector3Double Origin = { .X = 90.0 + (7.25 * Moves), .Y = 0.5, .Z = -40.0 - (3.375 * Moves) };
+        IsRun = TEST_CHECK_SUCCESS(run, WorldRenderCache_Sync(&Fixture.Cache, &Fixture.World, Origin,
+            Fixture.Assets.Manager, Fixture.ModelUser, NULL));
+        Listings += IsListedAgain ? 1U : 0U;
+        if (!TEST_CHECK(run, (WorldRenderCache_GetTerrainListingCount(&Fixture.Cache) == Listings)
+            && ListsTheChunksOfAFreshCache(run, &Fixture, FreshUser, Origin)))
+        {
+            printf("      (step %d)\n", Step);
+        }
+    }
+    // The steps did list something: both terrains' chunks, three each, then the first's gone while it failed.
+    size_t Count = 0U;
+    WorldRenderCache_GetTerrainChunks(&Fixture.Cache, &Count);
+    TEST_CHECK(run, !IsRun || (Count == 6U));
+    CacheFixture_Deconstruct(run, &Fixture);
+}
+
 // Tests: model instances.
 /* Creates an object with a model instances component of "box" holding @p copies; returns the component, or NULL with a
  * failed check. */
@@ -2411,6 +2553,8 @@ void WorldRenderCacheTests_Run(TestRun* run)
         { "the_first_person_object_hides_its_bones_from_the_camera", TheFirstPersonObjectHidesItsBonesFromTheCamera },
         { "terrain_chunks_are_listed_where_their_object_puts_them", TerrainChunksAreListedWhereTheirObjectPutsThem },
         { "terrain_entries_follow_their_components", TerrainEntriesFollowTheirComponents },
+        { "terrain_chunks_are_listed_again_only_when_they_would_change",
+            TerrainChunksAreListedAgainOnlyWhenTheyWouldChange },
         { "instance_cells_are_listed_where_their_object_puts_them", InstanceCellsAreListedWhereTheirObjectPutsThem },
         { "instance_entries_follow_their_components", InstanceEntriesFollowTheirComponents },
         { "instance_cells_hold_far_from_the_origin", InstanceCellsHoldFarFromTheOrigin },

@@ -7,6 +7,7 @@
 #include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 #include "WorldRendererInternal.h"
 #include "WorldLightCulling.h"
 #include "Logger.h"
@@ -632,31 +633,32 @@ void WorldRendererLighting_UploadLitProgram(WorldRenderer* self, const WorldRend
     UploadLitUniforms(self, frame, shader, locations, applyScreenAo, areReflectionsDeferred);
 }
 
-void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader,
-    const WorldRendererLitLocations* locations, Vector3 center, float radius)
+/* The forward lights a draw's bounding sphere takes: the strongest few the frame's candidates reach it with, as indices
+ * into them; returns how many. */
+static size_t SelectObjectLights(const WorldRenderer* self, const WorldRendererLitLocations* locations, Vector3 center,
+    float radius, size_t* outSelected)
 {
-    WorldRendererSurfaces_UploadScreenLight(self, shader, &locations->_screenLight, center, radius);
-    if (locations->_locPointLightCount < 0)
-    {
-        return;
-    }
+    const void* CandidateData = self->_pbr._forwardLights._data;
+    return WorldLightCulling_SelectForSphere((const WorldCullingLight*)CandidateData, self->_pbr._forwardLights._count,
+        center, radius, outSelected, (size_t)locations->_maxPointLights);
+}
 
+/* Uploads the forward lights a draw takes (SelectObjectLights) for the draw that follows. */
+static void UploadSelectedLights(const WorldRenderer* self, Shader shader, const WorldRendererLitLocations* locations,
+    const size_t* selected, size_t count)
+{
     const void* CandidateData = self->_pbr._forwardLights._data;
     const void* RadianceData = self->_pbr._forwardRadiances._data;
     const WorldCullingLight* Candidates = CandidateData;
     const WorldRendererRadiance* Radiances = RadianceData;
 
-    size_t Selected[WORLD_MAX_FORWARD_LIGHTS];
-    size_t Count = WorldLightCulling_SelectForSphere(Candidates, self->_pbr._forwardLights._count, center, radius,
-        Selected, (size_t)locations->_maxPointLights);
-
     float Positions[WORLD_MAX_FORWARD_LIGHTS * 3];
     float RadianceValues[WORLD_MAX_FORWARD_LIGHTS * 3];
     float Ranges[WORLD_MAX_FORWARD_LIGHTS];
-    for (size_t Index = 0; Index < Count; Index++)
+    for (size_t Index = 0; Index < count; Index++)
     {
-        const WorldCullingLight* Light = &Candidates[Selected[Index]];
-        const WorldRendererRadiance* Radiance = &Radiances[Selected[Index]];
+        const WorldCullingLight* Light = &Candidates[selected[Index]];
+        const WorldRendererRadiance* Radiance = &Radiances[selected[Index]];
         Positions[Index*3 + 0] = Light->Position.x;
         Positions[Index*3 + 1] = Light->Position.y;
         Positions[Index*3 + 2] = Light->Position.z;
@@ -666,13 +668,59 @@ void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader
         Ranges[Index] = Light->Range;
     }
 
-    int CountInt = (int)Count;
+    int CountInt = (int)count;
     SetShaderValue(shader, locations->_locPointLightCount, &CountInt, SHADER_UNIFORM_INT);
-    if (Count > 0)
+    if (count > 0)
     {
         SetShaderValueV(shader, locations->_locPointLightPositions, Positions, SHADER_UNIFORM_VEC3, CountInt);
         SetShaderValueV(shader, locations->_locPointLightRadiances, RadianceValues, SHADER_UNIFORM_VEC3, CountInt);
         SetShaderValueV(shader, locations->_locPointLightRanges, Ranges, SHADER_UNIFORM_FLOAT, CountInt);
+    }
+}
+
+void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader,
+    const WorldRendererLitLocations* locations, Vector3 center, float radius)
+{
+    WorldRendererSurfaces_UploadScreenLight(self, shader, &locations->_screenLight, center, radius);
+    if (locations->_locPointLightCount < 0)
+    {
+        return;
+    }
+    size_t Selected[WORLD_MAX_FORWARD_LIGHTS];
+    size_t Count = SelectObjectLights(self, locations, center, radius, Selected);
+    UploadSelectedLights(self, shader, locations, Selected, Count);
+}
+
+void WorldRendererLighting_UploadRunLights(WorldRenderer* self, Shader shader,
+    const WorldRendererLitLocations* locations, WorldRendererLitRun* run, Vector3 center, float radius)
+{
+    if (locations->_screenLight._locActive >= 0)
+    {
+        const WorldRendererScreenLight* Nearest = WorldRendererSurfaces_FindScreenLight(self, center, radius);
+        if (!run->_hasScreenLight || (run->_screenLight != Nearest))
+        {
+            WorldRendererSurfaces_UploadFoundScreenLight(shader, &locations->_screenLight, Nearest);
+            run->_hasScreenLight = true;
+            run->_screenLight = Nearest;
+        }
+    }
+    if (locations->_locPointLightCount < 0)
+    {
+        return;
+    }
+    size_t Selected[WORLD_MAX_FORWARD_LIGHTS];
+    size_t Count = SelectObjectLights(self, locations, center, radius, Selected);
+    if (run->_hasLights && (run->_lightCount == Count)
+        && ((Count == 0U) || (memcmp(run->_lights, Selected, Count * sizeof(size_t)) == 0)))
+    {
+        return;
+    }
+    UploadSelectedLights(self, shader, locations, Selected, Count);
+    run->_hasLights = true;
+    run->_lightCount = Count;
+    if (Count > 0U)
+    {
+        Memory_Copy(Selected, run->_lights, Count * sizeof(size_t));
     }
 }
 
@@ -686,6 +734,36 @@ void WorldRendererLighting_SetDrawPlace(const WorldRenderer* self, Shader shader
     int Mirrors = hasReflections ? 1 : 0;
     SetShaderValue(shader, locations->_locHasReflections, &Mirrors, SHADER_UNIFORM_INT);
     WorldRendererInterior_UploadZones(self, shader, &locations->_interior, center, radius);
+}
+
+void WorldRendererLighting_SetRunDrawPlace(const WorldRenderer* self, Shader shader,
+    const WorldRendererLitLocations* locations, WorldRendererLitRun* run, Vector3 center, float radius, float haze,
+    bool isInPrepass, bool hasReflections)
+{
+    if (!run->_hasPlace || (memcmp(&run->_haze, &haze, sizeof(haze)) != 0))
+    {
+        SetShaderValue(shader, locations->_locHazeMultiplier, &haze, SHADER_UNIFORM_FLOAT);
+        run->_haze = haze;
+    }
+    if (!run->_hasPlace || (run->_isInPrepass != isInPrepass))
+    {
+        int InPrepass = isInPrepass ? 1 : 0;
+        SetShaderValue(shader, locations->_locDrawInPrepass, &InPrepass, SHADER_UNIFORM_INT);
+        run->_isInPrepass = isInPrepass;
+    }
+    if (!run->_hasPlace || (run->_hasReflections != hasReflections))
+    {
+        int Mirrors = hasReflections ? 1 : 0;
+        SetShaderValue(shader, locations->_locHasReflections, &Mirrors, SHADER_UNIFORM_INT);
+        run->_hasReflections = hasReflections;
+    }
+    run->_hasPlace = true;
+    // While interior lighting runs every draw takes the zones its sphere touches; otherwise none, uploaded once.
+    if (self->_interior._isActive || !run->_hasNoZones)
+    {
+        WorldRendererInterior_UploadZones(self, shader, &locations->_interior, center, radius);
+        run->_hasNoZones = !self->_interior._isActive;
+    }
 }
 
 /* raylib's DrawMesh uploads colDiffuse and binds the material's textures (via the map-sampler locations of the

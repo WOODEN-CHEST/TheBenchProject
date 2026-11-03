@@ -25,6 +25,7 @@
 #include "NightVision.h"
 #include "WorldAtmosphere.h"
 #include "WorldInterior.h"
+#include "WorldLightCulling.h"
 #include "WorldSkyLight.h"
 #include "WorldWeatherLight.h"
 #include "WorldClouds.h"
@@ -1767,17 +1768,21 @@ typedef struct WorldRendererTerrainPartStruct
     unsigned int _flagBuffer;
 } WorldRendererTerrainPart;
 
+/** @brief The most rules the terrain shader holds (its rule arrays' size): TerrainAsset.h's TERRAIN_MAX_RULES. */
+#define WORLD_RENDERER_TERRAIN_MAX_RULES TERRAIN_MAX_RULES
+
 /** @brief A terrain chunk's GPU mesh: its parts (none for a chunk without a surface), and the chunk revision they
- *  were built from (0: not built yet). */
+ *  were built from (0: not built yet). With them, its place for the lit shader, worked out when they are built (the
+ *  chunk's centre in the terrain's space stays while its revision does): the centre wrapped by each palette material's
+ *  tile size and by each rule's noise period (three floats each, as materialUvOffset and ruleNoiseOffset take them). */
 typedef struct WorldRendererTerrainChunkMeshStruct
 {
     WorldRendererTerrainPart* _parts;
     uint32_t _partCount;
     uint32_t _revision;
+    float _uvOffsets[TERRAIN_MAX_MATERIALS * 3U];
+    float _noiseOffsets[WORLD_RENDERER_TERRAIN_MAX_RULES * 3U];
 } WorldRendererTerrainChunkMesh;
-
-/** @brief The most rules the terrain shader holds (its rule arrays' size): TerrainAsset.h's TERRAIN_MAX_RULES. */
-#define WORLD_RENDERER_TERRAIN_MAX_RULES TERRAIN_MAX_RULES
 
 /** @brief A terrain's material uniforms, worked out once when its record is made (the terrain never changes while
  *  loaded) and uploaded whenever the lit pass turns to its chunks: the arrays' layouts are the shader's. */
@@ -2072,6 +2077,32 @@ typedef struct WorldRendererScreenLightStruct
     Texture2D Picture;
     float Level;
 } WorldRendererScreenLight;
+
+/**
+ * @brief A run of lit draws in one program (WorldRendererLighting_UploadRunLights, _SetRunDrawPlace): what it uploaded
+ *        last for a draw's place, so a run of draws that take the same lights, screen light, haze and flags
+ *        (neighbouring terrain chunks) uploads them once. Start each run zeroed: nothing uploaded yet. Valid for one pass
+ *        of one frame (it remembers the frame's lights by index and the screen light by address).
+ */
+typedef struct WorldRendererLitRunStruct
+{
+    /** @brief The forward lights it uploaded last: whether any were, how many, and which (indices into the frame's
+     *  candidates). */
+    bool _hasLights;
+    size_t _lightCount;
+    size_t _lights[WORLD_MAX_FORWARD_LIGHTS];
+    /** @brief The screen light it uploaded last (NULL: none reached the draw), and whether one was uploaded at all. */
+    bool _hasScreenLight;
+    const WorldRendererScreenLight* _screenLight;
+    /** @brief The draw place it uploaded last: whether one was, the haze multiplier, the pre-pass flag, the reflection
+     *  flag, and whether the ambient zones were uploaded while interior lighting does not run (none then, for every
+     *  draw). */
+    bool _hasPlace;
+    float _haze;
+    bool _isInPrepass;
+    bool _hasReflections;
+    bool _hasNoZones;
+} WorldRendererLitRun;
 
 /** @brief The surfaces' pictures and the screens' light (WorldRendererSurfaces.c). */
 typedef struct WorldRendererSurfaceStateStruct
@@ -2465,6 +2496,31 @@ void WorldRendererCommon_DrawDepthMesh(Shader shader, Mesh mesh, Matrix transfor
 void WorldRendererCommon_EndDepthMeshes(void);
 
 /**
+ * @brief Begins a run of WorldRendererCommon_DrawRunMesh in one program: binds it and uploads the view and the
+ *        projection where it has them (DrawMesh uploads the same two before every mesh). Upload the program's other
+ *        uniforms after it (rlSetUniform, or SetShaderValue: it binds the same program).
+ * @param shader The program the run draws with.
+ */
+void WorldRendererCommon_BeginMeshRun(Shader shader);
+
+/**
+ * @brief Draws one mesh of a run (WorldRendererCommon_BeginMeshRun) as raylib's DrawMesh does with a material of no
+ *        maps: the model's matrix, the normal matrix and the MVP worked out as DrawMesh does them and uploaded where
+ *        @p shader has them, then the draw through the mesh's vertex array; but without binding the program, uploading
+ *        the view and the projection or a material's colours, and without unbinding anything after it. The caller
+ *        uploads the material's colour (colDiffuse) when it changes. Call WorldRendererCommon_EndMeshRun after the run's
+ *        last mesh, before anything else draws. A mesh without a vertex array draws nothing.
+ * @param shader The run's program, bound.
+ * @param mesh The mesh, uploaded.
+ * @param transform Its matrix into render space.
+ */
+void WorldRendererCommon_DrawRunMesh(Shader shader, Mesh mesh, Matrix transform);
+
+/** @brief Ends a run of WorldRendererCommon_DrawRunMesh: unbinds the vertex array, the buffers and the program, as
+ *  DrawMesh does after each mesh. */
+void WorldRendererCommon_EndMeshRun(void);
+
+/**
  * @brief Finds a skinned shader's bone palette (bonePalette, shaders/common/skinning.glsl): its location and how many
  *        bones its array holds, read from the program. Call once at load.
  * @param shader The shader (its program).
@@ -2846,6 +2902,16 @@ const WorldRendererScreenLight* WorldRendererSurfaces_FindScreenLight(const Worl
 void WorldRendererSurfaces_UploadScreenLight(const WorldRenderer* self, Shader shader,
     const WorldRendererScreenLightLocations* locations, Vector3 center, float radius);
 
+/**
+ * @brief Uploads a screen light found for the lit draw that follows (WorldRendererSurfaces_FindScreenLight), as
+ *        WorldRendererSurfaces_UploadScreenLight does after finding it. Does nothing for a shader without the uniforms.
+ * @param shader The lit shader (its program).
+ * @param locations Its screen light locations (WorldRendererSurfaces_PrepareLitShader).
+ * @param light The light, or NULL: none reaches the draw.
+ */
+void WorldRendererSurfaces_UploadFoundScreenLight(Shader shader, const WorldRendererScreenLightLocations* locations,
+    const WorldRendererScreenLight* light);
+
 
 // WorldRendererCrt.c
 /**
@@ -3097,6 +3163,38 @@ void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader
 void WorldRendererLighting_SetDrawPlace(const WorldRenderer* self, Shader shader,
     const WorldRendererLitLocations* locations, Vector3 center, float radius, float haze, bool isInPrepass,
     bool hasReflections);
+
+/**
+ * @brief WorldRendererLighting_UploadObjectLights for a draw in a run (WorldRendererLitRun): the same lights chosen the
+ *        same way, uploaded only where they differ from the run's last upload (another screen light, other forward
+ *        lights); the program holds the same values for the draw either way.
+ * @param self The renderer.
+ * @param shader The lit shader (its program).
+ * @param locations Its locations (WorldRendererLighting_PrepareLitShader).
+ * @param run The run's state in this program (zeroed at the run's start).
+ * @param center The draw's bounding sphere's centre, in render space.
+ * @param radius Its radius.
+ */
+void WorldRendererLighting_UploadRunLights(WorldRenderer* self, Shader shader,
+    const WorldRendererLitLocations* locations, WorldRendererLitRun* run, Vector3 center, float radius);
+
+/**
+ * @brief WorldRendererLighting_SetDrawPlace for a draw in a run (WorldRendererLitRun): the haze multiplier and the two
+ *        flags uploaded only when they differ from the run's last upload (compared bit for bit), the ambient zones for
+ *        every draw while interior lighting runs and once while it does not (none then).
+ * @param self The renderer.
+ * @param shader The lit shader (its program).
+ * @param locations Its locations (WorldRendererLighting_PrepareLitShader).
+ * @param run The run's state in this program (zeroed at the run's start).
+ * @param center The draw's bounding sphere's centre, in render space.
+ * @param radius Its radius.
+ * @param haze The multiplier.
+ * @param isInPrepass Whether the ambient pre-pass saw the draw's surface.
+ * @param hasReflections Whether the draw mirrors its surroundings.
+ */
+void WorldRendererLighting_SetRunDrawPlace(const WorldRenderer* self, Shader shader,
+    const WorldRendererLitLocations* locations, WorldRendererLitRun* run, Vector3 center, float radius, float haze,
+    bool isInPrepass, bool hasReflections);
 
 /**
  * @brief Uploads one material's PBR scalar factors and map-presence flags to a PBR program, for its meshes drawn next.

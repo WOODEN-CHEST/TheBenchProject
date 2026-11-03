@@ -1,5 +1,6 @@
 // Shared helpers of the world renderer: config multipliers, colour conversion, shader loading, the textures the world
-// names (their slots), the depth passes' mesh draw, one-time warnings and render-target constructors.
+// names (their slots), the depth passes' mesh draw and the runs of lean mesh draws, one-time warnings and render-target
+// constructors.
 
 #include <math.h>
 #include <stdio.h>
@@ -170,6 +171,63 @@ void WorldRendererCommon_EndDepthMeshes(void)
     rlDisableVertexBuffer();
     rlDisableVertexBufferElement();
     rlDisableShader();
+}
+
+void WorldRendererCommon_BeginMeshRun(Shader shader)
+{
+    rlEnableShader(shader.id);
+    if (shader.locs == NULL)
+    {
+        return;
+    }
+    if (shader.locs[SHADER_LOC_MATRIX_VIEW] != -1)
+    {
+        rlSetUniformMatrix(shader.locs[SHADER_LOC_MATRIX_VIEW], rlGetMatrixModelview());
+    }
+    if (shader.locs[SHADER_LOC_MATRIX_PROJECTION] != -1)
+    {
+        rlSetUniformMatrix(shader.locs[SHADER_LOC_MATRIX_PROJECTION], rlGetMatrixProjection());
+    }
+}
+
+void WorldRendererCommon_DrawRunMesh(Shader shader, Mesh mesh, Matrix transform)
+{
+    if ((shader.locs == NULL) || (mesh.vaoId == 0U))
+    {
+        return;
+    }
+    // DrawMesh's matrices, worked out as it works them out.
+    Matrix View = rlGetMatrixModelview();
+    Matrix Projection = rlGetMatrixProjection();
+    Matrix ModelMatrix = MatrixMultiply(transform, rlGetMatrixTransform());
+    if (shader.locs[SHADER_LOC_MATRIX_MODEL] != -1)
+    {
+        rlSetUniformMatrix(shader.locs[SHADER_LOC_MATRIX_MODEL], ModelMatrix);
+    }
+    Matrix ModelView = MatrixMultiply(ModelMatrix, View);
+    if (shader.locs[SHADER_LOC_MATRIX_NORMAL] != -1)
+    {
+        rlSetUniformMatrix(shader.locs[SHADER_LOC_MATRIX_NORMAL], MatrixTranspose(MatrixInvert(ModelMatrix)));
+    }
+    if (!rlEnableVertexArray(mesh.vaoId))
+    {
+        return;
+    }
+    rlSetUniformMatrix(shader.locs[SHADER_LOC_MATRIX_MVP], MatrixMultiply(ModelView, Projection));
+    // Indexed while the CPU index array is kept, as DrawMesh decides.
+    if (mesh.indices != NULL)
+    {
+        rlDrawVertexArrayElements(0, mesh.triangleCount * 3, 0);
+    }
+    else
+    {
+        rlDrawVertexArray(0, mesh.vertexCount);
+    }
+}
+
+void WorldRendererCommon_EndMeshRun(void)
+{
+    WorldRendererCommon_EndDepthMeshes();
 }
 
 void WorldRendererCommon_PreparePalette(Shader shader, WorldRendererPalette* outPalette)
