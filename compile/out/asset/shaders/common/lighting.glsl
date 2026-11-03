@@ -1,8 +1,9 @@
 // The world's lighting, shared by the lit shaders (world_pbr, world_crt, world_sprite, world_terrain), for #include
 // "common/lighting": the frame's lighting uniforms (the renderer uploads the same values to every shader that includes
 // this file), the Cook-Torrance BRDF, the sky's two directional lights (the sun and the moon) with the shadow levels'
-// shadow and the terrain's shadow at any distance (common/far_shadow) and a lightning bolt's light, forward point
-// lights and the shadow-casting point light with its cube shadow, a screen's light, the sky's ambient light with the
+// shadow and the terrain's shadow at any distance (common/far_shadow) and a lightning bolt's light, forward lights
+// (points and spots), the shadow-casting point light with its cube shadow and the shadowed spots with their maps, a
+// screen's light, the sky's ambient light with the
 // screen-space AO and interior lighting (common/interior: what roofs keep out, rooms' own light), what a glossy surface
 // mirrors (and what it hands the reflection pass: common/reflections), the weather's wetness and puddles (common/rain:
 // what keeps the rain out; common/puddles: the puddles, the sky mirrored in water), the eye's night vision and the haze
@@ -15,8 +16,8 @@
 // volume's last row every frame (SkyLightAt reads it at the fragment's height); without it (the atmosphere's tables off
 // or unavailable) the uniforms hold the light at the camera, the C mirror's.
 //
-// Two families of light functions: the plain ones (SkyLight, PointLights) the PBR shader uses, and the wrapped ones
-// (SkyLightWrapped, PointLightsWrapped) sprites use, whose diffuse part reaches past the terminator ("wrap lighting",
+// Two families of light functions: the plain ones (SkyLight, LocalLights) the PBR shader uses, and the wrapped ones
+// (SkyLightWrapped, LocalLightsWrapped) sprites use, whose diffuse part reaches past the terminator ("wrap lighting",
 // for billboards standing in for round things). They are kept apart on purpose: the plain ones are exactly the PBR
 // shader's BRDF, untouched by the wrap.
 //
@@ -85,24 +86,39 @@ uniform bool skyVisibilityOnScreen;    // the pre-pass's G holds the sky's visib
 uniform bool drawInPrepass;            // per draw: the pre-pass saw this draw's surface at its pixels (false: it faded out of
                                        // the G-buffer, and the pixels hold what lies behind it)
 
-// Point lights, culled + uploaded per object by the renderer (nearest/strongest that reach this object).
-// MAX_POINT_LIGHTS should equal WORLD_MAX_FORWARD_LIGHTS in WorldLightCulling.h. A mismatch is safe: the loops below
-// clamp to the array size, and the renderer checks the arrays at load and never uploads more than fit.
-#define MAX_POINT_LIGHTS 8
-uniform int pointLightCount;                          // active entries in the arrays below (0..MAX)
-uniform vec3 pointLightPositions[MAX_POINT_LIGHTS];   // render space
-uniform vec3 pointLightRadiances[MAX_POINT_LIGHTS];   // linear colour * intensity
-uniform float pointLightRanges[MAX_POINT_LIGHTS];     // reach radius (attenuation falls to 0 here)
+// Forward lights (points and spots), culled + uploaded per object by the renderer (the strongest that reach this
+// object). MAX_FORWARD_LIGHTS should equal WORLD_MAX_FORWARD_LIGHTS in WorldLightCulling.h. A mismatch is safe: the
+// loops below clamp to the array size, and the renderer checks the arrays at load and never uploads more than fit.
+#define MAX_FORWARD_LIGHTS 8
+uniform int forwardLightCount;                            // active entries in the arrays below (0..MAX)
+uniform vec3 forwardLightPositions[MAX_FORWARD_LIGHTS];   // render space
+uniform vec3 forwardLightRadiances[MAX_FORWARD_LIGHTS];   // linear colour * intensity * its flicker this frame
+uniform float forwardLightRanges[MAX_FORWARD_LIGHTS];     // reach radius (attenuation falls to 0 here)
+uniform vec3 forwardLightDirections[MAX_FORWARD_LIGHTS];  // a spot's axis, the way it shines (unit); a point's (0, 0, 0)
+uniform vec2 forwardLightCones[MAX_FORWARD_LIGHTS];       // a spot's cone falloff (LightCone); a point's (0, 1)
+uniform int forwardLightShadows[MAX_FORWARD_LIGHTS];      // a shadowed spot's map (its layer of spotShadowMaps); -1 none
 
 // ONE shadow-casting point light, shaded SEPARATELY from the culled set above (which excludes it) so it can sample its
 // own omnidirectional (cube) shadow map. pointShadowActive false => no shadow-casting point light.
 uniform bool pointShadowActive;
 uniform vec3 pointShadowLightPos;       // render space
-uniform vec3 pointShadowLightRadiance;  // linear colour * intensity
+uniform vec3 pointShadowLightRadiance;  // linear colour * intensity * its flicker this frame
 uniform float pointShadowLightRange;    // reach radius
 uniform samplerCube pointShadowCube;    // packed (RGBA8) linear distance from the light, per direction
 uniform float pointShadowFar;           // far range the stored distance was normalized by
 uniform float pointShadowBias;          // world-space depth bias to combat shadow acne
+
+// The shadowed spots' maps (at most MAX_SPOT_SHADOWS: the renderer's WORLD_RENDERER_MAX_SPOT_SHADOWS): a perspective depth
+// map from each light along its axis, a layer of spotShadowMaps each (source/WorldLocalShadows.h). The shadowed spots are
+// forward lights like the others, culled and ranked per draw; forwardLightShadows names a light's layer, and the loop
+// darkens it by its map. (Shaded in a term of their own, a second copy of the BRDF per spot, they cost the scene pass
+// about a third more where they light.)
+#define MAX_SPOT_SHADOWS 2
+uniform mat4 spotShadowMatrices[MAX_SPOT_SHADOWS];    // render space -> its map's clip space
+uniform vec2 spotShadowLookups[MAX_SPOT_SHADOWS];     // per metre of depth along the axis: the lookup's move off its
+                                                      // surface at grazing incidence; and the depth bias times the depth
+uniform float spotShadowTexel;                        // a texel of the maps in their texture coordinates (1 / their size)
+uniform sampler2DArrayShadow spotShadowMaps;          // the maps (depth compared, bilinear)
 
 // The haze in front of a surface (common/haze): the air's from the aerial-perspective volume, and the ground haze.
 // The volume's screen directions are the scene camera's: a point's place among them is its position through the scene's
@@ -700,7 +716,33 @@ vec3 AmbientLight(SkyLightValues light, vec3 n, vec3 worldPos, vec3 surfaceNorma
 }
 
 
-// ---- Point lights ----------------------------------------------------------------------------------------------
+// ---- Local lights: points and spots ----------------------------------------------------------------------------
+// Where a surface reads the local lights' shadows: its own point (a model, the terrain, the water: SurfaceShadowLookups),
+// or for a billboard the matching point of its quad as each light sees it (each light's map holds the quad facing that
+// light), with the geometric normal there.
+struct LocalShadowLookups
+{
+    vec3 cubePosition;
+    vec3 cubeNormal;
+    vec3 spotPositions[MAX_SPOT_SHADOWS];
+    vec3 spotNormals[MAX_SPOT_SHADOWS];
+};
+
+// Every local light's shadow read at the surface's own point: the cube's with the normal the surface is shaded with,
+// each spot's off the triangle's own face (FaceNormal: what the spots' maps hold, as the shadow levels read theirs; a
+// normal map's bumps would jitter the lookups).
+LocalShadowLookups SurfaceShadowLookups(vec3 position, vec3 cubeNormal, vec3 faceNormal)
+{
+    LocalShadowLookups lookups;
+    lookups.cubePosition = position;
+    lookups.cubeNormal = cubeNormal;
+    lookups.spotPositions[0] = position;
+    lookups.spotNormals[0] = faceNormal;
+    lookups.spotPositions[1] = position;
+    lookups.spotNormals[1] = faceNormal;
+    return lookups;
+}
+
 // 20 sample directions for cube-map PCF (a small 3D disk around the light->fragment ray).
 const vec3 CUBE_PCF_OFFSETS[20] = vec3[]
 (
@@ -737,18 +779,28 @@ float ComputePointShadow(vec3 fragPos, vec3 nrm)
     return shadow/20.0;
 }
 
-// A point light's falloff at a distance: a physical 1/d^2, smoothly windowed to exactly 0 at the light's range so the
+// A local light's falloff at a distance: a physical 1/d^2, smoothly windowed to exactly 0 at the light's range so the
 // shaded set agrees with what the CPU reach-culler decided affects an object (no hard popping at the edge).
-float PointLightFalloff(float dist, float lightRange)
+float LocalLightFalloff(float dist, float lightRange)
 {
     float range = max(lightRange, 1e-3);
     float window = clamp(1.0 - pow(dist/range, 4.0), 0.0, 1.0);
     return (window*window)/(dist*dist + 1.0);
 }
 
-// One point light through the plain BRDF with PointLightFalloff.
-vec3 PointLight(vec3 n, vec3 v, vec3 worldPos, vec3 lightPos, vec3 radiance, float lightRange, vec3 albedo, vec3 f0,
-    float rough, float metal)
+// A light's cone at a point it lights: with c the cosine between the way from the light to the point and the light's
+// axis, t = clamp(c*cone.x + cone.y, 0, 1) is 1 within a spot's inner angle and 0 past its outer (the renderer's
+// WorldRendererLighting_GetConeFalloff), and the light is t's smoothstep: no edge where the fade begins or ends. A point's
+// cone (0, 1) is exactly 1 every way. toLight is the unit direction from the point to the light.
+float LightCone(vec3 toLight, vec3 axis, vec2 cone)
+{
+    float t = clamp(dot(-toLight, axis)*cone.x + cone.y, 0.0, 1.0);
+    return t*t*(3.0 - 2.0*t);
+}
+
+// One local light through the plain BRDF with LocalLightFalloff and its cone (LightCone).
+vec3 LocalLight(vec3 n, vec3 v, vec3 worldPos, vec3 lightPos, vec3 radiance, float lightRange, vec3 axis, vec2 cone,
+    vec3 albedo, vec3 f0, float rough, float metal)
 {
     vec3 toLight = lightPos - worldPos;
     float dist = length(toLight);
@@ -762,62 +814,137 @@ vec3 PointLight(vec3 n, vec3 v, vec3 worldPos, vec3 lightPos, vec3 radiance, flo
     vec3 kDp = (vec3(1.0) - fp)*(1.0 - metal);
     float ndlp = max(dot(n, lp), 0.0);
 
-    return (kDp*albedo/PI + specp)*radiance*ndlp*PointLightFalloff(dist, lightRange);
+    return (kDp*albedo/PI + specp)*radiance*ndlp*LocalLightFalloff(dist, lightRange)*LightCone(lp, axis, cone);
 }
 
-// One point light with wrap lighting (WrappedLight) and PointLightFalloff.
-vec3 PointLightWrapped(vec3 n, vec3 v, vec3 worldPos, vec3 lightPos, vec3 radiance, float lightRange, float wrap,
-    vec3 albedo, vec3 f0, float rough, float metal)
+// 0 (lit) .. 1 (shadowed) for a shadowed spot (its map's layer `spot`, its render-space position lightPos and its axis) at
+// a point with the geometric normal `normal`, turned toward the light (a two-sided quad's back faces it too)
+// (source/WorldLocalShadows.h): the point moved off its surface by the map's texels there times the slant (the sine of the
+// surface's angle to the light), projected onto the spot's map, and
+// compared, less the depth bias, with 3 x 3 taps a texel apart, each weighing four texels bilinearly by the hardware (a
+// soft edge some four texels wide). A point beyond the map (outside its field of view, past its far plane, behind the
+// light) reads as lit. The reads sit in branches (only where the spot lights the surface), where implicit derivatives are
+// undefined: harmless, the maps have no mipmaps and filter linearly at every scale.
+float SpotShadowAmount(int spot, vec3 lightPos, vec3 axis, vec3 position, vec3 normal)
+{
+    vec3 toPoint = position - lightPos;
+    float depth = max(dot(toPoint, axis), 1e-3);
+    vec3 toLight = -toPoint/max(length(toPoint), 1e-4);
+    vec3 facing = (dot(normal, toLight) < 0.0) ? -normal : normal;
+    float nDotL = clamp(dot(facing, toLight), 0.0, 1.0);
+    float slant = sqrt(max(1.0 - nDotL*nDotL, 0.0));
+    vec2 lookup = spotShadowLookups[spot];
+    vec4 clip = spotShadowMatrices[spot]*vec4(position + facing*(lookup.x*depth*slant), 1.0);
+    if (!(clip.w > 0.0))
+    {
+        return 0.0;
+    }
+    vec3 proj = clip.xyz/clip.w*0.5 + 0.5;
+    if (any(lessThan(proj.xy, vec2(0.0))) || any(greaterThan(proj.xy, vec2(1.0))) || (proj.z > 1.0))
+    {
+        return 0.0;
+    }
+    float compare = proj.z - lookup.y/depth;
+    float lit = 0.0;
+    for (int y = -1; y <= 1; y++)
+    {
+        for (int x = -1; x <= 1; x++)
+        {
+            lit += texture(spotShadowMaps, vec4(proj.xy + vec2(float(x), float(y))*spotShadowTexel, float(spot), compare));
+        }
+    }
+    return 1.0 - lit/9.0;
+}
+
+// One local light with wrap lighting (WrappedLight), LocalLightFalloff and its cone.
+vec3 LocalLightWrapped(vec3 n, vec3 v, vec3 worldPos, vec3 lightPos, vec3 radiance, float lightRange, vec3 axis,
+    vec2 cone, float wrap, vec3 albedo, vec3 f0, float rough, float metal)
 {
     vec3 toLight = lightPos - worldPos;
     float dist = length(toLight);
     vec3 lp = toLight/max(dist, 1e-4);
-    return WrappedLight(n, v, lp, radiance, wrap, albedo, f0, rough, metal)*PointLightFalloff(dist, lightRange);
+    return WrappedLight(n, v, lp, radiance, wrap, albedo, f0, rough, metal)*LocalLightFalloff(dist, lightRange)
+        *LightCone(lp, axis, cone);
 }
 
-// The point lights through the plain BRDF: the reach-culled set the renderer chose for this object (the count is
-// clamped to the arrays' size so a bad upload can never index past them), then the shadow-casting point light, darkened
-// by its own cube shadow (shaded here rather than in the culled loop so it can sample the cube; the renderer excludes it
-// from that loop). The cube is read at shadowPos with shadowNormal's slope bias (the fragment's own, for models).
-vec3 PointLights(vec3 n, vec3 v, vec3 worldPos, vec3 shadowPos, vec3 shadowNormal, vec3 albedo, vec3 f0, float rough,
+// How much a shadowed light's term is left by its shadow (1 lit .. 1 - shadowStrength fully shadowed).
+float LocalShadowVisibility(float shadow)
+{
+    return 1.0 - shadow*clamp(shadowStrength, 0.0, 1.0);
+}
+
+// Where a shadowed spot's map is read for a surface: the lookups of the spot of that layer, chosen by constant indices (an
+// index the compiler cannot see through would put the lookups' arrays in memory for every fragment: some 60 % more time
+// for the scene pass).
+#if MAX_SPOT_SHADOWS != 2
+#error "SpotLookupPosition and SpotLookupNormal choose between two shadowed spots: give each of MAX_SPOT_SHADOWS its case"
+#endif
+vec3 SpotLookupPosition(LocalShadowLookups lookups, int layer)
+{
+    return (layer == 0) ? lookups.spotPositions[0] : lookups.spotPositions[1];
+}
+
+vec3 SpotLookupNormal(LocalShadowLookups lookups, int layer)
+{
+    return (layer == 0) ? lookups.spotNormals[0] : lookups.spotNormals[1];
+}
+
+// A forward light's term darkened by its spot's map, where it has one and lights the surface.
+vec3 ShadowForwardLight(int i, vec3 light, LocalShadowLookups lookups)
+{
+    int layer = forwardLightShadows[i];
+    if ((layer < 0) || !any(greaterThan(light, vec3(0.0))))
+    {
+        return light;
+    }
+    return light*LocalShadowVisibility(SpotShadowAmount(layer, forwardLightPositions[i], forwardLightDirections[i],
+        SpotLookupPosition(lookups, layer), SpotLookupNormal(lookups, layer)));
+}
+
+// The local lights through the plain BRDF: the reach-culled set the renderer chose for this object (the count is
+// clamped to the arrays' size so a bad upload can never index past them), a shadowed spot among them darkened by its map,
+// then the shadow-casting point light, darkened by its own cube shadow (shaded here rather than in the culled loop so it
+// can sample the cube; the renderer excludes it from that loop). The shadows are read where lookups says
+// (SurfaceShadowLookups: the fragment's own point, for models).
+vec3 LocalLights(vec3 n, vec3 v, vec3 worldPos, LocalShadowLookups lookups, vec3 albedo, vec3 f0, float rough,
     float metal)
 {
-    vec3 pointTotal = vec3(0.0);
-    int pointLightLimit = min(pointLightCount, MAX_POINT_LIGHTS);
-    for (int i = 0; i < pointLightLimit; i++)
+    vec3 localTotal = vec3(0.0);
+    int forwardLimit = min(forwardLightCount, MAX_FORWARD_LIGHTS);
+    for (int i = 0; i < forwardLimit; i++)
     {
-        pointTotal += PointLight(n, v, worldPos, pointLightPositions[i], pointLightRadiances[i], pointLightRanges[i],
-            albedo, f0, rough, metal);
+        localTotal += ShadowForwardLight(i, LocalLight(n, v, worldPos, forwardLightPositions[i],
+            forwardLightRadiances[i], forwardLightRanges[i], forwardLightDirections[i], forwardLightCones[i], albedo, f0,
+            rough, metal), lookups);
     }
     if (pointShadowActive)
     {
-        float shadow = ComputePointShadow(shadowPos, shadowNormal);
-        float visibility = 1.0 - shadow*clamp(shadowStrength, 0.0, 1.0);
-        pointTotal += PointLight(n, v, worldPos, pointShadowLightPos, pointShadowLightRadiance, pointShadowLightRange,
-            albedo, f0, rough, metal)*visibility;
+        float visibility = LocalShadowVisibility(ComputePointShadow(lookups.cubePosition, lookups.cubeNormal));
+        localTotal += LocalLight(n, v, worldPos, pointShadowLightPos, pointShadowLightRadiance, pointShadowLightRange,
+            vec3(0.0), vec2(0.0, 1.0), albedo, f0, rough, metal)*visibility;
     }
-    return pointTotal;
+    return localTotal;
 }
 
-// The point lights with wrap lighting (PointLightWrapped), shadowed like PointLights.
-vec3 PointLightsWrapped(vec3 n, vec3 v, vec3 worldPos, vec3 shadowPos, vec3 shadowNormal, float wrap, vec3 albedo,
-    vec3 f0, float rough, float metal)
+// The local lights with wrap lighting (LocalLightWrapped), shadowed like LocalLights.
+vec3 LocalLightsWrapped(vec3 n, vec3 v, vec3 worldPos, LocalShadowLookups lookups, float wrap, vec3 albedo, vec3 f0,
+    float rough, float metal)
 {
-    vec3 pointTotal = vec3(0.0);
-    int pointLightLimit = min(pointLightCount, MAX_POINT_LIGHTS);
-    for (int i = 0; i < pointLightLimit; i++)
+    vec3 localTotal = vec3(0.0);
+    int forwardLimit = min(forwardLightCount, MAX_FORWARD_LIGHTS);
+    for (int i = 0; i < forwardLimit; i++)
     {
-        pointTotal += PointLightWrapped(n, v, worldPos, pointLightPositions[i], pointLightRadiances[i],
-            pointLightRanges[i], wrap, albedo, f0, rough, metal);
+        localTotal += ShadowForwardLight(i, LocalLightWrapped(n, v, worldPos, forwardLightPositions[i],
+            forwardLightRadiances[i], forwardLightRanges[i], forwardLightDirections[i], forwardLightCones[i], wrap,
+            albedo, f0, rough, metal), lookups);
     }
     if (pointShadowActive)
     {
-        float shadow = ComputePointShadow(shadowPos, shadowNormal);
-        float visibility = 1.0 - shadow*clamp(shadowStrength, 0.0, 1.0);
-        pointTotal += PointLightWrapped(n, v, worldPos, pointShadowLightPos, pointShadowLightRadiance,
-            pointShadowLightRange, wrap, albedo, f0, rough, metal)*visibility;
+        float visibility = LocalShadowVisibility(ComputePointShadow(lookups.cubePosition, lookups.cubeNormal));
+        localTotal += LocalLightWrapped(n, v, worldPos, pointShadowLightPos, pointShadowLightRadiance,
+            pointShadowLightRange, vec3(0.0), vec2(0.0, 1.0), wrap, albedo, f0, rough, metal)*visibility;
     }
-    return pointTotal;
+    return localTotal;
 }
 
 
@@ -890,8 +1017,8 @@ vec3 ScreenLightWrapped(vec3 n, vec3 v, vec3 worldPos, float wrap, vec3 albedo, 
 
 // The light a raindrop (a streak, a splash) at a render-space point sends toward the eye, per unit of its colour: a drop
 // refracts and reflects what lies around it, so it shows the mean of the sky's and the ground's light (as a surface
-// facing sideways takes them), and the sun's, the moon's, the point lights' and a bolt's light falling on it spread over
-// every direction.
+// facing sideways takes them), and the sun's, the moon's, the local lights' (within a spot's cone) and a bolt's light
+// falling on it spread over every direction.
 vec3 RainDropLight(vec3 worldPos)
 {
     SkyLightValues light = SkyLightAt(worldPos);
@@ -901,14 +1028,17 @@ vec3 RainDropLight(vec3 worldPos)
     {
         falling += light.moon;
     }
-    int pointLightLimit = min(pointLightCount, MAX_POINT_LIGHTS);
-    for (int i = 0; i < pointLightLimit; i++)
+    int forwardLimit = min(forwardLightCount, MAX_FORWARD_LIGHTS);
+    for (int i = 0; i < forwardLimit; i++)
     {
-        falling += pointLightRadiances[i]*PointLightFalloff(length(pointLightPositions[i] - worldPos), pointLightRanges[i]);
+        vec3 toLight = forwardLightPositions[i] - worldPos;
+        float dist = length(toLight);
+        falling += forwardLightRadiances[i]*LocalLightFalloff(dist, forwardLightRanges[i])
+            *LightCone(toLight/max(dist, 1e-4), forwardLightDirections[i], forwardLightCones[i]);
     }
     if (pointShadowActive)
     {
-        falling += pointShadowLightRadiance*PointLightFalloff(length(pointShadowLightPos - worldPos),
+        falling += pointShadowLightRadiance*LocalLightFalloff(length(pointShadowLightPos - worldPos),
             pointShadowLightRange);
     }
     return around + falling*(0.25/PI);

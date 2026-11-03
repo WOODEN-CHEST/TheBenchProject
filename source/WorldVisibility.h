@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "WorldLightCulling.h"
 #include "WorldRenderCache.h"
 #include "raylib/raylib.h"
 #include "wr/WRError.h"
@@ -78,6 +79,9 @@
 /** @brief The most shadow levels the lists are built for (WorldShadowLevels.h's WORLD_SHADOW_MAX_LEVELS: the renderer
  *  checks the two are the same). */
 #define WORLD_VISIBILITY_MAX_SHADOW_LEVELS 8U
+/** @brief The most shadowed spot lights the lists are built for (WorldLocalShadows.h's WORLD_LOCAL_SHADOWS_MAX_SPOTS: the
+ *  renderer checks the two are the same). */
+#define WORLD_VISIBILITY_MAX_SPOT_SHADOWS 2U
 /** @brief The vertical field of view, in degrees, that draw and LOD distances are authored at: the zoom factor is 1
  *  there (the camera's default). */
 #define WORLD_VISIBILITY_REFERENCE_FOV_Y 60.0
@@ -140,6 +144,11 @@ typedef enum WorldVisibilityPassEnum
     WorldVisibilityPass_ShadowLevelLast = WorldVisibilityPass_ShadowLevel0 + (int)WORLD_VISIBILITY_MAX_SHADOW_LEVELS - 1,
     /** @brief The point-light cube shadow's casters. */
     WorldVisibilityPass_PointShadow,
+    /** @brief The first shadowed spot's casters; spot k's list is this plus k (WorldVisibility_GetSpotShadowPass), up to
+     *  WorldVisibilityPass_SpotShadowLast. */
+    WorldVisibilityPass_SpotShadow0,
+    /** @brief The last shadowed spot's casters (spot WORLD_VISIBILITY_MAX_SPOT_SHADOWS - 1). */
+    WorldVisibilityPass_SpotShadowLast = WorldVisibilityPass_SpotShadow0 + (int)WORLD_VISIBILITY_MAX_SPOT_SHADOWS - 1,
     /** @brief What keeps the sky out in the sky's visibility map (its box): models and instance cells that occlude the
      *  sky, every terrain chunk. */
     WorldVisibilityPass_SkyVisibility,
@@ -212,6 +221,11 @@ typedef struct WorldVisibilityViewStruct
     bool IsPointShadowActive;
     Vector3 PointShadowPosition;
     float PointShadowReach;
+    /** @brief The shadowed spots this frame: how many (at most WORLD_VISIBILITY_MAX_SPOT_SHADOWS), and each one's reach
+     *  (its render-space position, range, axis and outer cone: casters must reach into it,
+     *  WorldLightCulling_DoesLightReachSphere). */
+    uint32_t SpotShadowCount;
+    WorldCullingLight SpotShadows[WORLD_VISIBILITY_MAX_SPOT_SHADOWS];
     /** @brief Whether the sky's visibility map is drawn, and its box. */
     bool IsSkyVisibilityActive;
     WorldFrustum SkyVisibilityBox;
@@ -478,15 +492,26 @@ void WorldVisibility_Deconstruct(WorldVisibility* self);
 Error WorldVisibility_Build(WorldVisibility* self, const WorldRenderCache* cache, const WorldVisibilityView* view);
 
 /**
- * @brief Whether a pass draws its entries as a light's shadow casters (a shadow level or the cube shadow), which dither by
- *        their shadow fade; the camera's, the sky's visibility map and the rain map draw by their fade.
+ * @brief Whether a pass draws its entries as a light's shadow casters (a shadow level, the cube shadow or a spot's map),
+ *        which dither by their shadow fade; the camera's, the sky's visibility map and the rain map draw by their fade.
  * @param pass The pass.
- * @returns true for the shadow levels' passes and the cube shadow's.
+ * @returns true for the shadow levels' passes, the cube shadow's and the spots' maps'.
  */
 static inline bool WorldVisibility_IsShadowPass(WorldVisibilityPass pass)
 {
     return ((pass >= WorldVisibilityPass_ShadowLevel0) && (pass <= WorldVisibilityPass_ShadowLevelLast))
-        || (pass == WorldVisibilityPass_PointShadow);
+        || (pass == WorldVisibilityPass_PointShadow)
+        || ((pass >= WorldVisibilityPass_SpotShadow0) && (pass <= WorldVisibilityPass_SpotShadowLast));
+}
+
+/**
+ * @brief The pass of a shadowed spot's list.
+ * @param spot The spot, below WORLD_VISIBILITY_MAX_SPOT_SHADOWS.
+ * @returns WorldVisibilityPass_SpotShadow0 + @p spot.
+ */
+static inline WorldVisibilityPass WorldVisibility_GetSpotShadowPass(uint32_t spot)
+{
+    return (WorldVisibilityPass)((uint32_t)WorldVisibilityPass_SpotShadow0 + spot);
 }
 
 /**

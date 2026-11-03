@@ -1,6 +1,6 @@
 #version 330
 
-// World sprites, lit like the models around them (common/lighting: the sun, the moon, point lights, shadows, the
+// World sprites, lit like the models around them (common/lighting: the sun, the moon, local lights, shadows, the
 // ambient, the haze, the eye's night vision) or unlit (their colours shown as emitted light, still hazed). The sprite's art
 // is sRGB and is linearized here; the scene buffer is linear HDR, tonemapped at the end.
 //
@@ -40,6 +40,10 @@ layout(location = 0) out vec4 finalColor;
 #include "common/lighting"
 #include "common/reflection_output"
 #include "common/dither"
+
+// Where each shadowed spot's map is read: the sprite as that spot sees it (sprite/vertex).
+in vec3 fragSpotShadowPositions[MAX_SPOT_SHADOWS];
+in vec3 fragSpotShadowNormals[MAX_SPOT_SHADOWS];
 
 const int ALPHA_MODE_CUTOUT = 0;
 const int ALPHA_MODE_BLEND = 1;
@@ -81,11 +85,17 @@ void main()
         placeNormal = isCard ? n : placeNormal;
 
         // The shadow levels are read on the sprite as their light sees it, off that quad's face toward the light; the cube
-        // shadow likewise on the quad facing its light.
+        // shadow and each shadowed spot's map likewise on the quad facing their light.
         vec3 toShadowLight = normalize(shadowLightDirection);
         vec3 shadowFace = FacingNormal(normalize(fragShadowNormal), toShadowLight);
         float shadowAmount = SkyShadowAmount(fragShadowPosition, shadowFace, dot(shadowFace, toShadowLight));
-        vec3 pointShadowNormal = FacingNormal(fragPointShadowNormal, pointShadowLightPos - fragPointShadowPosition);
+        LocalShadowLookups lookups;
+        lookups.cubePosition = fragPointShadowPosition;
+        lookups.cubeNormal = FacingNormal(fragPointShadowNormal, pointShadowLightPos - fragPointShadowPosition);
+        lookups.spotPositions[0] = fragSpotShadowPositions[0];
+        lookups.spotNormals[0] = normalize(fragSpotShadowNormals[0]);
+        lookups.spotPositions[1] = fragSpotShadowPositions[1];
+        lookups.spotNormals[1] = normalize(fragSpotShadowNormals[1]);
 
         // The weather's wetness on what lies on a surface or stands in the rain where the rain reaches it (cards, decals
         // among them, and cutout billboards; a blended billboard is smoke or glass, an additive sprite light): darker and
@@ -101,8 +111,8 @@ void main()
 
         SkyLightValues light = SkyLightAt(fragPosition);
         vec3 direct = SkyLightWrapped(light, n, v, shadowAmount, lightWrap, albedo, SPRITE_F0, rough, SPRITE_METALLIC);
-        vec3 pointTotal = PointLightsWrapped(n, v, fragPosition, fragPointShadowPosition, pointShadowNormal, lightWrap,
-            albedo, SPRITE_F0, rough, SPRITE_METALLIC)
+        vec3 localTotal = LocalLightsWrapped(n, v, fragPosition, lookups, lightWrap, albedo, SPRITE_F0, rough,
+            SPRITE_METALLIC)
             + ScreenLightWrapped(n, v, fragPosition, lightWrap, albedo, SPRITE_F0, rough, SPRITE_METALLIC);
         // A card the pre-pass saw (a cutout card, a decal on its surface) takes its sky visibility; a billboard stands for
         // a thing seen from all round (the pre-pass saw its quad facing the camera) and a blended sprite is not in it:
@@ -114,7 +124,7 @@ void main()
             *(useScreenAo ? ScreenAo() : 1.0);
 
         // Reflected light goes through the eye's night vision, as the models' does.
-        color = NightVisionOf(ambient + direct + pointTotal);
+        color = NightVisionOf(ambient + direct + localTotal);
     }
     else
     {

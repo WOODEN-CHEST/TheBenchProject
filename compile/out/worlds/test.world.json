@@ -1,7 +1,7 @@
 {
     "format_version": 3,
     "name": "test",
-    "next_object_id": 77,
+    "next_object_id": 95,
     "environment": {
         "cloud_high_coverage": 0.05
     },
@@ -3235,6 +3235,96 @@
             }
         },
         {
+            "id": 87,
+            "name": "room_desk",
+            "parent": 54,
+            "position": [-0.9, 0.38, 1.1],
+            "scale": [2.4, 1.5, 1.1],
+            "tint": "#8a6a4a",
+            "components": {
+                "model": {
+                    "world_model": "tbp:test"
+                },
+                "collider": {}
+            }
+        },
+        {
+            "id": 88,
+            "name": "room_desk_lamp",
+            "parent": 54,
+            "position": [-1.3, 0.97, 1.25],
+            "scale": [0.08, 0.84, 0.08],
+            "tint": "#59626b",
+            "components": {
+                "model": {
+                    "world_model": "tbp:test",
+                    "uses_variant": true,
+                    "variant": "polished"
+                }
+            }
+        },
+        {
+            "id": 89,
+            "name": "room_desk_lamp_shade",
+            "parent": 54,
+            "position": [-1.1, 1.17, 1.15],
+            "scale": [0.36, 0.2, 0.28],
+            "tint": "#59626b",
+            "components": {
+                "model": {
+                    "world_model": "tbp:test",
+                    "uses_variant": true,
+                    "variant": "polished"
+                }
+            }
+        },
+        {
+            "id": 90,
+            "name": "room_desk_lamp_light",
+            "parent": 54,
+            "position": [-1.08, 1.1, 1.1],
+            "rotation": [90.0, 17.0, 0.0],
+            "components": {
+                "light": {
+                    "type": "spot",
+                    "color": "#ffe0b0",
+                    "intensity": 1.2,
+                    "range": 4.0,
+                    "inner_angle": 20.0,
+                    "outer_angle": 40.0,
+                    "casts_shadows": true
+                }
+            }
+        },
+        {
+            "id": 91,
+            "name": "room_tube",
+            "parent": 54,
+            "position": [0.3, 2.58, 0.0],
+            "scale": [2.4, 0.08, 0.2],
+            "tint": "#f4f6f8",
+            "components": {
+                "model": {
+                    "world_model": "tbp:test"
+                }
+            }
+        },
+        {
+            "id": 92,
+            "name": "room_tube_light",
+            "parent": 54,
+            "position": [0.3, 2.52, 0.0],
+            "components": {
+                "light": {
+                    "color": "#e8f0ff",
+                    "intensity": 0.6,
+                    "range": 5.0,
+                    "flicker": "fluorescent",
+                    "flicker_amount": 0.5
+                }
+            }
+        },
+        {
             "id": 63,
             "name": "card_one_sided",
             "position": [4.4, 1.6, 7.5],
@@ -3333,6 +3423,34 @@
             }
         },
         {
+            "id": 93,
+            "name": "candle",
+            "parent": 66,
+            "position": [0.38, 0.85, 0.15],
+            "scale": [0.1, 0.28, 0.1],
+            "tint": "#f2ead8",
+            "components": {
+                "model": {
+                    "world_model": "tbp:test"
+                }
+            }
+        },
+        {
+            "id": 94,
+            "name": "candle_light",
+            "parent": 66,
+            "position": [0.38, 0.95, 0.15],
+            "components": {
+                "light": {
+                    "color": "#ffb060",
+                    "intensity": 0.25,
+                    "range": 2.5,
+                    "flicker": "candle",
+                    "flicker_amount": 0.35
+                }
+            }
+        },
+        {
             "id": 72,
             "name": "mirror_box",
             "position": [3.5, 0.55, -2.0],
@@ -3390,6 +3508,145 @@
             "components": {
                 "model": {
                     "world_model": "tbp:test_pond"
+                }
+            }
+        },
+        {
+            "id": 77,
+            "name": "street_lamp",
+            "position": [-1.2, 0.05, 0.6]
+        },
+        {
+            "id": 78,
+            "name": "street_lamp_pole",
+            "parent": 77,
+            "position": [0.0, 2.1, 0.0],
+            "scale": [0.24, 8.4, 0.24],
+            "tint": "#59626b",
+            "components": {
+                "model": {
+                    "world_model": "tbp:test",
+                    "uses_variant": true,
+                    "variant": "polished"
+                },
+                "collider": {}
+            }
+        },
+        {
+            "id": 79,
+            "name": "street_lamp_arm",
+            "parent": 77,
+            "position": [-0.45, 4.12, 0.0],
+            "scale": [1.8, 0.16, 0.16],
+            "tint": "#59626b",
+            "components": {
+                "model": {
+                    "world_model": "tbp:test",
+                    "uses_variant": true,
+                    "variant": "polished"
+                }
+            }
+        },
+        {
+            "id": 80,
+            "name": "street_lamp_head",
+            "parent": 77,
+            "position": [-0.8, 4.04, 0.0],
+            "scale": [0.72, 0.2, 0.48],
+            "tint": "#59626b",
+            "components": {
+                "model": {
+                    "world_model": "tbp:test",
+                    "uses_variant": true,
+                    "variant": "polished"
+                }
+            }
+        },
+        {
+            "id": 81,
+            "name": "street_lamp_light",
+            "parent": 77,
+            "position": [-0.8, 3.95, 0.0],
+            "rotation": [90.0, 0.0, 0.0],
+            "components": {
+                "light": {
+                    "type": "spot",
+                    "color": "#ffd28c",
+                    "intensity": 4.0,
+                    "range": 10.0,
+                    "outer_angle": 50.0,
+                    "casts_shadows": true
+                }
+            }
+        },
+        {
+            "id": 82,
+            "name": "street_lamp_broken",
+            "position": [-8.4, 0.05, 1.5],
+            "rotation": [0.0, 180.0, 0.0]
+        },
+        {
+            "id": 83,
+            "name": "street_lamp_broken_pole",
+            "parent": 82,
+            "position": [0.0, 2.1, 0.0],
+            "scale": [0.24, 8.4, 0.24],
+            "tint": "#59626b",
+            "components": {
+                "model": {
+                    "world_model": "tbp:test",
+                    "uses_variant": true,
+                    "variant": "polished"
+                },
+                "collider": {}
+            }
+        },
+        {
+            "id": 84,
+            "name": "street_lamp_broken_arm",
+            "parent": 82,
+            "position": [-0.45, 4.12, 0.0],
+            "scale": [1.8, 0.16, 0.16],
+            "tint": "#59626b",
+            "components": {
+                "model": {
+                    "world_model": "tbp:test",
+                    "uses_variant": true,
+                    "variant": "polished"
+                }
+            }
+        },
+        {
+            "id": 85,
+            "name": "street_lamp_broken_head",
+            "parent": 82,
+            "position": [-0.8, 4.04, 0.0],
+            "scale": [0.72, 0.2, 0.48],
+            "tint": "#59626b",
+            "components": {
+                "model": {
+                    "world_model": "tbp:test",
+                    "uses_variant": true,
+                    "variant": "polished"
+                }
+            }
+        },
+        {
+            "id": 86,
+            "name": "street_lamp_broken_light",
+            "parent": 82,
+            "position": [-0.8, 3.95, 0.0],
+            "rotation": [90.0, 0.0, 0.0],
+            "components": {
+                "light": {
+                    "type": "spot",
+                    "color": "#ffd28c",
+                    "intensity": 4.0,
+                    "range": 10.0,
+                    "outer_angle": 50.0,
+                    "casts_shadows": true,
+                    "flicker": "broken",
+                    "flicker_amount": 1.0
                 }
             }
         }

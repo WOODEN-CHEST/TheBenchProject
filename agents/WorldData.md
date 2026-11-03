@@ -17,7 +17,8 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | WorldModelComponent | `include/WorldModelComponent.h`, `source/WorldModelComponent.c` | A world model by asset name ([WorldModels.md](WorldModels.md)), the variant drawn, and the settings this placement overrides (explicit flags next to its own values: outline, crisp, casts shadows, shadow distance, fixed shadow distance, shadow only, two-sided shadows, shadow LOD, haze, keeps the sky out, draw distance, fixed draw distance; draw and shadow distance multipliers), with the pure function that resolves the settings in effect. |
 | WorldModelInstancesComponent | `include/WorldModelInstancesComponent.h`, `source/WorldModelInstancesComponent.c`, `source/WorldModelComponentInternal.h` (the rows it shares with the model component) | Many copies of one world model: the model component's settings, shared through macros (all but `omit_pixelation`: copies are never crisp), and the copies as an `InstanceList` (each a double position, a rotation, a scale and a tint), with the pure functions that resolve the settings and the LOD settings in effect. |
 | WorldSpriteComponent | `include/WorldSpriteComponent.h`, `source/WorldSpriteComponent.c` | A world sprite by asset name ([WorldSprites.md](WorldSprites.md)), bound by the world with its animation's playback instance, and every setting this placement overrides (explicit flags next to its own values: orientation, pivot, size, flips, alpha mode, lighting, decal, render flags, shadow distance, fixed shadow distance, shadow only, draw distance, fixed draw distance; draw and shadow distance multipliers), with the pure function that resolves the settings in effect. |
-| WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point light (colour, intensity, range, casts shadows). |
+| WorldLightComponent | `include/WorldLightComponent.h`, `source/WorldLightComponent.c` | A point or a spot light (on or off, colour, intensity, range, a spot's cone, casts shadows, a flicker). |
+| WorldLightFlicker | `include/WorldLightFlicker.h`, `source/WorldLightFlicker.c` | A light's flicker as pure maths: how bright a candle, a fluorescent tube or a broken lamp is at a moment, the same on every run. |
 | WorldAmbientZoneComponent | `include/WorldAmbientZoneComponent.h`, `source/WorldAmbientZoneComponent.c` | A volume that sets a room's own light (a box or a sphere: its light, the sky's share in it, the eye's exposure bias, its priority and its air's haze). |
 | WorldScreenComponent | `include/WorldScreenComponent.h`, `source/WorldScreenComponent.c` | Which surface of the object's world model shows a picture made while the game runs ([WorldModels.md](WorldModels.md), "Surfaces"), whether the screen is on and how bright it is. |
 | WorldScreens | `include/WorldScreens.h`, `source/WorldScreens.c` | The screens system: every screen component's surface resolved on its object's world model (under its own asset user), the ray that finds which screen the player points at and where on its picture (through a CRT's curvature), and each screen's power transition moved toward its power state (below, "Screen component"). |
@@ -400,9 +401,30 @@ terrain's space; the object is static by default, and moving it works (the colli
 static-move warning). Not a transform driver. An object with a collider as well collides through its collider alone.
 
 ### Light component (`light_component`)
-`_color` (white), `_intensity` (>= 0, default 1), `_range` (>= 0, default 1: how far the light reaches),
-`_castsShadows` (false). It uses its object's world position (a lamp carries its light); rotation, scale
-and tint do not affect it. A hidden or disabled object's light is off, also under a hidden or disabled ancestor.
+`_isOn` (true: off it lights nothing and casts no shadow, every other setting kept: a script's lamp switch,
+`WorldLightComponent_SetIsOn`), `_type` (`WorldLightType`: `point`, the default, shines every way; `spot` shines in a
+cone along its object's world forward, +Z after its rotation, through its parents: a lamp pointing down is turned
+`[90, 0, 0]`), `_color` (white), `_intensity` (>= 0, default 1), `_range` (>= 0, default 1: how far the light reaches),
+a spot's `_innerAngle` and `_outerAngle` (radians, degrees in files, each strictly between 0 and 90 degrees, defaults
+25 and 35: full light within the inner angle of the axis, fading smoothly to nothing at the outer), `_castsShadows`
+(false), and its flicker: `_flicker` (`WorldLightFlicker`: `none`, `candle`, `fluorescent`, `broken`), `_flickerAmount`
+(in [0, 1], 0.3: the intensity times a value in [1 - amount, 1]) and `_flickerSpeed` (in [0, 100], 1: the tempo; 0
+holds it still). It uses its object's world position and, for a spot, its world forward (a lamp carries its light); the
+scale (beyond the forward's direction) and the tint do not affect it. A hidden or disabled object's light is off, also
+under a hidden or disabled ancestor.
+- **The cone's rule spans two rows** (inner at most outer), which a table cannot hold: the table checks each angle on
+  its own (a file or a script may set them in any order), `WorldLightComponent_SetCone(inner, outer)` refuses a pair that
+  breaks it, and `WorldLightComponent_GetCone` gives the cone in effect: an inner angle past the outer counts as the
+  outer (a hard edge). The renderer reads the cone in effect.
+- **The flicker** (`WorldLightFlicker_GetFactor(flicker, amount, speed, seconds, seed)`, `include/WorldLightFlicker.h`)
+  is a pure function of the time, the light's seed (its object's id, so two candles never flicker together) and its
+  settings: no state, the same value for the same inputs on every run, always in [1 - amount, 1] (exactly 1 for `none`
+  or amount 0); the speed scales the time. `candle`: three smooth wavers (1.7, 4.3 and 9.1 a second), never a jump.
+  `fluorescent`: a faint 23-a-second shimmer (an eighth of the depth) and, about every ten seconds, a dip of one to
+  three quick blinks to its darkest. `broken`: in most 4-second slots a dark gap of 0.8 to 2.5 s, stuttering on and off
+  for a third of a second before and after it. The renderer evaluates it once per light per frame on its lights' clock
+  of real seconds (never wrapped, `WorldRenderer_GetLightSeconds`); `WorldLightComponent_GetFlickerFactor(light,
+  seconds)` at that clock gives game code the value the last render used (a candle's sound, a sprite's glow).
 
 ### Ambient zone component (`ambient_zone_component`)
 A volume that sets a room's own light (the warm office, the dim storeroom, the cellar no daylight reaches); how the

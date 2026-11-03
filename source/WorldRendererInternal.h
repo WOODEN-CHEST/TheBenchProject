@@ -36,6 +36,7 @@
 #include "SpriteTransform.h"
 #include "WorldRenderSpace.h"
 #include "WorldShadowLevels.h"
+#include "WorldLocalShadows.h"
 #include "WorldFarShadows.h"
 #include "WorldVisibility.h"
 #include "raylib/raylib.h"
@@ -125,6 +126,15 @@
 /** The most shadow levels the lit shaders read (common/lighting's SHADOW_MAX_LEVELS; the levels' own and the config's
  *  limits are the same: checked below). */
 #define WORLD_RENDERER_MAX_SHADOW_LEVELS WORLD_SHADOW_MAX_LEVELS
+/** The most spot lights that cast shadows in one render (WorldLocalShadows.h; common/lighting's MAX_SPOT_SHADOWS). */
+#define WORLD_RENDERER_MAX_SPOT_SHADOWS WORLD_LOCAL_SHADOWS_MAX_SPOTS
+/** The narrowest a cone's falloff band may be, in cosines (WorldRendererLighting_GetConeFalloff): an inner angle equal
+ *  to the outer one is a hard edge, its scale finite. A cone narrower than ten times it (an outer angle below about 2.6
+ *  degrees) takes a tenth of its own room instead, so its axis still gets its full light. */
+#define WORLD_RENDERER_MIN_CONE_SPAN 1e-4f
+/** The most objects the renderer names in its log for having more forward lights reach a draw of theirs than the draw
+ *  takes (one line each); past them one line says so and it stops. */
+#define WORLD_RENDERER_LIGHT_OVERFLOW_LOG_LIMIT 32U
 /** The widest the cloud target is, in texels (a window-sized scene without pixelation is marched at a fraction of it). */
 #define WORLD_RENDERER_CLOUD_MAX_WIDTH 640
 /** Number of maps in a raylib Material: the renderer module's RENDERER_MATERIAL_MAP_COUNT (raylib's private
@@ -213,6 +223,8 @@ typedef enum
     // The lit programs' far shadows (the terrain's shadows at any distance: WorldRendererFarShadows.c): the finished
     // sweep's maps, one layer each.
     WorldRendererTextureUnit_FarShadows = 32,            // sampler2DArray farShadowMaps
+    // The lit programs' shadowed spots' maps (WorldRendererShadows.c): a layer each, depth compared like the levels'.
+    WorldRendererTextureUnit_SpotShadows = 33,           // sampler2DArrayShadow spotShadowMaps
     // The far shadows' sweep program (world_far_shadow_sweep), before the scene pass: the heights, the pass before's
     // shadow heights and the coarser map's, on the reflection pass's units (their array target: that pass binds 2D
     // textures there, and no lit program reads them).
@@ -248,6 +260,12 @@ _Static_assert((WorldRendererTextureUnit_FarShadows > WorldRendererTextureUnit_W
 _Static_assert((WorldRendererTextureUnit_WaterNormalA > WorldRendererTextureUnit_ReflectionBlocks)
     && (WorldRendererTextureUnit_WaterSceneDepth < 48),
     "the water's units sit above the reflection pass's, within the 48 combined units GL 3.3 guarantees");
+_Static_assert((WorldRendererTextureUnit_SpotShadows > WorldRendererTextureUnit_FarShadows)
+    && (WorldRendererTextureUnit_SpotShadows < 48),
+    "the spots' maps take the lit programs' next unit, within GL 3.3's guaranteed 48 combined units");
+_Static_assert((WORLD_RENDERER_MAX_SPOT_SHADOWS == WORLD_VISIBILITY_MAX_SPOT_SHADOWS)
+    && (WORLD_RENDERER_MAX_SPOT_SHADOWS == WORLD_RENDERER_STATUS_MAX_SPOT_SHADOWS),
+    "the visibility lists and the status hold every shadowed spot");
 
 /* Which objects a draw pass should include, by their OmitPixelation flag. The pixelated scene pass draws only
  * pixelated objects (when the crisp overlay is active), the crisp overlay pass draws only the flagged ones, and
@@ -259,12 +277,48 @@ typedef enum
     WorldRendererPixelFilter_CrispOnly,     // OmitPixelation == true
 } WorldRendererPixelFilter;
 
-/** @brief One light's linear radiance (colour x intensity), parallel to the forward-light culling list. */
-typedef struct WorldRendererRadianceStruct
+/** @brief One forward-light candidate's shading values, parallel to the forward-light culling list
+ *  (WorldRendererLighting_BuildForwardLights). */
+typedef struct WorldRendererForwardLightStruct
 {
-    /** @brief Linear RGB radiance. */
+    /** @brief Linear RGB radiance: its colour times its intensity times its flicker this frame. */
     float Rgb[3];
-} WorldRendererRadiance;
+    /** @brief A spot's axis (unit, render space); a point's is (0, 0, 0). */
+    float Direction[3];
+    /** @brief Its cone's falloff as the shaders take it (WorldRendererLighting_GetConeFalloff). */
+    float Cone[2];
+    /** @brief A shadowed spot's map: its layer of the spots' maps (its index among the frame's SpotShadows); -1 for a
+     *  light without one. */
+    int ShadowLayer;
+} WorldRendererForwardLight;
+
+/** @brief The forward lights one draw takes, as the lit shaders' arrays hold them (common/lighting's forwardLight*):
+ *  WorldRendererLighting_PackForwardLights. */
+typedef struct WorldRendererForwardLightArraysStruct
+{
+    /** @brief How many entries are used (0 to WORLD_MAX_FORWARD_LIGHTS). */
+    int Count;
+    /** @brief Per light: its render-space position, linear radiance, range, axis and cone falloff. */
+    float Positions[WORLD_MAX_FORWARD_LIGHTS * 3];
+    float Radiances[WORLD_MAX_FORWARD_LIGHTS * 3];
+    float Ranges[WORLD_MAX_FORWARD_LIGHTS];
+    float Directions[WORLD_MAX_FORWARD_LIGHTS * 3];
+    float Cones[WORLD_MAX_FORWARD_LIGHTS * 2];
+    /** @brief Per light: its shadowed spot's map layer, or -1 (common/lighting's forwardLightShadows). */
+    int Shadows[WORLD_MAX_FORWARD_LIGHTS];
+} WorldRendererForwardLightArrays;
+
+/** @brief One shadowed spot in a frame (WorldRendererShadows_PrepareFrame), in render space. */
+typedef struct WorldRendererSpotShadowFrameStruct
+{
+    /** @brief Its light: an index into the render cache's lights, and its object's id. */
+    size_t LightIndex;
+    uint64_t ObjectId;
+    /** @brief Its map's matrices, planes and lookups (WorldLocalShadows_GetSpotFrame). */
+    WorldSpotShadowFrame Map;
+    /** @brief Its reach as the culling sees it (its position, range, axis and outer cone): the casters its map draws. */
+    WorldCullingLight Reach;
+} WorldRendererSpotShadowFrame;
 
 /** @brief One shadow level in a frame, in render space (WorldRendererShadows_PrepareFrame, from
  *  WorldShadowLevels_BeginFrame). */
@@ -440,6 +494,16 @@ typedef struct WorldRenderFrameStruct
      *  casters must touch; valid while IsPointShadowActive. */
     Vector3 PointShadowPosition;
     float PointShadowFar;
+    /** @brief The shadowed spots this frame (WorldRendererShadows_PrepareFrame: the strongest that cast shadows,
+     *  WorldLocalShadows_Choose), each its own map's layer; 0 while none (or their maps could not be made). */
+    uint32_t SpotShadowCount;
+    WorldRendererSpotShadowFrame SpotShadows[WORLD_RENDERER_MAX_SPOT_SHADOWS];
+    /** @brief The cube shadow's light's linear radiance this frame (its colour times its intensity times its flicker:
+     *  WorldRendererLighting_GetLightRadiance); valid while IsPointShadowActive. */
+    float PointShadowRadiance[3];
+    /** @brief The render's clock for the lights' flicker: real seconds since the renderer was made (the frames' deltas),
+     *  never wrapped (TimeSeconds wraps every hour, which a flicker would show as a jump). */
+    double LightSeconds;
     /** @brief Lighting shared by the scene and crisp passes (computed once per render): the scene luminance estimate of
      *  the sky's light at the camera (WorldSkyLight_GetSceneLuminance), the field luminance night vision compares with
      *  before the lamps (NightVision_GetFieldLuminance of the daylight's and the night lights' shares of the light the eye
@@ -877,9 +941,9 @@ typedef struct WorldRendererCurvatureLocationsStruct
  */
 typedef struct WorldRendererLitLocationsStruct
 {
-    /** @brief How many point lights the shader's uniform arrays hold, capped at WORLD_MAX_FORWARD_LIGHTS
+    /** @brief How many forward lights the shader's uniform arrays hold, capped at WORLD_MAX_FORWARD_LIGHTS
      *  (checked at load; uploads never exceed it). */
-    int _maxPointLights;
+    int _maxForwardLights;
     /** @brief The two directional lights' directions (they light the ground haze too) and the sky's light: whether it
      *  comes by height from the volume, the camera's (the sun's, the moon's, the sky's, the ground's), whether the moon
      *  lights anything, the ambient's tint and the night's own light. (No camera position: the camera sits at the origin
@@ -928,11 +992,20 @@ typedef struct WorldRendererLitLocationsStruct
     int _locPointShadowCube;
     int _locPointShadowFar;
     int _locPointShadowBias;
-    /** @brief The forward point lights, uploaded per drawn object. */
-    int _locPointLightCount;
-    int _locPointLightPositions;
-    int _locPointLightRadiances;
-    int _locPointLightRanges;
+    /** @brief The shadowed spots' maps: each one's matrix and lookups (the normal offset's and the depth bias's scales),
+     *  the maps' texel and their sampler (the spots themselves are forward lights with a map layer). */
+    int _locSpotShadowMatrices;
+    int _locSpotShadowLookups;
+    int _locSpotShadowTexel;
+    int _locSpotShadowMaps;
+    /** @brief The forward lights (points and spots), uploaded per drawn object. */
+    int _locForwardLightCount;
+    int _locForwardLightPositions;
+    int _locForwardLightRadiances;
+    int _locForwardLightRanges;
+    int _locForwardLightDirections;
+    int _locForwardLightCones;
+    int _locForwardLightShadows;
     /** @brief The haze: the scene's view-projection, where the volume's screen directions lie (uploaded per
      *  frame), and the draw's haze multiplier (its placement's haze, set before every lit draw:
      *  WorldRendererLighting_SetDrawPlace). */
@@ -1027,11 +1100,20 @@ typedef struct WorldRendererPbrStateStruct
      *  upload of the rigid program goes to it too; its instancing uniforms are in WorldRendererInstanceState. */
     WorldRendererPbrProgram _instanced;
     /** @brief This render's forward-light candidates (WorldCullingLight), which every lit shader (models and sprites)
-     *  picks each object's lights from: every light of the render cache except the cube-shadow light, which is shaded on
-     *  its own. */
+     *  picks each object's lights from: every light of the render cache that is on and can light anything, except the
+     *  cube shadow's light, which is shaded on its own; a shadowed spot is one of them, with its map's layer
+     *  (WorldRendererLighting_BuildForwardLights). */
     GenericBuffer _forwardLights;
-    /** @brief The candidates' linear radiance (WorldRendererRadiance), parallel to _forwardLights. */
-    GenericBuffer _forwardRadiances;
+    /** @brief The candidates' shading values (WorldRendererForwardLight), parallel to _forwardLights. */
+    GenericBuffer _forwardShading;
+    /** @brief The objects already logged for having more forward lights reach a draw of theirs than it takes (their ids,
+     *  uint64_t; at most WORLD_RENDERER_LIGHT_OVERFLOW_LOG_LIMIT), and whether the last line about it has been written. */
+    GenericBuffer _lightOverflowObjects;
+    bool _isLightOverflowLogFull;
+    /** @brief The names of the objects whose lights cast shadows in the last render (the cube shadow's, then each
+     *  shadowed spot's; empty for none or no name), copied while the render cache matched the world, for the status
+     *  log, which may run after the world has changed. */
+    unsigned char _shadowLightNames[1U + WORLD_RENDERER_MAX_SPOT_SHADOWS][WORLD_OBJECT_NAME_MAX_LENGTH + 1U];
 } WorldRendererPbrState;
 
 /** @brief The unlit fallback's skinned shader. Without the PBR shader models draw with their materials' own shaders
@@ -1546,6 +1628,9 @@ typedef struct WorldRendererSpriteFrameStruct
     /** @brief The sprite as the cube shadow's light sees it; the camera transform while the cube shadow does not run or
      *  for a fixed sprite. */
     Matrix PointTransform;
+    /** @brief The sprite as each shadowed spot sees it (a billboard faces the spot); the camera transform for a spot that
+     *  does not cast this frame or for a fixed sprite. */
+    Matrix SpotTransforms[WORLD_RENDERER_MAX_SPOT_SHADOWS];
     /** @brief Its distance in front of the camera, along the view (the camera-facing quad's centre), for sorting. */
     float Depth;
 } WorldRendererSpriteFrame;
@@ -1570,6 +1655,7 @@ typedef struct WorldRendererSpriteStateStruct
     int _locUvRect;
     int _locShadowModel;
     int _locPointShadowModel;
+    int _locSpotShadowModels;
     int _locDecalOffset;
     int _locAlphaMode;
     int _locAlphaCutoff;
@@ -1659,6 +1745,19 @@ typedef struct WorldRendererPointShadowStateStruct
      *  WorldRenderFrame.PointShadowPosition and PointShadowFar.) */
     bool _hasCube;
 } WorldRendererPointShadowState;
+
+/** @brief The shadowed spots' maps (WorldLocalShadows.h). They draw with the shadow levels' depth shaders and GL functions
+ *  (WorldRendererShadowLevelState). */
+typedef struct WorldRendererSpotShadowStateStruct
+{
+    /** @brief The maps: one layer per shadowed spot, WORLD_LOCAL_SHADOWS_SPOT_MAP_SIZE a side, made at the first frame
+     *  with a shadowed spot (valid while _hasMaps); whether making them failed (logged once, not tried again). */
+    GLShadowArray _maps;
+    bool _hasMaps;
+    bool _hasFailed;
+    /** @brief The object ids of the spots that cast shadows last frame (0: none), for the choice's hysteresis. */
+    uint64_t _lastObjectIds[WORLD_RENDERER_MAX_SPOT_SHADOWS];
+} WorldRendererSpotShadowState;
 
 /** @brief The normal/flag G-buffer (view-space normals + surface/outline flag) read by the AO and outline passes. */
 typedef struct WorldRendererGBufferStateStruct
@@ -2501,6 +2600,8 @@ struct WorldRendererStruct
     bool _isStatusReported;
     /** @brief The render clock behind WorldRenderFrame.TimeSeconds: seconds of render time, wrapped every hour. */
     double _renderTimeSeconds;
+    /** @brief The lights' clock behind WorldRenderFrame.LightSeconds: the same seconds, never wrapped. */
+    double _lightSeconds;
 
     /** @brief Per-pass state (shader, uniform locations, targets, toggles). */
     WorldRendererSceneState _scene;
@@ -2516,6 +2617,7 @@ struct WorldRendererStruct
     WorldRendererShadowLevelState _shadowLevels;
     WorldRendererFarShadowState _farShadows;
     WorldRendererPointShadowState _pointShadow;
+    WorldRendererSpotShadowState _spotShadows;
     WorldRendererGBufferState _gbuffer;
     WorldRendererAoState _ao;
     WorldRendererOutlineState _outline;
@@ -3244,10 +3346,69 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
 void WorldRendererLighting_PrepareSkyLight(WorldRenderer* self, WorldRenderFrame* frame);
 
 /**
- * @brief Computes the frame's shadow strength into @p frame and builds the forward-light candidates (every light except
- *        the frame's cube-shadow light). Needs IsPointShadowActive and ShadowLightIndex.
+ * @brief Computes the frame's shadow strength into @p frame, the cube shadow's light's radiance (PointShadowRadiance) and
+ *        builds the forward-light candidates (WorldRendererLighting_BuildForwardLights: every light that is on, except the
+ *        cube shadow's light; the shadowed spots with their maps' layers). Needs IsPointShadowActive, ShadowLightIndex and
+ *        the SpotShadows.
  */
 void WorldRendererLighting_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame);
+
+/**
+ * @brief A light's linear radiance this frame: its sRGB colour made linear, times its intensity, times its flicker at
+ *        @p seconds (WorldLightFlicker_GetFactor, its object's id the seed); 0 while it is off. Pure.
+ * @param light The light.
+ * @param seconds The render's light clock (WorldRenderFrame.LightSeconds).
+ * @param outRgb [out] The radiance.
+ */
+void WorldRendererLighting_GetLightRadiance(const WorldRenderLight* light, double seconds, float outRgb[3]);
+
+/**
+ * @brief A light's cone falloff as the lit shaders take it (common/lighting's LightCone): with c the cosine between a
+ *        lit point's direction from the light and the spot's axis, t = clamp(c x out[0] + out[1], 0, 1) is 0 past the
+ *        outer angle and 1 within the inner, and the light is multiplied by t's smoothstep. A spot's out[0] is 1 over the
+ *        two cosines' difference (at least WORLD_RENDERER_MIN_CONE_SPAN, or a tenth of a narrow cone's room between its
+ *        outer cosine and 1: a hard edge stays finite and the axis gets its full light), out[1] its outer cosine times
+ *        -out[0]; a point's are 0 and 1 (t is 1 every way). Pure.
+ * @param type The light's kind.
+ * @param cone A spot's cone in effect (InnerAngle <= OuterAngle).
+ * @param out [out] The scale and the offset.
+ */
+void WorldRendererLighting_GetConeFalloff(WorldLightType type, WorldLightCone cone, float out[2]);
+
+/**
+ * @brief Builds a frame's forward-light candidates and their shading values: every light of @p lights that is on,
+ *        reaches anything (range and intensity above 0) and is not among @p excluded (the cube shadow's light, which the
+ *        shaders light on their own), in order, its culling light (its render-space position, range, its flickered
+ *        intensity, a spot's axis and outer cosine) appended to @p outCandidates and its shading values (its flickered
+ *        radiance, a spot's axis, its cone's falloff, its map's layer when it is the k-th of @p shadowedSpots, else -1)
+ *        to @p outShading. A light that flickers to darkness this frame is left out (it lights nothing), so its draws
+ *        take the next strongest. Appends; the caller clears. Pure (no GL).
+ * @param lights The render cache's lights this frame.
+ * @param lightCount Their number.
+ * @param excluded Indices into @p lights to leave out; may be NULL when @p excludedCount is 0.
+ * @param excludedCount Their number.
+ * @param shadowedSpots Indices into @p lights of the shadowed spots, in their maps' layers' order; may be NULL when
+ *        @p shadowedSpotCount is 0.
+ * @param shadowedSpotCount Their number.
+ * @param seconds The render's light clock (the flicker's time).
+ * @param outCandidates [out] WorldCullingLight entries.
+ * @param outShading [out] WorldRendererForwardLight entries, parallel to @p outCandidates.
+ * @returns true; false when a buffer could not grow (both are then cleared, as one list).
+ */
+bool WorldRendererLighting_BuildForwardLights(const WorldRenderLight* lights, size_t lightCount, const size_t* excluded,
+    size_t excludedCount, const size_t* shadowedSpots, size_t shadowedSpotCount, double seconds,
+    GenericBuffer* outCandidates, GenericBuffer* outShading);
+
+/**
+ * @brief Packs the forward lights a draw takes into the lit shaders' arrays. Pure.
+ * @param candidates The frame's candidates (WorldRendererLighting_BuildForwardLights).
+ * @param shading Their shading values, parallel to @p candidates.
+ * @param selected Indices into @p candidates.
+ * @param count The number of @p selected (clamped to WORLD_MAX_FORWARD_LIGHTS).
+ * @param outArrays [out] The arrays, in @p selected's order.
+ */
+void WorldRendererLighting_PackForwardLights(const WorldCullingLight* candidates, const WorldRendererForwardLight* shading,
+    const size_t* selected, size_t count, WorldRendererForwardLightArrays* outArrays);
 
 /**
  * @brief Uploads the frame's lighting uniforms to every lit shader the renderer has (the PBR programs, the CRT programs,
@@ -3280,15 +3441,17 @@ void WorldRendererLighting_UploadLitProgram(WorldRenderer* self, const WorldRend
 /**
  * @brief Reach-culls the frame's forward lights against a bounding sphere in render space and uploads the strongest few
  *        to a lit shader, for the object drawn next, with the screen light that reaches it
- *        (WorldRendererSurfaces_UploadScreenLight).
+ *        (WorldRendererSurfaces_UploadScreenLight). When more lights reach the sphere than the shader takes, the object is
+ *        named in the log, once (at most WORLD_RENDERER_LIGHT_OVERFLOW_LOG_LIMIT objects).
  * @param self The renderer.
  * @param shader The lit shader (its program).
  * @param locations Its locations (WorldRendererLighting_PrepareLitShader).
  * @param center The object's bounding sphere's centre, in render space.
  * @param radius Its radius.
+ * @param objectId The drawn object's id, for that log line (0: a draw of no object, never logged).
  */
 void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader,
-    const WorldRendererLitLocations* locations, Vector3 center, float radius);
+    const WorldRendererLitLocations* locations, Vector3 center, float radius, uint64_t objectId);
 
 /**
  * @brief Sets what the lit draw that follows takes from its place: its placement's resolved haze multiplier (1 the
@@ -3313,17 +3476,19 @@ void WorldRendererLighting_SetDrawPlace(const WorldRenderer* self, Shader shader
 
 /**
  * @brief WorldRendererLighting_UploadObjectLights for a draw in a run (WorldRendererLitRun): the same lights chosen the
- *        same way, uploaded only where they differ from the run's last upload (another screen light, other forward
- *        lights); the program holds the same values for the draw either way.
+ *        same way (and logged the same way), uploaded only where they differ from the run's last upload (another screen
+ *        light, other forward lights); the program holds the same values for the draw either way.
  * @param self The renderer.
  * @param shader The lit shader (its program).
  * @param locations Its locations (WorldRendererLighting_PrepareLitShader).
  * @param run The run's state in this program (zeroed at the run's start).
  * @param center The draw's bounding sphere's centre, in render space.
  * @param radius Its radius.
+ * @param objectId The drawn object's id (0: never logged).
  */
 void WorldRendererLighting_UploadRunLights(WorldRenderer* self, Shader shader,
-    const WorldRendererLitLocations* locations, WorldRendererLitRun* run, Vector3 center, float radius);
+    const WorldRendererLitLocations* locations, WorldRendererLitRun* run, Vector3 center, float radius,
+    uint64_t objectId);
 
 /**
  * @brief WorldRendererLighting_SetDrawPlace for a draw in a run (WorldRendererLitRun): the haze multiplier and the two
@@ -3366,25 +3531,27 @@ void WorldRendererLighting_LogStatus(const WorldRenderer* self);
  *  and the shadow cube (the levels' maps are made by WorldRendererShadows_PrepareFrame, for the config's size). */
 void WorldRendererShadows_LoadShaders(WorldRenderer* self);
 
-/** @brief Unloads the shadow levels' maps and the shadow cube. Needs a live GL context. */
+/** @brief Unloads the shadow levels' maps, the shadow cube and the spots' maps. Needs a live GL context. */
 void WorldRendererShadows_Unload(WorldRenderer* self);
-
-/**
- * @brief Picks the light that casts the cube shadow: the CastsShadows light with positive intensity and reach
- *        nearest the camera (the origin of render space: the shortest RenderPosition).
- * @returns Its index in the render cache's lights, or SIZE_MAX when no light qualifies.
- */
-size_t WorldRendererShadows_SelectPointLight(const WorldRenderer* self);
 
 /**
  * @brief Fills the frame's shadow values the passes and the visibility share, in render space: the shadow levels (while
  *        AreShadowLevelsActive: their maps made for the config's size and level count, then WorldShadowLevels_BeginFrame
  *        from frame->ShadowDirection and the frame's settings: which levels are used and which render, each one's
- *        matrices, box, LOD distance and lookups; AreShadowLevelsActive is turned off when the maps cannot be made) and
- *        the cube shadow's light position and far range (while IsPointShadowActive). Call after the shadow decisions,
- *        before the visibility; once per frame (it moves the levels' grids and their schedule).
+ *        matrices, box, LOD distance and lookups; AreShadowLevelsActive is turned off when the maps cannot be made), the
+ *        cube shadow's light position and far range (while IsPointShadowActive) and each shadowed spot's map frame, reach
+ *        and cone (their maps made at the first frame with one; SpotShadowCount is 0 when they cannot be made). Call after
+ *        the shadow decisions, before the visibility; once per frame (it moves the levels' grids and their schedule).
  */
 void WorldRendererShadows_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame);
+
+/** @brief Whether spots can cast shadows at all: the shadow levels' depth shader and GL functions are there (their maps
+ *  are made at the first frame with a shadowed spot) and making the maps has not failed. */
+bool WorldRendererShadows_AreSpotsAvailable(const WorldRenderer* self);
+
+/** @brief Binds the shadowed spots' maps on WorldRendererTextureUnit_SpotShadows for the lit passes, while a spot casts
+ *  this frame. */
+void WorldRendererShadows_BindSpots(const WorldRenderer* self, const WorldRenderFrame* frame);
 
 /**
  * @brief Draws the depth of a pass's model casters (its visibility list) with a depth shader and its skinned twin, each
@@ -3400,7 +3567,7 @@ void WorldRendererShadows_PrepareFrame(WorldRenderer* self, WorldRenderFrame* fr
  * @param dither The rigid shader's dither locations.
  * @param skinnedDither The skinned twin's.
  * @param pass The pass whose list is drawn.
- * @param level The shadow level drawn (its LOD distance), or NULL for the cube shadow.
+ * @param level The shadow level drawn (its LOD distance), or NULL for the cube's and the spots' maps.
  * @param zoomFactor The camera's zoom factor (the level's LOD distance is measured with it).
  * @param faceCulled The face the pass culls (RL_CULL_FACE_FRONT or RL_CULL_FACE_BACK).
  */
@@ -3510,6 +3677,15 @@ void WorldRendererShadows_RenderLevels(WorldRenderer* self, const WorldRenderFra
  *        dithered by its shadow fade (two-sided casters with both faces).
  */
 void WorldRendererShadows_RenderPointLight(WorldRenderer* self, const WorldRenderFrame* frame);
+
+/**
+ * @brief Renders each shadowed spot into its layer of the spots' maps, from the light along its axis
+ *        (WorldLocalShadows_GetSpotFrame), drawing its visibility list: the models (the LOD the camera shows, or their own
+ *        shadow LOD), the copies of model instances and the terrain chunks (their faces turned away from the light, both
+ *        faces for two-sided casters) and the cutout sprites (turned toward the light) that reach into its cone, each
+ *        dithered by its shadow fade.
+ */
+void WorldRendererShadows_RenderSpots(WorldRenderer* self, const WorldRenderFrame* frame);
 
 
 // WorldRendererGBuffer.c
@@ -4149,16 +4325,20 @@ void WorldRendererInstances_DrawNormals(WorldRenderer* self, const WorldRenderFr
  *        level past the first at least the one it would show at the level's inner edge; the component's own shadow LOD
  *        while it has one), dithered by its own shadow fade, left out of a level it is too small for; both faces for a
  *        two-sided component. Instanced through the pass's twin (world_depth_instanced, or world_cube_depth_instanced
- *        with the frame's cube light), or one at a time through @p shader. Inside the pass's matrices and culling.
+ *        with the frame's cube light), or one at a time through @p shader. Inside the pass's matrices and culling
+ *        (@p faceCulled, put back after each two-sided component).
  * @param self The renderer.
  * @param frame The frame (the zoom factor; the cube's light for PointShadow).
  * @param shader The pass's ordinary depth shader (its program).
  * @param dither Its dither locations.
  * @param pass The shadow pass.
- * @param level The shadow level drawn (its texel and LOD distance), or NULL for the cube shadow.
+ * @param level The shadow level drawn (its texel and LOD distance), or NULL for the cube's and the spots' maps.
+ * @param faceCulled The face a shadow pass culls (RL_CULL_FACE_FRONT or RL_CULL_FACE_BACK); the other passes draw no
+ *        component two-sided and ignore it.
  */
 void WorldRendererInstances_DrawCasters(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
-    const WorldRendererDitherLocations* dither, WorldVisibilityPass pass, const WorldRendererShadowLevelFrame* level);
+    const WorldRendererDitherLocations* dither, WorldVisibilityPass pass, const WorldRendererShadowLevelFrame* level,
+    int faceCulled);
 
 /**
  * @brief The water pass's copies: the camera's cells whose world model has water slots, each with its forward lights and

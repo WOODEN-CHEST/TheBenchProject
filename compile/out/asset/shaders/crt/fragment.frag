@@ -75,7 +75,8 @@ void main()
     SkyLightValues light = SkyLightAt(fragPosition);
     float shadowAmount = FaceShadowAmount(fragPosition, FaceNormal(fragPosition, surfaceNormal));
     vec3 direct = SkyLight(light, n, v, shadowAmount, albedo, f0, rough, metal);
-    vec3 pointTotal = PointLights(n, v, fragPosition, fragPosition, n, albedo, f0, rough, metal)
+    vec3 localTotal = LocalLights(n, v, fragPosition, SurfaceShadowLookups(fragPosition, n,
+        FaceNormal(fragPosition, surfaceNormal)), albedo, f0, rough, metal)
         + ScreenLight(n, v, fragPosition, albedo, f0, rough, metal);
     float skyVisibility = SkyVisibilityAt(fragPosition, surfaceNormal);
     vec3 glass = FresnelSchlickRoughness(clamp(dot(n, v), 0.0, 1.0), f0, rough);
@@ -96,7 +97,7 @@ void main()
     // Reflected light through the eye's night vision; the picture's light keeps its colour. While the reflection pass
     // runs, the water on the glass is its, and so is the glass's mirror for a CRT that mirrors its surroundings
     // (has_reflections); otherwise the glass mirrors the sky here, and the water too while the pass does not run.
-    vec3 reflected = ambient + direct + pointTotal;
+    vec3 reflected = ambient + direct + localTotal;
     if (reflectionsDeferred)
     {
         SurfaceReflection wet = WetReflection(light, n, v, water, rough);

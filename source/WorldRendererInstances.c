@@ -64,6 +64,8 @@ typedef struct CopyPassStruct
     bool IsLit;
     bool IsCast;
     const WorldRendererShadowLevelFrame* Level;
+    /** The face a shadow pass culls, put back after a two-sided component's copies. */
+    int FaceCulled;
 } CopyPass;
 
 
@@ -469,7 +471,7 @@ static bool DrawCell(WorldRenderer* self, const CopyPass* pass, const WorldRende
     if (IsTwoSided)
     {
         rlEnableBackfaceCulling();
-        rlSetCullFace((pass->Level != NULL) ? RL_CULL_FACE_FRONT : RL_CULL_FACE_BACK);
+        rlSetCullFace(pass->FaceCulled);
     }
     return IsInstanced;
 }
@@ -707,7 +709,7 @@ void WorldRendererInstances_DrawLit(WorldRenderer* self, const WorldRenderFrame*
             const WorldRendererPbrProgram* Program = (IsInstanced && (GetEntryBuffer(self, Cell->Entry) != 0U))
                 ? &self->_pbr._instanced : &self->_pbr._rigid;
             WorldRendererLighting_UploadObjectLights(self, Program->_passShader, &Program->_lit, Cell->RenderCenter,
-                Cell->Radius);
+                Cell->Radius, (Cell->Entry < EntryCount) ? Entries[Cell->Entry].ObjectId : 0U);
             WorldRendererLighting_SetDrawPlace(self, Program->_passShader, &Program->_lit, Cell->RenderCenter,
                 Cell->Radius, (Cell->Entry < EntryCount) ? Entries[Cell->Entry].Haze : 1.0f,
                 WorldVisibility_GetInstanceCellFade(&self->_visibility, Visible[Position]).Combined
@@ -783,7 +785,8 @@ void WorldRendererInstances_DrawNormals(WorldRenderer* self, const WorldRenderFr
 }
 
 void WorldRendererInstances_DrawCasters(WorldRenderer* self, const WorldRenderFrame* frame, Shader shader,
-    const WorldRendererDitherLocations* dither, WorldVisibilityPass pass, const WorldRendererShadowLevelFrame* level)
+    const WorldRendererDitherLocations* dither, WorldVisibilityPass pass, const WorldRendererShadowLevelFrame* level,
+    int faceCulled)
 {
     WorldRendererInstanceState* State = &self->_instances;
     // The rain map draws the copies' depth as the shadow levels do, by their fade (what keeps the sky out keeps the rain
@@ -810,7 +813,8 @@ void WorldRendererInstances_DrawCasters(WorldRenderer* self, const WorldRenderFr
         .OrdinaryDither = dither,
         .IsLit = false,
         .IsCast = WorldVisibility_IsShadowPass(pass),
-        .Level = level
+        .Level = level,
+        .FaceCulled = faceCulled
     };
     float DrawDistanceScale = WorldRendererCommon_ConfigDrawDistanceScale(self);
     size_t CellCount = 0U;
@@ -867,7 +871,7 @@ size_t WorldRendererInstances_DrawWater(WorldRenderer* self, const WorldRenderFr
         const WorldRendererPbrProgram* Program = (IsInstanced && (GetEntryBuffer(self, Cell->Entry) != 0U))
             ? &Instanced->_program : &Rigid->_program;
         WorldRendererLighting_UploadObjectLights(self, Program->_passShader, &Program->_lit, Cell->RenderCenter,
-            Cell->Radius);
+            Cell->Radius, Entries[Cell->Entry].ObjectId);
         WorldRendererLighting_SetDrawPlace(self, Program->_passShader, &Program->_lit, Cell->RenderCenter, Cell->Radius,
             Entries[Cell->Entry].Haze, WorldVisibility_GetInstanceCellFade(&self->_visibility, Visible[Position]).Combined
                 < WORLD_VISIBILITY_GBUFFER_FADE_LIMIT, false);

@@ -471,7 +471,7 @@ void WorldRendererSkyVisibility_Render(WorldRenderer* self, const WorldRenderFra
                 else
                 {
                     WorldRendererInstances_DrawCasters(self, frame, SliceShader, &State->_dither,
-                        WorldVisibilityPass_SkyVisibility, NULL);
+                        WorldVisibilityPass_SkyVisibility, NULL, RL_CULL_FACE_BACK);
                 }
                 GLSliceMap_EndLogicOp(&State->_api);
                 EndVolumeDraw();
@@ -492,7 +492,7 @@ void WorldRendererSkyVisibility_Render(WorldRenderer* self, const WorldRenderFra
             GLSliceMap_BeginLogicOp(&State->_api, GLSliceMapOp_Or);
             DrawModelLayer(self, &Shaders, MODEL_LAYER_COUNT);
             WorldRendererInstances_DrawCasters(self, frame, SliceShader, &State->_dither,
-                WorldVisibilityPass_SkyVisibility, NULL);
+                WorldVisibilityPass_SkyVisibility, NULL, RL_CULL_FACE_BACK);
             GLSliceMap_EndLogicOp(&State->_api);
             EndVolumeDraw();
         }

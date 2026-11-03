@@ -1548,7 +1548,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 76U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 94U);
             // The terrain: one object placing the placeholder terrain around the ground slab.
             WorldComponent* Ground = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 51U, WorldComponentType_Terrain, &Ground)
@@ -1656,13 +1656,40 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
                 TEST_CHECK(run, (Offer != NULL) && (Offer->Type == DataType_String)
                     && AreNamesEqual(Offer->StringValue, (const unsigned char*)Offers[Index].Action));
             }
-            // The collision examples: 49 colliders, among them a door of two sets, a trigger zone where the desk
+            // The collision examples: 52 colliders, among them a door of two sets, a trigger zone where the desk
             // slides, a pushing wall, a row of five pushable crates, its stop, a crate pinned in a corner of two posts
-            // in the door's swing, the bench, the coffee cup, a pushable trash can, the test room's walls and roof, the
-            // monitor and its table, and the mirror box; the door turns, so it is movable.
+            // in the door's swing, the bench, the coffee cup, a pushable trash can, the test room's walls, roof and
+            // desk, the monitor and its table, the mirror box and the street lamps' poles; the door turns, so it is
+            // movable.
             size_t ColliderCount = 0U;
             World_GetComponents(&Loaded, WorldComponentType_Collider, &ColliderCount);
-            TEST_CHECK(run, ColliderCount == 49U);
+            TEST_CHECK(run, ColliderCount == 52U);
+            // The lights' examples: a street lamp (a spot hanging from its arm, shining down, casting shadows), a broken
+            // one of the same, a desk lamp's spot in the test room, a fluorescent tube under its roof and a candle on the
+            // monitor's table, each flickering in its own way.
+            static const struct { uint64_t Id; WorldLightType Type; WorldLightFlicker Flicker; bool CastsShadows; }
+                Lamps[] =
+            {
+                { 81U, WorldLightType_Spot, WorldLightFlicker_None, true },
+                { 86U, WorldLightType_Spot, WorldLightFlicker_Broken, true },
+                { 90U, WorldLightType_Spot, WorldLightFlicker_None, true },
+                { 92U, WorldLightType_Point, WorldLightFlicker_Fluorescent, false },
+                { 94U, WorldLightType_Point, WorldLightFlicker_Candle, false }
+            };
+            for (size_t Index = 0U; Index < (sizeof(Lamps) / sizeof(Lamps[0])); Index++)
+            {
+                WorldComponent* Lamp = NULL;
+                const WorldLightComponent* LampComponent = World_TryGetComponent(&Loaded, Lamps[Index].Id,
+                    WorldComponentType_Light, &Lamp) ? WorldLightComponent_FromComponent(Lamp) : NULL;
+                TEST_CHECK(run, (LampComponent != NULL) && WorldLightComponent_IsOn(LampComponent)
+                    && (WorldLightComponent_GetType(LampComponent) == Lamps[Index].Type)
+                    && (WorldLightComponent_GetFlicker(LampComponent) == Lamps[Index].Flicker)
+                    && (WorldLightComponent_CastsShadows(LampComponent) == Lamps[Index].CastsShadows));
+            }
+            WorldComponent* StreetLamp = NULL;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 81U, WorldComponentType_Light, &StreetLamp)
+                && (fabsf(WorldLightComponent_GetCone(WorldLightComponent_FromComponent(StreetLamp)).OuterAngle
+                    - (float)(50.0 * 3.14159265358979323846 / 180.0)) < 1e-5f));
             // The reflections' examples: the monitor's glass, the test room's polished floor (a child of the room) and
             // the chrome mirror box mirror their surroundings, each by its own override.
             static const struct { uint64_t Id; const char* Variant; } Mirrors[] =

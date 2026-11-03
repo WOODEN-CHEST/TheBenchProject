@@ -1,10 +1,10 @@
-// The shadow levels of the sky's shadow light (the sun by day, the moon on bright nights; WorldShadowLevels.h) and the
-// point-light cube shadow, cast by models, the copies of model instances, terrain chunks and cutout sprites (turned
-// toward the light). Each pass draws the casters the frame's visibility lists for it (a level's box and its size cut,
-// or the cube's reach), each dithered by its shadow fade, so a fading object's shadow thins with it. Everything is in
-// render space: the levels' boxes sit around the camera with their centres snapped to their texel grids
-// (WorldRenderSpace_StepCascade), so their edges stand still while the camera moves; the cube sits at its light's
-// render-space position.
+// The shadow levels of the sky's shadow light (the sun by day, the moon on bright nights; WorldShadowLevels.h), the
+// point-light cube shadow and the shadowed spots' maps (WorldLocalShadows.h), cast by models, the copies of model
+// instances, terrain chunks and cutout sprites (turned toward the light). Each pass draws the casters the frame's
+// visibility lists for it (a level's box and its size cut, the cube's reach, a spot's cone), each dithered by its shadow
+// fade, so a fading object's shadow thins with it. Everything is in render space: the levels' boxes sit around the camera
+// with their centres snapped to their texel grids (WorldRenderSpace_StepCascade), so their edges stand still while the
+// camera moves; the cube and the spots' maps sit at their lights' render-space positions.
 
 #include <math.h>
 #include <stdio.h>
@@ -42,6 +42,16 @@
 #define SHADOW_MIN_DEPTH_BIAS 1.1920929e-7f
 /** Room for a warning that quotes an error. */
 #define WARNING_CAPACITY 512
+
+
+// Types.
+/* Which light a sprite caster faces in its shadow pass (WorldRendererSpriteFrame's transforms). */
+typedef enum SpriteCasterViewEnum
+{
+    SpriteCasterView_Level,
+    SpriteCasterView_Cube,
+    SpriteCasterView_Spot
+} SpriteCasterView;
 
 
 // Static functions.
@@ -149,10 +159,10 @@ void WorldRendererShadows_DrawModelCasters(WorldRenderer* self, const WorldRende
 
 /* Draws a shadow pass's sprite casters (its visibility list: cutout sprites that are not decals, with casts_shadows)
  * through an alpha-tested sprite depth shader, each dithered by its shadow fade and with its matrix for this light (a
- * billboard faces it: @p isLevel picks the levels' light, else the cube shadow's), so the shadow has the sprite's shape
- * and does not turn with the camera. Two-sided: culling is off for them. No-op without sprites. */
+ * billboard faces it: @p view picks the levels' light, the cube shadow's or the shadowed spot @p spot), so the shadow has
+ * the sprite's shape and does not turn with the camera. Two-sided: culling is off for them. No-op without sprites. */
 static void DrawSpriteCasters(WorldRenderer* self, Shader shader, const WorldRendererDitherLocations* dither,
-    int locUvRect, int locAlphaCutoff, WorldVisibilityPass pass, bool isLevel)
+    int locUvRect, int locAlphaCutoff, WorldVisibilityPass pass, SpriteCasterView view, uint32_t spot)
 {
     if (!WorldRendererSprites_IsAvailable(self))
     {
@@ -176,8 +186,20 @@ static void DrawSpriteCasters(WorldRenderer* self, Shader shader, const WorldRen
         SetShaderValue(shader, locAlphaCutoff, &Entry->AlphaCutoff, SHADER_UNIFORM_FLOAT);
         WorldRendererCommon_SetDither(shader, dither, WorldVisibility_GetSpriteFade(&self->_visibility, Index).Shadow,
             0.0f, false);
-        WorldRendererSprites_DrawQuad(self, shader, Entry, WHITE,
-            isLevel ? Matrices->ShadowTransform : Matrices->PointTransform);
+        Matrix LightTransform = Matrices->PointTransform;
+        switch (view)
+        {
+            case SpriteCasterView_Level:
+                LightTransform = Matrices->ShadowTransform;
+                break;
+            case SpriteCasterView_Cube:
+                LightTransform = Matrices->PointTransform;
+                break;
+            case SpriteCasterView_Spot:
+                LightTransform = Matrices->SpotTransforms[(spot < WORLD_RENDERER_MAX_SPOT_SHADOWS) ? spot : 0U];
+                break;
+        }
+        WorldRendererSprites_DrawQuad(self, shader, Entry, WHITE, LightTransform);
     }
     rlEnableBackfaceCulling();
 }
@@ -279,7 +301,7 @@ static void RenderLevel(WorldRenderer* self, const WorldRenderFrame* frame, uint
     WorldRendererShadows_DrawModelCasters(self, &Shaders, &State->_dither, &State->_skinnedDither, Pass, Level,
         frame->ZoomFactor, RL_CULL_FACE_FRONT);
     // The model instances components' copies, each at its level's LOD, dithered by its own shadow fade.
-    WorldRendererInstances_DrawCasters(self, frame, DepthShader, &State->_dither, Pass, Level);
+    WorldRendererInstances_DrawCasters(self, frame, DepthShader, &State->_dither, Pass, Level, RL_CULL_FACE_FRONT);
     // The terrain's chunks the same way: a hill's far side, facing away from the light, shades what lies behind it.
     WorldRendererTerrain_DrawCasters(self, DepthShader, &State->_dither, Pass);
     rlSetCullFace(RL_CULL_FACE_BACK);  // restore the default culling for the scene pass
@@ -287,9 +309,81 @@ static void RenderLevel(WorldRenderer* self, const WorldRenderFrame* frame, uint
     if (State->_spriteDepthShader != NULL)
     {
         DrawSpriteCasters(self, GameShader_GetRaylibShader(State->_spriteDepthShader), &State->_spriteDither,
-            State->_spriteLocUvRect, State->_spriteLocAlphaCutoff, Pass, true);
+            State->_spriteLocUvRect, State->_spriteLocAlphaCutoff, Pass, SpriteCasterView_Level, 0U);
     }
     GLShadowArray_EndDepthClamp(&State->_api);
+    rlDisableDepthTest();
+    EndTextureMode();
+}
+
+
+/* Makes the spots' maps (a layer per shadowed spot, WORLD_LOCAL_SHADOWS_SPOT_MAP_SIZE a side) at the first frame that
+ * needs them; a failure is logged once and never tried again (spots then light without shadows). Returns whether the maps
+ * are there. */
+static bool EnsureSpotMaps(WorldRenderer* self)
+{
+    WorldRendererSpotShadowState* State = &self->_spotShadows;
+    if (State->_hasMaps)
+    {
+        return true;
+    }
+    if (State->_hasFailed)
+    {
+        return false;
+    }
+    Error Result = GLShadowArray_Create(&self->_shadowLevels._api, WORLD_LOCAL_SHADOWS_SPOT_MAP_SIZE,
+        (int)WORLD_RENDERER_MAX_SPOT_SHADOWS, &State->_maps);
+    if (Result.Code != ErrorCode_Success)
+    {
+        char Message[WARNING_CAPACITY];
+        snprintf(Message, sizeof(Message), "WorldRenderer: could not make the spots' %u shadow maps of %d texels; spot "
+            "lights cast no shadows (%s).", (unsigned int)WORLD_RENDERER_MAX_SPOT_SHADOWS,
+            WORLD_LOCAL_SHADOWS_SPOT_MAP_SIZE, (Result.Message != NULL) ? (const char*)Result.Message : "no reason given");
+        WorldRendererCommon_Warn(self, (const unsigned char*)Message);
+        Error_Deconstruct(&Result);
+        State->_hasFailed = true;
+        return false;
+    }
+    State->_hasMaps = true;
+    return true;
+}
+
+/* Renders one shadowed spot into its layer of the spots' maps: the depth of its casters (the visibility list of its pass)
+ * from the light along its axis. Opens and closes its own texture and 3D passes. */
+static void RenderSpot(WorldRenderer* self, const WorldRenderFrame* frame, uint32_t spot)
+{
+    WorldRendererShadowLevelState* Levels = &self->_shadowLevels;
+    WorldRendererSpotShadowState* State = &self->_spotShadows;
+    const WorldRendererSpotShadowFrame* Spot = &frame->SpotShadows[spot];
+    WorldVisibilityPass Pass = WorldVisibility_GetSpotShadowPass(spot);
+    Shader DepthShader = GameShader_GetRaylibShader(Levels->_depthShader);
+    bool HasSkinned = (Levels->_skinnedDepthShader != NULL);
+    Shader SkinnedShader = HasSkinned ? GameShader_GetRaylibShader(Levels->_skinnedDepthShader) : DepthShader;
+    WorldRendererMeshShaders Shaders = { .Rigid = &DepthShader, .Skinned = HasSkinned ? &SkinnedShader : NULL,
+        .Palette = &Levels->_skinnedPalette };
+
+    GLShadowArray_AttachLayer(&Levels->_api, &State->_maps, (int)spot);
+    RenderTexture2D Target = { 0 };
+    Target.id = GLShadowArray_GetFramebuffer(&State->_maps);
+    Target.texture.width = State->_maps._size;
+    Target.texture.height = State->_maps._size;
+    BeginTextureMode(Target);
+    ClearBackground(WHITE); // clears depth to the far plane (the framebuffer has no colour)
+    rlEnableDepthTest();
+    rlSetMatrixProjection(Spot->Map.Projection);
+    rlSetMatrixModelview(Spot->Map.View);   // DrawMesh reads these to build each model's light-space MVP
+    // Back faces into the map (cull front), as the levels draw them: a lit front face sits in front of what is stored.
+    rlSetCullFace(RL_CULL_FACE_FRONT);
+    WorldRendererShadows_DrawModelCasters(self, &Shaders, &Levels->_dither, &Levels->_skinnedDither, Pass, NULL,
+        frame->ZoomFactor, RL_CULL_FACE_FRONT);
+    WorldRendererInstances_DrawCasters(self, frame, DepthShader, &Levels->_dither, Pass, NULL, RL_CULL_FACE_FRONT);
+    WorldRendererTerrain_DrawCasters(self, DepthShader, &Levels->_dither, Pass);
+    rlSetCullFace(RL_CULL_FACE_BACK);  // restore the default culling for the scene pass
+    if (Levels->_spriteDepthShader != NULL)
+    {
+        DrawSpriteCasters(self, GameShader_GetRaylibShader(Levels->_spriteDepthShader), &Levels->_spriteDither,
+            Levels->_spriteLocUvRect, Levels->_spriteLocAlphaCutoff, Pass, SpriteCasterView_Spot, spot);
+    }
     rlDisableDepthTest();
     EndTextureMode();
 }
@@ -394,6 +488,11 @@ void WorldRendererShadows_Unload(WorldRenderer* self)
         rlUnloadTexture(self->_pointShadow._cube);
         self->_pointShadow._hasCube = false;
     }
+    if (self->_spotShadows._hasMaps)
+    {
+        GLShadowArray_Destroy(&State->_api, &self->_spotShadows._maps);
+        self->_spotShadows._hasMaps = false;
+    }
 }
 
 WorldShadowLevelsSettings WorldRendererShadows_GetSettings(const WorldRenderer* self, const WorldEnvironment* environment)
@@ -418,29 +517,6 @@ WorldShadowLevelsSettings WorldRendererShadows_GetSettings(const WorldRenderer* 
 bool WorldRendererShadows_AreLevelsAvailable(const WorldRenderer* self)
 {
     return (self->_shadowLevels._depthShader != NULL) && self->_shadowLevels._api._isAvailable;
-}
-
-size_t WorldRendererShadows_SelectPointLight(const WorldRenderer* self)
-{
-    size_t Best = SIZE_MAX;
-    float BestDistance = 0.0f;
-    size_t LightCount = 0;
-    const WorldRenderLight* Lights = WorldRenderCache_GetLights(&self->_cache, &LightCount);
-    for (size_t Index = 0; Index < LightCount; Index++)
-    {
-        const WorldRenderLight* Light = &Lights[Index];
-        if (!Light->CastsShadows || (Light->Intensity <= 0.0f) || (Light->Range <= 0.0f))
-        {
-            continue;
-        }
-        float Distance = Vector3Length(Light->RenderPosition); // the camera sits at the origin of render space
-        if ((Best == SIZE_MAX) || (Distance < BestDistance))
-        {
-            Best = Index;
-            BestDistance = Distance;
-        }
-    }
-    return Best;
 }
 
 void WorldRendererShadows_PrepareFrame(WorldRenderer* self, WorldRenderFrame* frame)
@@ -480,6 +556,44 @@ void WorldRendererShadows_PrepareFrame(WorldRenderer* self, WorldRenderFrame* fr
         }
         frame->PointShadowPosition = Lights[frame->ShadowLightIndex].RenderPosition;
         frame->PointShadowFar = Far;
+    }
+
+    // The shadowed spots: their maps (made at the first frame with one), each one's frame and reach.
+    if ((frame->SpotShadowCount > 0U) && !EnsureSpotMaps(self))
+    {
+        frame->SpotShadowCount = 0U;
+    }
+    for (uint32_t Spot = 0U; Spot < frame->SpotShadowCount; Spot++)
+    {
+        WorldRendererSpotShadowFrame* Entry = &frame->SpotShadows[Spot];
+        const WorldRenderLight* Light = &Lights[Entry->LightIndex];
+        Entry->ObjectId = Light->ObjectId;
+        Entry->Map = WorldLocalShadows_GetSpotFrame(Light->RenderPosition, Light->Direction, Light->Cone.OuterAngle,
+            Light->Range, WORLD_LOCAL_SHADOWS_SPOT_MAP_SIZE);
+        Entry->Reach = (WorldCullingLight){ .Position = Light->RenderPosition, .Range = Light->Range,
+            .Intensity = Light->Intensity, .IsSpot = true, .Direction = Light->Direction,
+            .CosOuter = cosf(Light->Cone.OuterAngle) };
+    }
+}
+
+bool WorldRendererShadows_AreSpotsAvailable(const WorldRenderer* self)
+{
+    return WorldRendererShadows_AreLevelsAvailable(self) && !self->_spotShadows._hasFailed;
+}
+
+void WorldRendererShadows_BindSpots(const WorldRenderer* self, const WorldRenderFrame* frame)
+{
+    if ((frame->SpotShadowCount > 0U) && self->_spotShadows._hasMaps)
+    {
+        GLShadowArray_Bind(&self->_shadowLevels._api, &self->_spotShadows._maps, WorldRendererTextureUnit_SpotShadows);
+    }
+}
+
+void WorldRendererShadows_RenderSpots(WorldRenderer* self, const WorldRenderFrame* frame)
+{
+    for (uint32_t Spot = 0U; Spot < frame->SpotShadowCount; Spot++)
+    {
+        RenderSpot(self, frame, Spot);
     }
 }
 
@@ -642,13 +756,13 @@ void WorldRendererShadows_RenderPointLight(WorldRenderer* self, const WorldRende
             &self->_pointShadow._skinnedDither, WorldVisibilityPass_PointShadow, NULL, frame->ZoomFactor,
             RL_CULL_FACE_BACK);
         WorldRendererInstances_DrawCasters(self, frame, CubeShader, &self->_pointShadow._dither,
-            WorldVisibilityPass_PointShadow, NULL);
+            WorldVisibilityPass_PointShadow, NULL, RL_CULL_FACE_BACK);
         WorldRendererTerrain_DrawCasters(self, CubeShader, &self->_pointShadow._dither, WorldVisibilityPass_PointShadow);
         if (HasSpriteShader)
         {
             DrawSpriteCasters(self, SpriteCubeShader, &self->_pointShadow._spriteDither,
                 self->_pointShadow._spriteLocUvRect, self->_pointShadow._spriteLocAlphaCutoff,
-                WorldVisibilityPass_PointShadow, false);
+                WorldVisibilityPass_PointShadow, SpriteCasterView_Cube, 0U);
         }
         rlDisableDepthTest();
         rlEnableColorBlend(); // restore the default blending for the passes that follow

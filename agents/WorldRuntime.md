@@ -17,6 +17,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | WorldAtmosphere | `source/WorldAtmosphere.h`, `source/WorldAtmosphere.c` (private) | The atmosphere as pure maths (see "Atmosphere"): the air's coefficients from the environment, the height the sky is seen from, heights and distances along rays without cancellation, and the lookup tables' layout: the C mirror of `shaders/common/atmosphere.glsl`'s mappings. |
 | WorldRenderSpace | `source/WorldRenderSpace.h`, `source/WorldRenderSpace.c` (private) | Render space as pure maths (see "Render space"): the frame's origin and its rotation-only view and projection, the C mirror of the sky shader's ray, the shadow levels' boxes snapped to their texel grids, each grid anchored to its last box, a kept box rebuilt for a new origin, and the planet's curve in the picture (a point's drop, a pass's clip-space up, a culling sphere where it is drawn: the C mirror of `common/curvature`). |
 | WorldFarShadows | `source/WorldFarShadows.h`, `source/WorldFarShadows.c` (private) | The terrain's shadows at any distance as pure maths (see "Far terrain shadows"): the nested height maps' sizes and their frame on the coarsest texel grid, the maps drawn from above, the light's two disc edges, the sweep's passes and their schedule across frames, the map a point reads with its height lowered by the curve, the disc's share, and the sweep itself on the CPU: the C mirror of `shaders/far_shadow/sweep.frag` and `shaders/common/far_shadow.glsl`. |
+| WorldLocalShadows | `source/WorldLocalShadows.h`, `source/WorldLocalShadows.c` (private) | The local lights' shadows as pure maths (see "Local lights"): which point light gets the cube shadow and which spots get maps (their strength, the view, the hysteresis), a spot's bounding sphere, a spot's map's frame (its view, projection, planes and lookups' scales) and the C mirror of its lookup's projection. |
 | WorldShadowLevels | `source/WorldShadowLevels.h`, `source/WorldShadowLevels.c` (private) | The sun's and the moon's shadow levels as pure maths (see "Sun and moon shadows"): their sizes and texels, the levels the reach needs, which level a point reads (the C mirror of `common/lighting`'s choice), the size cut, the LODs far levels pick, and which levels render each frame with the light frame each kept one is read with. |
 | WorldVisibility | `source/WorldVisibility.h`, `source/WorldVisibility.c` (private) | What each pass draws this frame (see "Visibility"): frustum planes and sphere tests, draw distances and their fade band, opacity, the dither's C mirror, and the per-pass lists built from the render cache. |
 | SpriteTransform | `source/SpriteTransform.h`, `source/SpriteTransform.c` (private) | A sprite quad's pure maths: its matrix for a viewer (billboard, axis billboard, fixed; the camera or a light), its world size, its bounds, and the back-to-front order of a transparent list (see "Sprites"). |
@@ -276,7 +277,9 @@ lamp all relative to the frame's origin.
   (`WorldVisibilityShadowLevel.MinRadius`) and reaches within the shadow reach; past the first level, not those lying
   inside the level before's sides by more than their radius and the level's inner inset (its ring:
   `WorldVisibilityShadowLevel.InnerInset`, see "Sun and moon shadows"); a kept level gets no list. The cube shadow takes
-  the casters touching its lamp's reach (the shadow reach does not limit it). A model casts when it has
+  the casters touching its lamp's reach (the shadow reach does not limit it), and each shadowed spot's map the casters
+  reaching into its cone within its reach (`WorldLightCulling_DoesLightReachSphere`; `WorldVisibilityPass_SpotShadow0`
+  plus the spot's index). A model casts when it has
   `casts_shadows` and its shadow fade is below 1; a sprite when it is a cutout sprite that is not a decal and casts
   (`WorldRenderSprite_CastsShadows`). A shadow-only entry (`is_shadow_only`) is in every shadow list and the sky's
   volume, never in the camera's.
@@ -511,7 +514,8 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    first which shadow passes run (`DecideShadows`, with the shadow levels' settings: the player's quality and the
    world's reach) and their light matrices (`WorldRendererShadows_PrepareFrame`: the levels' maps made for the config,
    the levels used, which render this frame, each one's view, projection and box, snapped to its texels, or kept from its
-   last render; the cube shadow's lamp and far range), the terrain's far shadows (`WorldRendererFarShadows_PrepareFrame`,
+   last render; the cube shadow's lamp and far range; each shadowed spot's map: see "Local lights"), the terrain's far
+   shadows (`WorldRendererFarShadows_PrepareFrame`,
    see "Far terrain shadows": whether they run, their maps made for the player's size, their schedule's frame: the maps
    drawn again when due, the sweep's passes, whether the lit shaders read a finished sweep) and the sky's
    occupancy volume's map and window (`WorldRendererSkyVisibility_PrepareFrame`), the rain (`WorldRendererRain_PrepareFrame`,
@@ -520,19 +524,22 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    pass draws, see "Visibility"), then the water's (`WorldRendererWater_PrepareFrame`, see "Water": the drift by the
    frame's real seconds in the wind, the water in view and the share of it that mirrors, the copies made when first
    needed), then the rest (`DecidePasses`; the crisp overlay runs only for crisp objects in view).
-3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the shadow strength and the forward-light
-   candidates (every light except the cube-shadow light) with their linear radiance; then the screens' lights
+3. Lighting values for the frame (`WorldRendererLighting_PrepareFrame`): the shadow strength, the cube shadow's light's
+   radiance and the forward-light candidates (every light that is on except the cube-shadow light, each with its flickered
+   radiance, a spot's axis and cone, a shadowed spot's map layer: see "Local lights"); then the screens' lights
    (`WorldRendererSurfaces_PrepareFrame`, see "Screen light").
    Then the eye's night vision for the frame (`DecideNightVision`: its strength, the field luminance, the rods' grey),
    and each sprite's matrices (`WorldRendererSprites_PrepareFrame`: facing the camera, facing the shadow levels' light
-   and the cube shadow's lamp while those run) with the blended and additive sprites sorted back to front.
+   the cube shadow's lamp and each shadowed spot while those run) with the blended and additive sprites sorted back to
+   front.
 4. The atmosphere's tables (`WorldRendererAtmosphere_Render`, see "Atmosphere"): the transmittance and multiple
    scattering tables when the air changed, the sky's irradiance table after them, then the sky view (the sun's
    half, and the moon's while the moonlit sky shows), then the aerial-perspective volume (see "Haze") with the
    sky's light by height in its last row (only that row while the haze is off); the tables left bound on units 7
    and 8. Then the shadow levels of the shadow light (the sun or the moon) that render this frame, each into its
-   layer of the maps with depth clamping, then the point-light cube shadow, each drawing its visibility list (the
-   casters in its box, large enough for its texels, within the reach; within the light's reach). Models (the LOD they
+   layer of the maps with depth clamping, then the point-light cube shadow, then each shadowed spot's map, each drawing
+   its visibility list (the casters in its box, large enough for its texels, within the reach; within the light's reach;
+   within a spot's cone). Models (the LOD they
    show or fade to, at least the level's), the model instances' copies (each the LOD with the larger share, at least the
    level's, dithered by its own shadow fade, left out of a level they are too small for), terrain chunks (their back
    faces in the levels, as the models') and cutout sprites cast; sprites turned toward the light; each caster dithered
@@ -551,7 +558,8 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
    a lightning flash's glow above it; the ground haze in front of it all; the moon's disc, the Milky Way), the
    stars (none behind the moon, dimmed by the drawn clouds in front of them), debug grid, the camera's PBR models (each dithered by its fade, both LODs
    of a cross-fade with complementary dithers; the sun and the moon; per object: up to
-   `WORLD_MAX_FORWARD_LIGHTS` reach-culled point lights and the nearest screen's light; per material: PBR factors and map
+   `WORLD_MAX_FORWARD_LIGHTS` reach-culled local lights (points and spots) and the nearest screen's light; per material:
+   PBR factors and map
    flags; a CRT's glass with the CRT program: "CRT screens"), the camera's
    instance cells (lit like the models, the lights per cell, both LODs of a copy's band), the camera's terrain
    chunks (the `world_terrain` shader, lit as the models, with up to `WORLD_MAX_FORWARD_LIGHTS` lights per chunk;
@@ -585,13 +593,15 @@ tonemapped (ACES + gamma, `world_tonemap`) only in the final blit, after the pix
 **PBR.** `world_pbr` (vertex + fragment pair): Cook-Torrance GGX with two directional lights, the sun and the moon
 (one `DirectionalLight` function; their light through the air at the fragment's height), the sky's own
 light as the ambient (the sky's irradiance from above, the ground's bounce from below, the moonless night's own
-light; see "Sky's light on surfaces"), forward point lights, per-material metallic/roughness/occlusion/emissive factors and
+light; see "Sky's light on surfaces"), forward local lights (points and spots: see "Local lights"), per-material
+metallic/roughness/occlusion/emissive factors and
 optional albedo / normal / packed ORM (in the METALNESS slot) / emissive maps from the model file (a glTF file's
 occlusion, roughness and metallic maps packed when it loads: [GameAssets.md](GameAssets.md)) or the model definition's
 `material_overrides`, derivative-based normal mapping (OpenGL's convention: green toward the image's top), and the
 haze in front of every surface (the aerial
 perspective and ground haze, see "Haze": `ApplyAerialPerspective`). The lighting
-itself (the frame's uniforms, the BRDF, the sky's lights with the shadow levels' shadow, point lights with the cube shadow,
+itself (the frame's uniforms, the BRDF, the sky's lights with the shadow levels' shadow, local lights with the cube shadow
+and the spots' maps,
 the AO, the night vision and the haze) lives in
 `shaders/common/lighting.glsl`, which the sprite shader includes too: the renderer prepares and feeds every lit shader
 the same way (`WorldRendererLighting_PrepareLitShader`, `WorldRendererLighting_UploadFrame`). Without it models draw
@@ -621,7 +631,7 @@ because raylib's `DrawMesh` draws indexed only while the CPU index array is kept
   sprites stay as they are. So a tree's shadow does not turn with the camera. The matrices (camera, the shadow levels' light,
   cube's lamp) are made once per frame and shared by every pass.
 - **Lighting** (`world_sprite`, `#include "common/lighting"`): a rough dielectric (roughness 0.9, metallic 0, occlusion
-  1) lit by the sun, the moon, the forward point lights (reach-culled per sprite on the sphere around its pivot), the
+  1) lit by the sun, the moon, the forward local lights (reach-culled per sprite on the sphere around its pivot), the
   cube-shadow lamp, the ambient and the haze, its reflected light through the eye's night vision. Fixed sprites and decals
   are two-sided cards lit with their normal turned toward the viewer. Billboards and axis billboards face the camera
   and stand in for round things, so their diffuse light wraps: (n.l + w) / (1 + w) with w their `light_wrap` (default 1:
@@ -1653,12 +1663,54 @@ shaders take the larger of the shadow levels' shadow and that one for the shadow
 `WorldRenderer_SetContactShadowsEnabled` (keypad . in the test frame) switches it, and the status has it as the feature
 "contact shadows".
 
-**Point-light shadow.** One cube shadow for the shadow-casting light nearest the camera (`CastsShadows`): six
-90° faces of packed linear distance (RGBA8 cube, `common/distance_packing`), sampled with 20-tap PCF. The faces are
-written with colour blending off: the packed value's alpha byte is a digit of the distance, not a coverage (the
-default blending would mix every texel with the cleared "far", so casters beyond half the light's reach would leave no
-shadow and nearer ones would be stored too far away). Models and cutout sprites (turned toward the light) cast. That light is
-shaded separately and is excluded from the forward candidates, so an object can still get eight other point lights.
+**Local lights.** The world's point and spot lights (the light component: WorldData.md, "Light component"), through the
+same Cook-Torrance BRDF as the sun (`common/lighting`'s `LocalLight`, `LocalLightWrapped` for sprites), with a physical
+1/d^2 falloff windowed to exactly 0 at the light's range (`LocalLightFalloff`), so the shaded set agrees with the
+reach culling.
+- **On, off and the flicker.** A light that is off is still listed by the cache (its gizmo shows) but lights nothing
+  and casts nothing. Each frame every light's radiance is its colour made linear times its intensity times its flicker
+  (`WorldRendererLighting_GetLightRadiance`: `WorldLightFlicker_GetFactor` on the renderer's lights' clock of real
+  seconds, never wrapped, `WorldRenderFrame.LightSeconds`, which `WorldRenderer_GetLightSeconds` hands to game code,
+  with the light's object id as the seed); a light that flickers to darkness this frame is no forward candidate, so its
+  draws take the next strongest.
+- **Spots.** A spot shines along its object's world forward (the cache's `Direction`, render space having the world's
+  orientation), its light multiplied by its cone: with c the cosine between the way from the light and its axis,
+  t = clamp(c x scale + offset, 0, 1) is 1 within the inner angle and 0 past the outer, and the light is t's smoothstep
+  (`LightCone`; `WorldRendererLighting_GetConeFalloff` gives the scale and the offset, a hard edge's band at least
+  `WORLD_RENDERER_MIN_CONE_SPAN`; a point's are 0 and 1, exactly 1 every way). The culling keeps a spot only for what
+  reaches into its cone (WorldLightCulling.md); the rain's drops take a spot's light within its cone too.
+- **Forward lights.** Per draw (a model, a sprite, a terrain chunk, a cell of copies) the strongest
+  `WORLD_MAX_FORWARD_LIGHTS` (8) lights reaching its sphere, as the shaders' arrays (`forwardLight*`: position,
+  radiance, range, axis, cone, map layer; `WorldRendererLighting_PackForwardLights`). A draw that more reach names its
+  object in the log once (WorldLightCulling.md).
+- **The point-light shadow.** One cube shadow for the shadow-casting point light nearest the camera (`CastsShadows`, on):
+  six 90° faces of packed linear distance (RGBA8 cube, `common/distance_packing`), sampled with 20-tap PCF. The faces are
+  written with colour blending off: the packed value's alpha byte is a digit of the distance, not a coverage (the
+  default blending would mix every texel with the cleared "far", so casters beyond half the light's reach would leave
+  no shadow and nearer ones would be stored too far away). Models and cutout sprites (turned toward the light) cast.
+  That light is shaded separately (on every lit fragment) and is excluded from the forward candidates, so an object can
+  still get eight other lights.
+- **The spots' shadows** (source/WorldLocalShadows.h, `WorldRendererShadows_RenderSpots`). The two strongest
+  shadow-casting spots in view (`WorldLocalShadows_Choose`: on, casting, intensity over the squared distance from the
+  camera, at least 1 m, among the spots whose cone's bounding sphere touches the camera's frustum; a spot that cast last
+  frame counts a quarter stronger, so two equal lamps do not hand the shadows back and forth) each draw a 1024 x 1024
+  perspective depth map from the light along its axis (its field of view the outer cone and four texels, at most
+  160 degrees; from 5 cm to its range), a layer each of one `GLShadowArray` (32-bit float depth, compared by the
+  hardware; made at the first frame with a shadowed spot, 8 MB) on `WorldRendererTextureUnit_SpotShadows` (33). The maps
+  hold the casters' faces turned away from the light (front faces culled), drawn as the levels draw them: models at the
+  LOD the camera shows (or their own shadow LOD), the copies of model instances, terrain chunks, and cutout sprites
+  turned toward the spot. The spots stay forward lights, culled and ranked like the others, with their map's layer
+  (`forwardLightShadows`, -1 for every other light): the loop darkens such a light by its map where it lights the
+  surface (`SpotShadowAmount`: the lookup moved off the triangle's own face, as the shadow levels read theirs, by 1.5
+  texels times the slant, its depth less half a texel along the axis through the perspective depth's slope, 3 x 3
+  bilinear taps a texel apart; outside the map it is lit), the shadow strength as for the cube. A billboard reads each spot's map on its quad as that spot sees it
+  (`matSpotShadowModels`). Shading them in the loop keeps one copy of the BRDF: in a term of their own (a copy per spot)
+  they cost the scene pass a third more. Every other spot lights without a shadow.
+- **Cost** (GTX 980 Ti, the scene at 640 x 360, the start view at night with both street lamps' pools in view; GPU
+  timestamps, the least of four runs): with no spot shadowed the scene pass costs what it did with point lights alone
+  (2.75 ms against 2.77); the two spots' maps 0.2 ms; reading them 0.85 ms more in the scene pass than the same lamps
+  unshadowed. About 0.5 ms of that remains when the maps are only cleared and never read: the spots' pass slows the
+  passes after it (the cube's pass does not), not understood yet.
 
 **G-buffer, AO and outlines.** `world_normal` (models) and `world_normal_sprite` (cutout sprites, alpha-tested) write
 view-space normals (RGB) and a surface/outline flag (A: 0 = nothing, 0.5 = surface, 0.76 to 1 = surface with outline,
@@ -2066,11 +2118,16 @@ get no AO and no outlines.
   player's quality and the world allow them, a shadow light and a terrain; the status adds the maps' size, how often they
   were drawn and swept, the chunks the last drawing drew into each, the sweep under way and the camera's distance from
   the maps' centre), "curvature" the picture's curve (always available, active while the world asks for it; the status
-  has its scale). It also counts what the camera's passes
-  drew and what culling and fading removed (see "Visibility"). The renderer logs the status once after its first
+  has its scale), "spot-light shadows" the shadowed spots' maps (unavailable without the shadow levels' depth shader and
+  GL functions or PBR lighting, or when their maps could not be made, logged once; active while a spot casts this
+  frame). It also counts what the camera's passes
+  drew and what culling and fading removed (see "Visibility"), and the lights (points and spots, those off, those that
+  flicker, the cube shadow's light and the shadowed spots' objects). The renderer logs the status once after its first
   render; `WorldRenderer_LogStatus` logs it again (the I key in the test frame), with a line for the atmosphere's tables,
-  one for the haze, one for interior lighting, one for the clouds, one for the reflections, one for the water and one for
-  the far shadows (with the curve).
+  one for the lights (`WorldRenderer: lights: 9 (6 points, 3 spots; 0 off, 3 flickering), at most 8 a draw; the cube
+  shadow's: object 4 ("warm_light"); the spots' shadows: object 81 ("street_lamp_light"), ...`), one for the haze, one for
+  interior lighting, one for the clouds, one for the reflections, one for the water and one for the far shadows (with
+  the curve).
 
 ### Renderer structure (keep it clean)
 
@@ -2080,15 +2137,16 @@ get no AO and no outlines.
 | `WorldRendererInternal.h` | The renderer state (one state struct per pass), `WorldRenderFrame`, fixed texture units, shared constants, and every internal function, documented. |
 | `WorldRendererCommon.c` | Config multipliers, colour conversion, shader loading, the textures and sprite animations the world names (asset slots: one asset user each, loaded when the name changes, a failed name logged once), one-time warnings, render-target constructors; the camera passes' depth (their depth buffers, the reversed state around them, the projection they load, the depth convention's uniform); the lean mesh draws: the depth passes' (`WorldRendererCommon_DrawDepthMesh`) and runs of lit or G-buffer draws in one program (`WorldRendererCommon_BeginMeshRun`, `_DrawRunMesh`, `_EndMeshRun`: DrawMesh's matrices without its binding and unbinding around every mesh). |
 | `WorldRendererScene.c` | Scene target size, HDR tiers and recreation on resize (asks each pass to recreate its targets); the scene pass. |
-| `WorldRendererGeometry.c` | Model meshes one LOD at a time with per-draw materials (both LODs of a cross-fade in the lit passes; `WorldRendererGeometry_PrepareMaterial` builds each, the instanced draws use it too), each mesh with its pass's rigid shader or, posed and skinned, its skinned twin after the pose's palette, of the set of meshes its pass draws (`WorldRendererMeshSet`: the water slots' for the water pass, with their water materials; every other mesh for every other pass; the G-buffer draws both); the unlit fallback's skinned shader; the LOD tinting, light gizmos, the pixelation filter. |
+| `WorldRendererGeometry.c` | Model meshes one LOD at a time with per-draw materials (both LODs of a cross-fade in the lit passes; `WorldRendererGeometry_PrepareMaterial` builds each, the instanced draws use it too), each mesh with its pass's rigid shader or, posed and skinned, its skinned twin after the pose's palette, of the set of meshes its pass draws (`WorldRendererMeshSet`: the water slots' for the water pass, with their water materials; every other mesh for every other pass; the G-buffer draws both); the unlit fallback's skinned shader; the LOD tinting, light gizmos (a sphere at each light, a spot's outer and inner cones as wire cones whose sides are 1 m or its range long), the pixelation filter. |
 | `WorldRendererInstances.c` | The model instances' copies (see "Model instances"): each entry's records buffer, the G-buffer's and the shadows' instanced twins (the lit one is the lighting file's), the instanced draw that mirrors `DrawMesh`, each pass's cells instanced or one at a time (the A/B and every fallback), the status line. |
 | `WorldRendererSprites.c` | The sprites: the unit quad, the lit sprite shader, each frame's sprite matrices (camera, the shadow levels' light, cube's lamp) and transparent draw order, the lit cutout / decal / sorted transparent draws. The G-buffer and shadow passes draw sprites with this file's quad and matrices. |
-| `WorldRendererLighting.c` | The PBR programs (rigid, skinned, instanced: `WorldRendererPbrProgram`) and their location tables, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: every PBR program, the sprite shader and the terrain shader, the night vision's and interior lighting's among them), forward point lights, each lit draw's place (`WorldRendererLighting_SetDrawPlace`: its haze multiplier and its ambient zones), the same two for a draw in a run of lit draws in one program (`WorldRendererLitRun`, `WorldRendererLighting_UploadRunLights`, `_SetRunDrawPlace`: only what differs from the run's last upload), per-material factors. |
-| `WorldRendererShadows.c` | The shadow levels of the sun or the moon (their settings from the config and the world, their maps through `GLShadowArray`, each frame's levels from `WorldShadowLevels`, the levels' passes with depth clamping, the maps' bind, the status line), and the point-light cube shadow (models, model instances, terrain chunks, and cutout sprites through alpha-tested depth shaders). |
+| `WorldRendererLighting.c` | The PBR programs (rigid, skinned, instanced: `WorldRendererPbrProgram`) and their location tables, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: every PBR program, the sprite shader and the terrain shader, the night vision's and interior lighting's among them), forward local lights (the frame's candidates with their flickered radiance, cones and shadow layers: `WorldRendererLighting_BuildForwardLights`, packed per draw by `_PackForwardLights`, pure; the log of a draw with more lights than it takes) and the spots' maps' uniforms, each lit draw's place (`WorldRendererLighting_SetDrawPlace`: its haze multiplier and its ambient zones), the same two for a draw in a run of lit draws in one program (`WorldRendererLitRun`, `WorldRendererLighting_UploadRunLights`, `_SetRunDrawPlace`: only what differs from the run's last upload), per-material factors. |
+| `WorldRendererShadows.c` | The shadow levels of the sun or the moon (their settings from the config and the world, their maps through `GLShadowArray`, each frame's levels from `WorldShadowLevels`, the levels' passes with depth clamping, the maps' bind, the status line), the point-light cube shadow (models, model instances, terrain chunks, and cutout sprites through alpha-tested depth shaders), and the shadowed spots' maps (`WorldLocalShadows`: a `GLShadowArray` of a layer per spot, made at the first frame with one; their frames, their pass through the levels' depth shaders, their bind on unit 33). |
 | `WorldRendererFarShadows.c` | The terrain's far shadows (see "Far terrain shadows"): their two programs (the heights, the sweep) and the float maps (made at the first frame that runs them, for the player's size), the frame's decision and schedule, the height maps drawn from above (the chunks through `WorldRendererTerrain_DrawFarShadowHeights`), the sweep's passes and copies, the bind of the finished maps on unit 32, the lit shaders' far-shadow uniforms, the status line. Runs after the shadow levels, before the lit passes. |
 | `WorldFarShadows.c` (pure maths, not a pass) | The far shadows' maps and frame, the light's disc edges, the sweep's passes and their schedule, the lookup's choice and the disc's share, and the sweep on the CPU (the C mirror of `common/far_shadow` and `shaders/far_shadow/`); see "Far terrain shadows". |
 | `GLFloatArray.c` (not a pass) | Float colour texture arrays (`GL_R32F`, `GL_RG32F`): their layers drawn into through a framebuffer of their own (with a depth when asked), exact float clear values; direct OpenGL calls in `GLTextureArray`'s manner; private (`source/GLFloatArray.h`). |
 | `GLShadowArray.c` (not a pass) | The shadow levels' maps: a texture array of 32-bit float depth with the hardware's comparison, its layers attached to a framebuffer one at a time, depth clamping; direct OpenGL calls in `GLTextureArray`'s manner; private (`source/GLShadowArray.h`). |
+| `WorldLocalShadows.c` (pure maths, not a pass) | The local lights' shadows: the cube's light and the shadowed spots' choice, a spot's bounding sphere and its map's frame and projection; see "Local lights". |
 | `WorldShadowLevels.c` (pure maths, not a pass) | The levels' sizes, the reach's levels, the lookup's C mirror, the size cut, the LOD distances, the update schedule and the kept levels' light frames; see "Sun and moon shadows". |
 | `WorldRendererSkyVisibility.c` | The sky's occupancy volume (see "Interior lighting"): its integer texture with its levels and their framebuffers, the scratch volume, its frame (the map's matrices and box, the window), its pass (the models' layers, the parity and the slices from above, both faces, the pyramid) and its bind on unit 7. |
 | `WorldRendererInterior.c` | Interior lighting's other parts: the lit shaders' interior uniforms (`WorldRendererInteriorLocations`), the camera's interior for the eye (its openness and the ambient zones at it, eased), each lit draw's zones (through `WorldRendererLighting_SetDrawPlace`), the zones' wireframes (the debug view), the status line. |
@@ -2161,19 +2219,27 @@ The renderer keeps receiving features, so:
   | 21–26 | the reflection pass (`world_reflections`; `world_reflection_blocks` reads 25) | Its inputs (`WorldRendererTextureUnit_Reflection*`): 21 the weights, 22 what the surfaces mirror where the screen has no answer, 23 the directions (the scene target's attachments 1 to 3), 24 the scene's colour, 25 the scene's depth, 26 the block image; bound by hand before its rectangles (the 2D batch binds only 0 to 4), between the opaque world and the transparent draws. No lit program reads these units, so the lit draws after the pass never meet them. Before the scene pass the far shadows' sweep (`world_far_shadow_sweep`) takes 21 to 23 for its arrays (`sampler2DArray farSweepHeights`, `farSweepSource`, `farSweepCoarser`: the units' array target, which the reflection pass leaves alone), bound by hand before its rectangles. |
   | 27–31 | the water programs (`world_water`, `world_water_instanced`) | 27 and 28 the water material's normal maps, 29 its foam (`sampler2D waterNormalA`, `waterNormalB`, `waterFoam`, `WorldRendererTextureUnit_Water*`), bound per water material; 30 and 31 the copies of the scene's colour and depth (`waterSceneColor`, `waterSceneDepth`), bound once by the water pass after it copies them. The water's fragment stage reads none of the material maps (0–11), so with the lit programs' frame textures it reads 15 samplers (the puddle mask is not among them). |
   | 32 | every lit program | The far shadows' finished maps (`sampler2DArray farShadowMaps`, `WorldRendererTextureUnit_FarShadows`: a layer per map), bound with the lit passes' frame textures while the lit shaders read them ("Far terrain shadows"). |
+  | 33 | every lit program | The shadowed spots' maps (`sampler2DArrayShadow spotShadowMaps`, `WorldRendererTextureUnit_SpotShadows`: a layer per spot, depth compared), bound with the lit passes' frame textures while a spot casts ("Local lights"). |
 
-  A new frame texture for the lit programs takes a unit from 33 up (16 to 20 are the rain's and the screens', 21 to 26
-  the reflection pass's, bound in the middle of the scene pass, 27 to 31 the water's, 32 the far shadows'; the PBR, CRT
-  and water stages read 15 samplers already, one below a stage's 16; GL 3.3 guarantees 48 combined
+  A new frame texture for the lit programs takes a unit from 34 up (16 to 20 are the rain's and the screens', 21 to 26
+  the reflection pass's, bound in the middle of the scene pass, 27 to 31 the water's, 32 the far shadows', 33 the
+  spots'; **the PBR, CRT and water stages read 16 samplers, a stage's whole guaranteed 16** (GL 3.3's
+  `GL_MAX_TEXTURE_IMAGE_UNITS`; the GTX 980 Ti has 32), the terrain's 15 and the sprites' 12: another sampler in those
+  three needs two of their textures merged (the cube shadow as six layers of the spots' array, say) or a GPU floor above
+  GL 3.3's; GL 3.3 guarantees 48 combined
   units, `WorldRendererInternal.h` asserts the last stays below), or below 12 where no
   material map the programs' materials use binds (the PBR materials use maps 0, 1, 2 and 5: albedo, the packed ORM,
   normal, emission; raylib's importers also fill 3 (roughness) and 4 (occlusion) in some formats (a glTF file's are
   packed into 1 and emptied when the model loads) and its OBJ import 6 (height) when the file has those maps), keeping
   every lit stage within 16 samplers read. A sampler type different from what a unit's other users bind is safe only
   through a different target (2D, cube, 2D array); keep each new unit's users in this table.
-- **Constants shared with GLSL.** `MAX_POINT_LIGHTS` in `pbr/fragment.frag` should equal
+- **Constants shared with GLSL.** `MAX_FORWARD_LIGHTS` in `common/lighting` should equal
   `WORLD_MAX_FORWARD_LIGHTS`; the shader clamps its loop and the renderer checks the arrays at load (and logs if
-  the shader holds fewer), so a mismatch costs lights, never memory safety. The bone palette's size
+  the shader holds fewer), so a mismatch costs lights, never memory safety. `MAX_SPOT_SHADOWS` in `common/lighting` and
+  `sprite/vertex` is `WORLD_LOCAL_SHADOWS_MAX_SPOTS` (2; the sprite's two stages' arrays must match for the program to
+  link; `common/lighting` reads the two spots' lookups by constant indices and stops at an `#error` if the count
+  changes: an index the compiler cannot see through puts the lookups' arrays in memory for every fragment);
+  `tests/ShaderSourceTests.c` checks all three. The bone palette's size
   (`SKINNING_MAX_BONES` in `common/skinning`) is read from each skinned program at load the same way
   (`WorldRendererCommon_PreparePalette`). The instanced twins' constants (the passes' values, the most bands, the solid
   share, the G-buffer's fade limit) are pinned to their C mirror by `tests/ShaderSourceTests.c`.
@@ -2247,8 +2313,8 @@ off and the horizon a dark brown band), `common/haze` (the volume's readers, the
 compositing, see "Haze"; used by `common/lighting`, `world_sky`, `world_stars` and `world_postfx`), `common/night_sky`
 (air mass, extinction and the skyglow profile, used by `world_sky` and `world_stars`) and `common/night_vision` (the eye's night vision: the rods' share
 and the blend into their grey; used by `world_sky` and `common/lighting`), `common/lighting` (the frame's lighting: its
-uniforms, the BRDF and its wrapped variant, the shadow levels' shadow off the face with the contact shadows, point lights
-and the cube shadow, the pre-pass's AO and sky visibility, the
+uniforms, the BRDF and its wrapped variant, the shadow levels' shadow off the face with the contact shadows, local lights
+(points and spots, their cones) with the cube shadow and the spots' maps, the pre-pass's AO and sky visibility, the
 night vision, the haze through `common/haze`: `ApplyAerialPerspective`, interior lighting through
 `common/interior`, a screen's light (`ScreenLight`, `ScreenLightWrapped`) and what a glossy surface mirrors
 (`EnvironmentRadiance`, `FresnelSchlickRoughness`); used by `world_pbr`, `world_crt`, `world_terrain` and `world_sprite`), `common/interior` (interior lighting: the
@@ -2328,7 +2394,7 @@ the ground in front of the camera, an axis-billboard tree that casts a shadow, a
 smoke puff in front of an additive, unlit glow around the warm lamp, and an unlit neon sign. The tree stands a second
 time, mirrored by its placement (`tree_mirrored`: `overrides_flip_x`), left of the first and farther back. Its hierarchy: a `desk` at (1.8, 0.05, -3.6) on the left of the start view,
 an empty object turned 15 degrees that holds its parts (`desk_top` and two `desk_side_*`, scaled test cubes), a gold
-`cup` and a `desk_lamp` (a thin post) whose child `desk_lamp_light` is a warm point light (intensity 3, reach 4, no
+`cup` and a `desk_lamp` (a thin post) whose child `desk_lamp_light` is a warm point light (intensity 0.5, reach 4, no
 shadow) 0.35 lamp units above the post's centre (0.28 m: a child's position is in its parent's scaled space). Its
 world models: two cubes behind the centre row, `variant_cube_left` (red) and `variant_cube_right` (blue), show the
 `painted_cube` world model's two variants; the crisp cube and the 16 m shadow distances of the PBR demo cubes, the cup
@@ -2377,6 +2443,18 @@ whose stream flows along its texture coordinates, the `uv` flow, toward +X) and 
 over the basin's floor) and `fountain_murky` (id 75, at (-9.5, 0.05, 11.6), the `murky` variant swapping the slot's
 water material for a dark green one that hides the floor); and a `pond` (id 76, the `test_pond` world model: the 1 km
 water plane scaled to 60 x 220 m) at y = -5 in the test terrain's valley, from x 60 to 120 and z 0 to 220: it mirrors the hills and shows its bottom and foam along its shore.
+Its local lights (see "Local lights"; the objects from id 77): a `street_lamp` (id 77, a pivot at (-1.2, 0.05, 0.6),
+between the crate row and the figures in front of the start view: a 4.2 m pole with a collider, an arm and a head,
+grey test cubes) whose `street_lamp_light` (id 81) is a warm spot under the head pointing straight down from 3.95 m
+(rotation [90, 0, 0], intensity 4, reach 10, outer angle 50 degrees) casting shadows: the crates, the test cube and the
+figures cast them on the slab; a second one, `street_lamp_broken` (id 82, at (-8.4, 0.05, 1.5), turned to face the first),
+whose spot (id 86) flickers `broken` at full depth over the PBR cube and the running figure; in the test room a desk
+(`room_desk`, id 87) with a desk lamp (a post and a shade, ids 88 and 89) whose spot (`room_desk_lamp_light`, id 90,
+intensity 1.2, reach 4, 20 and 40 degrees, casting shadows) lights the desk's top and the floor around the desk, the
+desk's shadow under it, and a fluorescent tube under the roof (`room_tube`, id 91) whose point light
+(`room_tube_light`, id 92) flickers `fluorescent`; and on the monitor's table a `candle` (id 93) whose point light
+(`candle_light`, id 94, warm, intensity 0.25, reach 2.5) flickers `candle`. Of the three spots casting shadows the two
+strongest in view cast (the street lamps from the start view; the desk lamp inside the room).
 Edit the file and restart to change the test world.
 The frame owns a `WorldCollision` too, created after the world, and a `WorldCharacters` (the character
 system, [Characters.md](Characters.md)) created after that, with its test characters (the private
@@ -2442,7 +2520,7 @@ not while walking, and the UI takes it first while the pointer is over a widget)
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11, the
 digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/`, the backslash, Insert, Home, End, Page Up, Page Down, the
 keypad's digits, its `.`, `+`, `-`, `*`, `/` and Enter, Scroll Lock and Pause are taken already, and with Shift the grave
-key, keypad `-`, `/`, Enter, `+` and `*`; the keypad's `=` is free (with Shift the keypad's digits and `.` turn into other
+key, L, keypad `-`, `/`, Enter, `+` and `*`; the keypad's `=` is free (with Shift the keypad's digits and `.` turn into other
 keys on Windows while Num Lock is on). Leave F12 free:
 raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
@@ -2506,7 +2584,9 @@ raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writi
   15 degrees up) the mountains' long shadows fall across the range and the hills toward the town;
 - **the renderer and the sky:** O post effects, B bloom, G sun shafts, keypad . contact shadows, C crisp overlay, V
   night vision (logged), K
-  sprite lighting (off draws every sprite unlit; logged), L light gizmos, N cycle the
+  sprite lighting (off draws every sprite unlit; logged), L light gizmos (a spot's are wire cones), Shift with L every
+  light off and on again (each light's `is_on`, as a script's switch: nothing else changes; logged with the count:
+  `WorldTest: every light OFF (9 lights).`), N cycle the
   light pollution (0, 0.35, 0.7, 1; logged), X step the opacity of the centre cube (`test_object`) and the tree (1, 0.5,
   0; logged: a 50% dither on the pixel grid, then gone, their shadows with them), U frustum culling (off draws everything
   within its draw distance; the image must not change; logged), I log the renderer status (with the drawn, culled and

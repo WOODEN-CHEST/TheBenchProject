@@ -271,24 +271,40 @@ typedef struct WorldRenderSpriteStruct
     bool IsDrawDistanceFixed;
 } WorldRenderSprite;
 
-/** @brief A point light as the passes use it this frame. */
+/** @brief A point or spot light of a shown object as the passes use it this frame (listed whether it is on or not: the
+ *  gizmos show it either way). */
 typedef struct WorldRenderLightStruct
 {
     /** @brief The light component (borrowed); valid until the world changes. */
     const WorldLightComponent* Component;
+    /** @brief Id of the object that carries it: its flicker's seed. */
+    uint64_t ObjectId;
     /** @brief World-space position (the object's world position), in double. */
     Vector3Double Position;
     /** @brief The position in render space: relative to the origin the lists were synced for (subtracted in double,
      *  rounded once). */
     Vector3 RenderPosition;
+    /** @brief A point or a spot. */
+    WorldLightType Type;
+    /** @brief A spot's axis, the unit direction it shines along: its object's world forward (+Z through its world matrix;
+     *  +Z for a matrix that flattens it), in render space, which has the world's orientation. Set for points too. */
+    Vector3 Direction;
+    /** @brief A spot's cone in effect (WorldLightComponent_GetCone). */
+    WorldLightCone Cone;
     /** @brief Reach radius (the light's range). */
     float Range;
-    /** @brief Emission intensity. */
+    /** @brief Emission intensity, as authored (the flicker multiplies it per frame). */
     float Intensity;
     /** @brief The light's sRGB colour (alpha ignored). */
     Color Color;
     /** @brief Whether the light may cast a shadow. */
     bool CastsShadows;
+    /** @brief Whether the light is on: off, it lights nothing and casts nothing. */
+    bool IsOn;
+    /** @brief Its flicker (WorldLightFlicker_GetFactor with ObjectId as the seed). */
+    WorldLightFlicker Flicker;
+    float FlickerAmount;
+    float FlickerSpeed;
 } WorldRenderLight;
 
 /** @brief A terrain component as the cache resolves it, kept across frames. */
@@ -632,6 +648,15 @@ static inline GameModel* WorldRenderModel_GetLodModel(const WorldRenderModel* mo
  * @returns The transform.
  */
 Matrix WorldRenderModel_GetLodTransform(const WorldRenderModel* model, size_t lod);
+
+/**
+ * @brief Returns the name of an object this frame's lists hold: the owner of a listed model, sprite, light, terrain or
+ *        model instances component of that id. A search of the lists, for rare uses (a log line), never per draw.
+ * @param self The cache; must not be NULL.
+ * @param objectId The object's id.
+ * @returns Its name (borrowed from the object, valid until the world changes), or NULL when no list holds it.
+ */
+const unsigned char* WorldRenderCache_FindObjectName(const WorldRenderCache* self, uint64_t objectId);
 
 /**
  * @brief Returns this frame's model entries: one per model component, in world order, including ones that are not

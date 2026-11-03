@@ -374,6 +374,48 @@ half as far:
 }
 ```
 
+### The light block
+
+The `light` component is a point or a spot light at its object's position (`agents/WorldData.md`, "Light component"; how
+it lights in `agents/WorldRuntime.md`, "Local lights"). A spot shines along its object's forward: +Z turned by the
+object's rotation (and its parents'), so a lamp pointing straight down is turned `[90, 0, 0]`.
+
+| Key | Value (default) | |
+|---|---|---|
+| `is_on` | boolean (true) | Off it lights nothing and casts no shadow; every other value is kept (a lamp's switch). |
+| `type` | `point` or `spot` (`point`) | A point shines every way, a spot in a cone along the object's forward. |
+| `color` | a colour (`#ffffff`) | The light's colour. |
+| `intensity` | >= 0 (1) | Its brightness. |
+| `range` | metres, >= 0 (1) | How far it reaches: it fades to nothing there, and lights nothing past it. |
+| `inner_angle` | degrees, above 0 and below 90 (25) | A spot's full light reaches this far from its axis. Past `outer_angle` it counts as the outer angle (a hard edge). |
+| `outer_angle` | degrees, above 0 and below 90 (35) | A spot lights nothing past this angle from its axis; its light fades smoothly from the inner angle to it. |
+| `casts_shadows` | boolean (false) | Whether it casts shadows: the shadow-casting point light nearest the camera gets the cube shadow, and the two strongest shadow-casting spots in view get a map each; every other light lights without a shadow. |
+| `flicker` | `none`, `candle`, `fluorescent` or `broken` (`none`) | How it flickers: a flame's soft wavering, a tube's fast shimmer with rare dips, a broken lamp's long dark gaps with a stutter. |
+| `flicker_amount` | in [0, 1] (0.3) | How deep: its intensity times a value between 1 minus this and 1 (1 reaches darkness). |
+| `flicker_speed` | in [0, 100] (1) | The flicker's tempo: 2 twice as fast, 0 held still. |
+
+The test world's street lamp (object 81, a child of the lamp's pivot, under its head):
+```
+"light": {
+    "type": "spot",
+    "color": "#ffd28c",
+    "intensity": 4.0,
+    "range": 10.0,
+    "outer_angle": 50.0,
+    "casts_shadows": true
+}
+```
+and the candle on the monitor's table (object 94):
+```
+"light": {
+    "color": "#ffb060",
+    "intensity": 0.25,
+    "range": 2.5,
+    "flicker": "candle",
+    "flicker_amount": 0.35
+}
+```
+
 ### The ambient zone block
 
 The `ambient_zone` component is a volume that sets a room's own light (`agents/WorldData.md`, "Ambient zone component";

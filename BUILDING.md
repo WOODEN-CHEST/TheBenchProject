@@ -137,14 +137,14 @@ Everything draws through raylib, with seven exceptions, each in a private module
   `glDeleteTextures`, `glBindTexture`, `glTexImage2D`, `glTexParameteri`, `glEnable`, `glDisable`, `glLogicOp`,
   `glClearBufferuiv`, `glGetError`: OpenGL 3.0 core; a missing one leaves the sky's visibility open, logged once);
 - **shadow map arrays** (`source/GLShadowArray.{h,c}`): the sun's and the moon's shadow levels are the layers of one
-  texture array of 32-bit float depth, read with the hardware's depth comparison (a `sampler2DArrayShadow`: one lookup
-  weighs four texels bilinearly), drawn layer by layer through a framebuffer without colour, with depth clamping (casters
-  nearer the light than a level's box land on its near plane); raylib has no texture arrays, no depth comparison, no
+  texture array of 32-bit float depth (the shadowed spots' maps the layers of another), read with the hardware's depth
+  comparison (a `sampler2DArrayShadow`: one lookup weighs four texels bilinearly), drawn layer by layer through a
+  framebuffer without colour, with depth clamping (casters nearer the light than a level's box land on its near plane); raylib has no texture arrays, no depth comparison, no
   layer attachments and no depth clamping (`glGenTextures`, `glDeleteTextures`, `glBindTexture`, `glTexImage3D`,
   `glTexParameteri`, `glGenFramebuffers`, `glDeleteFramebuffers`, `glBindFramebuffer`, `glFramebufferTextureLayer`,
   `glDrawBuffer`, `glReadBuffer`, `glCheckFramebufferStatus`, `glEnable`, `glDisable`, `glGetIntegerv`, `glGetError`:
-  OpenGL 3.2 core at the newest; a missing one, or maps the GPU refuses, leave the sun and the moon without shadows,
-  logged once);
+  OpenGL 3.2 core at the newest; a missing one, or maps the GPU refuses, leave the sun, the moon and the spots without
+  shadows, logged once);
 - **3D textures** (`source/GLTexture3D.{h,c}`): the clouds' noise is two volumes the cloud march reads at any point
   with the hardware's trilinear filtering, repeating on every axis; raylib has no 3D textures (`glGenTextures`,
   `glDeleteTextures`, `glBindTexture`, `glTexImage3D`, `glGenerateMipmap`, `glTexParameteri`, `glPixelStorei`,

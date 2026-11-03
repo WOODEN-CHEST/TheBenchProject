@@ -235,11 +235,12 @@ Current module list:
     integer clear, the logic operations (XOR, OR) that draw them and the per-level reads that build their pyramid;
     direct OpenGL calls in GLTextureArray's manner. Used by the sky's occupancy volume (WorldRendererSkyVisibility.c,
     interior lighting); without them the sky's visibility stays open.
-  * GLShadowArray - The sun's and the moon's shadow maps (private, source/GLShadowArray.{h,c}): one 2D array texture of
-    32-bit float depth, a layer per shadow level, with the hardware's depth comparison and linear filtering, a
-    framebuffer without colour that each layer is attached to in turn, and depth clamping around a level's draw; direct
-    OpenGL calls in GLTextureArray's manner. Used by the shadow pass (WorldRendererShadows.c); without it the sun and
-    the moon cast no shadows.
+  * GLShadowArray - The sun's and the moon's shadow maps and the shadowed spots' (private, source/GLShadowArray.{h,c}):
+    one 2D array texture of 32-bit float depth, a layer per shadow level (or per spot), with the hardware's depth
+    comparison and linear filtering, a framebuffer without colour that each layer is attached to in turn, and depth
+    clamping around a level's draw; direct OpenGL calls in GLTextureArray's manner. Used by the shadow pass
+    (WorldRendererShadows.c; two arrays: the levels', the spots'); without it the sun, the moon and the spots cast no
+    shadows.
   * GLTexture3D - 3D textures (private, source/GLTexture3D.{h,c}): one-channel or four-channel byte volumes with their
     mipmaps, filtered trilinearly and repeating on every axis, bound to a unit's GL_TEXTURE_3D target; direct OpenGL
     calls in GLTextureArray's manner. Used by the clouds' noise (WorldRendererClouds.c); without them no clouds are
@@ -328,7 +329,14 @@ Current module list:
     pivot, pixels per unit, flips, alpha mode and cutoff, lit, emission, light wrap, casts shadows, decal and its lift,
     outline, crisp, draw distance, fixed draw distance), plus a draw distance multiplier; a pure function resolves the
     settings in effect (the draw distance from the placement, the world sprite or the kind).
-  * WorldLightComponent - A point light (colour, intensity, range, casts shadows).
+  * WorldLightComponent - A point or a spot light (WorldData.md, "Light component"): on or off (a script's switch), its
+    colour, intensity and range, a spot's cone along its object's world forward (inner and outer angles; one rule spans
+    the two rows, so WorldLightComponent_SetCone checks the pair and WorldLightComponent_GetCone gives the cone in
+    effect), whether it casts shadows, and its flicker.
+  * WorldLightFlicker - A light's flicker as pure maths (include/WorldLightFlicker.h, source/WorldLightFlicker.c): how
+    bright a candle, a fluorescent tube or a broken lamp is at a moment, from the time, the light's seed (its object's id)
+    and its amount and speed; no state, the same on every run, always in [1 - amount, 1]. The renderer evaluates it once
+    per light per frame; game code gets the same value (WorldLightComponent_GetFlickerFactor).
   * WorldScreenComponent - Component type 9 (`screen`): which surface of its object's world model shows a picture made
     while the game runs, whether the screen is on, its brightness, and how far it is on (its runtime power transition,
     settled at its power state when read from a file) (WorldData.md, "Screen component").
@@ -373,7 +381,9 @@ Current module list:
   * Services - Bundle of borrowed shared services (logger, config, unicode, asset manager, frame manager, input, GHDF
     pool, key registry, root registry).
   * WorldRenderer - Renders a World through a GameCamera (PBR lit by the sun and the moon, HDR, sky with the moon,
-    stars, Milky Way and light pollution, the eye's night vision, sun and moon shadows, AO, outlines, bloom, sun
+    stars, Milky Way and light pollution, the eye's night vision, sun and moon shadows, local lights (points and spots
+    with their cones, on or off, flickering; the nearest shadow-casting point light's cube shadow and the two strongest
+    shadow-casting spots' maps), AO, outlines, bloom, sun
     shafts, crisp overlay, lit sprites with decals, sorted transparency and shadows that face the light; frustum
     culling, draw distances, and dithered fades and opacity; LODs with dithered cross-fades; skinned models posed by
     their animators in every pass; terrain chunks in every pass with their own GPU meshes; model instances drawn a cell
@@ -461,6 +471,11 @@ Current module list:
     the coarser map) and their schedule across frames (the maps drawn again when the camera moved or a terrain changed,
     a sweep when the light turned), the map a point reads and the disc's share, and the sweep on the CPU: the C mirror
     of shaders/far_shadow/sweep.frag and shaders/common/far_shadow.glsl (WorldRuntime.md, "Far terrain shadows").
+  * WorldLocalShadows - The local lights' shadows as pure maths (private, source/WorldLocalShadows.h): which point light
+    gets the cube shadow (the nearest that casts) and which spots get a shadow map (the two strongest in view, with a
+    hysteresis), a spot's bounding sphere, and a spot's map's frame (its view, perspective projection, planes and the
+    lookup's normal offset and depth bias) with the C mirror of its lookup's projection (WorldRuntime.md, "Local
+    lights").
   * WorldShadowLevels - The sun's and the moon's shadow levels as pure maths (private, source/WorldShadowLevels.h): the
     nested boxes around the camera (their sizes and texels from the player's quality settings, the levels the world's
     reach needs, their depth range), which level a point reads and the blend over its band (the C mirror of
@@ -571,7 +586,9 @@ Current module list:
     source/WorldTestWater.{h,c}), which makes the test world an island. Shift with the keypad's * shows the far terrain
     around it (a coast: hills and mountains to 40 km to the north, the sea floor to the south; runtime objects of the
     tbp:test_far_terrain_* definitions, the private source/WorldTestFarTerrain.{h,c}), Scroll Lock switches the world's
-    curve and Pause the terrain's far shadows (the A/B).
+    curve and Pause the terrain's far shadows (the A/B). Its world has local lights: two street lamps (spots casting
+    shadows, one of them broken), a desk lamp's spot and a fluorescent tube in the test room and a candle on the monitor's
+    table; Shift with L switches every light off and on.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
@@ -612,7 +629,10 @@ Current module list:
     of strikes for thunder), in four modes (simulated, fixed, scripted, off), with the story's API (presets, values,
     lock, seed, speed, climate, a strike), a forecast that runs a copy ahead (blurred by the climate's accuracy, stable
     across calls) and a property table that saves it.
-* World light culling (WorldLightCulling.md) - Reach-culls a list of point lights to the strongest few (up to WORLD_MAX_FORWARD_LIGHTS) overlapping an object's bounding sphere, ranked by influence, for the renderer's per-object forward shading.
+* World light culling (WorldLightCulling.md) - Reach-culls a list of point and spot lights to the strongest few (up to
+  WORLD_MAX_FORWARD_LIGHTS) reaching an object's bounding sphere (a spot's reach is its cone within its range: a
+  conservative cone-sphere test), ranked by influence, for the renderer's per-object forward shading; counts the lights
+  past the cap.
 * UI framework (UIFramework.md) - The in-game UI, on any surface (the window or a texture in the world: the host passes
   the pointer, the keyboard and the viewport). A screen holds a tree of widgets with slot + generation ids, routes the
   tick's GameInput (the focused widget gets every key first, consumed input does not reach the game), drives keyboard

@@ -93,6 +93,7 @@ static void LoadLitShader(WorldRenderer* self)
     self->_sprites._locUvRect = GetShaderLocation(RayShader, "uvRect");
     self->_sprites._locShadowModel = GetShaderLocation(RayShader, "matShadowModel");
     self->_sprites._locPointShadowModel = GetShaderLocation(RayShader, "matPointShadowModel");
+    self->_sprites._locSpotShadowModels = GetShaderLocation(RayShader, "matSpotShadowModels");
     self->_sprites._locDecalOffset = GetShaderLocation(RayShader, "decalOffset");
     self->_sprites._locAlphaMode = GetShaderLocation(RayShader, "alphaMode");
     self->_sprites._locAlphaCutoff = GetShaderLocation(RayShader, "alphaCutoff");
@@ -180,6 +181,12 @@ static void DrawLitSprite(WorldRenderer* self, const WorldRenderSprite* sprite, 
     SetShaderValue(RayShader, self->_sprites._locUvRect, sprite->UvRect, SHADER_UNIFORM_VEC4);
     SetShaderValueMatrix(RayShader, self->_sprites._locShadowModel, matrices->ShadowTransform);
     SetShaderValueMatrix(RayShader, self->_sprites._locPointShadowModel, matrices->PointTransform);
+    if (self->_sprites._locSpotShadowModels >= 0)
+    {
+        rlEnableShader(RayShader.id);
+        rlSetUniformMatrices(self->_sprites._locSpotShadowModels, matrices->SpotTransforms,
+            (int)WORLD_RENDERER_MAX_SPOT_SHADOWS);
+    }
     SetShaderValue(RayShader, self->_sprites._locDecalOffset, &DecalOffset, SHADER_UNIFORM_FLOAT);
     SetShaderValue(RayShader, self->_sprites._locAlphaMode, &AlphaMode, SHADER_UNIFORM_INT);
     SetShaderValue(RayShader, self->_sprites._locAlphaCutoff, &sprite->AlphaCutoff, SHADER_UNIFORM_FLOAT);
@@ -195,7 +202,7 @@ static void DrawLitSprite(WorldRenderer* self, const WorldRenderSprite* sprite, 
     if (IsLit)
     {
         WorldRendererLighting_UploadObjectLights(self, RayShader, &self->_sprites._lit, sprite->Shape.Position,
-            sprite->BoundsRadius);
+            sprite->BoundsRadius, WorldObject_GetId(WorldComponent_GetOwner(&sprite->Component->Base)));
     }
     WorldRendererSprites_DrawQuad(self, RayShader, sprite, Tint, matrices->CameraTransform);
 }
@@ -262,12 +269,18 @@ void WorldRendererSprites_PrepareFrame(WorldRenderer* self, const WorldRenderFra
     const WorldRenderLight* PointLight = GetPointShadowLight(self, frame);
     SpriteViewer PointViewer = SpriteViewer_FromPoint((PointLight != NULL) ? PointLight->RenderPosition
         : CameraPosition, WorldUp);
+    SpriteViewer SpotViewers[WORLD_RENDERER_MAX_SPOT_SHADOWS];
+    for (uint32_t Spot = 0U; Spot < frame->SpotShadowCount; Spot++)
+    {
+        SpotViewers[Spot] = SpriteViewer_FromPoint(frame->SpotShadows[Spot].Reach.Position, WorldUp);
+    }
 
     for (size_t Index = 0; Index < SpriteCount; Index++)
     {
         const WorldRenderSprite* Sprite = &Sprites[Index];
         WorldRendererSpriteFrame Entry;
-        if (Sprite->Shape.Orientation == WorldSpriteOrientation_Fixed)
+        bool IsFixed = (Sprite->Shape.Orientation == WorldSpriteOrientation_Fixed);
+        if (IsFixed)
         {
             Entry.CameraTransform = Sprite->FixedTransform;
             Entry.ShadowTransform = Sprite->FixedTransform;
@@ -280,6 +293,11 @@ void WorldRendererSprites_PrepareFrame(WorldRenderer* self, const WorldRenderFra
                 ? SpriteTransform_GetMatrix(&Sprite->Shape, &LevelViewer) : Entry.CameraTransform;
             Entry.PointTransform = (PointLight != NULL)
                 ? SpriteTransform_GetMatrix(&Sprite->Shape, &PointViewer) : Entry.CameraTransform;
+        }
+        for (uint32_t Spot = 0U; Spot < WORLD_RENDERER_MAX_SPOT_SHADOWS; Spot++)
+        {
+            Entry.SpotTransforms[Spot] = (!IsFixed && (Spot < frame->SpotShadowCount))
+                ? SpriteTransform_GetMatrix(&Sprite->Shape, &SpotViewers[Spot]) : Entry.CameraTransform;
         }
         Vector3 Center = SpriteTransform_GetCenter(Entry.CameraTransform);
         Entry.Depth = Vector3DotProduct(Vector3Subtract(Center, CameraPosition), CameraForward);

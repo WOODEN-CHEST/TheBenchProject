@@ -96,6 +96,8 @@ typedef struct WorldRendererStruct WorldRenderer;
 #define WORLD_RENDERER_HAZE_SLICE_COUNT 32
 /** @brief The most shadow levels the status reports on (the most there may be). */
 #define WORLD_RENDERER_STATUS_MAX_SHADOW_LEVELS 8U
+/** @brief How many shadowed spots the status names: the most that cast shadows in one render. */
+#define WORLD_RENDERER_STATUS_MAX_SPOT_SHADOWS 2U
 /** @brief How many far-shadow maps the status counts chunks for (WorldRendererStatus.FarShadowMapChunkCounts): the far
  *  shadows' nested maps. */
 #define WORLD_RENDERER_STATUS_FAR_SHADOW_MAP_COUNT 3U
@@ -250,6 +252,10 @@ typedef enum WorldRendererFeatureEnum
      *  flat ground meets the far ground at the horizon; always available, active while the world asks for it
      *  (is_curvature_enabled). */
     WorldRendererFeature_Curvature,
+    /** @brief The shadowed spots: the strongest few shadow-casting spot lights in view each cast shadows from a map of
+     *  their own (the others light without one). Unavailable without the shadow levels' depth shader and GL functions,
+     *  PBR lighting, or when their maps could not be made (logged once); active while a spot casts this frame. */
+    WorldRendererFeature_SpotLightShadows,
     /** @brief The number of features; not a feature. */
     WorldRendererFeature_Count
 } WorldRendererFeature;
@@ -382,8 +388,17 @@ typedef struct WorldRendererStatusStruct
     size_t DecalCount;
     /** @brief Of those, the blended and additive sprites that are not decals (drawn sorted, back to front). */
     size_t TransparentSpriteCount;
-    /** @brief Point lights on enabled and visible objects. */
+    /** @brief Lights (points and spots) on enabled and visible objects, whether they are on or not. */
     size_t LightCount;
+    /** @brief Of those, the spots, the lights switched off and the lights that flicker (a flicker kind other than none,
+     *  with an amount above 0). */
+    size_t SpotLightCount;
+    size_t LightOffCount;
+    size_t FlickeringLightCount;
+    /** @brief The id of the object whose point light casts the cube shadow this render (0: none). */
+    uint64_t PointShadowObjectId;
+    /** @brief The ids of the objects whose spots cast shadows this render, strongest first (0: none). */
+    uint64_t SpotShadowObjectIds[WORLD_RENDERER_STATUS_MAX_SPOT_SHADOWS];
     /** @brief Stars in the star catalogue (from the environment's StarDensity), whether or not they show now. */
     size_t StarCount;
     /** @brief Whether the camera's frustum and the shadow levels' boxes culled (WorldRenderer_SetCullingEnabled). */
@@ -624,8 +639,9 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world);
  * @param self The renderer; must not be NULL.
  * @param world The world to draw; must not be NULL. Read only.
  * @param camera The camera to view from; must not be NULL.
- * @param deltaSeconds Real seconds since the previous render, used to pace HDR eye adaptation (auto-exposure).
- *        Pass the render tick's frame delta; 0, negative or non-finite holds the current adaptation.
+ * @param deltaSeconds Real seconds since the previous render, used to pace HDR eye adaptation (auto-exposure) and to
+ *        advance the lights' clock (WorldRenderer_GetLightSeconds). Pass the render tick's frame delta; 0, negative or
+ *        non-finite holds the current adaptation and the clocks.
  * @param target The frame render target to blit the final image into (its texture size is the window size).
  * @returns Success; ErrorCode_IllegalArgument if @p self, @p world or @p camera is NULL;
  *          ErrorCode_InvalidState if no scene render target can be created at all (the only fatal failure).
@@ -643,6 +659,16 @@ Error WorldRenderer_RenderToTarget(WorldRenderer* self, World* world, const Game
  * @param outStatus [out] Receives the snapshot. Must not be NULL.
  */
 void WorldRenderer_GetStatus(const WorldRenderer* self, WorldRendererStatus* outStatus);
+
+/**
+ * @brief Returns the lights' clock: the real seconds of every render so far (the sum of the deltas the renders took),
+ *        never wrapped. Each light's flicker in a render is WorldLightFlicker_GetFactor at this clock (as
+ *        WorldLightComponent_GetFlickerFactor gives it), so game code that reads it after a render (a candle's sound,
+ *        a sprite's glow) matches what that render showed.
+ * @param self The renderer; must not be NULL.
+ * @returns The seconds; 0 before the first render with time.
+ */
+double WorldRenderer_GetLightSeconds(const WorldRenderer* self);
 
 /**
  * @brief Returns a short English name for a feature, for log lines and debug overlays.

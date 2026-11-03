@@ -10,6 +10,8 @@
 #include "WorldFarShadows.h"
 #include "WorldInstancing.h"
 #include "WorldInterior.h"
+#include "WorldLightCulling.h"
+#include "WorldLocalShadows.h"
 #include "WorldLod.h"
 #include "WorldRain.h"
 #include "WorldReflections.h"
@@ -991,6 +993,55 @@ static double GetDefinedValue(const GenericBuffer* text, const char* name)
     return (Define != NULL) ? strtod(Define + strlen(Opening), NULL) : NAN;
 }
 
+/* The lit shaders hold as many forward lights as the culling selects (common/lighting's MAX_FORWARD_LIGHTS) and as many
+ * shadowed spots as the renderer shadows, in common/lighting and in the sprites' vertex stage that hands the lit sprite
+ * stage its spots' lookups (their arrays must match for the program to link). */
+static void ShippedLightCountsAreTheRenderers(TestRun* run)
+{
+    GenericBuffer Text;
+    GenericBuffer_AllocateVariable(&Text, 0U, sizeof(unsigned char));
+    if (ReadShippedText(run, "common/lighting.glsl", &Text))
+    {
+        TEST_CHECK(run, GetDefinedValue(&Text, "MAX_FORWARD_LIGHTS") == (double)WORLD_MAX_FORWARD_LIGHTS);
+        TEST_CHECK(run, GetDefinedValue(&Text, "MAX_SPOT_SHADOWS") == (double)WORLD_LOCAL_SHADOWS_MAX_SPOTS);
+    }
+    GenericBuffer_Clear(&Text);
+    if (ReadShippedText(run, "sprite/vertex.vert", &Text))
+    {
+        TEST_CHECK(run, GetDefinedValue(&Text, "MAX_SPOT_SHADOWS") == (double)WORLD_LOCAL_SHADOWS_MAX_SPOTS);
+    }
+    Memory_Free(Text._data);
+}
+
+/* The spots' maps are read off the triangle's own face (what they hold, as the shadow levels read theirs), the cube's
+ * with the normal the surface is shaded with, in every lit stage that builds its lookups from its own point. */
+static void ShippedSpotShadowsAreReadOffTheFace(TestRun* run)
+{
+    const char* const Stages[][2] =
+    {
+        { "pbr/fragment.frag", "SurfaceShadowLookups(fragPosition, n,\n        FaceNormal(fragPosition, surfaceNormal))" },
+        { "crt/fragment.frag", "SurfaceShadowLookups(fragPosition, n,\n        FaceNormal(fragPosition, surfaceNormal))" },
+        { "terrain/fragment.frag",
+            "SurfaceShadowLookups(fragPosition, geometric,\n        FaceNormal(fragPosition, geometric))" },
+        { "water/fragment.frag",
+            "SurfaceShadowLookups(fragPosition, surfaceNormal,\n        FaceNormal(fragPosition, surfaceNormal))" },
+        { "common/lighting.glsl", "    lookups.cubeNormal = cubeNormal;\n    lookups.spotPositions[0] = position;\n"
+            "    lookups.spotNormals[0] = faceNormal;\n    lookups.spotPositions[1] = position;\n"
+            "    lookups.spotNormals[1] = faceNormal;" },
+    };
+    GenericBuffer Text;
+    GenericBuffer_AllocateVariable(&Text, 0U, sizeof(unsigned char));
+    for (size_t Index = 0U; Index < (sizeof(Stages) / sizeof(Stages[0])); Index++)
+    {
+        GenericBuffer_Clear(&Text);
+        if (ReadShippedText(run, Stages[Index][0], &Text))
+        {
+            TEST_CHECK(run, CountOccurrences(&Text, Stages[Index][1]) == 1U);
+        }
+    }
+    Memory_Free(Text._data);
+}
+
 /* The instanced twins: each definition loads, defines WORLD_INSTANCED and pairs its own vertex stage with its rigid
  * shader's fragment stage. Every instanced vertex stage places its copies through the one shared include, which takes
  * the records at locations 9 to 13 and whose constants and shadow pass rules (the shadow distance's fade, the level's
@@ -1941,6 +1992,8 @@ void ShaderSourceTests_Run(TestRun* run)
         { "shipped_geometry_shaders_share_one_dither", ShippedGeometryShadersShareOneDither },
         { "shipped_skinned_stages_share_one_skinning", ShippedSkinnedStagesShareOneSkinning },
         { "shipped_instanced_twins_share_their_stages", ShippedInstancedTwinsShareTheirStages },
+        { "shipped_light_counts_are_the_renderers", ShippedLightCountsAreTheRenderers },
+        { "shipped_spot_shadows_are_read_off_the_face", ShippedSpotShadowsAreReadOffTheFace },
         { "shipped_meter_matches_its_mirror", ShippedMeterMatchesItsMirror },
         { "shipped_depth_readers_share_one_convention", ShippedDepthReadersShareOneConvention },
         { "shipped_interior_matches_its_mirror", ShippedInteriorMatchesItsMirror },

@@ -54,8 +54,18 @@ void ModelGltfMaterialsTests_Run(TestRun* run);
  *  BVH (CollisionGeometryTests.c; private modules of source/). */
 void CollisionGeometryTests_Run(TestRun* run);
 
-/** @brief Point-light reach culling (WorldLightCullingTests.c). */
+/** @brief Point and spot light reach culling: the cone against spheres, the ranking, the reaching count
+ *  (WorldLightCullingTests.c). */
 void WorldLightCullingTests_Run(TestRun* run);
+
+/** @brief The light component (its defaults, the cone's rules, its setters, its JSON) and the flicker (deterministic,
+ *  bounded, each kind's character) (WorldLightTests.c). */
+void WorldLightTests_Run(TestRun* run);
+
+/** @brief The local lights' shadows: which point light gets the cube and which spots get maps (their strength, the view,
+ *  the hysteresis), a spot's bounding sphere and its map's projection and bias (WorldLocalShadowsTests.c; a private
+ *  module of source/). */
+void WorldLocalShadowsTests_Run(TestRun* run);
 
 /** @brief Namespaced keys: the key characters, the length limit, the default namespace, interning, stable texts and
  *  prefix search (NamespacedKeyTests.c). */

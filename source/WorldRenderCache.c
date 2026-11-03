@@ -426,8 +426,8 @@ static Error AddSprite(WorldRenderCache* self, WorldSpriteComponent* sprite, Vec
     return Error_CreateSuccess();
 }
 
-/* Lists a point light of a shown object with the values the passes read (it sits at the object's world position, also
- * kept in render space for @p origin). */
+/* Lists a light of a shown object with the values the passes read (it sits at the object's world position, also kept
+ * in render space for @p origin, and a spot shines along the object's world forward). */
 static Error AddLight(WorldRenderCache* self, const WorldLightComponent* light, Vector3Double origin)
 {
     const WorldObject* Owner = WorldComponent_GetOwner(&light->Base);
@@ -437,15 +437,26 @@ static Error AddLight(WorldRenderCache* self, const WorldLightComponent* light, 
     }
 
     Vector3Double Position = WorldObject_GetWorldPosition(Owner);
+    Matrix4Double WorldMatrix = WorldObject_GetWorldMatrix(Owner);
+    Vector3Double Forward = Vector3Double_NormalizeOr(Matrix4Double_TransformDirection(&WorldMatrix,
+        Vector3Double_Create(0.0, 0.0, 1.0)), Vector3Double_Create(0.0, 0.0, 1.0));
     WorldRenderLight Entry =
     {
         .Component = light,
+        .ObjectId = WorldObject_GetId(Owner),
         .Position = Position,
         .RenderPosition = GameMath_ToVector3Relative(Position, origin),
+        .Type = WorldLightComponent_GetType(light),
+        .Direction = GameMath_ToVector3(Forward),
+        .Cone = WorldLightComponent_GetCone(light),
         .Range = WorldLightComponent_GetRange(light),
         .Intensity = WorldLightComponent_GetIntensity(light),
         .Color = WorldLightComponent_GetColor(light),
-        .CastsShadows = WorldLightComponent_CastsShadows(light)
+        .CastsShadows = WorldLightComponent_CastsShadows(light),
+        .IsOn = WorldLightComponent_IsOn(light),
+        .Flicker = WorldLightComponent_GetFlicker(light),
+        .FlickerAmount = WorldLightComponent_GetFlickerAmount(light),
+        .FlickerSpeed = WorldLightComponent_GetFlickerSpeed(light)
     };
     if (!GenericBuffer_AddLast(&self->_lights, &Entry))
     {
@@ -1257,6 +1268,53 @@ void WorldRenderCache_Reset(WorldRenderCache* self)
     GenericBuffer_Clear(&self->_instanceCells);
     self->_world = NULL;
     self->_isMatched = false;
+}
+
+const unsigned char* WorldRenderCache_FindObjectName(const WorldRenderCache* self, uint64_t objectId)
+{
+    size_t Count = 0;
+    const WorldRenderModel* Models = WorldRenderCache_GetModels(self, &Count);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        if (Models[Index].ObjectId == objectId)
+        {
+            return WorldObject_GetName(WorldComponent_GetOwner(&Models[Index].Component->Base));
+        }
+    }
+    const WorldRenderSprite* Sprites = WorldRenderCache_GetSprites(self, &Count);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        const WorldObject* Owner = WorldComponent_GetOwner(&Sprites[Index].Component->Base);
+        if (WorldObject_GetId(Owner) == objectId)
+        {
+            return WorldObject_GetName(Owner);
+        }
+    }
+    const WorldRenderLight* Lights = WorldRenderCache_GetLights(self, &Count);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        if (Lights[Index].ObjectId == objectId)
+        {
+            return WorldObject_GetName(WorldComponent_GetOwner(&Lights[Index].Component->Base));
+        }
+    }
+    const WorldRenderTerrain* Terrains = WorldRenderCache_GetTerrains(self, &Count);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        if (Terrains[Index].ObjectId == objectId)
+        {
+            return WorldObject_GetName(WorldComponent_GetOwner(&Terrains[Index].Component->Base));
+        }
+    }
+    const WorldRenderInstances* Instances = WorldRenderCache_GetInstances(self, &Count);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        if (Instances[Index].ObjectId == objectId)
+        {
+            return WorldObject_GetName(WorldComponent_GetOwner(&Instances[Index].Component->Base));
+        }
+    }
+    return NULL;
 }
 
 Error WorldRenderCache_Sync(WorldRenderCache* self, World* world, Vector3Double origin, AssetManager* assets,

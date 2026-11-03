@@ -21,6 +21,7 @@
 #include "WorldTestWeather.h"
 #include "WorldFile.h"
 #include "WorldObject.h"
+#include "WorldLightComponent.h"
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
 #include "GameCamera.h"
@@ -205,6 +206,8 @@ typedef struct WorldTestFrameStruct
     size_t _variantStep;
     /** Whether the Z key's zoom is on (the camera at ZOOMED_FOV_Y). */
     bool _isZoomed;
+    /** Whether Shift with the L key last switched every light on (true at the start: the lights as the world has them). */
+    bool _areLightsOn;
     /** The world's colliders, stepped every tick after the drivers move things; owned. Its trigger, contact and motion
      *  events are logged. */
     WorldCollision* _collision;
@@ -841,6 +844,29 @@ static void SaveWorldAs(WorldTestFrame* frame, WorldFileFormat format)
 
 /* The renderer's and the sky's debug keys (A/B toggles, the light pollution steps, status lines), and F5 (save the
  * world). Called from Update with the tick's input (what the UI above did not consume). */
+/* Shift with the L key: switches every light of the world off, or every one on again (is_on, as a script's switch does:
+ * nothing else about them changes), and logs it. */
+static void SwitchEveryLight(WorldTestFrame* frame)
+{
+    frame->_areLightsOn = !frame->_areLightsOn;
+    size_t Count = 0;
+    size_t Switched = 0;
+    WorldComponent* const* Lights = World_GetComponents(&frame->_world, WorldComponentType_Light, &Count);
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        Error Result = WorldLightComponent_SetIsOn(WorldLightComponent_FromComponent(Lights[Index]), frame->_areLightsOn);
+        Switched += (Result.Code == ErrorCode_Success) ? 1U : 0U;
+        Error_Deconstruct(&Result);
+    }
+    if (frame->_services->Logger != NULL)
+    {
+        Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
+            (const unsigned char*)u8"WorldTest: every light %s (%zu lights).", frame->_areLightsOn ? "ON" : "OFF",
+            Switched);
+        Error_Deconstruct(&LogResult);
+    }
+}
+
 /* Shift with keypad - switches the reflections of the screen off and on (the A/B: off, water and mirroring objects
  * mirror the sky alone), with keypad Enter steps their debug view (off, the weights, the answers), with keypad / steps
  * their quality (off, low, high). */
@@ -1107,8 +1133,13 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         SaveWorldAs(frame, WorldFileFormat_GHDF);
     }
 
-    // L toggles the debug light gizmos (wireframe spheres at light positions).
-    if (GameInput_IsKeyPressed(input, GameKey_L))
+    // L toggles the debug light gizmos (wireframe spheres at light positions, a spot's cones), Shift with L switches
+    // every light off and on.
+    if (IsShiftDown && GameInput_IsKeyPressed(input, GameKey_L))
+    {
+        SwitchEveryLight(frame);
+    }
+    if (!IsShiftDown && GameInput_IsKeyPressed(input, GameKey_L))
     {
         bool Enabled = !WorldRenderer_AreLightGizmosEnabled(frame->_renderer);
         WorldRenderer_SetLightGizmosEnabled(frame->_renderer, Enabled);
@@ -1689,6 +1720,7 @@ static Error ConstructTextSample(WorldTestFrame* frame, Services* services)
 
     LoadTextSample(frame, services);
     frame->_isTextSampleShown = true;
+    frame->_areLightsOn = true;
     return Error_CreateSuccess();
 }
 
@@ -1837,8 +1869,8 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             (const unsigned char*)u8"WorldTest: entered the world. WASD+SPACE/CTRL move, SHIFT sprint, mouse look; "
             u8"P pause/resume the clock, 1-4 = dawn/noon/dusk/midnight (paused), [ ] scrub time, , . previous/next "
             u8"day, / a week ahead; F full moon / calendar moon, Y seasons; O post effects, B bloom, G sun shafts, "
-            u8"C crisp overlay, V night vision, K sprite lighting, L light gizmos, N light pollution, X opacity of the "
-            u8"centre cube and the tree, U frustum culling, J slide the desk (through a trigger zone), H hide the "
+            u8"C crisp overlay, V night vision, K sprite lighting, L light gizmos, Shift+L every light off and on, N "
+            u8"light pollution, X opacity of the centre cube and the tree, U frustum culling, J slide the desk (through a trigger zone), H hide the "
             u8"desk, E variants, Z zoom, Q LOD tinting, F7 collider wireframes, F8 contact points, F6 swing the door, "
             u8"F9 the pushing wall, F10 move the door's crate, F11 far shift (everything 28 km out, then 141 km, then "
             u8"back), - the terrain's chunk key, = the terrain's views (shaded, painted weights, rule weights, the "

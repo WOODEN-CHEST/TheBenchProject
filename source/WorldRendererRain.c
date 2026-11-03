@@ -253,7 +253,7 @@ static void PrepareProgram(WorldRenderer* self, const WorldRenderFrame* frame, c
 {
     WorldRendererLighting_UploadLitProgram(self, frame, shader, &program->_lit, true, false);
     Vector3 CameraPlace = { 0.0f, 0.0f, 0.0f };
-    WorldRendererLighting_UploadObjectLights(self, shader, &program->_lit, CameraPlace, RAIN_LIGHT_RADIUS);
+    WorldRendererLighting_UploadObjectLights(self, shader, &program->_lit, CameraPlace, RAIN_LIGHT_RADIUS, 0U);
     WorldRendererLighting_SetDrawPlace(self, shader, &program->_lit, CameraPlace, RAIN_LIGHT_RADIUS, 1.0f, false,
         false);
     SetShaderValueMatrix(shader, program->_locViewProjection, frame->ViewProjection);
@@ -680,7 +680,8 @@ void WorldRendererRain_RenderMap(WorldRenderer* self, const WorldRenderFrame* fr
     // side, the top of a closed thing).
     rlDisableBackfaceCulling();
     DrawModelOccluders(self, &Shaders);
-    WorldRendererInstances_DrawCasters(self, frame, DepthShader, &Shadows->_dither, WorldVisibilityPass_Rain, NULL);
+    WorldRendererInstances_DrawCasters(self, frame, DepthShader, &Shadows->_dither, WorldVisibilityPass_Rain, NULL,
+        RL_CULL_FACE_BACK);
     WorldRendererTerrain_DrawCasters(self, DepthShader, &Shadows->_dither, WorldVisibilityPass_Rain);
     rlEnableBackfaceCulling();
     GLShadowArray_EndDepthClamp(&State->_api);

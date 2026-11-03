@@ -104,12 +104,13 @@ void main()
     vec3 f0 = mix(vec3(0.04), albedo, metal);
 
     // The sun and (at night) the moon through the air at the fragment's height, darkened by the shadow levels' shadow, read
-    // off the triangle's own face (what the maps hold). Then the point lights, the cube-shadow light read at the fragment
-    // itself, and a screen's light.
+    // off the triangle's own face (what the maps hold). Then the local lights (points and spots), the cube-shadow light
+    // read at the fragment itself, and a screen's light.
     SkyLightValues light = SkyLightAt(fragPosition);
     float shadowAmount = FaceShadowAmount(fragPosition, FaceNormal(fragPosition, surfaceNormal));
     vec3 direct = SkyLight(light, n, v, shadowAmount, albedo, f0, rough, metal);
-    vec3 pointTotal = PointLights(n, v, fragPosition, fragPosition, n, albedo, f0, rough, metal)
+    vec3 localTotal = LocalLights(n, v, fragPosition, SurfaceShadowLookups(fragPosition, n,
+        FaceNormal(fragPosition, surfaceNormal)), albedo, f0, rough, metal)
         + ScreenLight(n, v, fragPosition, albedo, f0, rough, metal);
 
     // The sky's own light as the ambient (the sky above, the ground's bounce below, the night's light; under a roof only
@@ -140,7 +141,7 @@ void main()
     // The eye sees the reflected light through its night vision (the sky mirrored in water with it); emissive light is
     // added after it and keeps its colour. What the surface mirrors (water on it, a glossy object's surroundings) is the
     // reflection pass's while it runs (handed over here); otherwise the sky's, added here.
-    vec3 reflected = ambient + direct + pointTotal;
+    vec3 reflected = ambient + direct + localTotal;
     if (reflectionsDeferred)
     {
         WriteReflection(CombineReflections(glossy, WetReflection(light, n, v, water, rough)), fragPosition);

@@ -9,6 +9,7 @@
 #include "WorldAnimatorComponent.h"
 #include "SkeletalAnimation.h"
 #include "WorldRenderCache.h"
+#include "WorldRendererInternal.h"
 #include "WorldTransform.h"
 #include "SpriteTransform.h"
 #include "World.h"
@@ -330,6 +331,201 @@ static WorldComponent* AddComponentObject(TestRun* run, World* world, WorldCompo
         return NULL;
     }
     return Component;
+}
+
+/* Creates an object at @p position turned by @p rotation (radians) with a light component; returns the light, or NULL
+ * with a failed check. */
+static WorldLightComponent* AddLightAt(TestRun* run, World* world, Vector3 position, Vector3 rotation)
+{
+    WorldObject* Object = NULL;
+    WorldComponent* Component = NULL;
+    if (!TEST_CHECK_SUCCESS(run, World_CreateObject(world, NULL, &Object))
+        || !TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, GameMath_FromVector3(position)))
+        || !TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Object, rotation))
+        || !TEST_CHECK_SUCCESS(run, World_AddComponent(world, WorldObject_GetId(Object), WorldComponentType_Light,
+            &Component)))
+    {
+        return NULL;
+    }
+    return WorldLightComponent_FromComponent(Component);
+}
+
+/* The first time from @p start, in steps of a tenth of a second, at which a light of @p seed flickering broken at full
+ * depth is dark (or lit, with @p isDark false); -1 when none comes within a minute. */
+static double FindBrokenTime(uint64_t seed, double start, bool isDark)
+{
+    for (int Step = 0; Step < 600; Step++)
+    {
+        double Seconds = start + (0.1 * (double)Step);
+        float Factor = WorldLightFlicker_GetFactor(WorldLightFlicker_Broken, 1.0f, 1.0f, Seconds, seed);
+        if ((Factor == 0.0f) == isDark)
+        {
+            return Seconds;
+        }
+    }
+    return -1.0;
+}
+
+/* Points and spots are listed with what the passes need: a spot's axis is its object's world forward (through its
+ * parent's turn), its cone the one in effect, its flicker and whether it is on; the frame's forward lights take every
+ * light that is on and not shadowed (its flicker in its intensity and radiance, a spot's axis and cone falloff, a point's
+ * cone 1 every way and no axis, however its object turns), leave out a light dark in its flicker this frame, and pack
+ * into the shaders' arrays in the order a draw takes them; a light that is off has no radiance; a cone whose inner angle
+ * lies past its outer is listed as the cone in effect. */
+static void ListsPointsAndSpotsAndBuildsTheirForwardLights(TestRun* run)
+{
+    CacheFixture Fixture;
+    if (!CacheFixture_Construct(run, &Fixture))
+    {
+        CacheFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    const float QuarterTurn = 1.57079632679f;
+    WorldLightComponent* Shadowed = AddLightAt(run, &Fixture.World, (Vector3){ 9.0f, 1.0f, 0.0f }, (Vector3){ 0 });
+    WorldLightComponent* Point = AddLightAt(run, &Fixture.World, (Vector3){ 1.0f, 2.0f, 3.0f },
+        (Vector3){ 0.5f, 0.8f, 0.0f });
+    WorldLightComponent* Spot = AddLightAt(run, &Fixture.World, (Vector3){ 0.0f, 0.0f, 0.0f },
+        (Vector3){ 0.0f, QuarterTurn, 0.0f });
+    WorldLightComponent* Off = AddLightAt(run, &Fixture.World, (Vector3){ -1.0f, 1.0f, 0.0f }, (Vector3){ 0 });
+    WorldLightComponent* Broken = AddLightAt(run, &Fixture.World, (Vector3){ 0.0f, 1.0f, -2.0f }, (Vector3){ 0 });
+    WorldObject* Lamp = NULL;
+    bool IsBuilt = (Shadowed != NULL) && (Point != NULL) && (Spot != NULL) && (Off != NULL) && (Broken != NULL)
+        && TEST_CHECK_SUCCESS(run, World_CreateObject(&Fixture.World, NULL, &Lamp))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Lamp, Vector3Double_Create(0.0, 4.0, 0.0)))
+        && TEST_CHECK_SUCCESS(run, WorldObject_SetRotation(Lamp, (Vector3){ 0.0f, 0.0f, QuarterTurn }))
+        && TEST_CHECK_SUCCESS(run, World_SetParent(&Fixture.World, WorldObject_GetId(WorldComponent_GetOwner(&Spot->Base)),
+            WorldObject_GetId(Lamp), false))
+        && TEST_CHECK_SUCCESS(run, WorldLightComponent_SetIntensity(Point, 2.0f))
+        && TEST_CHECK_SUCCESS(run, WorldLightComponent_SetRange(Point, 5.0f))
+        && TEST_CHECK_SUCCESS(run, WorldLightComponent_SetColor(Point, (Color){ 255, 128, 0, 255 }))
+        && TEST_CHECK_SUCCESS(run, WorldLightComponent_SetFlicker(Point, WorldLightFlicker_Candle))
+        && TEST_CHECK_SUCCESS(run, WorldLightComponent_SetType(Spot, WorldLightType_Spot))
+        && TEST_CHECK_SUCCESS(run, WorldLightComponent_SetCone(Spot, 0.3f, 0.5f))
+        && TEST_CHECK_SUCCESS(run, WorldLightComponent_SetRange(Spot, 8.0f))
+        && TEST_CHECK_SUCCESS(run, WorldLightComponent_SetIsOn(Off, false))
+        && TEST_CHECK_SUCCESS(run, WorldLightComponent_SetFlicker(Broken, WorldLightFlicker_Broken))
+        && TEST_CHECK_SUCCESS(run, WorldLightComponent_SetFlickerAmount(Broken, 1.0f));
+    if (!IsBuilt)
+    {
+        CacheFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    World_UpdateTransforms(&Fixture.World);
+    if (!CacheFixture_Sync(run, &Fixture))
+    {
+        CacheFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+
+    size_t LightCount = 0;
+    const WorldRenderLight* Lights = WorldRenderCache_GetLights(&Fixture.Cache, &LightCount);
+    if (!TEST_CHECK(run, LightCount == 5U))
+    {
+        CacheFixture_Deconstruct(run, &Fixture);
+        return;
+    }
+    // The spot hangs under a lamp 4 m up turned a quarter about Z and is itself turned a quarter about Y: its +Z turns to
+    // +X (its own turn), then up to +Y (the lamp's, applied after it).
+    const WorldRenderLight* SpotEntry = &Lights[2];
+    TEST_CHECK(run, (SpotEntry->Type == WorldLightType_Spot) && (SpotEntry->Component == Spot)
+        && (SpotEntry->ObjectId == WorldObject_GetId(WorldComponent_GetOwner(&Spot->Base))));
+    Vector3 Expected = Vector3Transform((Vector3){ 0.0f, 0.0f, 1.0f },
+        MatrixMultiply(MatrixRotateXYZ((Vector3){ 0.0f, QuarterTurn, 0.0f }),
+            MatrixRotateXYZ((Vector3){ 0.0f, 0.0f, QuarterTurn })));
+    TEST_CHECK(run, (Vector3Distance(Expected, (Vector3){ 0.0f, 1.0f, 0.0f }) < 1e-5f)
+        && (Vector3Distance(SpotEntry->RenderPosition, (Vector3){ 0.0f, 4.0f, 0.0f }) < 1e-6f));
+    TEST_CHECK(run, (Vector3Distance(SpotEntry->Direction, Expected) < 1e-5f)
+        && (fabsf(Vector3Length(SpotEntry->Direction) - 1.0f) < 1e-5f));
+    TEST_CHECK(run, (SpotEntry->Cone.InnerAngle == 0.3f) && (SpotEntry->Cone.OuterAngle == 0.5f)
+        && (SpotEntry->Range == 8.0f) && SpotEntry->IsOn);
+    TEST_CHECK(run, (Lights[1].Type == WorldLightType_Point) && (Lights[1].Flicker == WorldLightFlicker_Candle)
+        && (Lights[1].FlickerAmount == 0.3f) && (Lights[1].FlickerSpeed == 1.0f) && !Lights[3].IsOn
+        && Lights[4].IsOn && (Lights[4].Flicker == WorldLightFlicker_Broken));
+    // The turned point's forward is listed too (no pass uses it), off every axis.
+    TEST_CHECK(run, (fabsf(Lights[1].Direction.x) > 0.1f) && (fabsf(Lights[1].Direction.y) > 0.1f)
+        && (fabsf(Lights[1].Direction.z) > 0.1f));
+    // The light that is off (white, intensity 1) has no radiance.
+    float OffRgb[3] = { 1.0f, 1.0f, 1.0f };
+    WorldRendererLighting_GetLightRadiance(&Lights[3], 10.0, OffRgb);
+    TEST_CHECK(run, (OffRgb[0] == 0.0f) && (OffRgb[1] == 0.0f) && (OffRgb[2] == 0.0f));
+
+    // The forward lights at a moment the broken light is dark, with the first point shadowed: the point and the spot.
+    double DarkTime = FindBrokenTime(Lights[4].ObjectId, 10.0, true);
+    double LitTime = FindBrokenTime(Lights[4].ObjectId, 10.0, false);
+    GenericBuffer Candidates;
+    GenericBuffer Shading;
+    GenericBuffer_AllocateVariable(&Candidates, 0U, sizeof(WorldCullingLight));
+    GenericBuffer_AllocateVariable(&Shading, 0U, sizeof(WorldRendererForwardLight));
+    const size_t Excluded[1] = { 0U };
+    const size_t ShadowedSpots[1] = { 2U };
+    if (TEST_CHECK(run, (DarkTime >= 0.0) && (LitTime >= 0.0))
+        && TEST_CHECK(run, WorldRendererLighting_BuildForwardLights(Lights, LightCount, Excluded, 1U, ShadowedSpots, 1U,
+            DarkTime, &Candidates, &Shading))
+        && TEST_CHECK(run, (Candidates._count == 2U) && (Shading._count == 2U)))
+    {
+        const void* CandidateData = Candidates._data;
+        const void* ShadingData = Shading._data;
+        const WorldCullingLight* Culling = CandidateData;
+        const WorldRendererForwardLight* Values = ShadingData;
+        float Flicker = WorldLightFlicker_GetFactor(WorldLightFlicker_Candle, 0.3f, 1.0f, DarkTime, Lights[1].ObjectId);
+        float Linear[3];
+        WorldRendererCommon_ColorToLinear((Color){ 255, 128, 0, 255 }, Linear);
+        TEST_CHECK(run, !Culling[0].IsSpot && (Culling[0].Intensity == (2.0f * Flicker)) && (Culling[0].Range == 5.0f)
+            && (Vector3Distance(Culling[0].Position, (Vector3){ 1.0f, 2.0f, 3.0f }) < 1e-6f));
+        TEST_CHECK(run, (Values[0].Rgb[0] == (Linear[0] * (2.0f * Flicker)))
+            && (Values[0].Rgb[1] == (Linear[1] * (2.0f * Flicker))) && (Values[0].Cone[0] == 0.0f)
+            && (Values[0].Cone[1] == 1.0f) && (Values[0].Direction[0] == 0.0f) && (Values[0].Direction[1] == 0.0f)
+            && (Values[0].Direction[2] == 0.0f));
+        float Falloff[2];
+        WorldRendererLighting_GetConeFalloff(WorldLightType_Spot, SpotEntry->Cone, Falloff);
+        TEST_CHECK(run, Culling[1].IsSpot && (Culling[1].CosOuter == cosf(0.5f))
+            && (Vector3Distance(Culling[1].Direction, Expected) < 1e-5f) && (Values[1].Cone[0] == Falloff[0])
+            && (Values[1].Cone[1] == Falloff[1]) && (Values[1].Direction[1] == SpotEntry->Direction.y));
+        // The shadowed spot carries its map's layer, the point none.
+        TEST_CHECK(run, (Values[0].ShadowLayer == -1) && (Values[1].ShadowLayer == 0));
+        // The falloff: 1 at the inner angle, 0 at the outer, and a hard edge stays finite.
+        TEST_CHECK(run, (fabsf((cosf(0.3f) * Falloff[0]) + Falloff[1] - 1.0f) < 1e-4f)
+            && (fabsf((cosf(0.5f) * Falloff[0]) + Falloff[1]) < 1e-4f));
+        float HardEdge[2];
+        WorldRendererLighting_GetConeFalloff(WorldLightType_Spot, (WorldLightCone){ 0.4f, 0.4f }, HardEdge);
+        TEST_CHECK(run, isfinite(HardEdge[0]) && isfinite(HardEdge[1]) && (HardEdge[0] > 1000.0f));
+        // A very narrow spot (half a degree, a hard edge) still has its full light on its axis and none past its edge.
+        float Narrow[2];
+        const float HalfDegree = 0.0087266f;
+        WorldRendererLighting_GetConeFalloff(WorldLightType_Spot, (WorldLightCone){ HalfDegree, HalfDegree }, Narrow);
+        TEST_CHECK(run, ((Narrow[0] + Narrow[1]) >= 1.0f)
+            && (fabsf((cosf(HalfDegree) * Narrow[0]) + Narrow[1]) < 0.05f)
+            && (((cosf(1.5f * HalfDegree) * Narrow[0]) + Narrow[1]) < 0.0f));
+
+        // A draw that takes the spot first and the point second gets them in that order.
+        WorldRendererForwardLightArrays Arrays;
+        const size_t Selected[2] = { 1U, 0U };
+        WorldRendererLighting_PackForwardLights(Culling, Values, Selected, 2U, &Arrays);
+        TEST_CHECK(run, (Arrays.Count == 2) && (Arrays.Positions[1] == 4.0f) && (Arrays.Ranges[0] == 8.0f)
+            && (Arrays.Ranges[1] == 5.0f) && (Arrays.Positions[3] == 1.0f) && (Arrays.Positions[5] == 3.0f)
+            && (Arrays.Cones[0] == Falloff[0]) && (Arrays.Cones[3] == 1.0f) && (Arrays.Directions[1] == Values[1].Direction[1])
+            && (Arrays.Radiances[3] == Values[0].Rgb[0]) && (Arrays.Shadows[0] == 0) && (Arrays.Shadows[1] == -1));
+    }
+    // A moment later the broken light is lit again and takes its place; without the shadowed one excluded it joins too.
+    GenericBuffer_Clear(&Candidates);
+    GenericBuffer_Clear(&Shading);
+    if (TEST_CHECK(run, WorldRendererLighting_BuildForwardLights(Lights, LightCount, NULL, 0U, NULL, 0U, LitTime,
+        &Candidates, &Shading)))
+    {
+        TEST_CHECK(run, Candidates._count == 4U);
+    }
+    Memory_Free(Candidates._data);
+    Memory_Free(Shading._data);
+
+    // Through the table the spot's inner angle goes past its outer: it is listed with the cone in effect, a hard edge.
+    PropertyValue Wide = PropertyValue_FromAngle(0.7f);
+    if (TEST_CHECK_SUCCESS(run, Properties_Set(WorldLightComponent_GetPropertyTable(), Spot, u8"inner_angle", &Wide))
+        && CacheFixture_Sync(run, &Fixture))
+    {
+        Lights = WorldRenderCache_GetLights(&Fixture.Cache, &LightCount);
+        TEST_CHECK(run, (LightCount == 5U) && (Lights[2].Cone.InnerAngle == 0.5f) && (Lights[2].Cone.OuterAngle == 0.5f));
+    }
+    CacheFixture_Deconstruct(run, &Fixture);
 }
 
 static void ListsDrawableSpritesAndEveryLight(TestRun* run)
@@ -2528,6 +2724,7 @@ void WorldRenderCacheTests_Run(TestRun* run)
         { "reused_id_with_another_model_is_resolved_again", ReusedIdWithAnotherModelIsResolvedAgain },
         { "another_world_is_resolved_from_scratch", AnotherWorldIsResolvedFromScratch },
         { "lists_drawable_sprites_and_every_light", ListsDrawableSpritesAndEveryLight },
+        { "lists_points_and_spots_and_builds_their_forward_lights", ListsPointsAndSpotsAndBuildsTheirForwardLights },
         { "disabled_and_hidden_objects_are_not_drawn", DisabledAndHiddenObjectsAreNotDrawn },
         { "entries_carry_the_settings_in_effect", EntriesCarryTheSettingsInEffect },
         { "a_model_with_water_is_never_crisp", AModelWithWaterIsNeverCrisp },

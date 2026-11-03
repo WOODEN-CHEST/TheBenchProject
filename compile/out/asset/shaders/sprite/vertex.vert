@@ -22,11 +22,14 @@ uniform mat4 matProjection;
 
 uniform vec4 uvRect;        // the animation frame's area in its texture, normalized: x, y (top left), width, height
 
-// Lit pass only (world_sprite): the sprite as the shadow levels' light and as the cube shadow's light see it. A
-// billboard's shadow-map entry faces the light, so its shadow is read on that light-facing quad, at the point matching
-// this one; the sprite then never shadows itself where its two quads cross.
+// Lit pass only (world_sprite): the sprite as the shadow levels' light, the cube shadow's light and each shadowed spot
+// see it. A billboard's shadow-map entry faces the light, so its shadow is read on that light-facing quad, at the point
+// matching this one; the sprite then never shadows itself where its two quads cross. MAX_SPOT_SHADOWS is common/lighting's
+// (the lit fragment stage reads this many).
+#define MAX_SPOT_SHADOWS 2
 uniform mat4 matShadowModel;
 uniform mat4 matPointShadowModel;
+uniform mat4 matSpotShadowModels[MAX_SPOT_SHADOWS];
 // Lit pass only: metres a decal is pushed off its surface along its normal, toward the side the camera is on (0 for
 // every other sprite). The camera sits at the origin of render space, the space every position here is in.
 uniform float decalOffset;
@@ -38,6 +41,8 @@ out vec3 fragShadowPosition;      // where the shadow levels are read
 out vec3 fragShadowNormal;
 out vec3 fragPointShadowPosition; // where the cube shadow is read
 out vec3 fragPointShadowNormal;
+out vec3 fragSpotShadowPositions[MAX_SPOT_SHADOWS]; // where each shadowed spot's map is read
+out vec3 fragSpotShadowNormals[MAX_SPOT_SHADOWS];
 
 void main()
 {
@@ -51,6 +56,11 @@ void main()
     fragShadowNormal = normalize(mat3(matShadowModel)*vertexNormal);
     fragPointShadowPosition = (matPointShadowModel*local).xyz;
     fragPointShadowNormal = normalize(mat3(matPointShadowModel)*vertexNormal);
+    for (int i = 0; i < MAX_SPOT_SHADOWS; i++)
+    {
+        fragSpotShadowPositions[i] = (matSpotShadowModels[i]*local).xyz;
+        fragSpotShadowNormals[i] = normalize(mat3(matSpotShadowModels[i])*vertexNormal);
+    }
 
     if (decalOffset > 0.0)
     {

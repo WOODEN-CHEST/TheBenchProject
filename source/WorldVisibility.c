@@ -149,7 +149,8 @@ static bool IsInsideSides(const WorldVisibilityView* view, const WorldFrustum* b
  * shadow reach, lies in its box and, past the first level, is not deep inside the level before's box (its ring); with
  * culling off, the box and the ring take everything (the size cut and the reach stay). The cube shadow takes it when it
  * touches the light's reach sphere (anything further cannot shadow what the light lights: the light falls to 0 at its
- * reach). */
+ * reach), and a shadowed spot's map when it reaches into the spot's cone within its reach (culling off too: outside the
+ * cone a caster shadows nothing the spot lights). */
 static bool AddCaster(GenericBuffer lists[WorldVisibilityPass_Count], const WorldVisibilityView* view, Vector3 center,
     float radius, float shadowFade, size_t index)
 {
@@ -177,6 +178,16 @@ static bool AddCaster(GenericBuffer lists[WorldVisibilityPass_Count], const Worl
         && !AddIndex(&lists[WorldVisibilityPass_PointShadow], index))
     {
         return false;
+    }
+    uint32_t SpotCount = (view->SpotShadowCount < WORLD_VISIBILITY_MAX_SPOT_SHADOWS) ? view->SpotShadowCount
+        : WORLD_VISIBILITY_MAX_SPOT_SHADOWS;
+    for (uint32_t Spot = 0U; Spot < SpotCount; Spot++)
+    {
+        if (WorldLightCulling_DoesLightReachSphere(&view->SpotShadows[Spot], center, radius)
+            && !AddIndex(&lists[WorldVisibility_GetSpotShadowPass(Spot)], index))
+        {
+            return false;
+        }
     }
     return true;
 }

@@ -1,7 +1,7 @@
 #version 330
 
 // The terrain's lit fragment stage: up to sixteen terrain materials blended per pixel from texture arrays, lit as
-// world_pbr lights a dielectric (the sun and the moon with the shadow levels' shadow, the point lights, the ambient with
+// world_pbr lights a dielectric (the sun and the moon with the shadow levels' shadow, the local lights, the ambient with
 // the screen's AO, the night vision and the haze), dithered by the draw's fade. The blend, in order (its C mirror is
 // source/TerrainBlend.c: change both together):
 // 1. the painted weights, interpolated and divided by their sum (none at all: the first material);
@@ -487,17 +487,18 @@ void main()
     vec3 f0 = vec3(0.04);
 
     // The sun and the moon, darkened by the shadow levels' shadow, read off the triangle's own face (what the shadow map
-    // holds); then the point lights, the cube-shadow light read at the fragment itself, and a screen's light.
+    // holds); then the local lights, the cube-shadow light read at the fragment itself, and a screen's light.
     SkyLightValues light = SkyLightAt(fragPosition);
     float shadowAmount = FaceShadowAmount(fragPosition, FaceNormal(fragPosition, geometric));
     vec3 direct = SkyLight(light, n, v, shadowAmount, albedo, f0, roughness, 0.0);
-    vec3 pointTotal = PointLights(n, v, fragPosition, fragPosition, geometric, albedo, f0, roughness, 0.0)
+    vec3 localTotal = LocalLights(n, v, fragPosition, SurfaceShadowLookups(fragPosition, geometric,
+        FaceNormal(fragPosition, geometric)), albedo, f0, roughness, 0.0)
         + ScreenLight(n, v, fragPosition, albedo, f0, roughness, 0.0);
     float skyVisibility = SkyVisibilityAt(fragPosition, geometric);
     vec3 ambient = AmbientLight(light, n, fragPosition, geometric, skyVisibility)*albedo*occlusion*ScreenAo();
 
     // Water on the wet ground mirrors: the reflection pass's while it runs (handed over here), else the sky's, added here.
-    vec3 reflected = ambient + direct + pointTotal;
+    vec3 reflected = ambient + direct + localTotal;
     if (reflectionsDeferred)
     {
         WriteReflection(WetReflection(light, n, v, water, roughness), fragPosition);

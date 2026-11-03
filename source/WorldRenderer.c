@@ -106,6 +106,11 @@ static bool IsPointShadowAvailable(const WorldRenderer* self)
     return self->_pointShadow._hasCube && (self->_pointShadow._shader != NULL) && (self->_pbr._rigid._shader != NULL);
 }
 
+static bool AreSpotShadowsAvailable(const WorldRenderer* self)
+{
+    return WorldRendererShadows_AreSpotsAvailable(self) && (self->_pbr._rigid._shader != NULL);
+}
+
 static bool IsAoAvailable(const WorldRenderer* self)
 {
     return (self->_pbr._rigid._shader != NULL) && (self->_ao._shader != NULL) && (self->_ao._blurShader != NULL)
@@ -165,7 +170,8 @@ static bool IsNightVisionAvailable(const WorldRenderer* self)
 static bool AreSpriteShadowsAvailable(const WorldRenderer* self)
 {
     return WorldRendererSprites_IsAvailable(self)
-        && ((AreShadowLevelsAvailable(self) && (self->_shadowLevels._spriteDepthShader != NULL))
+        && (((AreShadowLevelsAvailable(self) || AreSpotShadowsAvailable(self))
+                && (self->_shadowLevels._spriteDepthShader != NULL))
             || (IsPointShadowAvailable(self) && (self->_pointShadow._spriteShader != NULL)));
 }
 
@@ -186,10 +192,18 @@ static bool DoSpritesCastShadows(const WorldRenderer* self, const WorldRenderFra
     }
     size_t CubeCount = 0;
     WorldVisibility_GetSprites(&self->_visibility, &self->_cache, WorldVisibilityPass_PointShadow, &CubeCount);
+    size_t SpotCount = 0;
+    for (uint32_t Spot = 0U; Spot < frame->SpotShadowCount; Spot++)
+    {
+        size_t Count = 0;
+        WorldVisibility_GetSprites(&self->_visibility, &self->_cache, WorldVisibility_GetSpotShadowPass(Spot), &Count);
+        SpotCount += Count;
+    }
     bool IsLevelCasting = frame->AreShadowLevelsActive && (self->_shadowLevels._spriteDepthShader != NULL)
         && (LevelCount > 0);
     bool IsCubeCasting = frame->IsPointShadowActive && (self->_pointShadow._spriteShader != NULL) && (CubeCount > 0);
-    return IsLevelCasting || IsCubeCasting;
+    bool IsSpotCasting = (self->_shadowLevels._spriteDepthShader != NULL) && (SpotCount > 0);
+    return IsLevelCasting || IsCubeCasting || IsSpotCasting;
 }
 
 /* The eye's night vision this frame: how strongly it applies (the renderer toggle x the world's strength), the field
@@ -210,8 +224,9 @@ static void DecideNightVision(const WorldRenderer* self, WorldRenderFrame* frame
         && (frame->NightVisionFieldLuminance < frame->NightVision.FullColourLuminance);
 }
 
-/* Advances the render clock behind WorldRenderFrame.TimeSeconds, wrapping it every RENDER_TIME_WRAP_SECONDS. A zero,
- * negative or non-finite delta holds it. */
+/* Advances the render clock behind WorldRenderFrame.TimeSeconds, wrapping it every RENDER_TIME_WRAP_SECONDS, and the
+ * lights' clock behind LightSeconds, never wrapped (the flicker's time: a wrap would show as a jump). A zero, negative or
+ * non-finite delta holds them. */
 static void AdvanceRenderTime(WorldRenderer* self, double deltaSeconds)
 {
     if (!isfinite(deltaSeconds) || (deltaSeconds <= 0.0))
@@ -219,6 +234,7 @@ static void AdvanceRenderTime(WorldRenderer* self, double deltaSeconds)
         return;
     }
     self->_renderTimeSeconds = fmod(self->_renderTimeSeconds + deltaSeconds, RENDER_TIME_WRAP_SECONDS);
+    self->_lightSeconds += deltaSeconds;
 }
 
 /* Fills the frame's sky from the environment's model: the sun, the moon, their light above the air (what reaches the
@@ -253,6 +269,7 @@ static void BuildFrame(const WorldRenderer* self, World* world, const GameCamera
     outFrame->Environment = World_GetEnvironment(world);
     BuildSky(outFrame);
     outFrame->TimeSeconds = (float)self->_renderTimeSeconds;
+    outFrame->LightSeconds = self->_lightSeconds;
     outFrame->WindowWidth = target.texture.width;
     outFrame->WindowHeight = target.texture.height;
     outFrame->SceneWidth = self->_scene._width;
@@ -296,12 +313,13 @@ static void UpdateLods(WorldRenderer* self, const WorldRenderFrame* frame, doubl
     WorldRenderCache_UpdateLods(&self->_cache, &View, self->_logger);
 }
 
-/* Decides which shadow passes run this frame (both are rendered before the scene pass). The shadow levels follow the
+/* Decides which shadow passes run this frame (all are rendered before the scene pass). The shadow levels follow the
  * sky's shadow light (the sun by day, the moon on bright nights, none while both are low or handing over:
  * WorldRendererLighting_PrepareSkyLight chose it from their light at the camera), with the player's quality and the
- * world's reach (none at a reach of 0); the point-light shadow is independent of the sky (shadows at night), cast by
- * the nearest shadow-casting light. Both need to be available and wanted (the world's switch, world x config strength
- * above 0). */
+ * world's reach (none at a reach of 0); the local lights' shadows are independent of the sky (shadows at night): the
+ * cube shadow of the nearest shadow-casting point light and the maps of the strongest shadow-casting spots in view
+ * (WorldLocalShadows_Choose, which remembers last frame's spots). All need to be available and wanted (the world's switch,
+ * world x config strength above 0). */
 static void DecideShadows(WorldRenderer* self, WorldRenderFrame* frame)
 {
     const WorldEnvironment* Environment = frame->Environment;
@@ -312,10 +330,23 @@ static void DecideShadows(WorldRenderer* self, WorldRenderFrame* frame)
     frame->AreShadowLevelsActive = AreShadowLevelsAvailable(self) && AreShadowsWanted
         && (frame->ShadowLight != WorldShadowLight_None) && (frame->ShadowFade > 0.0f)
         && (frame->ShadowLevelSettings.Reach > 0.0f);
-    if (IsPointShadowAvailable(self) && AreShadowsWanted)
+
+    size_t LightCount = 0;
+    const WorldRenderLight* Lights = WorldRenderCache_GetLights(&self->_cache, &LightCount);
+    uint32_t MaxSpots = (AreSpotShadowsAvailable(self) && AreShadowsWanted) ? WORLD_RENDERER_MAX_SPOT_SHADOWS : 0U;
+    WorldLocalShadowChoice Choice = WorldLocalShadows_Choose(Lights, LightCount, &frame->CameraFrustum,
+        self->_spotShadows._lastObjectIds, MaxSpots, IsPointShadowAvailable(self) && AreShadowsWanted);
+    frame->ShadowLightIndex = Choice.PointLight;
+    frame->IsPointShadowActive = (Choice.PointLight != SIZE_MAX);
+    frame->SpotShadowCount = Choice.SpotCount;
+    for (uint32_t Spot = 0U; Spot < WORLD_RENDERER_MAX_SPOT_SHADOWS; Spot++)
     {
-        frame->ShadowLightIndex = WorldRendererShadows_SelectPointLight(self);
-        frame->IsPointShadowActive = (frame->ShadowLightIndex != SIZE_MAX);
+        bool IsUsed = (Spot < Choice.SpotCount);
+        if (IsUsed)
+        {
+            frame->SpotShadows[Spot].LightIndex = Choice.Spots[Spot];
+        }
+        self->_spotShadows._lastObjectIds[Spot] = IsUsed ? Lights[Choice.Spots[Spot]].ObjectId : 0U;
     }
 }
 
@@ -339,6 +370,7 @@ static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
         .IsPointShadowActive = frame->IsPointShadowActive,
         .PointShadowPosition = frame->PointShadowPosition,
         .PointShadowReach = frame->PointShadowFar,
+        .SpotShadowCount = frame->SpotShadowCount,
         .IsSkyVisibilityActive = frame->IsSkyVisibilityActive,
         .SkyVisibilityBox = frame->SkyMapBox,
         .IsRainMapActive = frame->IsRainMapDrawn,
@@ -346,6 +378,10 @@ static Error BuildVisibility(WorldRenderer* self, const WorldRenderFrame* frame)
         .DrawDistanceScale = WorldRendererCommon_ConfigDrawDistanceScale(self),
         .ZoomFactor = frame->ZoomFactor
     };
+    for (uint32_t Spot = 0U; Spot < frame->SpotShadowCount; Spot++)
+    {
+        View.SpotShadows[Spot] = frame->SpotShadows[Spot].Reach;
+    }
     for (uint32_t Level = 0U; Level < View.ShadowLevelCount; Level++)
     {
         View.ShadowLevels[Level] = (WorldVisibilityShadowLevel)
@@ -427,6 +463,15 @@ static WorldRendererFeatureState StateOf(bool isAvailable, bool isActive)
 }
 
 /* Records what this frame did, for WorldRenderer_GetStatus. */
+/* Copies the name of a light's object (empty for no light or no name) into a status name buffer, while the render cache
+ * matches the world. */
+static void CopyLightName(const WorldRenderLight* light, unsigned char out[WORLD_OBJECT_NAME_MAX_LENGTH + 1U])
+{
+    const unsigned char* Name = (light != NULL)
+        ? WorldObject_GetName(WorldComponent_GetOwner(&light->Component->Base)) : NULL;
+    snprintf((char*)out, WORLD_OBJECT_NAME_MAX_LENGTH + 1U, "%s", (Name != NULL) ? (const char*)Name : "");
+}
+
 static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
 {
     WorldRendererStatus* Status = &self->_status;
@@ -453,6 +498,8 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
         frame->AreShadowLevelsActive && (frame->ShadowLight == WorldShadowLight_Moon));
     Status->Features[WorldRendererFeature_PointLightShadow] = StateOf(IsPointShadowAvailable(self),
         frame->IsPointShadowActive);
+    Status->Features[WorldRendererFeature_SpotLightShadows] = StateOf(AreSpotShadowsAvailable(self),
+        frame->SpotShadowCount > 0U);
     Status->Features[WorldRendererFeature_FarShadows] = StateOf(WorldRendererFarShadows_IsAvailable(self)
         && (self->_farShadows._failedTextureSize == 0), frame->AreFarShadowsActive);
     Status->Features[WorldRendererFeature_Curvature] = StateOf(true, frame->CurvatureScale > 0.0f);
@@ -526,7 +573,27 @@ static void UpdateStatus(WorldRenderer* self, const WorldRenderFrame* frame)
             Status->TransparentSpriteCount++;
         }
     }
-    WorldRenderCache_GetLights(&self->_cache, &Status->LightCount);
+    const WorldRenderLight* Lights = WorldRenderCache_GetLights(&self->_cache, &Status->LightCount);
+    Status->SpotLightCount = 0U;
+    Status->LightOffCount = 0U;
+    Status->FlickeringLightCount = 0U;
+    for (size_t Index = 0; Index < Status->LightCount; Index++)
+    {
+        Status->SpotLightCount += (Lights[Index].Type == WorldLightType_Spot) ? 1U : 0U;
+        Status->LightOffCount += Lights[Index].IsOn ? 0U : 1U;
+        Status->FlickeringLightCount += ((Lights[Index].Flicker != WorldLightFlicker_None)
+            && (Lights[Index].FlickerAmount > 0.0f)) ? 1U : 0U;
+    }
+    bool HasCubeLight = frame->IsPointShadowActive && (frame->ShadowLightIndex < Status->LightCount);
+    Status->PointShadowObjectId = HasCubeLight ? Lights[frame->ShadowLightIndex].ObjectId : 0U;
+    CopyLightName(HasCubeLight ? &Lights[frame->ShadowLightIndex] : NULL, self->_pbr._shadowLightNames[0]);
+    for (uint32_t Spot = 0U; Spot < WORLD_RENDERER_MAX_SPOT_SHADOWS; Spot++)
+    {
+        bool HasSpot = (Spot < frame->SpotShadowCount) && (frame->SpotShadows[Spot].LightIndex < Status->LightCount);
+        Status->SpotShadowObjectIds[Spot] = HasSpot ? frame->SpotShadows[Spot].ObjectId : 0U;
+        CopyLightName(HasSpot ? &Lights[frame->SpotShadows[Spot].LightIndex] : NULL,
+            self->_pbr._shadowLightNames[1U + Spot]);
+    }
 
     WorldVisibilityCounts Counts = WorldVisibility_GetCounts(&self->_visibility);
     Status->IsCullingEnabled = self->_isCullingEnabled;
@@ -771,8 +838,9 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     WorldRendererWater_Construct(Renderer);
     GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardLights, INITIAL_FORWARD_LIGHT_CAPACITY,
         sizeof(WorldCullingLight));
-    GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardRadiances, INITIAL_FORWARD_LIGHT_CAPACITY,
-        sizeof(WorldRendererRadiance));
+    GenericBuffer_AllocateVariable(&Renderer->_pbr._forwardShading, INITIAL_FORWARD_LIGHT_CAPACITY,
+        sizeof(WorldRendererForwardLight));
+    GenericBuffer_AllocateVariable(&Renderer->_pbr._lightOverflowObjects, 0U, sizeof(uint64_t));
     GenericBuffer_AllocateVariable(&Renderer->_skyVisibility._modelLayers, 0U, sizeof(uint8_t));
     GenericBuffer_AllocateVariable(&Renderer->_skyVisibility._modelBoxes, 0U, sizeof(BoundingBox));
     GenericBuffer_AllocateVariable(&Renderer->_surfaces._bindings, INITIAL_SURFACE_BINDING_CAPACITY,
@@ -817,7 +885,8 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     Memory_Free(self->_pbr._forwardLights._data);
     Memory_Free(self->_skyVisibility._modelLayers._data);
     Memory_Free(self->_skyVisibility._modelBoxes._data);
-    Memory_Free(self->_pbr._forwardRadiances._data);
+    Memory_Free(self->_pbr._forwardShading._data);
+    Memory_Free(self->_pbr._lightOverflowObjects._data);
     Memory_Free(self->_surfaces._bindings._data);
     Memory_Free(self->_surfaces._lights._data);
 
@@ -978,6 +1047,10 @@ static Error RenderFrame(WorldRenderer* self, World* world, const GameCamera* ca
     {
         WorldRendererShadows_RenderPointLight(self, &Frame);
     }
+    if (Frame.SpotShadowCount > 0U)
+    {
+        WorldRendererShadows_RenderSpots(self, &Frame);
+    }
     // The terrain's far shadows: the height maps when due and the sweep's passes of the frame.
     WorldRendererFarShadows_Render(self, &Frame);
     // The sky's occupancy volume: the ambient pre-pass and the lit passes read it for every surface's share of the sky's
@@ -1080,6 +1153,11 @@ void WorldRenderer_GetStatus(const WorldRenderer* self, WorldRendererStatus* out
     *outStatus = self->_status;
 }
 
+double WorldRenderer_GetLightSeconds(const WorldRenderer* self)
+{
+    return self->_lightSeconds;
+}
+
 const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
 {
     switch (feature)
@@ -1090,6 +1168,7 @@ const unsigned char* WorldRenderer_GetFeatureName(WorldRendererFeature feature)
         case WorldRendererFeature_SpriteShading:    return (const unsigned char*)u8"sprite shading";
         case WorldRendererFeature_SunShadows:       return (const unsigned char*)u8"sun shadows";
         case WorldRendererFeature_PointLightShadow: return (const unsigned char*)u8"point-light shadow";
+        case WorldRendererFeature_SpotLightShadows: return (const unsigned char*)u8"spot-light shadows";
         case WorldRendererFeature_AmbientOcclusion: return (const unsigned char*)u8"ambient occlusion";
         case WorldRendererFeature_Outlines:         return (const unsigned char*)u8"outlines";
         case WorldRendererFeature_Bloom:            return (const unsigned char*)u8"bloom";

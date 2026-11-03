@@ -1,6 +1,6 @@
 // The PBR shader and the frame lighting every lit shader (models, a CRT's glass, sprites, terrain, the rain's) gets
 // through common/lighting (the sky's light: the sun and the moon through the air and the sky's own light as the ambient;
-// the haze, shadows, per-object forward point lights and a screen's light, and each draw's place: its haze and its
+// the haze, shadows, per-object forward lights (points and spots, on or off, flickering) and a screen's light, and each draw's place: its haze and its
 // ambient zones; the eye's night vision; the rain's: WorldRendererRain.c), and the PBR's per-material factors. The eye's adaptation is WorldRendererExposure.c's; interior lighting's parts are
 // WorldRendererInterior.c's and WorldRendererSkyVisibility.c's.
 
@@ -10,6 +10,7 @@
 #include <string.h>
 #include "WorldRendererInternal.h"
 #include "WorldLightCulling.h"
+#include "WorldLightFlicker.h"
 #include "Logger.h"
 #include "raylib/rlgl.h"
 #include "wr/WRMemory.h"
@@ -35,8 +36,10 @@
  *  larger where the light grazes a surface, a small fraction head-on). Raise if acne (streaky self-shadowing),
  *  lower if peter-panning (the shadow detaches from its caster). */
 #define POINT_SHADOW_BIAS 0.35f
-/** Room for the name of one point-light array element ("pointLightPositions[N]") when probing the shader. */
-#define POINT_LIGHT_UNIFORM_NAME_CAPACITY 48
+/** Room for the name of one forward-light array element ("forwardLightPositions[N]") when probing the shader. */
+#define FORWARD_LIGHT_UNIFORM_NAME_CAPACITY 48
+/** A shadow-casting light's text in the lights' status line: its object's id and its whole name. */
+#define LIGHT_STATUS_TEXT_CAPACITY (WORLD_OBJECT_NAME_MAX_LENGTH + 48U)
 
 
 // Static functions.
@@ -54,15 +57,15 @@ static void AssignSamplerUnit(Shader shader, int location, WorldRendererTextureU
     SetShaderValue(shader, location, &UnitIndex, SHADER_UNIFORM_INT);
 }
 
-/* How many entries the shader's point-light arrays have, up to WORLD_MAX_FORWARD_LIGHTS: the highest N whose
- * element pointLightPositions[N-1] has a location (the loop indexes the arrays dynamically, so every element of
+/* How many entries the shader's forward-light arrays have, up to WORLD_MAX_FORWARD_LIGHTS: the highest N whose
+ * element forwardLightPositions[N-1] has a location (the loop indexes the arrays dynamically, so every element of
  * the declared size is active). 0 when the arrays are absent. */
-static int CountShaderPointLights(Shader shader)
+static int CountShaderForwardLights(Shader shader)
 {
     for (int Count = WORLD_MAX_FORWARD_LIGHTS; Count > 0; Count--)
     {
-        char Name[POINT_LIGHT_UNIFORM_NAME_CAPACITY];
-        snprintf(Name, sizeof(Name), "pointLightPositions[%d]", Count - 1);
+        char Name[FORWARD_LIGHT_UNIFORM_NAME_CAPACITY];
+        snprintf(Name, sizeof(Name), "forwardLightPositions[%d]", Count - 1);
         if (GetShaderLocation(shader, Name) >= 0)
         {
             return Count;
@@ -114,10 +117,18 @@ static void CacheLitLocations(WorldRendererLitLocations* lit, Shader shader)
     lit->_locPointShadowFar = GetShaderLocation(shader, "pointShadowFar");
     lit->_locPointShadowBias = GetShaderLocation(shader, "pointShadowBias");
 
-    lit->_locPointLightCount = GetShaderLocation(shader, "pointLightCount");
-    lit->_locPointLightPositions = GetShaderLocation(shader, "pointLightPositions");
-    lit->_locPointLightRadiances = GetShaderLocation(shader, "pointLightRadiances");
-    lit->_locPointLightRanges = GetShaderLocation(shader, "pointLightRanges");
+    lit->_locSpotShadowMatrices = GetShaderLocation(shader, "spotShadowMatrices");
+    lit->_locSpotShadowLookups = GetShaderLocation(shader, "spotShadowLookups");
+    lit->_locSpotShadowTexel = GetShaderLocation(shader, "spotShadowTexel");
+    lit->_locSpotShadowMaps = GetShaderLocation(shader, "spotShadowMaps");
+
+    lit->_locForwardLightCount = GetShaderLocation(shader, "forwardLightCount");
+    lit->_locForwardLightPositions = GetShaderLocation(shader, "forwardLightPositions");
+    lit->_locForwardLightRadiances = GetShaderLocation(shader, "forwardLightRadiances");
+    lit->_locForwardLightRanges = GetShaderLocation(shader, "forwardLightRanges");
+    lit->_locForwardLightDirections = GetShaderLocation(shader, "forwardLightDirections");
+    lit->_locForwardLightCones = GetShaderLocation(shader, "forwardLightCones");
+    lit->_locForwardLightShadows = GetShaderLocation(shader, "forwardLightShadows");
 
     lit->_locHazeViewProjection = GetShaderLocation(shader, "hazeViewProjection");
     lit->_locHazeMultiplier = GetShaderLocation(shader, "hazeMultiplier");
@@ -148,48 +159,6 @@ static void CacheMaterialLocations(WorldRendererPbrProgram* program, Shader shad
     program->_locMaterialPuddles = GetShaderLocation(shader, "materialPuddles");
     program->_locIsAlbedoMapBottomUp = GetShaderLocation(shader, "isAlbedoMapBottomUp");
     program->_locIsEmissiveMapBottomUp = GetShaderLocation(shader, "isEmissiveMapBottomUp");
-}
-
-/* Builds this render's forward-light candidates and their linear radiance (colour -> linear x intensity, once
- * per light per frame): every light of the render cache that can light anything, except the cube-shadow light,
- * which the shader shades separately with its shadow. In render space, like the spheres they are culled against. */
-static void BuildForwardLights(WorldRenderer* self, const WorldRenderFrame* frame)
-{
-    GenericBuffer_Clear(&self->_pbr._forwardLights);
-    GenericBuffer_Clear(&self->_pbr._forwardRadiances);
-
-    size_t LightCount = 0;
-    const WorldRenderLight* Lights = WorldRenderCache_GetLights(&self->_cache, &LightCount);
-    for (size_t Index = 0; Index < LightCount; Index++)
-    {
-        const WorldRenderLight* Light = &Lights[Index];
-        if ((frame->IsPointShadowActive && (Index == frame->ShadowLightIndex))
-            || (Light->Range <= 0.0f) || (Light->Intensity <= 0.0f))
-        {
-            continue;
-        }
-
-        WorldCullingLight Candidate =
-        {
-            .Position = Light->RenderPosition,
-            .Range = Light->Range,
-            .Intensity = Light->Intensity
-        };
-        WorldRendererRadiance Radiance;
-        WorldRendererCommon_ColorToLinear(Light->Color, Radiance.Rgb);
-        for (int Channel = 0; Channel < 3; Channel++)
-        {
-            Radiance.Rgb[Channel] *= Light->Intensity;
-        }
-        if (!GenericBuffer_AddLast(&self->_pbr._forwardLights, &Candidate)
-            || !GenericBuffer_AddLast(&self->_pbr._forwardRadiances, &Radiance))
-        {
-            // Cannot happen short of address-space exhaustion; keep the two lists parallel by dropping both.
-            GenericBuffer_Clear(&self->_pbr._forwardLights);
-            GenericBuffer_Clear(&self->_pbr._forwardRadiances);
-            return;
-        }
-    }
 }
 
 /* The shadow light from the luminance each light gives a surface facing it, into the frame. */
@@ -254,6 +223,7 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
     // Point the renderer-owned samplers at their fixed units once (see WorldRendererTextureUnit).
     AssignSamplerUnit(shader, outLocations->_locShadowLevels, WorldRendererTextureUnit_ShadowLevels);
     AssignSamplerUnit(shader, outLocations->_locPointShadowCube, WorldRendererTextureUnit_PointShadowCube);
+    AssignSamplerUnit(shader, outLocations->_locSpotShadowMaps, WorldRendererTextureUnit_SpotShadows);
     AssignSamplerUnit(shader, outLocations->_locAmbientOcclusionMap, WorldRendererTextureUnit_AmbientOcclusion);
     // The air and the haze (the volume's sampler on its own unit), and interior lighting (the sky's visibility map on
     // its own).
@@ -269,18 +239,18 @@ void WorldRendererLighting_PrepareLitShader(WorldRenderer* self, Shader shader, 
     WorldRendererSurfaces_PrepareLitShader(shader, &outLocations->_screenLight);
     WorldRendererFarShadows_PrepareLitShader(shader, &outLocations->_farShadow);
 
-    // The shader's point-light arrays must hold the WORLD_MAX_FORWARD_LIGHTS the culling may select; with fewer,
+    // The shader's forward-light arrays must hold the WORLD_MAX_FORWARD_LIGHTS the culling may select; with fewer,
     // upload only as many as fit (the shader also clamps its loop to its own array size).
-    outLocations->_maxPointLights = CountShaderPointLights(shader);
-    // A program that reads no point lights at all (the lightning bolt's) has none to hold.
-    if ((outLocations->_maxPointLights > 0) && (outLocations->_maxPointLights < WORLD_MAX_FORWARD_LIGHTS)
+    outLocations->_maxForwardLights = CountShaderForwardLights(shader);
+    // A program that reads no forward lights at all (the lightning bolt's) has none to hold.
+    if ((outLocations->_maxForwardLights > 0) && (outLocations->_maxForwardLights < WORLD_MAX_FORWARD_LIGHTS)
         && (self->_logger != NULL))
     {
         Error LogResult = Logger_LogWarningFormatted(self->_logger,
-            (const unsigned char*)u8"WorldRenderer: \"%s\" holds %d point lights, fewer than the %d the renderer "
+            (const unsigned char*)u8"WorldRenderer: \"%s\" holds %d forward lights, fewer than the %d the renderer "
             u8"selects (WORLD_MAX_FORWARD_LIGHTS); objects get at most %d.",
-            (const char*)assetName, outLocations->_maxPointLights, WORLD_MAX_FORWARD_LIGHTS,
-            outLocations->_maxPointLights);
+            (const char*)assetName, outLocations->_maxForwardLights, WORLD_MAX_FORWARD_LIGHTS,
+            outLocations->_maxForwardLights);
         Error_Deconstruct(&LogResult);
     }
 }
@@ -388,7 +358,155 @@ void WorldRendererLighting_PrepareFrame(WorldRenderer* self, WorldRenderFrame* f
     frame->ShadowStrength = (Environment->AreShadowsEnabled && (EffectiveShadowStrength > 0.0f))
         ? EffectiveShadowStrength : 0.0f;
 
-    BuildForwardLights(self, frame);
+    // The cube shadow's light is shaded on its own, with its flicker; every other light that is on is a candidate, the
+    // shadowed spots with their maps' layers.
+    size_t LightCount = 0;
+    const WorldRenderLight* Lights = WorldRenderCache_GetLights(&self->_cache, &LightCount);
+    size_t Excluded[1];
+    size_t ExcludedCount = 0;
+    if (frame->IsPointShadowActive && (frame->ShadowLightIndex < LightCount))
+    {
+        WorldRendererLighting_GetLightRadiance(&Lights[frame->ShadowLightIndex], frame->LightSeconds,
+            frame->PointShadowRadiance);
+        Excluded[ExcludedCount++] = frame->ShadowLightIndex;
+    }
+    size_t ShadowedSpots[WORLD_RENDERER_MAX_SPOT_SHADOWS];
+    for (uint32_t Spot = 0U; Spot < frame->SpotShadowCount; Spot++)
+    {
+        ShadowedSpots[Spot] = frame->SpotShadows[Spot].LightIndex;
+    }
+    GenericBuffer_Clear(&self->_pbr._forwardLights);
+    GenericBuffer_Clear(&self->_pbr._forwardShading);
+    WorldRendererLighting_BuildForwardLights(Lights, LightCount, Excluded, ExcludedCount, ShadowedSpots,
+        frame->SpotShadowCount, frame->LightSeconds, &self->_pbr._forwardLights, &self->_pbr._forwardShading);
+}
+
+void WorldRendererLighting_GetLightRadiance(const WorldRenderLight* light, double seconds, float outRgb[3])
+{
+    WorldRendererCommon_ColorToLinear(light->Color, outRgb);
+    float Flicker = WorldLightFlicker_GetFactor(light->Flicker, light->FlickerAmount, light->FlickerSpeed, seconds,
+        light->ObjectId);
+    float Scale = light->IsOn ? (light->Intensity * Flicker) : 0.0f;
+    for (int Channel = 0; Channel < 3; Channel++)
+    {
+        outRgb[Channel] *= Scale;
+    }
+}
+
+void WorldRendererLighting_GetConeFalloff(WorldLightType type, WorldLightCone cone, float out[2])
+{
+    if (type != WorldLightType_Spot)
+    {
+        out[0] = 0.0f;
+        out[1] = 1.0f;
+        return;
+    }
+    float CosInner = cosf(cone.InnerAngle);
+    float CosOuter = cosf(cone.OuterAngle);
+    // The band is at least WORLD_RENDERER_MIN_CONE_SPAN wide (a hard edge stays finite), but never more than a tenth of
+    // the cone's own room between its outer angle and its axis, so a very narrow spot still reaches full light inside.
+    float Room = 1.0f - CosOuter;
+    float Span = fmaxf(CosInner - CosOuter, fminf(WORLD_RENDERER_MIN_CONE_SPAN, 0.1f * Room));
+    float Scale = 1.0f / ((Span > 0.0f) ? Span : WORLD_RENDERER_MIN_CONE_SPAN);
+    out[0] = Scale;
+    out[1] = -CosOuter * Scale;
+}
+
+/* Whether @p index is among the @p count indices of @p excluded. */
+static bool IsExcluded(const size_t* excluded, size_t count, size_t index)
+{
+    for (size_t Entry = 0; Entry < count; Entry++)
+    {
+        if (excluded[Entry] == index)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* The map layer of light @p index: its place among the @p count shadowed spots, or -1. */
+static int GetShadowLayer(const size_t* shadowedSpots, size_t count, size_t index)
+{
+    for (size_t Spot = 0; Spot < count; Spot++)
+    {
+        if (shadowedSpots[Spot] == index)
+        {
+            return (int)Spot;
+        }
+    }
+    return -1;
+}
+
+bool WorldRendererLighting_BuildForwardLights(const WorldRenderLight* lights, size_t lightCount, const size_t* excluded,
+    size_t excludedCount, const size_t* shadowedSpots, size_t shadowedSpotCount, double seconds,
+    GenericBuffer* outCandidates, GenericBuffer* outShading)
+{
+    for (size_t Index = 0; Index < lightCount; Index++)
+    {
+        const WorldRenderLight* Light = &lights[Index];
+        if (!Light->IsOn || !(Light->Range > 0.0f) || !(Light->Intensity > 0.0f)
+            || IsExcluded(excluded, excludedCount, Index))
+        {
+            continue;
+        }
+        float Flicker = WorldLightFlicker_GetFactor(Light->Flicker, Light->FlickerAmount, Light->FlickerSpeed, seconds,
+            Light->ObjectId);
+        if (!(Flicker > 0.0f))
+        {
+            continue; // dark this frame: it lights nothing, and its draws take the next strongest light
+        }
+
+        bool IsSpot = (Light->Type == WorldLightType_Spot);
+        WorldCullingLight Candidate =
+        {
+            .Position = Light->RenderPosition,
+            .Range = Light->Range,
+            .Intensity = Light->Intensity * Flicker,
+            .IsSpot = IsSpot,
+            .Direction = Light->Direction,
+            .CosOuter = cosf(Light->Cone.OuterAngle)
+        };
+        WorldRendererForwardLight Shading;
+        WorldRendererLighting_GetLightRadiance(Light, seconds, Shading.Rgb);
+        Shading.Direction[0] = IsSpot ? Light->Direction.x : 0.0f;
+        Shading.Direction[1] = IsSpot ? Light->Direction.y : 0.0f;
+        Shading.Direction[2] = IsSpot ? Light->Direction.z : 0.0f;
+        WorldRendererLighting_GetConeFalloff(Light->Type, Light->Cone, Shading.Cone);
+        Shading.ShadowLayer = GetShadowLayer(shadowedSpots, shadowedSpotCount, Index);
+        if (!GenericBuffer_AddLast(outCandidates, &Candidate) || !GenericBuffer_AddLast(outShading, &Shading))
+        {
+            // Cannot happen short of address-space exhaustion; keep the two lists parallel by dropping both.
+            GenericBuffer_Clear(outCandidates);
+            GenericBuffer_Clear(outShading);
+            return false;
+        }
+    }
+    return true;
+}
+
+void WorldRendererLighting_PackForwardLights(const WorldCullingLight* candidates, const WorldRendererForwardLight* shading,
+    const size_t* selected, size_t count, WorldRendererForwardLightArrays* outArrays)
+{
+    size_t Count = (count < (size_t)WORLD_MAX_FORWARD_LIGHTS) ? count : (size_t)WORLD_MAX_FORWARD_LIGHTS;
+    outArrays->Count = (int)Count;
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        const WorldCullingLight* Light = &candidates[selected[Index]];
+        const WorldRendererForwardLight* Values = &shading[selected[Index]];
+        outArrays->Positions[(Index * 3U) + 0U] = Light->Position.x;
+        outArrays->Positions[(Index * 3U) + 1U] = Light->Position.y;
+        outArrays->Positions[(Index * 3U) + 2U] = Light->Position.z;
+        outArrays->Ranges[Index] = Light->Range;
+        for (size_t Channel = 0; Channel < 3U; Channel++)
+        {
+            outArrays->Radiances[(Index * 3U) + Channel] = Values->Rgb[Channel];
+            outArrays->Directions[(Index * 3U) + Channel] = Values->Direction[Channel];
+        }
+        outArrays->Cones[(Index * 2U) + 0U] = Values->Cone[0];
+        outArrays->Cones[(Index * 2U) + 1U] = Values->Cone[1];
+        outArrays->Shadows[Index] = Values->ShadowLayer;
+    }
 }
 
 /* The cube-shadow light of the frame, or NULL while the cube shadow does not run. */
@@ -437,6 +555,35 @@ static void UploadShadowLevels(const WorldRenderer* self, const WorldRenderFrame
     SetShaderValue(shader, lit->_locShadowLevelBandStart, &BandStart, SHADER_UNIFORM_FLOAT);
     SetShaderValue(shader, lit->_locShadowLevelLogFactor, &LogFactor, SHADER_UNIFORM_FLOAT);
     SetShaderValue(shader, lit->_locShadowReachFade, ReachFade, SHADER_UNIFORM_VEC2);
+}
+
+/* Uploads the shadowed spots' maps to one lit shader (common/lighting): each one's matrix and lookups (the normal offset's
+ * and the depth bias's scales), and the maps' texel. (The spots are forward lights; their layers come with a draw's
+ * lights.) */
+static void UploadSpotShadows(const WorldRenderFrame* frame, Shader shader, const WorldRendererLitLocations* lit)
+{
+    int Count = (int)frame->SpotShadowCount;
+    if (Count == 0)
+    {
+        return;
+    }
+    float Lookups[WORLD_RENDERER_MAX_SPOT_SHADOWS * 2];
+    Matrix Matrices[WORLD_RENDERER_MAX_SPOT_SHADOWS];
+    for (int Spot = 0; Spot < Count; Spot++)
+    {
+        const WorldRendererSpotShadowFrame* Entry = &frame->SpotShadows[Spot];
+        Lookups[(Spot * 2) + 0] = Entry->Map.NormalOffsetScale;
+        Lookups[(Spot * 2) + 1] = Entry->Map.DepthBiasScale;
+        Matrices[Spot] = Entry->Map.ViewProjection;
+    }
+    SetShaderValueV(shader, lit->_locSpotShadowLookups, Lookups, SHADER_UNIFORM_VEC2, Count);
+    if (lit->_locSpotShadowMatrices >= 0)
+    {
+        rlEnableShader(shader.id);
+        rlSetUniformMatrices(lit->_locSpotShadowMatrices, Matrices, Count);
+    }
+    float Texel = 1.0f / (float)WORLD_LOCAL_SHADOWS_SPOT_MAP_SIZE;
+    SetShaderValue(shader, lit->_locSpotShadowTexel, &Texel, SHADER_UNIFORM_FLOAT);
 }
 
 /* Uploads the frame's lighting values to one lit shader (common/lighting): the sun and the moon, the ambient, the haze,
@@ -546,18 +693,14 @@ static void UploadLitUniforms(WorldRenderer* self, const WorldRenderFrame* frame
         };
         SetShaderValue(shader, lit->_locPointShadowLightPos, LightPos, SHADER_UNIFORM_VEC3);
 
-        float Radiance[3];
-        WorldRendererCommon_ColorToLinear(PointShadowLight->Color, Radiance);
-        for (int Channel = 0; Channel < 3; Channel++)
-        {
-            Radiance[Channel] *= PointShadowLight->Intensity;
-        }
-        SetShaderValue(shader, lit->_locPointShadowLightRadiance, Radiance, SHADER_UNIFORM_VEC3);
+        SetShaderValue(shader, lit->_locPointShadowLightRadiance, frame->PointShadowRadiance, SHADER_UNIFORM_VEC3);
         SetShaderValue(shader, lit->_locPointShadowLightRange, &PointShadowLight->Range, SHADER_UNIFORM_FLOAT);
         SetShaderValue(shader, lit->_locPointShadowFar, &frame->PointShadowFar, SHADER_UNIFORM_FLOAT);
         float PointBias = POINT_SHADOW_BIAS;
         SetShaderValue(shader, lit->_locPointShadowBias, &PointBias, SHADER_UNIFORM_FLOAT);
     }
+
+    UploadSpotShadows(frame, shader, lit);
 
     SetShaderValue(shader, lit->_locShadowStrength, &frame->ShadowStrength, SHADER_UNIFORM_FLOAT);
     // The planet's curve in the vertex stage: every lit program draws a camera pass.
@@ -572,6 +715,7 @@ static void BindFrameTextures(WorldRenderer* self, const WorldRenderFrame* frame
     WorldRendererAtmosphere_BindVolume(self, frame);
     WorldRendererSkyVisibility_BindMap(self, frame);
     WorldRendererShadows_BindLevels(self, frame);
+    WorldRendererShadows_BindSpots(self, frame);
     WorldRendererFarShadows_Bind(self, frame);
     WorldRendererClouds_BindShadow(self, frame);
     WorldRendererRain_BindFrameTextures(self, frame);
@@ -645,14 +789,65 @@ void WorldRendererLighting_UploadLitProgram(WorldRenderer* self, const WorldRend
     UploadLitUniforms(self, frame, shader, locations, applyScreenAo, areReflectionsDeferred);
 }
 
+/* Names an object in the log, once, for having more forward lights reach a draw of it than the draw takes (a scene that
+ * needs more shows up: clustered lighting would light it by all of them); past WORLD_RENDERER_LIGHT_OVERFLOW_LOG_LIMIT
+ * objects one line says so and no more are named. */
+static void LogLightOverflow(WorldRenderer* self, uint64_t objectId, size_t reaching, size_t taken)
+{
+    WorldRendererPbrState* State = &self->_pbr;
+    const void* Data = State->_lightOverflowObjects._data;
+    const uint64_t* Logged = Data;
+    for (size_t Index = 0; Index < State->_lightOverflowObjects._count; Index++)
+    {
+        if (Logged[Index] == objectId)
+        {
+            return;
+        }
+    }
+    if (State->_isLightOverflowLogFull)
+    {
+        return;
+    }
+    if ((State->_lightOverflowObjects._count >= WORLD_RENDERER_LIGHT_OVERFLOW_LOG_LIMIT)
+        || !GenericBuffer_AddLast(&State->_lightOverflowObjects, &objectId))
+    {
+        State->_isLightOverflowLogFull = true;
+        if (self->_logger != NULL)
+        {
+            Error LogResult = Logger_LogWarningFormatted(self->_logger,
+                (const unsigned char*)u8"WorldRenderer: more objects have more lights reaching a draw than it takes; "
+                u8"no more of them are named.");
+            Error_Deconstruct(&LogResult);
+        }
+        return;
+    }
+    if (self->_logger == NULL)
+    {
+        return;
+    }
+    const unsigned char* Name = WorldRenderCache_FindObjectName(&self->_cache, objectId);
+    Error LogResult = Logger_LogWarningFormatted(self->_logger,
+        (const unsigned char*)u8"WorldRenderer: %zu lights reach a draw of object %" PRIu64 u8" (\"%s\"), more than "
+        u8"the %zu one draw takes; it is lit by the strongest %zu (logged once per object).", reaching, objectId,
+        (Name != NULL) ? (const char*)Name : "", taken, taken);
+    Error_Deconstruct(&LogResult);
+}
+
 /* The forward lights a draw's bounding sphere takes: the strongest few the frame's candidates reach it with, as indices
- * into them; returns how many. */
-static size_t SelectObjectLights(const WorldRenderer* self, const WorldRendererLitLocations* locations, Vector3 center,
-    float radius, size_t* outSelected)
+ * into them; returns how many. An object with more lights reaching the draw than it takes is logged once. */
+static size_t SelectObjectLights(WorldRenderer* self, const WorldRendererLitLocations* locations, Vector3 center,
+    float radius, uint64_t objectId, size_t* outSelected)
 {
     const void* CandidateData = self->_pbr._forwardLights._data;
-    return WorldLightCulling_SelectForSphere((const WorldCullingLight*)CandidateData, self->_pbr._forwardLights._count,
-        center, radius, outSelected, (size_t)locations->_maxPointLights);
+    size_t Capacity = (size_t)locations->_maxForwardLights;
+    size_t Reaching = 0;
+    size_t Count = WorldLightCulling_SelectForSphere((const WorldCullingLight*)CandidateData,
+        self->_pbr._forwardLights._count, center, radius, outSelected, Capacity, &Reaching);
+    if ((objectId != 0U) && (Capacity > 0U) && (Reaching > Capacity))
+    {
+        LogLightOverflow(self, objectId, Reaching, Capacity);
+    }
+    return Count;
 }
 
 /* Uploads the forward lights a draw takes (SelectObjectLights) for the draw that follows. */
@@ -660,51 +855,39 @@ static void UploadSelectedLights(const WorldRenderer* self, Shader shader, const
     const size_t* selected, size_t count)
 {
     const void* CandidateData = self->_pbr._forwardLights._data;
-    const void* RadianceData = self->_pbr._forwardRadiances._data;
-    const WorldCullingLight* Candidates = CandidateData;
-    const WorldRendererRadiance* Radiances = RadianceData;
+    const void* ShadingData = self->_pbr._forwardShading._data;
+    WorldRendererForwardLightArrays Arrays;
+    WorldRendererLighting_PackForwardLights(CandidateData, ShadingData, selected, count, &Arrays);
 
-    float Positions[WORLD_MAX_FORWARD_LIGHTS * 3];
-    float RadianceValues[WORLD_MAX_FORWARD_LIGHTS * 3];
-    float Ranges[WORLD_MAX_FORWARD_LIGHTS];
-    for (size_t Index = 0; Index < count; Index++)
+    SetShaderValue(shader, locations->_locForwardLightCount, &Arrays.Count, SHADER_UNIFORM_INT);
+    if (Arrays.Count > 0)
     {
-        const WorldCullingLight* Light = &Candidates[selected[Index]];
-        const WorldRendererRadiance* Radiance = &Radiances[selected[Index]];
-        Positions[Index*3 + 0] = Light->Position.x;
-        Positions[Index*3 + 1] = Light->Position.y;
-        Positions[Index*3 + 2] = Light->Position.z;
-        RadianceValues[Index*3 + 0] = Radiance->Rgb[0];
-        RadianceValues[Index*3 + 1] = Radiance->Rgb[1];
-        RadianceValues[Index*3 + 2] = Radiance->Rgb[2];
-        Ranges[Index] = Light->Range;
-    }
-
-    int CountInt = (int)count;
-    SetShaderValue(shader, locations->_locPointLightCount, &CountInt, SHADER_UNIFORM_INT);
-    if (count > 0)
-    {
-        SetShaderValueV(shader, locations->_locPointLightPositions, Positions, SHADER_UNIFORM_VEC3, CountInt);
-        SetShaderValueV(shader, locations->_locPointLightRadiances, RadianceValues, SHADER_UNIFORM_VEC3, CountInt);
-        SetShaderValueV(shader, locations->_locPointLightRanges, Ranges, SHADER_UNIFORM_FLOAT, CountInt);
+        SetShaderValueV(shader, locations->_locForwardLightPositions, Arrays.Positions, SHADER_UNIFORM_VEC3, Arrays.Count);
+        SetShaderValueV(shader, locations->_locForwardLightRadiances, Arrays.Radiances, SHADER_UNIFORM_VEC3, Arrays.Count);
+        SetShaderValueV(shader, locations->_locForwardLightRanges, Arrays.Ranges, SHADER_UNIFORM_FLOAT, Arrays.Count);
+        SetShaderValueV(shader, locations->_locForwardLightDirections, Arrays.Directions, SHADER_UNIFORM_VEC3,
+            Arrays.Count);
+        SetShaderValueV(shader, locations->_locForwardLightCones, Arrays.Cones, SHADER_UNIFORM_VEC2, Arrays.Count);
+        SetShaderValueV(shader, locations->_locForwardLightShadows, Arrays.Shadows, SHADER_UNIFORM_INT, Arrays.Count);
     }
 }
 
 void WorldRendererLighting_UploadObjectLights(WorldRenderer* self, Shader shader,
-    const WorldRendererLitLocations* locations, Vector3 center, float radius)
+    const WorldRendererLitLocations* locations, Vector3 center, float radius, uint64_t objectId)
 {
     WorldRendererSurfaces_UploadScreenLight(self, shader, &locations->_screenLight, center, radius);
-    if (locations->_locPointLightCount < 0)
+    if (locations->_locForwardLightCount < 0)
     {
         return;
     }
     size_t Selected[WORLD_MAX_FORWARD_LIGHTS];
-    size_t Count = SelectObjectLights(self, locations, center, radius, Selected);
+    size_t Count = SelectObjectLights(self, locations, center, radius, objectId, Selected);
     UploadSelectedLights(self, shader, locations, Selected, Count);
 }
 
 void WorldRendererLighting_UploadRunLights(WorldRenderer* self, Shader shader,
-    const WorldRendererLitLocations* locations, WorldRendererLitRun* run, Vector3 center, float radius)
+    const WorldRendererLitLocations* locations, WorldRendererLitRun* run, Vector3 center, float radius,
+    uint64_t objectId)
 {
     if (locations->_screenLight._locActive >= 0)
     {
@@ -716,12 +899,12 @@ void WorldRendererLighting_UploadRunLights(WorldRenderer* self, Shader shader,
             run->_screenLight = Nearest;
         }
     }
-    if (locations->_locPointLightCount < 0)
+    if (locations->_locForwardLightCount < 0)
     {
         return;
     }
     size_t Selected[WORLD_MAX_FORWARD_LIGHTS];
-    size_t Count = SelectObjectLights(self, locations, center, radius, Selected);
+    size_t Count = SelectObjectLights(self, locations, center, radius, objectId, Selected);
     if (run->_hasLights && (run->_lightCount == Count)
         && ((Count == 0U) || (memcmp(run->_lights, Selected, Count * sizeof(size_t)) == 0)))
     {
@@ -837,6 +1020,41 @@ void WorldRendererLighting_LogStatus(const WorldRenderer* self)
         Status->IsExposureMetered ? "measured" : "the anchor", (double)Status->Exposure,
         Status->SkyLightTableBuildCount,
         Status->IsSkyLightTableBuilding ? "; a rebuild is running" : "");
+    Error_Deconstruct(&LogResult);
+    // The names as the last render copied them: the world may have changed since. Each light's text holds a whole name.
+    char CubeLight[LIGHT_STATUS_TEXT_CAPACITY];
+    if (Status->PointShadowObjectId != 0U)
+    {
+        snprintf(CubeLight, sizeof(CubeLight), "object %" PRIu64 " (\"%s\")", Status->PointShadowObjectId,
+            (const char*)self->_pbr._shadowLightNames[0]);
+    }
+    else
+    {
+        snprintf(CubeLight, sizeof(CubeLight), "none");
+    }
+    char SpotLights[WORLD_RENDERER_STATUS_MAX_SPOT_SHADOWS * LIGHT_STATUS_TEXT_CAPACITY];
+    size_t SpotLength = 0U;
+    SpotLights[0] = '\0';
+    for (uint32_t Spot = 0U; (Spot < WORLD_RENDERER_STATUS_MAX_SPOT_SHADOWS) && (SpotLength < sizeof(SpotLights)); Spot++)
+    {
+        uint64_t Id = Status->SpotShadowObjectIds[Spot];
+        if (Id == 0U)
+        {
+            continue;
+        }
+        int Written = snprintf(SpotLights + SpotLength, sizeof(SpotLights) - SpotLength, "%sobject %" PRIu64 " (\"%s\")",
+            (SpotLength > 0U) ? ", " : "", Id, (const char*)self->_pbr._shadowLightNames[1U + Spot]);
+        if (Written < 0)
+        {
+            break;
+        }
+        SpotLength += (size_t)Written;
+    }
+    LogResult = Logger_LogInfoFormatted(self->_logger,
+        (const unsigned char*)u8"WorldRenderer: lights: %zu (%zu points, %zu spots; %zu off, %zu flickering), at most %d "
+        u8"a draw; the cube shadow's: %s; the spots' shadows: %s.", Status->LightCount,
+        Status->LightCount - Status->SpotLightCount, Status->SpotLightCount, Status->LightOffCount,
+        Status->FlickeringLightCount, WORLD_MAX_FORWARD_LIGHTS, CubeLight, (SpotLength > 0U) ? SpotLights : "none");
     Error_Deconstruct(&LogResult);
     LogResult = Logger_LogInfoFormatted(self->_logger,
         (const unsigned char*)u8"WorldRenderer: weather: the clouds hide %.3g of the sky (the sun and the moon %.3g of their "

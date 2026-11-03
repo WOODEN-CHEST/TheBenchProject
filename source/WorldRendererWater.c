@@ -236,7 +236,8 @@ static size_t DrawModels(WorldRenderer* self)
         float Fade = WorldVisibility_GetModelFade(&self->_visibility, Index).Combined;
         // Past half its fade the G-buffer left it out: the ambient pre-pass saw what lies behind it. Its own water
         // material says whether it mirrors.
-        WorldRendererLighting_UploadObjectLights(self, Pass, &Program->_program._lit, Entry->RenderCenter, Entry->Radius);
+        WorldRendererLighting_UploadObjectLights(self, Pass, &Program->_program._lit, Entry->RenderCenter, Entry->Radius,
+            Entry->ObjectId);
         WorldRendererLighting_SetDrawPlace(self, Pass, &Program->_program._lit, Entry->RenderCenter, Entry->Radius,
             Entry->Haze, Fade < WORLD_VISIBILITY_GBUFFER_FADE_LIMIT, false);
         WorldLodDraw LodDraws[WORLD_LOD_MAX_DRAWS];

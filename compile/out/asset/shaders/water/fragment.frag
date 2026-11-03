@@ -160,11 +160,12 @@ void main()
     vec3 through = (1.0 - mirror)*(1.0 - foam)*transmit;
 
     // The sun and the moon through the air with the levels' shadow (their glints and the light they scatter in), the
-    // point lights and a screen's light, and the sky's own light, what mirrors taken from it.
+    // local lights (points and spots) and a screen's light, and the sky's own light, what mirrors taken from it.
     SkyLightValues light = SkyLightAt(fragPosition);
     float shadowAmount = FaceShadowAmount(fragPosition, FaceNormal(fragPosition, surfaceNormal));
     vec3 direct = SkyLight(light, n, v, shadowAmount, albedo, vec3(f0), rough, 0.0);
-    vec3 pointTotal = PointLights(n, v, fragPosition, fragPosition, surfaceNormal, albedo, vec3(f0), rough, 0.0)
+    vec3 localTotal = LocalLights(n, v, fragPosition, SurfaceShadowLookups(fragPosition, surfaceNormal,
+        FaceNormal(fragPosition, surfaceNormal)), albedo, vec3(f0), rough, 0.0)
         + ScreenLight(n, v, fragPosition, albedo, vec3(f0), rough, 0.0);
     float skyVisibility = SkyVisibilityAt(fragPosition, surfaceNormal);
     vec3 ambient = AmbientLight(light, surfaceNormal, fragPosition, surfaceNormal, skyVisibility)*albedo*ScreenAo()
@@ -177,7 +178,7 @@ void main()
     reflection.weight = vec3(mirror);
     reflection.sky = EnvironmentRadiance(light, reflection.direction, fragPosition, surfaceNormal, skyVisibility);
     reflection.screenShare = ReflectionScreenShare(rough);
-    vec3 reflected = direct + pointTotal + ambient;
+    vec3 reflected = direct + localTotal + ambient;
     if (reflectionsDeferred && waterHasReflections)
     {
         WriteReflection(reflection, fragPosition);

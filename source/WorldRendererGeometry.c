@@ -6,8 +6,10 @@
 // by the water pass (with their water materials: WorldRendererWater.c) and the G-buffer alone: every pass draws one set
 // of meshes (WorldRendererMeshSet). Sprites have their own file (WorldRendererSprites.c).
 
+#include <math.h>
 #include "WorldRendererInternal.h"
 #include "GameSkeleton.h"
+#include "raylib/raymath.h"
 #include "raylib/rlgl.h"
 #include "wr/WRMemory.h"
 
@@ -15,6 +17,10 @@
 // Macros.
 /** Radius of the debug wireframe gizmo drawn at each light's position. */
 #define LIGHT_GIZMO_RADIUS 0.2f
+/** A spot's gizmo: its outer cone as a wire cone whose sides are this long (or its range, if shorter), with this many
+ *  sides, so a wide cone keeps its size, and its inner cone within it, dimmer. */
+#define LIGHT_GIZMO_CONE_LENGTH 1.0f
+#define LIGHT_GIZMO_CONE_SIDES 12
 /** How many colours the LOD tinting has: one per LOD up to the last, which every coarser LOD shares. */
 #define LOD_TINT_COLOR_COUNT 5U
 /** How strongly a tinted LOD past LOD 0 glows in its colour (linear emissive intensity): faint by day, where the
@@ -343,7 +349,7 @@ void WorldRendererGeometry_DrawModels(WorldRenderer* self, WorldRendererPixelFil
         for (size_t Program = 0U; Program < ProgramCount; Program++)
         {
             WorldRendererLighting_UploadObjectLights(self, Programs[Program]->_passShader, &Programs[Program]->_lit,
-                Entry->RenderCenter, Entry->Radius);
+                Entry->RenderCenter, Entry->Radius, Entry->ObjectId);
             WorldRendererLighting_SetDrawPlace(self, Programs[Program]->_passShader, &Programs[Program]->_lit,
                 Entry->RenderCenter, Entry->Radius, Entry->Haze, IsInPrepass, Entry->HasReflections);
         }
@@ -361,12 +367,28 @@ void WorldRendererGeometry_DrawModels(WorldRenderer* self, WorldRendererPixelFil
     }
 }
 
+/* Draws a wire cone from a spot's position along its axis, opening at @p angle, its sides @p length long. */
+static void DrawConeWires(const WorldRenderLight* light, float angle, float length, Color color)
+{
+    Vector3 End = Vector3Add(light->RenderPosition, Vector3Scale(light->Direction, length * cosf(angle)));
+    DrawCylinderWiresEx(light->RenderPosition, End, 0.0f, length * sinf(angle), LIGHT_GIZMO_CONE_SIDES, color);
+}
+
 void WorldRendererGeometry_DrawLightGizmos(WorldRenderer* self)
 {
     size_t LightCount = 0;
     const WorldRenderLight* Lights = WorldRenderCache_GetLights(&self->_cache, &LightCount);
     for (size_t Index = 0; Index < LightCount; Index++)
     {
-        DrawSphereWires(Lights[Index].RenderPosition, LIGHT_GIZMO_RADIUS, 6, 6, Lights[Index].Color);
+        const WorldRenderLight* Light = &Lights[Index];
+        DrawSphereWires(Light->RenderPosition, LIGHT_GIZMO_RADIUS, 6, 6, Light->Color);
+        if (Light->Type == WorldLightType_Spot)
+        {
+            float Length = fminf(LIGHT_GIZMO_CONE_LENGTH, fmaxf(Light->Range, LIGHT_GIZMO_RADIUS));
+            DrawConeWires(Light, Light->Cone.OuterAngle, Length, Light->Color);
+            Color Inner = { (unsigned char)(Light->Color.r / 2U), (unsigned char)(Light->Color.g / 2U),
+                (unsigned char)(Light->Color.b / 2U), Light->Color.a };
+            DrawConeWires(Light, Light->Cone.InnerAngle, Length, Inner);
+        }
     }
 }

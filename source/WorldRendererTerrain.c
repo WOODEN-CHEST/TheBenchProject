@@ -693,7 +693,8 @@ static void DrawLitChunks(WorldRenderer* self, const WorldRenderTerrainChunk* ch
         UploadChunkPlace(self, Record, Gpu, Entry);
         // Each chunk takes the forward lights and the ambient zones its sphere reaches, its haze multiplier, and dithers
         // by its fade (its draw distance, its object's opacity).
-        WorldRendererLighting_UploadRunLights(self, Program, &State->_lit, &LitRun, Entry->RenderCenter, Entry->Radius);
+        WorldRendererLighting_UploadRunLights(self, Program, &State->_lit, &LitRun, Entry->RenderCenter, Entry->Radius,
+            Entry->ObjectId);
         float Fade = WorldVisibility_GetTerrainChunkFade(&self->_visibility, Index).Combined;
         WorldRendererLighting_SetRunDrawPlace(self, Program, &State->_lit, &LitRun, Entry->RenderCenter, Entry->Radius,
             Entry->Haze, Fade < WORLD_VISIBILITY_GBUFFER_FADE_LIMIT, false);
