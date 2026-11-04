@@ -210,6 +210,9 @@ typedef struct WorldCollisionFilterStruct
     /** @brief The layer the query collides as, while HasOwnLayer is on (a value that is not a layer: the query sees
      *  nothing). */
     CollisionLayer OwnLayer;
+    /** @brief Whether the query sees terrain alone (default false), on whichever layers LayerMask lets through: the ground
+     *  under a path, whatever stands on it. */
+    bool IsTerrainOnly;
 } WorldCollisionFilter;
 
 /**

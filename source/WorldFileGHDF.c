@@ -73,7 +73,39 @@ static void NoteUnknownId(WorldFileLoad* load, WorldFileUnknownKind kind, const 
         objectId);
 }
 
-/* Notes every entry of @p compound that is neither one of @p ownIds nor an entry @p table reads (NULL: no table). */
+static Error NoteUnknownEntries(WorldFileLoad* load, GHDFCompound* compound, const PropertyTable* table,
+    const GHDFEntryID* ownIds, size_t ownIdCount, const unsigned char* where, uint64_t objectId);
+
+/* Notes the entries no record's table reads, in a record list's Compound array, if it is one (anything else is left for
+ * the read to refuse). A record table holds no record list, so this goes one level down and no further. */
+static Error NoteUnknownRecordEntries(WorldFileLoad* load, GHDFCompound* compound, const PropertyDescriptor* row,
+    uint64_t objectId)
+{
+    GHDFObjectValue Entry;
+    bool IsFound = false;
+    Error Result = GHDFCompound_GetOptionalVerified(compound, (GHDFEntryID)row->WireId,
+        GHDF_CreateArrayType(GHDFValueType_Compound), &Entry, &IsFound);
+    if ((Result.Code != ErrorCode_Success) || !IsFound)
+    {
+        Error_Deconstruct(&Result);
+        return Error_CreateSuccess();
+    }
+    size_t Count = GHDFArray_GetElementCount(Entry.Value.Array);
+    for (size_t Index = 0U; (Index < Count) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        GHDFObjectValue Element;
+        Result = GHDFArray_Get(Entry.Value.Array, Index, &Element);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = NoteUnknownEntries(load, Element.Value.Compound, row->RecordTable, NULL, 0U, row->RecordTable->Name,
+                objectId);
+        }
+    }
+    return Result;
+}
+
+/* Notes every entry of @p compound that is neither one of @p ownIds nor an entry @p table reads (NULL: no table), and those
+ * of the records in its record lists. */
 static Error NoteUnknownEntries(WorldFileLoad* load, GHDFCompound* compound, const PropertyTable* table,
     const GHDFEntryID* ownIds, size_t ownIdCount, const unsigned char* where, uint64_t objectId)
 {
@@ -101,6 +133,13 @@ static Error NoteUnknownEntries(WorldFileLoad* load, GHDFCompound* compound, con
         Result = CollectionEnumerator_HasNext(Enumerator, &HasNext);
     }
     WorldFileInternal_EndEnumeration(Enumerator, &Storage);
+    for (size_t Row = 0U; (table != NULL) && (Row < table->DescriptorCount) && (Result.Code == ErrorCode_Success); Row++)
+    {
+        if (table->Descriptors[Row].Type == PropertyType_RecordList)
+        {
+            Result = NoteUnknownRecordEntries(load, compound, &table->Descriptors[Row], objectId);
+        }
+    }
     return Result;
 }
 

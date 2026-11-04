@@ -135,6 +135,10 @@ recomputed per frame.
   objects' world positions (`WorldObject_GetWorldPosition`, through their parents). `Origin` and the box are
   `Vector3Double`s and the distances compare in double, so a query 100 km out tells apart objects millimetres
   apart; `MaximumDistance` is a float;
+- inside a region ("is the player in the park"; [Paths.md](Paths.md)): `InsideRegionObject` (the id of an object holding a closed
+  path) and `InsideRegionTag` (a tag: inside at least one of the closed paths whose objects carry it), each 0 for no filter, both
+  by the object's world position, at any height. A region that no longer exists, an open path or a tag nobody carries matches
+  nothing and is no error; with `IsEnabledOnly` a disabled region does not count either;
 - the order: object ids ascending, or nearest to `Origin` first (`IsSortedByDistance`, ties by id); then `Limit`.
 
 Malformed queries (a NULL array with a count, key id 0, an ordering operator on a string, a NaN, a negative distance,

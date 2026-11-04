@@ -618,6 +618,10 @@ bool WorldCollisionInternal_PassesFilter(WorldCollision* self, const WorldCollis
     {
         return false;
     }
+    if (filter->IsTerrainOnly && (instance->Terrain == NULL))
+    {
+        return false;
+    }
     if (filter->HasOwnLayer && (((uint32_t)filter->OwnLayer >= (uint32_t)CollisionLayer_Count)
         || ((instance->Settings.CollidesWith & COLLISION_LAYER_BIT(filter->OwnLayer)) == 0U)))
     {

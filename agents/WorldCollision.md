@@ -180,6 +180,8 @@ A terrain component ([Terrain.md](Terrain.md)) is the collision world's second s
   and indices" above): an edge on a chunk's border is inactive where the terrain is smooth across it, so a capsule
   sliding across it takes the face's normal, exactly as inside a chunk (the tests check a ball's contacts across seams
   and compare a capsule's walk across them with the same walk on a box).
+- **Terrain alone:** a query's filter with `IsTerrainOnly` sees nothing else, on whichever layers its mask lets through: the
+  ground under a path, whatever stands on it (`PathGround_Project`, [Paths.md](Paths.md)).
 - **Hits name the terrain's triangle:** `MeshPart` is the chunk and `SourceTriangle` the terrain's triangle index
   (scattering and the editor, not built yet, will read its weights from it).
 - **One-sided:** the front (counter-clockwise) side collides; rays and casts from below pass through. An overhang's

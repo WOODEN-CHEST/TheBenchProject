@@ -296,6 +296,9 @@ void WorldRendererScene_Render(WorldRenderer* self, const WorldRenderFrame* fram
         WorldRendererCollision_Draw(self, frame);
     }
 
+    // A debug list of lines (the paths' view), off unless a list is set.
+    WorldRendererDebugLines_Draw(self, frame);
+
     EndMode3D();
     WorldRendererCommon_EndCameraDepth(self, frame);
     EndTextureMode();

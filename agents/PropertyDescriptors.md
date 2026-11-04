@@ -116,6 +116,7 @@ no `inherit` states: a flag cannot collide with a real value, and the editor sho
 | `FloatList` | owned `PropertyFloatList*`, NULL while empty (its only default) | array of numbers, `[3.0, 6.0, 60.0]` (`[]` when empty) | Float array (empty when empty) |
 | `EnumSet` | `uint32_t` mask: bit N is the enum entry of value N | array of the entries' names in the table's order, `["world", "prop"]` (`[]` when empty) | the smallest unsigned integer type that holds the mask |
 | `AssetNameList` | owned `PropertyAssetNameList*`, NULL while empty (its only default), each name kept in full | array of strings, `["tbp:human_motions", "tbp:gestures"]` (`[]` when empty), read as written | String array (empty when empty) |
+| `RecordList` | owned `PropertyRecordList*`, NULL while empty (its only default): small structs a table of their own describes, the row's `RecordTable` | array of objects, each through its table (`[]` when empty): its keys, defaults left out, its rules | Compound array, each through its table (an empty array when empty) |
 | `InstanceList` | owned `PropertyInstanceList*` of `PropertyInstanceEntry` (a `Vector3Double` position, a radians `Vector3` rotation, a `Vector3` scale, a `Color` tint), NULL while empty (its only default) | array of instances, each `{"position": [x, y, z], "rotation": [x, y, z], "scale": s or [x, y, z], "tint": "#rrggbb"}` with the defaults left out (rotation 0, scale 1, white; the position always written; rotations in degrees, a scale one number when even, the tint as a `Color`); any other key is refused; `[]` when empty | Compound {1: Double array of the positions (3 per instance), 2: Float array of the rotations in radians, 3: Float array of the scales, 4: UInt8 array of the tints (4 each)}; 2, 3 and 4 only when an instance differs from its default, each of exactly its length |
 
 The integer types are written in the smallest GHDF integer type that holds the value (a `parent` of 12 is one
@@ -152,7 +153,11 @@ animator's `animation_libraries` is the first. An `InstanceList` takes `PROPERTY
 positionLimit)` (`Rules.MaxCount`, required: 1 to `PROPERTY_INSTANCE_LIST_MAX_COUNT`, 262 144, and every position's
 components within ±`positionLimit`); every rotation and scale must be finite; its default must be NULL. A refusal names
 the instance (`"...; instance 12's are not"`), and a JSON read's error its place (`[12].scale: Expected a number or
-three numbers.`). The model instances component's `instances` is the first.
+three numbers.`). The model instances component's `instances` is the first. A `RecordList` takes
+`PROPERTY_RULES_RECORD_LIST(maxCount)` (1 to `PROPERTY_RECORD_LIST_MAX_COUNT`, 65 536) and a `RecordTable`; each record
+follows that table's rules; its default must be NULL. A refusal names the record (`"...; record 12: path_node.width (Width)
+must be ..."`), and a read's error its place (`path_component.nodes: [12]: path_node.width: Expected ...`). A path's `nodes`
+is the first.
 
 Flags: `Persistent` (written and read by JSON and GHDF), `Editable` (inspector), `ReadOnly` (visible, refused by
 `Properties_Set`; reads from files still fill it), `Script`. `PROPERTY_FLAGS_SETTING` = Persistent | Editable | Script.
@@ -233,11 +238,12 @@ that**; everything else respects the `_` convention and goes through the type's 
 range) and whether it owns memory (`PropertyInternal_IsOwnedType`: the strings and `DataMap`; an owned field is freed,
 cloned and handed over through `PropertyInternal_AdoptOwned` and `CloneOwned`), document it in the header's type table
 and here, and test it in `tests/PropertyDescriptorTests.c` (the test record has one field of every type but
-`DataMap`, which has its own record: it needs a key registry). Examples to follow: `Double` and `Date`,
+`DataMap`, which has its own record: it needs a key registry; the lists of small structs have their own too). Examples to follow: `Double` and `Date`,
 `AngleVector3` (an object's rotation), `DataMap` (tags and typed data), `FloatList` (a placement's LOD
 distances), `EnumSet` (a collider's layer mask), `Vector3Double` (an object's position, named
 `vector3_double`), `AssetNameList` (an animator's own animation libraries, named `asset_name_list`) and
-`InstanceList` (a model instances component's copies, named `instance_list`).
+`InstanceList` (a model instances component's copies, named `instance_list`). Before adding a list type of small structs,
+see whether a `RecordList` does it: one table, no codec of its own.
 
 ### Float lists
 
@@ -271,9 +277,33 @@ scale 1, opaque white. Owned like a float list: `Properties_Set` copies (`Proper
 (GHDF: the positions' array must be a multiple of 3 long, the others exactly as long as the positions say). The rules are
 checked when the read commits.
 
+### Record lists
+
+A list of small structs where each item is a row set of its own: a path's nodes, later a slot's weighted models or a profile's
+strips. Declare the item as any table (`RecordTable` on the holding row), and everything comes from it: defaults, rules, copies,
+comparison, JSON keys and GHDF ids, and the inspector can show one item as it shows any row set.
+
+`PropertyRecordList` (in `PropertyDescriptor.h`) is one heap block: the table, the count and the records, each the table's
+`StructSize` bytes. The empty list is NULL. `PropertyRecordList_Create(table, records, count, &list)` deep-copies (NULL for 0; at
+most `PROPERTY_RECORD_LIST_MAX_COUNT`), `_Destroy` releases what each record owns, `_Clone`, `_Equals` (the same table and every
+record equal by `Properties_Equals`; NULL is empty), and the inline `_GetCount` / `_GetRecords` (one array of the struct). Owned
+like a float list: `Properties_Set` copies (`PropertyValue_FromRecordList`), `Properties_Get` borrows, copies clone, reads hand a
+new list over, and the readers check the count before they allocate. A list of another table is refused by the row's check.
+
+**A record table** passes `PropertyTable_Check` itself, which the holding table's check runs. It has no `AfterSet` and no
+migrations (a change that needs old records converted is the holding table's migration, before the read), and it holds no
+`DataMap` and no `RecordList`: so a value nests one level, and no walk over one needs a depth limit (AGENTS.md rule 5). It may hold
+owned rows (a name): each record's are its own.
+
+**Unknown keys in a record** follow the read's mode: `Error` fails naming the record, `Ignore` skips them, and `Warn` warns once
+per list, at the first record that holds any, not once per record. World files read with `Ignore` and note each name themselves
+([WorldFile.md](WorldFile.md)). GHDF skips unknown ids in a record, as everywhere.
+
+Reads are all or nothing with the holding row: a record refused leaves the instance as it was.
+
 ## Known limits
 
 - No cross-field rules (each property is checked on its own) and no bounds on `UInt64`.
-- Tables are flat: no nested property tables. The one nested value, a `DataMap`, limits its own depth (16 levels, its
-  codec; [ObjectData.md](ObjectData.md)); any later nested type needs a limit too (AGENTS.md rule 5).
+- A table nests one level at the most: a `RecordList`'s table holds no `RecordList`. The one deeper value, a `DataMap`, limits
+  its own depth (16 levels, its codec; [ObjectData.md](ObjectData.md)); any later nested type needs a limit too (AGENTS.md rule 5).
 - Not thread-safe (tables are immutable, instances are plain structs).

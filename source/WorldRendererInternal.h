@@ -2569,6 +2569,9 @@ struct WorldRendererStruct
     bool _lightGizmosEnabled;
     /** @brief The collision world whose debug shapes are drawn as wireframes (borrowed), or NULL (the default). */
     const WorldCollision* _collisionDebug;
+    /** The debug lines to draw (borrowed: WorldRenderer_SetDebugLines), and how many. */
+    const WorldDebugLine* _debugLines;
+    size_t _debugLineCount;
     /** @brief Whether the final pixelation pass is applied. */
     bool _pixelationEnabled;
     /** @brief Set once the shaders' load has been attempted (success or failure), so it is tried only once. */
@@ -3226,6 +3229,11 @@ CrtPowerShape WorldRendererCrt_GetPowerShape(const WorldRenderModel* model, floa
  *  layer, and its contact points (a debug aid), moved into render space for the frame's origin. Inside BeginMode3D;
  *  reads only. */
 void WorldRendererCollision_Draw(WorldRenderer* self, const WorldRenderFrame* frame);
+
+// WorldRendererDebugLines.c
+/** @brief Draws the debug lines (_debugLines), moved into render space for the frame's origin. Inside BeginMode3D; reads
+ *  only. */
+void WorldRendererDebugLines_Draw(WorldRenderer* self, const WorldRenderFrame* frame);
 
 
 // WorldRendererSprites.c

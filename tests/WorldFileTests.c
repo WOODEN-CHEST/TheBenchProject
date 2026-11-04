@@ -20,6 +20,7 @@
 #include "WorldScreenComponent.h"
 #include "WorldModelInstancesComponent.h"
 #include "WorldObject.h"
+#include "WorldPathComponent.h"
 #include "WorldSpriteComponent.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRGHDF.h"
@@ -177,7 +178,8 @@ static PropertyValue MakeCandidate(const PropertyDescriptor* row, size_t attempt
         case PropertyType_FloatList:
         case PropertyType_AssetNameList:
         case PropertyType_InstanceList:
-            break; // FillData, FillFloatList, FillAssetNameList and FillInstanceList build these
+        case PropertyType_RecordList:
+            break; // FillData, FillFloatList, FillAssetNameList, FillInstanceList and FillRecordList build these
     }
     return Value;
 }
@@ -240,6 +242,35 @@ static void FillInstanceList(TestRun* run, const PropertyTable* table, void* ins
     }
 }
 
+static void FillTable(TestRun* run, const PropertyTable* table, void* instance);
+
+/* Sets a record list row to three records, each with every row of its own table away from its default, so a file must carry
+ * every row of every record. */
+static void FillRecordList(TestRun* run, const PropertyTable* table, void* instance, const PropertyDescriptor* row)
+{
+    const PropertyTable* Records = row->RecordTable;
+    size_t Count = (row->Rules.MaxCount < 3U) ? row->Rules.MaxCount : 3U;
+    unsigned char* Block = Memory_Allocate(Count * Records->StructSize);
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        void* Record = Block + (Index * Records->StructSize);
+        TEST_CHECK_SUCCESS(run, Properties_Construct(Records, Record));
+        FillTable(run, Records, Record);
+    }
+    PropertyRecordList* List = NULL;
+    if (TEST_CHECK_SUCCESS(run, PropertyRecordList_Create(Records, Block, Count, &List)))
+    {
+        PropertyValue Value = PropertyValue_FromRecordList(List);
+        TEST_CHECK_SUCCESS(run, Properties_Set(table, instance, row->Key, &Value));
+        PropertyRecordList_Destroy(List);
+    }
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        Properties_Deconstruct(Records, Block + (Index * Records->StructSize));
+    }
+    Memory_Free(Block);
+}
+
 /* Sets every settable row of @p table (all but the ReadOnly ones, which go through the world) to a value that is not
  * its default and passes its rules. */
 static void FillTable(TestRun* run, const PropertyTable* table, void* instance)
@@ -265,6 +296,11 @@ static void FillTable(TestRun* run, const PropertyTable* table, void* instance)
         if (Descriptor->Type == PropertyType_InstanceList)
         {
             FillInstanceList(run, table, instance, Descriptor);
+            continue;
+        }
+        if (Descriptor->Type == PropertyType_RecordList)
+        {
+            FillRecordList(run, table, instance, Descriptor);
             continue;
         }
         bool IsSet = false;
@@ -1298,6 +1334,98 @@ static void HostileGHDFIsRefusedWithNothingLeft(TestRun* run)
     DestroyWorld(run, &Source, &Keys);
 }
 
+/* A key or entry no record's table knows, in a record list: the file loads with what it knows, and each name is warned about
+ * once, however many records hold it. A record's wrong value still refuses the file. */
+static void UnknownNamesInRecordsAreNotedToo(TestRun* run)
+{
+    GenericBuffer Directory;
+    GenericBuffer_AllocateVariable(&Directory, WORLD_FILE_TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    Logger Log;
+    KeyRegistry Keys;
+    if (!TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "world_file_unknown_in_records", &Directory))
+        || !TEST_CHECK_SUCCESS(run, Logger_Construct(&Log, Directory._data)))
+    {
+        Memory_Free(Directory._data);
+        return;
+    }
+    if (TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys)))
+    {
+        const char* Text =
+            "{\"format_version\": 3, \"objects\": [{\"id\": 1, \"components\": {\"path\": {\"nodes\": ["
+            "{\"position\": [1, 2, 3], \"tension\": 0.5}, {\"position\": [4, 5, 6], \"tension\": 0.25}, "
+            "{\"position\": [7, 8, 9], \"mode\": \"corner\"}]}}}]}";
+        World Loaded;
+        if (TEST_CHECK_SUCCESS(run, ReadJSONText(Text, &Keys, &Log, &Loaded)))
+        {
+            WorldComponent* Component = NULL;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 1U, WorldComponentType_Path, &Component));
+            size_t Count = 0U;
+            const PathNode* Nodes = WorldPathComponent_GetNodes(WorldPathComponent_FromComponent(Component), &Count);
+            TEST_CHECK(run, (Count == 3U) && (Nodes[1].Position.Y == 5.0) && (Nodes[2].Mode == PathNodeMode_Corner));
+            TEST_CHECK_SUCCESS(run, World_Deconstruct(&Loaded));
+        }
+        World Refused;
+        const char* const Fragments[] = { "object 1", "path_component.nodes", "[1]: path_node.mode", NULL };
+        TestText_CheckErrorMessage(run, ReadJSONText("{\"format_version\": 3, \"objects\": [{\"id\": 1, \"components\": {"
+            "\"path\": {\"nodes\": [{}, {\"mode\": \"wavy\"}]}}}]}", &Keys, &Log, &Refused), ErrorCode_InvalidJSON, Fragments);
+
+        // The same in GHDF: a newer game's entry in a record.
+        World Source;
+        GenericBuffer Bytes;
+        GenericBuffer_AllocateVariable(&Bytes, 0U, sizeof(unsigned char));
+        GenericBuffer Edited;
+        GenericBuffer_AllocateVariable(&Edited, 0U, sizeof(unsigned char));
+        GHDFObjectPool* Pool = NULL;
+        GHDFCompound* Root = NULL;
+        if (TEST_CHECK_SUCCESS(run, ReadJSONText("{\"format_version\": 3, \"objects\": [{\"id\": 1, \"components\": {\"path\": "
+            "{\"nodes\": [{\"position\": [1, 2, 3]}, {\"position\": [4, 5, 6]}]}}}]}", &Keys, &Log, &Source)))
+        {
+            TEST_CHECK_SUCCESS(run, WorldFile_WriteGHDF(&Source, &Bytes));
+            if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&Pool)) && ReadGHDFTree(run, Pool, &Bytes, &Root))
+            {
+                GHDFCompound* First = GetFirstGHDFObject(run, Root);
+                GHDFObjectValue Components;
+                GHDFObjectValue Block;
+                GHDFObjectValue NodeArray;
+                GHDFObjectValue Node;
+                if ((First != NULL) && TEST_CHECK_SUCCESS(run, GHDFCompound_Get(First, WorldFileObjectEntry_Components, &Components))
+                    && TEST_CHECK_SUCCESS(run, GHDFCompound_Get(Components.Value.Compound,
+                        (GHDFEntryID)(WorldComponentType_Path + 1), &Block))
+                    && TEST_CHECK_SUCCESS(run, GHDFCompound_Get(Block.Value.Compound, 1U, &NodeArray))
+                    && TEST_CHECK_SUCCESS(run, GHDFArray_Get(NodeArray.Value.Array, 1U, &Node)))
+                {
+                    TEST_CHECK_SUCCESS(run, GameGHDF_PutUnsigned(Node.Value.Compound, 777U, 1U));
+                }
+                World FromGHDF;
+                if (WriteGHDFTree(run, Root, &Edited) && TEST_CHECK_SUCCESS(run, ReadGHDFBytes(&Edited, &Keys, &Log, &FromGHDF)))
+                {
+                    WorldComponent* Component = NULL;
+                    TEST_CHECK(run, World_TryGetComponent(&FromGHDF, 1U, WorldComponentType_Path, &Component));
+                    size_t Count = 0U;
+                    WorldPathComponent_GetNodes(WorldPathComponent_FromComponent(Component), &Count);
+                    TEST_CHECK(run, Count == 2U);
+                    TEST_CHECK_SUCCESS(run, World_Deconstruct(&FromGHDF));
+                }
+                TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(Pool, Root, true));
+            }
+            TEST_CHECK_SUCCESS(run, World_Deconstruct(&Source));
+        }
+        if (Pool != NULL)
+        {
+            TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(Pool));
+        }
+        Memory_Free(Edited._data);
+        Memory_Free(Bytes._data);
+        KeyRegistry_Deconstruct(&Keys);
+    }
+    TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data,
+        "skipped the unknown key \"tension\" in path_node (2 times; first in object 1).") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "skipped the unknown entry 777 in path_node (in object 1).") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Directory._data, "skipped the unknown") == 2U);
+    Memory_Free(Directory._data);
+}
+
 static void UnknownNamesAreSkippedWithOneWarningEach(TestRun* run)
 {
     GenericBuffer Directory;
@@ -1361,7 +1489,7 @@ static void UnknownNamesAreSkippedWithOneWarningEach(TestRun* run)
                     GHDFCompound* Unknown = NULL;
                     TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Pool, &Unknown));
                     GHDFObjectValue UnknownValue = GHDFObjectValue_CreateCompound(Unknown);
-                    TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Components, 11U,
+                    TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Components, 100U,
                         GHDF_CreateRegularType(GHDFValueType_Compound), &UnknownValue));
                     GHDFObjectValue ComponentsValue = GHDFObjectValue_CreateCompound(Components);
                     TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(First, WorldFileObjectEntry_Components,
@@ -1401,7 +1529,7 @@ static void UnknownNamesAreSkippedWithOneWarningEach(TestRun* run)
     TEST_CHECK(run, CountInLatestLog(run, Base, "skipped the unknown entry 9 in the root.") == 1U);
     TEST_CHECK(run, CountInLatestLog(run, Base, "skipped the unknown entry 999 in world_environment.") == 1U);
     TEST_CHECK(run, CountInLatestLog(run, Base, "skipped the unknown entry 99 in world_object (in object 1).") == 1U);
-    TEST_CHECK(run, CountInLatestLog(run, Base, "skipped the unknown component type 10 (in object 1).") == 1U);
+    TEST_CHECK(run, CountInLatestLog(run, Base, "skipped the unknown component type 99 (in object 1).") == 1U);
     TEST_CHECK(run, CountInLatestLog(run, Base, "skipped the unknown") == 9U);
     Memory_Free(Directory._data);
 }
@@ -1548,7 +1676,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 94U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 98U);
             // The terrain: one object placing the placeholder terrain around the ground slab.
             WorldComponent* Ground = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 51U, WorldComponentType_Terrain, &Ground)
@@ -2500,6 +2628,7 @@ static const TestCase WorldFileTestCases[] =
     { "deep_hierarchies_and_large_files_are_refused", DeepHierarchiesAndLargeFilesAreRefused },
     { "hostile_ghdf_is_refused_with_nothing_left", HostileGHDFIsRefusedWithNothingLeft },
     { "unknown_names_are_skipped_with_one_warning_each", UnknownNamesAreSkippedWithOneWarningEach },
+    { "unknown_names_in_records_are_noted_too", UnknownNamesInRecordsAreNotedToo },
     { "next_object_id_is_raised_when_too_low", NextObjectIdIsRaisedWhenTooLow },
     { "files_and_memory_buffers_hold_the_same_world", FilesAndMemoryBuffersHoldTheSameWorld },
     { "the_shipped_test_world_loads_and_is_written_the_same", TheShippedTestWorldLoadsAndIsWrittenTheSame },

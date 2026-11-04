@@ -6,6 +6,8 @@
 // so the Raylib include is unavoidable here (as in the other rendering headers).
 #include "raylib/raylib.h"
 #include "wr/WRError.h"
+// Vector3Double: a debug line's ends are positions, in double like the objects'.
+#include "wr/WRVectorMath.h"
 // CrtMaskKind (the CRTs' mask override).
 #include "CrtScreen.h"
 
@@ -354,6 +356,20 @@ typedef enum WorldRendererFeatureStateEnum
      *  feature it builds on is unavailable. The cause was logged once when it happened. */
     WorldRendererFeatureState_Unavailable
 } WorldRendererFeatureState;
+
+/**
+ * @brief One line of a debug list (WorldRenderer_SetDebugLines): two points in the world, in double, and a colour. A plain
+ *        value type.
+ */
+typedef struct WorldDebugLineStruct
+{
+    /** @brief One end, in the world. */
+    Vector3Double From;
+    /** @brief The other end, in the world. */
+    Vector3Double To;
+    /** @brief Its colour (the alpha blends). */
+    Color LineColor;
+} WorldDebugLine;
 
 /**
  * @brief A snapshot of what the renderer did in its most recent render, for diagnostics and debug overlays.
@@ -1202,6 +1218,18 @@ void WorldRenderer_SetLightGizmosEnabled(WorldRenderer* self, bool enabled);
  * @returns true if the light gizmos are drawn.
  */
 bool WorldRenderer_AreLightGizmosEnabled(const WorldRenderer* self);
+
+/**
+ * @brief Sets a list of lines to draw in the scene pass (a debug aid), or none.
+ *
+ * Each is drawn solid where it is in view and faint where it lies behind something, moved into render space for each frame,
+ * after the collider wireframes. What fills the list is the caller's: the renderer only reads it (rule 3), so the paths'
+ * debug view builds on the update side, where it can ask the collision world.
+ * @param self The renderer; must not be NULL.
+ * @param lines The lines (borrowed until the next call: set NULL before releasing them), or NULL.
+ * @param count How many.
+ */
+void WorldRenderer_SetDebugLines(WorldRenderer* self, const WorldDebugLine* lines, size_t count);
 
 /**
  * @brief Sets the collision world whose shapes are drawn as wireframes (a debug aid), or NULL to draw none (the

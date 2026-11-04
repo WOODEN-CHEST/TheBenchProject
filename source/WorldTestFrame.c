@@ -14,6 +14,7 @@
 #include "WorldTestAnimation.h"
 #include "WorldTestCharacters.h"
 #include "WorldTestInstances.h"
+#include "WorldTestPaths.h"
 #include "WorldTestScreens.h"
 #include "WorldTestShadows.h"
 #include "WorldTestWater.h"
@@ -246,6 +247,8 @@ typedef struct WorldTestFrameStruct
     WorldTestShadows _testShadows;
     /** The water's test content: the sea (Shift + keypad +). */
     WorldTestWater _testWater;
+    /** The paths' debug view, a moving node and the camera's region; owned. */
+    WorldTestPaths _testPaths;
     /** The far terrain's test content: the coast (Shift + keypad *), the picture's curve (Scroll Lock) and the far
      *  shadows' switch (Pause). */
     WorldTestFarTerrain _testFarTerrain;
@@ -1084,6 +1087,7 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         WorldTestInstances_LogStatus(&frame->_testInstances);
         WorldTestShadows_LogStatus(&frame->_testShadows);
         WorldTestWater_LogStatus(&frame->_testWater);
+        WorldTestPaths_LogStatus(&frame->_testPaths);
         WorldTestFarTerrain_LogStatus(&frame->_testFarTerrain);
         WorldTestWeather_LogStatus(&frame->_testWeather);
         LogCameraStatus(frame);
@@ -1849,6 +1853,7 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
     WorldTestInstances_HandleInput(&frame->_testInstances, input);
     WorldTestShadows_HandleInput(&frame->_testShadows, input);
     WorldTestWater_HandleInput(&frame->_testWater, input);
+    WorldTestPaths_HandleInput(&frame->_testPaths, input);
     WorldTestFarTerrain_HandleInput(&frame->_testFarTerrain, input);
     WorldTestWeather_HandleInput(&frame->_testWeather, input, &frame->_clock);
     WorldTestScreens_HandleInput(&frame->_testScreens, input, frame->_renderer);
@@ -1880,7 +1885,8 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"(a human, a dog, a pigeon), 8 the NPC human sits on the bench and gets up, F3 fly, F4 the player's kind; "
             u8"5 the showcase's next clip, 6 the crowd, 7 slow motion; ' the pebble field (20 000 instanced copies), ; "
             u8"instanced drawing (off: every copy on its own, the same picture); ` the monitor's power (a CRT's "
-            u8"animation), SHIFT+` every CRT's mask; I renderer, game "
+            u8"animation), SHIFT+` every CRT's mask; BACKSPACE the paths' view (off, the paths, with their samples, frames "
+            u8"and ground), SHIFT+BACKSPACE one node of the walk moves; I renderer, game "
             u8"time, collision and camera status, T text sample, F5 save the world (worlds/test.saved.world.json and "
             u8".ghdf); M frees the mouse for the UI (click the world to capture it again); ESC quits (once the UI lets "
             u8"go of it).");
@@ -2016,7 +2022,6 @@ static bool WorldTestFrame_IsUnloaded(void* self)
  * measured for the eye. */
 static Error WorldTestFrame_PrepareRender(void* self, ProgramTime time)
 {
-    (void)time;
     WorldTestFrame* Frame = self;
     WorldTestAnimation_Pose(&Frame->_testAnimation);
     World_UpdateTransforms(&Frame->_world);
@@ -2029,6 +2034,7 @@ static Error WorldTestFrame_PrepareRender(void* self, ProgramTime time)
         | COLLISION_LAYER_BIT(CollisionLayer_Prop), WorldCollisionTriggerMode_Ignore);
     WorldRenderer_SetCameraOpenness(Frame->_renderer, WorldCollision_GetSkyOpenness(Frame->_collision,
         Frame->_camera.Position, CAMERA_OPENNESS_REACH, &Filter));
+    WorldTestPaths_PrepareRender(&Frame->_testPaths, time.PassedTime, Frame->_camera.Position);
     return Error_CreateSuccess();
 }
 
@@ -2073,6 +2079,7 @@ static void WorldTestFrame_Destroy(void* self)
 
     if (Frame->_renderer != NULL)
     {
+        WorldTestPaths_Deconstruct(&Frame->_testPaths); // takes its list back from the renderer
         Error RendererResult = WorldRenderer_Deconstruct(Frame->_renderer);
         Error_Deconstruct(&RendererResult);
     }
@@ -2236,6 +2243,7 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         services->Logger);
     WorldTestShadows_Construct(&Frame->_testShadows, &Frame->_world, Frame->_renderer, services->Logger);
     WorldTestWater_Construct(&Frame->_testWater, &Frame->_world, services->Logger);
+    WorldTestPaths_Construct(&Frame->_testPaths, &Frame->_world, Frame->_collision, Frame->_renderer, services->Logger);
     WorldTestFarTerrain_Construct(&Frame->_testFarTerrain, &Frame->_world, Frame->_renderer, services->Assets,
         services->AssetTypes.Terrain, services->Logger);
     WorldTestWeather_Construct(&Frame->_testWeather, &Frame->_world, services->Assets, services->Logger);

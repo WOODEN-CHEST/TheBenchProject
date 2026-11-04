@@ -51,7 +51,7 @@ typedef struct WorldObjectStruct WorldObject;
  * Above WorldComponentType_Count to leave room for types not built yet (an interactable, a vehicle, ...) and for
  * test-only types.
  */
-#define WORLD_MAX_COMPONENT_TYPES ((size_t)16)
+#define WORLD_MAX_COMPONENT_TYPES ((size_t)32)
 
 
 // Types.
@@ -83,8 +83,11 @@ typedef enum WorldComponentTypeEnum
     /** @brief A screen: the surface of the object's world model that shows a picture made while the game runs
      *  (WorldScreenComponent.h). */
     WorldComponentType_Screen = 9,
+    /** @brief A path: a line through nodes that bends, which generators read; a closed one is also a region
+     *  (WorldPathComponent.h). */
+    WorldComponentType_Path = 10,
     /** @brief The number of standard types (not a type). */
-    WorldComponentType_Count = 10
+    WorldComponentType_Count = 11
 } WorldComponentType;
 
 /**

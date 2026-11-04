@@ -128,6 +128,8 @@ static size_t GetStorageSize(PropertyType type)
             return sizeof(PropertyAssetNameList*);
         case PropertyType_InstanceList:
             return sizeof(PropertyInstanceList*);
+        case PropertyType_RecordList:
+            return sizeof(PropertyRecordList*);
         case PropertyType_Enum:
             return 0U;
     }
@@ -172,6 +174,10 @@ static const void* GetOwnedData(PropertyType type, const PropertyData* data)
     {
         return data->InstanceListValue;
     }
+    if (type == PropertyType_RecordList)
+    {
+        return data->RecordListValue;
+    }
     return (type == PropertyType_FloatList) ? (const void*)data->FloatListValue : (const void*)data->StringValue;
 }
 
@@ -189,6 +195,10 @@ static void* CloneOwned(PropertyType type, const void* value)
     if (type == PropertyType_InstanceList)
     {
         return PropertyInstanceList_Clone(value);
+    }
+    if (type == PropertyType_RecordList)
+    {
+        return PropertyRecordList_Clone(value);
     }
     return (type == PropertyType_FloatList) ? (void*)PropertyFloatList_Clone(value) : (void*)CloneString(value);
 }
@@ -547,6 +557,39 @@ static Error CheckInstanceList(const PropertyTable* table, const PropertyDescrip
     return Error_CreateSuccess();
 }
 
+/* "hold at most 16384 records", "hold records of the table path_node", "have valid records; record 12: path_node.width
+ * (Width) must be ...": a hostile list is refused naming the record and its broken row. */
+static Error CheckRecordList(const PropertyTable* table, const PropertyDescriptor* descriptor,
+    const PropertyRecordList* list)
+{
+    size_t Count = PropertyRecordList_GetCount(list);
+    char Text[PROPERTY_RULE_TEXT_SIZE + 96U];
+    if (Count > descriptor->Rules.MaxCount)
+    {
+        snprintf(Text, sizeof(Text), "hold at most %" PRIu64 " records", (uint64_t)descriptor->Rules.MaxCount);
+        return MakeRuleError(table, descriptor, Text);
+    }
+    if ((list != NULL) && (list->_table != descriptor->RecordTable))
+    {
+        snprintf(Text, sizeof(Text), "hold records of the table %s", (const char*)descriptor->RecordTable->Name);
+        return MakeRuleError(table, descriptor, Text);
+    }
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        const void* Record = (const unsigned char*)PropertyRecordList_GetRecords(list) + (Index * list->_table->StructSize);
+        Error RecordResult = Properties_Validate(list->_table, Record);
+        if (RecordResult.Code != ErrorCode_Success)
+        {
+            char RecordText[PROPERTY_RULE_TEXT_SIZE + 256U];
+            snprintf(RecordText, sizeof(RecordText), "have valid records; record %" PRIu64 ": %s", (uint64_t)Index,
+                (RecordResult.Message != NULL) ? (const char*)RecordResult.Message : "invalid");
+            Error_Deconstruct(&RecordResult);
+            return MakeRuleError(table, descriptor, RecordText);
+        }
+    }
+    return Error_CreateSuccess();
+}
+
 
 // Static functions: the table check.
 static Error TableError(const PropertyTable* table, const PropertyDescriptor* descriptor, const char* problem)
@@ -703,6 +746,7 @@ static Error CheckDescriptorRules(const PropertyTable* table, const PropertyDesc
     bool IsList = descriptor->Type == PropertyType_FloatList;
     bool IsNameList = descriptor->Type == PropertyType_AssetNameList;
     bool IsInstanceList = descriptor->Type == PropertyType_InstanceList;
+    bool IsRecordList = descriptor->Type == PropertyType_RecordList;
     if (IsString && (Rules->MaxLength == 0U))
     {
         return TableError(table, descriptor, "a string needs a MaxLength");
@@ -730,15 +774,19 @@ static Error CheckDescriptorRules(const PropertyTable* table, const PropertyDesc
         return TableError(table, descriptor,
             "an instance list needs a MaxCount of 1 to PROPERTY_INSTANCE_LIST_MAX_COUNT");
     }
+    if (IsRecordList && ((Rules->MaxCount == 0U) || (Rules->MaxCount > PROPERTY_RECORD_LIST_MAX_COUNT)))
+    {
+        return TableError(table, descriptor, "a record list needs a MaxCount of 1 to PROPERTY_RECORD_LIST_MAX_COUNT");
+    }
     if ((!IsString && !IsMap && !IsNameList && (Rules->MaxLength != 0U)) || (!IsString && Rules->IsNullAllowed))
     {
         return TableError(table, descriptor, "only strings take MaxLength and IsNullAllowed (and data maps and asset "
             "name lists MaxLength)");
     }
-    if (!IsMap && !IsList && !IsNameList && !IsInstanceList && (Rules->MaxCount != 0U))
+    if (!IsMap && !IsList && !IsNameList && !IsInstanceList && !IsRecordList && (Rules->MaxCount != 0U))
     {
-        return TableError(table, descriptor, "only data maps, float lists, asset name lists and instance lists take a "
-            "MaxCount");
+        return TableError(table, descriptor, "only data maps, float lists, asset name lists, instance lists and record "
+            "lists take a MaxCount");
     }
     if (!IsList && Rules->IsStrictlyIncreasing)
     {
@@ -759,6 +807,52 @@ static Error CheckDescriptorRules(const PropertyTable* table, const PropertyDesc
     if (IsInstanceList && (descriptor->Default.InstanceListValue != NULL))
     {
         return TableError(table, descriptor, "an instance list must default to empty (NULL)");
+    }
+    if (IsRecordList && (descriptor->Default.RecordListValue != NULL))
+    {
+        return TableError(table, descriptor, "a record list must default to empty (NULL)");
+    }
+    return Error_CreateSuccess();
+}
+
+/* A RecordTable exactly on record lists: a table that passes its own check, has no hooks and holds no row that nests, so a
+ * value nests one level and no walk over it needs a depth limit. */
+static Error CheckRecordTable(const PropertyTable* table, const PropertyDescriptor* descriptor)
+{
+    if (descriptor->Type != PropertyType_RecordList)
+    {
+        return (descriptor->RecordTable == NULL) ? Error_CreateSuccess()
+            : TableError(table, descriptor, "only record lists take a RecordTable");
+    }
+    const PropertyTable* Records = descriptor->RecordTable;
+    if (Records == NULL)
+    {
+        return TableError(table, descriptor, "a record list needs a RecordTable");
+    }
+    if ((Records->AfterSet != NULL) || (Records->Migrate != NULL) || (Records->MigrateGHDF != NULL))
+    {
+        return TableError(table, descriptor, "a record table has no AfterSet and no migrations");
+    }
+    if (Records->Descriptors == NULL)
+    {
+        return TableError(table, descriptor, "a record table needs its descriptors");
+    }
+    // Before the record table's own check, which would come back here through a table holding itself.
+    for (size_t Index = 0; Index < Records->DescriptorCount; Index++)
+    {
+        PropertyType Type = Records->Descriptors[Index].Type;
+        if ((Type == PropertyType_DataMap) || (Type == PropertyType_RecordList))
+        {
+            return TableError(table, descriptor, "a record table holds no data map and no record list");
+        }
+    }
+    Error RecordsResult = PropertyTable_Check(Records);
+    if (RecordsResult.Code != ErrorCode_Success)
+    {
+        Error Result = TableError(table, descriptor, (RecordsResult.Message != NULL) ? (const char*)RecordsResult.Message
+            : "its record table is broken");
+        Error_Deconstruct(&RecordsResult);
+        return Result;
     }
     return Error_CreateSuccess();
 }
@@ -881,7 +975,8 @@ bool PropertyInternal_IsStringType(PropertyType type)
 bool PropertyInternal_IsOwnedType(PropertyType type)
 {
     return PropertyInternal_IsStringType(type) || (type == PropertyType_DataMap) || (type == PropertyType_FloatList)
-        || (type == PropertyType_AssetNameList) || (type == PropertyType_InstanceList);
+        || (type == PropertyType_AssetNameList) || (type == PropertyType_InstanceList)
+        || (type == PropertyType_RecordList);
 }
 
 PropertyFloatList* PropertyInternal_AllocateFloatList(size_t count)
@@ -903,6 +998,21 @@ PropertyInstanceList* PropertyInternal_AllocateInstanceList(size_t count)
     for (size_t Index = 0; Index < count; Index++)
     {
         List->_entries[Index] = PropertyInstanceEntry_CreateDefault();
+    }
+    return List;
+}
+
+PropertyRecordList* PropertyInternal_AllocateRecordList(const PropertyTable* table, size_t count)
+{
+    // count is at most PROPERTY_RECORD_LIST_MAX_COUNT and a struct far smaller than the address space, so no overflow.
+    size_t ByteCount = sizeof(PropertyRecordList) + (count * table->StructSize);
+    PropertyRecordList* List = Memory_Allocate(ByteCount);
+    List->_table = table;
+    List->_count = count;
+    for (size_t Index = 0; Index < count; Index++)
+    {
+        Error Result = Properties_Construct(table, PropertyInternal_GetWritableRecord(List, Index));
+        Error_Deconstruct(&Result); // refuses only NULL arguments, and neither is
     }
     return List;
 }
@@ -1036,6 +1146,11 @@ void PropertyInternal_AdoptOwned(const PropertyDescriptor* descriptor, void* ins
         PropertyInstanceList_Destroy(Previous);
         return;
     }
+    if (descriptor->Type == PropertyType_RecordList)
+    {
+        PropertyRecordList_Destroy(Previous);
+        return;
+    }
     Memory_Free(Previous);
 }
 
@@ -1095,6 +1210,8 @@ bool PropertyInternal_AreDataEqual(PropertyType type, const PropertyData* a, con
             return PropertyAssetNameList_Equals(a->AssetNameListValue, b->AssetNameListValue);
         case PropertyType_InstanceList:
             return PropertyInstanceList_Equals(a->InstanceListValue, b->InstanceListValue);
+        case PropertyType_RecordList:
+            return PropertyRecordList_Equals(a->RecordListValue, b->RecordListValue);
     }
     return false;
 }
@@ -1207,6 +1324,8 @@ Error PropertyInternal_CheckData(const PropertyTable* table, const PropertyDescr
             return CheckAssetNameList(table, descriptor, data->AssetNameListValue);
         case PropertyType_InstanceList:
             return CheckInstanceList(table, descriptor, data->InstanceListValue);
+        case PropertyType_RecordList:
+            return CheckRecordList(table, descriptor, data->RecordListValue);
     }
     return MakeRuleError(table, descriptor, "have a known property type");
 }
@@ -1360,6 +1479,8 @@ const unsigned char* PropertyType_GetName(PropertyType type)
             return u8"asset_name_list";
         case PropertyType_InstanceList:
             return u8"instance_list";
+        case PropertyType_RecordList:
+            return u8"record_list";
     }
     return u8"unknown";
 }
@@ -1420,6 +1541,95 @@ bool PropertyFloatList_Equals(const PropertyFloatList* a, const PropertyFloatLis
     for (size_t Index = 0; Index < Count; Index++)
     {
         if (!(First[Index] == Second[Index]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+Error PropertyRecordList_Create(const PropertyTable* table, const void* records, size_t count,
+    PropertyRecordList** outList)
+{
+    if (outList == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "PropertyRecordList_Create: outList must not be NULL.");
+    }
+    *outList = NULL;
+    if (table == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "PropertyRecordList_Create: table must not be NULL.");
+    }
+    if (count == 0U)
+    {
+        return Error_CreateSuccess();
+    }
+    if (records == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "PropertyRecordList_Create: records must not be NULL when count is above 0.");
+    }
+    if (count > PROPERTY_RECORD_LIST_MAX_COUNT)
+    {
+        return Error_Construct4(ErrorCode_ArgumentOutOfRange,
+            "PropertyRecordList_Create: a list holds at most %" PRIu64 " records, not %" PRIu64 ".",
+            (uint64_t)PROPERTY_RECORD_LIST_MAX_COUNT, (uint64_t)count);
+    }
+    PropertyRecordList* List = PropertyInternal_AllocateRecordList(table, count);
+    for (size_t Index = 0; Index < count; Index++)
+    {
+        Error CopyResult = Properties_CopyTo(table, (const unsigned char*)records + (Index * table->StructSize),
+            PropertyInternal_GetWritableRecord(List, Index));
+        Error_Deconstruct(&CopyResult); // refuses only NULL arguments, and none is
+    }
+    *outList = List;
+    return Error_CreateSuccess();
+}
+
+void PropertyRecordList_Destroy(PropertyRecordList* list)
+{
+    if (list == NULL)
+    {
+        return;
+    }
+    for (size_t Index = 0; Index < list->_count; Index++)
+    {
+        Properties_Deconstruct(list->_table, PropertyInternal_GetWritableRecord(list, Index));
+    }
+    Memory_Free(list);
+}
+
+PropertyRecordList* PropertyRecordList_Clone(const PropertyRecordList* list)
+{
+    if (list == NULL)
+    {
+        return NULL;
+    }
+    PropertyRecordList* Copy = NULL;
+    Error Result = PropertyRecordList_Create(list->_table, list->_records, list->_count, &Copy);
+    Error_Deconstruct(&Result); // a list's own table, records and count are always accepted
+    return Copy;
+}
+
+bool PropertyRecordList_Equals(const PropertyRecordList* a, const PropertyRecordList* b)
+{
+    size_t Count = PropertyRecordList_GetCount(a);
+    if (Count != PropertyRecordList_GetCount(b))
+    {
+        return false;
+    }
+    if (Count == 0U)
+    {
+        return true;
+    }
+    if (a->_table != b->_table)
+    {
+        return false;
+    }
+    size_t Size = a->_table->StructSize;
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        if (!Properties_Equals(a->_table, a->_records + (Index * Size), b->_records + (Index * Size)))
         {
             return false;
         }
@@ -1520,6 +1730,10 @@ Error PropertyTable_Check(const PropertyTable* table)
         if (Result.Code == ErrorCode_Success)
         {
             Result = CheckTagsKey(table, Descriptor);
+        }
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = CheckRecordTable(table, Descriptor);
         }
         if (Result.Code == ErrorCode_Success)
         {

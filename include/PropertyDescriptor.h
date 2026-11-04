@@ -69,6 +69,7 @@ typedef struct DataMapStruct DataMap;
  * | EnumSet     | uint32_t mask (bit N: the entry of value N) | ["name", ...] (table order)    | smallest unsigned type (*)    |
  * | AssetNameList | PropertyAssetNameList*, owned, NULL while empty | ["name", ...]              | String array                  |
  * | InstanceList | PropertyInstanceList*, owned, NULL while empty | [{"position": [x, y, z], "rotation": [x, y, z] (DEGREES), "scale": s or [x, y, z], "tint": "#rrggbbaa"}, ...] | Compound of parallel arrays {1: Double positions, 2: Float rotations, 3: Float scales, 4: UInt8 tints} |
+ * | RecordList  | PropertyRecordList*, owned, NULL while empty | [{record}, ...], each through its own table | Compound array, each through its own table |
  *
  * (*) Written in the smallest GHDF integer type that holds the value (a parent id of 12 is one UInt8 byte; GameGHDF.h);
  * read from any GHDF integer type, fixed width or encoded, whose value fits the property's type.
@@ -93,7 +94,10 @@ typedef struct DataMapStruct DataMap;
  * (a scale whose three components are equal is one number); GHDF writes a compound of parallel arrays, three doubles of
  * position per instance at 1 and, only when some instance differs from the default, three floats of rotation at 2,
  * three of scale at 3 and four channel bytes of tint at 4. An empty list is NULL ([] in JSON, a compound holding an empty
- * position array in GHDF, when defaults are written).
+ * position array in GHDF, when defaults are written). A RecordList (a path's nodes) is a list of small structs described
+ * by a table of their own, the row's RecordTable: each record is written and read through that table, so its keys, wire
+ * ids, rules and defaults are that table's, and the inspector can show one from it. An empty list is NULL ([] in JSON, an
+ * empty Compound array in GHDF, when defaults are written).
  *
  * Not thread-safe: tables are immutable static data, but instances are plain structs with no locking.
  */
@@ -156,6 +160,12 @@ typedef struct DataMapStruct DataMap;
 /** @brief The most instances any InstanceList may hold, whatever its rules say (2^18), so a list's size never overflows
  *         and no single list takes more than about 15 MB. */
 #define PROPERTY_INSTANCE_LIST_MAX_COUNT ((size_t)262144)
+
+/** @brief Rules for a RecordList: at most @p maxCount records (at most PROPERTY_RECORD_LIST_MAX_COUNT); each record follows
+ *         the rules of the row's RecordTable. */
+#define PROPERTY_RULES_RECORD_LIST(maxCount) { .MaxCount = (maxCount) }
+/** @brief The most records any RecordList may hold, whatever its rules say (2^16). */
+#define PROPERTY_RECORD_LIST_MAX_COUNT ((size_t)65536)
 
 /** @brief The flags of a creator setting: saved, shown in the editor's inspector and reachable from scripts. */
 #define PROPERTY_FLAGS_SETTING ((uint32_t)(PropertyFlags_Persistent | PropertyFlags_Editable | PropertyFlags_Script))
@@ -249,7 +259,11 @@ typedef enum PropertyTypeEnum
      *  Every position component is finite and within the optional bounds (compared in double precision), every rotation
      *  and scale component finite; Rules.MaxCount (required, at most PROPERTY_INSTANCE_LIST_MAX_COUNT) bounds the
      *  count. */
-    PropertyType_InstanceList
+    PropertyType_InstanceList,
+    /** @brief A list of records: an owned `PropertyRecordList*`, NULL while empty, which is its only default. The
+     *  descriptor's RecordTable (required) describes one record, and every record follows that table's rules;
+     *  Rules.MaxCount (required, at most PROPERTY_RECORD_LIST_MAX_COUNT) bounds the count. */
+    PropertyType_RecordList
 } PropertyType;
 
 /**
@@ -335,6 +349,24 @@ typedef struct PropertyInstanceListStruct
 } PropertyInstanceList;
 
 /**
+ * @brief A list of records: the value of a PropertyType_RecordList property, one heap block holding the table that
+ *        describes a record, the count and the records.
+ *
+ * An empty list is NULL. Create one with PropertyRecordList_Create and release it with PropertyRecordList_Destroy; the
+ * instance whose field holds a list owns it, and Properties_Set copies the list it is given. Immutable once created:
+ * read it through PropertyRecordList_GetCount and PropertyRecordList_GetRecords.
+ */
+typedef struct PropertyRecordListStruct
+{
+    /** @brief The table describing a record (static, borrowed). */
+    const struct PropertyTableStruct* _table;
+    /** @brief The number of records: 1 to PROPERTY_RECORD_LIST_MAX_COUNT. */
+    size_t _count;
+    /** @brief The records, _count of them, each the table's StructSize bytes, aligned for any member. */
+    alignas(max_align_t) unsigned char _records[];
+} PropertyRecordList;
+
+/**
  * @brief The data of a property value; the active member is selected by the property's PropertyType.
  */
 typedef union PropertyDataUnion
@@ -386,6 +418,9 @@ typedef union PropertyDataUnion
     /** @brief PropertyType_InstanceList: the list, or NULL for an empty one. Borrowed, as FloatListValue: NULL in a
      *  default, the instance's own from Properties_Get, copied by Properties_Set. */
     const PropertyInstanceList* InstanceListValue;
+    /** @brief PropertyType_RecordList: the list, or NULL for an empty one. Borrowed, as FloatListValue: NULL in a
+     *  default, the instance's own from Properties_Get, copied by Properties_Set. */
+    const PropertyRecordList* RecordListValue;
 } PropertyData;
 
 /**
@@ -408,7 +443,7 @@ typedef struct PropertyValueStruct
  * component of Vector2, Vector3, Vector3Double and AngleVector3 (radians), to every value of a FloatList and to every
  * position component of an InstanceList (in double); the string rules to String
  * and AssetName; MaxCount and MaxLength (bytes) to a DataMap; MaxCount and IsStrictlyIncreasing to a FloatList; MaxCount
- * and MaxLength (bytes per name) to an AssetNameList; MaxCount to an InstanceList.
+ * and MaxLength (bytes per name) to an AssetNameList; MaxCount to an InstanceList and a RecordList.
  * PropertyTable_Check rejects rules that do not fit the type.
  */
 typedef struct PropertyRulesStruct
@@ -432,7 +467,8 @@ typedef struct PropertyRulesStruct
     size_t MaxLength;
     /** @brief DataMap: the most entries, tags included; FloatList: the most values (at most
      *  PROPERTY_FLOAT_LIST_MAX_COUNT); AssetNameList: the most names; InstanceList: the most instances (at most
-     *  PROPERTY_INSTANCE_LIST_MAX_COUNT). Required (> 0) for these; must be 0 for every other type. */
+     *  PROPERTY_INSTANCE_LIST_MAX_COUNT); RecordList: the most records (at most PROPERTY_RECORD_LIST_MAX_COUNT). Required
+     *  (> 0) for these; must be 0 for every other type. */
     size_t MaxCount;
     /** @brief Strings: whether NULL is a valid value. Such a property must default to NULL (GHDF has no null, so NULL
      *  is written as an absent entry, which reads back as the default). */
@@ -512,6 +548,11 @@ typedef struct PropertyDescriptorStruct
     /** @brief PropertyType_DataMap only (NULL for every other type): the JSON key the map's tags are written under,
      *  next to Key, which holds its values; snake_case and unique among the table's keys, e.g. u8"tags". */
     const unsigned char* TagsKey;
+    /** @brief PropertyType_RecordList only (NULL for every other type): the table describing one record. A record table
+     *  passes PropertyTable_Check itself, has no AfterSet and no migrations (a change that needs old records converted
+     *  is the holding table's migration), and holds no DataMap or RecordList row, so a value nests one level and no
+     *  more. */
+    const struct PropertyTableStruct* RecordTable;
 } PropertyDescriptor;
 
 /**
@@ -808,6 +849,13 @@ static inline PropertyValue PropertyValue_FromInstanceList(const PropertyInstanc
     return (PropertyValue){ .Type = PropertyType_InstanceList, .Data.InstanceListValue = list };
 }
 
+/** @brief Makes a RecordList value. @param list The list (borrowed; Properties_Set copies it), or NULL for an empty one.
+ *  @returns The typed value. */
+static inline PropertyValue PropertyValue_FromRecordList(const PropertyRecordList* list)
+{
+    return (PropertyValue){ .Type = PropertyType_RecordList, .Data.RecordListValue = list };
+}
+
 /**
  * @brief Returns a property type's name for messages and tooling, e.g. u8"float" or u8"render_color".
  * @param type The type.
@@ -1003,6 +1051,65 @@ static inline const PropertyInstanceEntry* PropertyInstanceList_GetEntries(const
 }
 
 
+// Functions: record lists.
+/**
+ * @brief Creates a record list holding a deep copy of @p count records of @p table.
+ *
+ * The records are copied as they are (owned rows cloned); whether they suit a property is that property's rules' business
+ * (Properties_CheckValue).
+ * @param table The table describing a record (static: the list borrows it for its whole life); must not be NULL.
+ * @param records The records, @p count of them, each the table's StructSize bytes; may be NULL only when @p count is 0.
+ * @param count The number of records, 0 to PROPERTY_RECORD_LIST_MAX_COUNT; 0 gives the empty list, NULL.
+ * @param outList [out] Receives the new list (the caller owns it: PropertyRecordList_Destroy), or NULL for an empty one.
+ *        Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p outList or @p table is NULL, or @p records is NULL with a count above
+ *          0; ErrorCode_ArgumentOutOfRange for a count above PROPERTY_RECORD_LIST_MAX_COUNT (*outList is NULL then).
+ */
+Error PropertyRecordList_Create(const PropertyTable* table, const void* records, size_t count,
+    PropertyRecordList** outList);
+
+/**
+ * @brief Releases a record list and what its records own.
+ * @param list The list, or NULL (nothing happens).
+ */
+void PropertyRecordList_Destroy(PropertyRecordList* list);
+
+/**
+ * @brief Copies a record list deeply.
+ * @param list The list to copy; NULL (the empty list) gives NULL.
+ * @returns The copy, owned by the caller (PropertyRecordList_Destroy).
+ */
+PropertyRecordList* PropertyRecordList_Clone(const PropertyRecordList* list);
+
+/**
+ * @brief Reports whether two record lists hold the same records in the same order, as Properties_Equals compares them.
+ * @param a The first list; NULL is the empty list.
+ * @param b The second list; NULL is the empty list.
+ * @returns true when they are equal (lists of different tables never are, unless both are empty).
+ */
+bool PropertyRecordList_Equals(const PropertyRecordList* a, const PropertyRecordList* b);
+
+/**
+ * @brief Returns how many records a record list holds.
+ * @param list The list; NULL is the empty list.
+ * @returns The count (0 for NULL).
+ */
+static inline size_t PropertyRecordList_GetCount(const PropertyRecordList* list)
+{
+    return (list != NULL) ? list->_count : 0U;
+}
+
+/**
+ * @brief Returns a record list's records as one array.
+ * @param list The list; NULL is the empty list.
+ * @returns The records (borrowed: valid while the list is), PropertyRecordList_GetCount of them; NULL for NULL.
+ */
+static inline const void* PropertyRecordList_GetRecords(const PropertyRecordList* list)
+{
+    return (list != NULL) ? (const void*)list->_records : NULL;
+}
+
+
 // Functions: tables.
 /**
  * @brief Checks a table against every rule a table must follow.
@@ -1012,8 +1119,9 @@ static inline const PropertyInstanceEntry* PropertyInstanceList_GetEntries(const
  * size its type needs (Enum: 1, 2 or 4 bytes), and no two fields overlapping; rules that fit the type (bounds only on
  * bounded numeric types and float lists, finite and ordered, whole and in range for integers; MaxLength on every string;
  * MaxCount and MaxLength on every DataMap; MaxCount, at most PROPERTY_FLOAT_LIST_MAX_COUNT, on every FloatList, and
- * IsStrictlyIncreasing only there; MaxCount, at most PROPERTY_INSTANCE_LIST_MAX_COUNT, on every InstanceList); a TagsKey
- * exactly on DataMaps, snake_case and unique among the keys; an enum table
+ * IsStrictlyIncreasing only there; MaxCount, at most PROPERTY_INSTANCE_LIST_MAX_COUNT, on every InstanceList; MaxCount, at
+ * most PROPERTY_RECORD_LIST_MAX_COUNT, on every RecordList); a TagsKey exactly on DataMaps, snake_case and unique among the
+ * keys; a RecordTable exactly on RecordLists, itself passing this check, with no hooks and no DataMap or RecordList row; an enum table
  * exactly on enums, with snake_case unique names and unique values that fit the field; only known flag bits;
  * SinceVersion in [1, Version]; override flags (PROPERTY_OVERRIDE_FLAG_PREFIX) that are Bools naming another row; and
  * every default passing its own rules (a DataMap's and every list's is NULL). Run it from a test for every table in the

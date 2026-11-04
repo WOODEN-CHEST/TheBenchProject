@@ -16,6 +16,7 @@
 #include "WorldColliderComponent.h"
 #include "WorldTerrainComponent.h"
 #include "WorldModelInstancesComponent.h"
+#include "WorldPathComponent.h"
 #include "Logger.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRPath.h"
@@ -698,6 +699,8 @@ static void TablesPassTheirCheck(TestRun* run)
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldColliderComponent_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldTerrainComponent_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldModelInstancesComponent_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldPathComponent_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldPathComponent_GetNodePropertyTable()));
     TEST_CHECK_ERROR(run, PropertyTable_Check(NULL), ErrorCode_IllegalArgument);
 }
 
@@ -824,7 +827,7 @@ static void DataMapRowsAreChecked(TestRun* run)
     CheckBrokenMapDescriptor(run, 1U, BreakTagsKeyToOtherKey, "key is used twice");
     CheckBrokenMapDescriptor(run, 1U, BreakMapCount, "MaxCount and a MaxLength");
     CheckBrokenMapDescriptor(run, 1U, BreakMapDefault, "default to empty");
-    CheckBrokenMapDescriptor(run, 0U, BreakCountOnInteger, "only data maps, float lists, asset name lists and instance lists take a MaxCount");
+    CheckBrokenMapDescriptor(run, 0U, BreakCountOnInteger, "only data maps, float lists, asset name lists, instance lists and record lists take a MaxCount");
     CheckBrokenMapDescriptor(run, 0U, BreakTagsKeyOnInteger, "only data maps take a TagsKey");
 }
 
@@ -3146,6 +3149,556 @@ static void InstanceListRowsAreChecked(TestRun* run)
     }
 }
 
+/* The record lists' tests: a small struct described by a table of its own (a plain number, a bounded one, an enum, a
+ * vector, an owned name), and a holder with a list of them. */
+typedef enum TestRecordKindEnum
+{
+    TestRecordKind_Post = 0,
+    TestRecordKind_Panel = 1
+} TestRecordKind;
+
+static const PropertyEnumEntry TestRecordKindEntries[] =
+{
+    { .Name = u8"post", .Value = TestRecordKind_Post },
+    { .Name = u8"panel", .Value = TestRecordKind_Panel },
+};
+
+static const PropertyEnumTable TestRecordKindTable =
+{
+    .Name = u8"test_record_kind",
+    .Entries = TestRecordKindEntries,
+    .EntryCount = sizeof(TestRecordKindEntries) / sizeof(TestRecordKindEntries[0])
+};
+
+typedef struct TestItemStruct
+{
+    Vector3Double Place;
+    TestRecordKind Kind;
+    float Weight;
+    unsigned char* Name;
+} TestItem;
+
+static const PropertyDescriptor TestItemProperties[] =
+{
+    { .Key = u8"place", .WireId = 1U, .Type = PropertyType_Vector3Double, PROPERTY_MEMBER(TestItem, Place),
+        .Default.Vector3DoubleValue = { 0.0, 0.0, 0.0 }, .Rules = PROPERTY_RULES_BETWEEN(-1000.0, 1000.0),
+        .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+    { .Key = u8"kind", .WireId = 2U, .Type = PropertyType_Enum, PROPERTY_MEMBER(TestItem, Kind),
+        .Default.EnumValue = TestRecordKind_Post, .EnumTable = &TestRecordKindTable, .Flags = PROPERTY_FLAGS_SETTING,
+        .SinceVersion = 1U },
+    { .Key = u8"weight", .WireId = 3U, .Type = PropertyType_Float, PROPERTY_MEMBER(TestItem, Weight),
+        .Default.FloatValue = 1.0f, .Rules = PROPERTY_RULES_AT_LEAST(0.0), .Flags = PROPERTY_FLAGS_SETTING,
+        .SinceVersion = 1U },
+    { .Key = u8"name", .WireId = 4U, .Type = PropertyType_String, PROPERTY_MEMBER(TestItem, Name),
+        .Default.StringValue = NULL, .Rules = PROPERTY_RULES_STRING(8U, true), .Flags = PROPERTY_FLAGS_SETTING,
+        .SinceVersion = 1U },
+};
+
+static const PropertyTable TestItemTable =
+{
+    .Name = u8"test_item", .Version = 1U, .StructSize = sizeof(TestItem), .Descriptors = TestItemProperties,
+    .DescriptorCount = sizeof(TestItemProperties) / sizeof(TestItemProperties[0])
+};
+
+typedef struct RecordListHolderStruct
+{
+    PropertyRecordList* Items;
+    int32_t Count;
+} RecordListHolder;
+
+static const PropertyDescriptor RecordListHolderProperties[] =
+{
+    { .Key = u8"items", .WireId = 1U, .Type = PropertyType_RecordList, PROPERTY_MEMBER(RecordListHolder, Items),
+        .Default.RecordListValue = NULL, .RecordTable = &TestItemTable, .Rules = PROPERTY_RULES_RECORD_LIST(4U),
+        .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+    { .Key = u8"count", .WireId = 2U, .Type = PropertyType_Int32, PROPERTY_MEMBER(RecordListHolder, Count),
+        .Default.Int32Value = 0, .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+};
+
+static const PropertyTable RecordListHolderTable =
+{
+    .Name = u8"test_holder", .Version = 1U, .StructSize = sizeof(RecordListHolder),
+    .Descriptors = RecordListHolderProperties,
+    .DescriptorCount = sizeof(RecordListHolderProperties) / sizeof(RecordListHolderProperties[0])
+};
+
+/* A table of another record, to hand a holder the wrong kind of list. */
+static const PropertyTable OtherItemTable =
+{
+    .Name = u8"other_item", .Version = 1U, .StructSize = sizeof(TestItem), .Descriptors = TestItemProperties,
+    .DescriptorCount = sizeof(TestItemProperties) / sizeof(TestItemProperties[0])
+};
+
+/* Three items: all defaults, a panel with a far position off every float step, and one with an owned name. The names are
+ * static strings: PropertyRecordList_Create clones them. */
+static void MakeTestItems(TestItem outItems[3])
+{
+    for (size_t Index = 0U; Index < 3U; Index++)
+    {
+        outItems[Index] = (TestItem){ .Place = Vector3Double_Create(0.0, 0.0, 0.0), .Kind = TestRecordKind_Post,
+            .Weight = 1.0f, .Name = NULL };
+    }
+    outItems[1].Place = Vector3Double_Create(987.6543210987, -0.000125, 3.0);
+    outItems[1].Kind = TestRecordKind_Panel;
+    outItems[2].Weight = 2.5f;
+    outItems[2].Name = (unsigned char*)u8"gate";
+}
+
+static Error ReadHolderFromText(TestRun* run, JSONObjectPool* pool, const char* text, RecordListHolder* holder,
+    const PropertyReadOptions* options)
+{
+    JSONObjectValue Value;
+    if (!TestText_ParseJSON(run, pool, text, &Value))
+    {
+        return Error_Construct2(ErrorCode_InvalidJSON, "the test's JSON did not parse");
+    }
+    Error Result = Properties_ReadJSON(&RecordListHolderTable, Value.Value.Compound, holder, options);
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(pool, &Value));
+    return Result;
+}
+
+/* The written JSON leaves each record's defaults out, reads back the same, and a read leaves the holder as it was on any
+ * refusal, which names the record and its row. */
+static void CheckRecordListsInJSON(TestRun* run, JSONObjectPool* pool, RecordListHolder* holder, RecordListHolder* other,
+    const PropertyRecordList* list)
+{
+    JSONCompound* Compound = NULL;
+    if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(pool, &Compound)))
+    {
+        TEST_CHECK_SUCCESS(run, Properties_WriteJSON(&RecordListHolderTable, holder, pool, Compound, NULL));
+        JSONObjectValue Array;
+        if (TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"items", JSONValueType_Array, &Array))
+            && TEST_CHECK(run, JSONArray_GetElementCount(Array.Value.Array) == 3U))
+        {
+            const char* const Plain[] = { "" };
+            const char* const Panel[] = { "place", "kind" };
+            const char* const Named[] = { "weight", "name" };
+            CheckWrittenInstance(run, Array.Value.Array, 0U, Plain, 0U);
+            CheckWrittenInstance(run, Array.Value.Array, 1U, Panel, 2U);
+            CheckWrittenInstance(run, Array.Value.Array, 2U, Named, 2U);
+        }
+        TEST_CHECK_SUCCESS(run, Properties_ReadJSON(&RecordListHolderTable, Compound, other, NULL));
+        TEST_CHECK(run, PropertyRecordList_Equals(other->Items, list));
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(pool, Compound, true));
+    }
+    // Every row of every record when defaults are written too.
+    if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(pool, &Compound)))
+    {
+        PropertyWriteOptions Options = PropertyWriteOptions_CreateDefault();
+        Options.AreDefaultsWritten = true;
+        TEST_CHECK_SUCCESS(run, Properties_WriteJSON(&RecordListHolderTable, holder, pool, Compound, &Options));
+        JSONObjectValue Array;
+        JSONObjectValue First;
+        if (TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"items", JSONValueType_Array, &Array))
+            && TEST_CHECK_SUCCESS(run, JSONArray_Get(Array.Value.Array, 0U, &First)))
+        {
+            TEST_CHECK(run, JSONCompound_GetEntryCount(First.Value.Compound) == 4U);
+        }
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(pool, Compound, true));
+    }
+
+    TEST_CHECK_SUCCESS(run, ReadHolderFromText(run, pool, "{\"items\": []}", other, NULL));
+    TEST_CHECK(run, other->Items == NULL);
+    TEST_CHECK_SUCCESS(run, ReadHolderFromText(run, pool,
+        "{\"items\": [{\"kind\": \"panel\", \"place\": [1.5, 0.0, -2.0], \"name\": \"a\"}, {}]}", other, NULL));
+    const TestItem* Read = PropertyRecordList_GetRecords(other->Items);
+    TEST_CHECK(run, (PropertyRecordList_GetCount(other->Items) == 2U) && (Read[0].Kind == TestRecordKind_Panel)
+        && (Read[0].Place.Z == -2.0) && (Read[0].Weight == 1.0f) && (Read[0].Name != NULL) && (Read[0].Name[0] == 'a')
+        && (Read[1].Kind == TestRecordKind_Post) && (Read[1].Name == NULL));
+
+    static const char* const RefusedTexts[] =
+    {
+        "{\"items\": {\"kind\": \"post\"}}",
+        "{\"items\": [{}, 12]}",
+        "{\"items\": [{}, {\"colour\": \"#ffffff\"}]}",
+        "{\"items\": [{}, {\"kind\": \"wall\"}]}",
+        "{\"items\": [{}, {\"place\": [0, 0]}]}",
+        "{\"items\": [{}, {}, {\"weight\": -1}]}",
+        "{\"items\": [{}, {}, {\"place\": [0, 2000, 0]}]}",
+        "{\"items\": [{}, {}, {\"name\": \"a name too long\"}]}",
+        "{\"items\": [{}, {}, {}, {}, {}]}",
+    };
+    static const char* const RefusedFragments[] =
+    {
+        "Expected an array of records", "[1]: Expected a record", "[1]: test_item: unknown key \"colour\"",
+        "[1]: test_item.kind", "[1]: test_item.place", "[2]: test_item.weight", "[2]: test_item.place", "[2]: test_item.name",
+        "The list has 5 records; at most 4",
+    };
+    for (size_t Index = 0U; Index < sizeof(RefusedTexts) / sizeof(RefusedTexts[0]); Index++)
+    {
+        const char* const Fragments[] = { "test_holder.items", RefusedFragments[Index], NULL };
+        if (!TestText_CheckErrorMessage(run, ReadHolderFromText(run, pool, RefusedTexts[Index], other, NULL),
+            ErrorCode_InvalidJSON, Fragments))
+        {
+            printf("      (read: %s)\n", RefusedTexts[Index]);
+        }
+        TEST_CHECK(run, PropertyRecordList_GetCount(other->Items) == 2U);
+    }
+}
+
+/* Unknown keys in a record: the read's mode decides, and a warning comes once per list, not once per record. */
+static void CheckUnknownRecordKeys(TestRun* run, JSONObjectPool* pool, RecordListHolder* other)
+{
+    const char* Text = "{\"items\": [{\"bogus\": 1}, {\"bogus\": 2, \"weight\": 3}, {\"bogus\": 3}]}";
+    PropertyReadOptions Options = PropertyReadOptions_CreateDefault();
+    Options.UnknownKeyMode = PropertyUnknownKeyMode_Ignore;
+    TEST_CHECK_SUCCESS(run, ReadHolderFromText(run, pool, Text, other, &Options));
+    TEST_CHECK(run, (PropertyRecordList_GetCount(other->Items) == 3U)
+        && (((const TestItem*)PropertyRecordList_GetRecords(other->Items))[1].Weight == 3.0f));
+
+    GenericBuffer Base;
+    GenericBuffer_AllocateVariable(&Base, TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    GenericBuffer LogText;
+    GenericBuffer_AllocateVariable(&LogText, TEST_TEXT_CAPACITY, sizeof(unsigned char));
+    Logger TestLogger;
+    if (TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "unknown_record_keys", &Base))
+        && TEST_CHECK_SUCCESS(run, Logger_Construct(&TestLogger, Base._data)))
+    {
+        Options.UnknownKeyMode = PropertyUnknownKeyMode_Warn;
+        Options.Logger = &TestLogger;
+        TEST_CHECK_SUCCESS(run, ReadHolderFromText(run, pool, Text, other, &Options));
+        TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&TestLogger));
+        if (TEST_CHECK_SUCCESS(run, ReadTextFile(Base._data, "logs/latest.log", &LogText)))
+        {
+            const char* First = strstr((const char*)LogText._data, "ignoring unknown key");
+            TEST_CHECK(run, (First != NULL) && (strstr(First + 1, "ignoring unknown key") == NULL)
+                && (strstr((const char*)LogText._data, "test_item") != NULL));
+        }
+    }
+    Memory_Free(Base._data);
+    Memory_Free(LogText._data);
+}
+
+/* GHDF: a Compound array of records, the defaults left out; a known id of the wrong shape and broken records refused, an
+ * unknown id inside a record skipped. */
+static void CheckRecordListsInGHDF(TestRun* run, GHDFObjectPool* pool, RecordListHolder* holder, RecordListHolder* other,
+    const PropertyRecordList* list)
+{
+    GHDFCompound* Binary = NULL;
+    if (!TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(pool, &Binary)))
+    {
+        return;
+    }
+    TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&RecordListHolderTable, holder, pool, Binary, NULL));
+    GHDFObjectValue Array;
+    if (TEST_CHECK_SUCCESS(run, GHDFCompound_GetVerified(Binary, 1U, GHDF_CreateArrayType(GHDFValueType_Compound), &Array))
+        && TEST_CHECK(run, GHDFArray_GetElementCount(Array.Value.Array) == 3U))
+    {
+        GHDFObjectValue Plain;
+        GHDFObjectValue Named;
+        TEST_CHECK(run, TEST_CHECK_SUCCESS(run, GHDFArray_Get(Array.Value.Array, 0U, &Plain))
+            && (GHDFCompound_GetEntryCount(Plain.Value.Compound) == 0U)
+            && TEST_CHECK_SUCCESS(run, GHDFArray_Get(Array.Value.Array, 2U, &Named))
+            && (GHDFCompound_GetEntryCount(Named.Value.Compound) == 2U));
+        // A newer game's entry in a record is skipped.
+        GHDFObjectValue Newer = GHDFObjectValue_CreateFloat(9.0f);
+        TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Named.Value.Compound, 77U,
+            GHDF_CreateRegularType(GHDFValueType_Float), &Newer));
+    }
+    TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&RecordListHolderTable, Binary, other, NULL));
+    TEST_CHECK(run, PropertyRecordList_Equals(other->Items, list));
+
+    // With the defaults written, every row of every record but a NULL name, which GHDF leaves out.
+    GHDFCompound* AllRows = NULL;
+    if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(pool, &AllRows)))
+    {
+        PropertyWriteOptions Options = PropertyWriteOptions_CreateDefault();
+        Options.AreDefaultsWritten = true;
+        TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&RecordListHolderTable, holder, pool, AllRows, &Options));
+        GHDFObjectValue Written;
+        GHDFObjectValue First;
+        if (TEST_CHECK_SUCCESS(run, GHDFCompound_GetVerified(AllRows, 1U, GHDF_CreateArrayType(GHDFValueType_Compound), &Written))
+            && TEST_CHECK_SUCCESS(run, GHDFArray_Get(Written.Value.Array, 0U, &First)))
+        {
+            TEST_CHECK(run, GHDFCompound_GetEntryCount(First.Value.Compound) == 3U);
+        }
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(pool, AllRows, true));
+    }
+
+    // A record that breaks its table's rules: named, and the holder keeps its list.
+    if (TEST_CHECK_SUCCESS(run, GHDFCompound_GetVerified(Binary, 1U, GHDF_CreateArrayType(GHDFValueType_Compound), &Array)))
+    {
+        GHDFObjectValue Second;
+        TEST_CHECK_SUCCESS(run, GHDFArray_Get(Array.Value.Array, 1U, &Second));
+        GHDFObjectValue Negative = GHDFObjectValue_CreateFloat(-4.0f);
+        TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Second.Value.Compound, 3U,
+            GHDF_CreateRegularType(GHDFValueType_Float), &Negative));
+        const char* const Fragments[] = { "test_holder.items", "[1]: test_item.weight", NULL };
+        TestText_CheckErrorMessage(run, Properties_ReadGHDF(&RecordListHolderTable, Binary, other, NULL),
+            ErrorCode_Deserialize, Fragments);
+        TEST_CHECK(run, PropertyRecordList_Equals(other->Items, list));
+    }
+    TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(pool, Binary, true));
+
+    // Too many records, and an entry that is no Compound array.
+    if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(pool, &Binary)))
+    {
+        GHDFArray* TooMany = NULL;
+        if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowArray(pool, GHDFValueType_Compound, &TooMany)))
+        {
+            for (size_t Index = 0U; Index < 5U; Index++)
+            {
+                GHDFCompound* Record = NULL;
+                TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(pool, &Record));
+                GHDFObjectValue Element = GHDFObjectValue_CreateCompound(Record);
+                TEST_CHECK_SUCCESS(run, GHDFArray_AddValue(TooMany, &Element));
+            }
+            GHDFObjectValue Value = GHDFObjectValue_CreateArray(TooMany, GHDFValueType_Compound);
+            TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Binary, 1U, GHDF_CreateArrayType(GHDFValueType_Compound), &Value));
+            const char* const Fragments[] = { "test_holder.items", "The list has 5 records; at most 4", NULL };
+            TestText_CheckErrorMessage(run, Properties_ReadGHDF(&RecordListHolderTable, Binary, other, NULL),
+                ErrorCode_Deserialize, Fragments);
+        }
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(pool, Binary, true));
+    }
+    if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(pool, &Binary)))
+    {
+        GHDFObjectValue Wrong = GHDFObjectValue_CreateFloat(1.0f);
+        TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Binary, 1U, GHDF_CreateRegularType(GHDFValueType_Float), &Wrong));
+        TEST_CHECK_ERROR(run, Properties_ReadGHDF(&RecordListHolderTable, Binary, other, NULL), ErrorCode_Deserialize);
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(pool, Binary, true));
+    }
+    TEST_CHECK(run, PropertyRecordList_Equals(other->Items, list));
+}
+
+static void RecordListsGoThroughTheTables(TestRun* run)
+{
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(&RecordListHolderTable));
+    TestItem Items[3];
+    MakeTestItems(Items);
+
+    PropertyRecordList* List = NULL;
+    TEST_CHECK_SUCCESS(run, PropertyRecordList_Create(&TestItemTable, Items, 0U, &List));
+    TEST_CHECK(run, (List == NULL) && (PropertyRecordList_GetCount(NULL) == 0U)
+        && (PropertyRecordList_GetRecords(NULL) == NULL) && (PropertyRecordList_Clone(NULL) == NULL)
+        && PropertyRecordList_Equals(NULL, NULL));
+    PropertyRecordList_Destroy(NULL);
+    TEST_CHECK_ERROR(run, PropertyRecordList_Create(NULL, Items, 1U, &List), ErrorCode_IllegalArgument);
+    TEST_CHECK_ERROR(run, PropertyRecordList_Create(&TestItemTable, NULL, 2U, &List), ErrorCode_IllegalArgument);
+    TEST_CHECK_ERROR(run, PropertyRecordList_Create(&TestItemTable, Items, 1U, NULL), ErrorCode_IllegalArgument);
+    TEST_CHECK_ERROR(run, PropertyRecordList_Create(&TestItemTable, Items, PROPERTY_RECORD_LIST_MAX_COUNT + 1U, &List),
+        ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK(run, List == NULL);
+    if (!TEST_CHECK_SUCCESS(run, PropertyRecordList_Create(&TestItemTable, Items, 3U, &List)))
+    {
+        return;
+    }
+
+    // Records are copied deeply: a record's name is its own, in the list and in a clone.
+    const TestItem* Stored = PropertyRecordList_GetRecords(List);
+    TEST_CHECK(run, (PropertyRecordList_GetCount(List) == 3U) && (Stored[1].Place.X == Items[1].Place.X)
+        && (Stored[2].Name != Items[2].Name) && (Stored[2].Name != NULL) && (Stored[2].Name[0] == 'g'));
+    PropertyRecordList* Copy = PropertyRecordList_Clone(List);
+    const TestItem* Copied = PropertyRecordList_GetRecords(Copy);
+    TEST_CHECK(run, (Copy != List) && PropertyRecordList_Equals(Copy, List) && !PropertyRecordList_Equals(List, NULL)
+        && (Copied[2].Name != Stored[2].Name));
+    PropertyRecordList_Destroy(Copy);
+
+    // Equal means the same in every row, compared by value.
+    for (size_t Change = 0U; Change < 4U; Change++)
+    {
+        TestItem Changed[3];
+        MakeTestItems(Changed);
+        switch (Change)
+        {
+            case 0U: Changed[1].Place.Y += 1e-9; break;
+            case 1U: Changed[0].Kind = TestRecordKind_Panel; break;
+            case 2U: Changed[2].Weight = 2.0f; break;
+            default: Changed[2].Name = (unsigned char*)u8"door"; break;
+        }
+        PropertyRecordList* Other = NULL;
+        if (TEST_CHECK_SUCCESS(run, PropertyRecordList_Create(&TestItemTable, Changed, 3U, &Other)))
+        {
+            TEST_CHECK(run, !PropertyRecordList_Equals(List, Other));
+            PropertyRecordList_Destroy(Other);
+        }
+    }
+    TestItem NegativeZero[3];
+    MakeTestItems(NegativeZero);
+    NegativeZero[0].Place.X = -0.0;
+    PropertyRecordList* Signed = NULL;
+    if (TEST_CHECK_SUCCESS(run, PropertyRecordList_Create(&TestItemTable, NegativeZero, 3U, &Signed)))
+    {
+        TEST_CHECK(run, PropertyRecordList_Equals(List, Signed));
+        PropertyRecordList_Destroy(Signed);
+    }
+    PropertyRecordList* Shorter = NULL;
+    if (TEST_CHECK_SUCCESS(run, PropertyRecordList_Create(&TestItemTable, Items, 2U, &Shorter)))
+    {
+        TEST_CHECK(run, !PropertyRecordList_Equals(List, Shorter));
+        PropertyRecordList_Destroy(Shorter);
+    }
+    PropertyRecordList* OfOther = NULL;
+    if (TEST_CHECK_SUCCESS(run, PropertyRecordList_Create(&OtherItemTable, Items, 3U, &OfOther)))
+    {
+        TEST_CHECK(run, !PropertyRecordList_Equals(List, OfOther));
+    }
+
+    RecordListHolder Holder;
+    RecordListHolder Other;
+    JSONObjectPool* Pool = NULL;
+    GHDFObjectPool* BinaryPool = NULL;
+    if (TEST_CHECK_SUCCESS(run, Properties_Construct(&RecordListHolderTable, &Holder))
+        && TEST_CHECK_SUCCESS(run, Properties_Construct(&RecordListHolderTable, &Other))
+        && TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool))
+        && TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&BinaryPool)))
+    {
+        // Set copies; the rules check every record, name the one that breaks them and keep the holder's list.
+        TEST_CHECK(run, Holder.Items == NULL);
+        PropertyValue Value = PropertyValue_FromRecordList(List);
+        TEST_CHECK_SUCCESS(run, Properties_Set(&RecordListHolderTable, &Holder, u8"items", &Value));
+        TEST_CHECK(run, (Holder.Items != NULL) && (Holder.Items != List) && PropertyRecordList_Equals(Holder.Items, List));
+        PropertyValue Borrowed;
+        TEST_CHECK(run, TEST_CHECK_SUCCESS(run, Properties_Get(&RecordListHolderTable, &Holder, u8"items", &Borrowed))
+            && (Borrowed.Type == PropertyType_RecordList) && (Borrowed.Data.RecordListValue == Holder.Items));
+        for (size_t Breaker = 0U; Breaker < 4U; Breaker++)
+        {
+            TestItem Broken[5];
+            MakeTestItems(Broken);
+            Broken[3] = Broken[0];
+            Broken[4] = Broken[0];
+            size_t Count = 3U;
+            const char* Fragment = "record 2: test_item";
+            switch (Breaker)
+            {
+                case 0U: Broken[2].Weight = NAN; break;
+                case 1U: Broken[2].Place.X = 5000.0; break;
+                case 2U: Broken[2].Weight = -1.0f; break;
+                default: Count = 5U; Fragment = "at most 4 records"; break;
+            }
+            PropertyRecordList* Wrong = NULL;
+            if (TEST_CHECK_SUCCESS(run, PropertyRecordList_Create(&TestItemTable, Broken, Count, &Wrong)))
+            {
+                PropertyValue WrongValue = PropertyValue_FromRecordList(Wrong);
+                const char* const Fragments[] = { "test_holder.items", Fragment, NULL };
+                TestText_CheckErrorMessage(run, Properties_Set(&RecordListHolderTable, &Holder, u8"items", &WrongValue),
+                    ErrorCode_ArgumentOutOfRange, Fragments);
+                PropertyRecordList_Destroy(Wrong);
+            }
+        }
+        if (OfOther != NULL)
+        {
+            PropertyValue WrongValue = PropertyValue_FromRecordList(OfOther);
+            const char* const Fragments[] = { "test_holder.items", "records of the table test_item", NULL };
+            TestText_CheckErrorMessage(run, Properties_Set(&RecordListHolderTable, &Holder, u8"items", &WrongValue),
+                ErrorCode_ArgumentOutOfRange, Fragments);
+        }
+        TEST_CHECK(run, PropertyRecordList_Equals(Holder.Items, List));
+        TEST_CHECK_SUCCESS(run, Properties_Validate(&RecordListHolderTable, &Holder));
+        TEST_CHECK_SUCCESS(run, Properties_CopyTo(&RecordListHolderTable, &Holder, &Other));
+        TEST_CHECK(run, (Other.Items != Holder.Items) && Properties_Equals(&RecordListHolderTable, &Holder, &Other));
+
+        CheckRecordListsInJSON(run, Pool, &Holder, &Other, List);
+        CheckUnknownRecordKeys(run, Pool, &Other);
+        CheckRecordListsInGHDF(run, BinaryPool, &Holder, &Other, List);
+
+        // Emptied, it writes nothing, and reads back empty with the defaults written.
+        Value = PropertyValue_FromRecordList(NULL);
+        TEST_CHECK_SUCCESS(run, Properties_Set(&RecordListHolderTable, &Holder, u8"items", &Value));
+        TEST_CHECK(run, Holder.Items == NULL);
+        PropertyWriteOptions AllRows = PropertyWriteOptions_CreateDefault();
+        AllRows.AreDefaultsWritten = true;
+        GHDFCompound* Binary = NULL;
+        if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(BinaryPool, &Binary)))
+        {
+            TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&RecordListHolderTable, &Holder, BinaryPool, Binary, NULL));
+            TEST_CHECK(run, GHDFCompound_GetEntryCount(Binary) == 0U);
+            TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&RecordListHolderTable, &Holder, BinaryPool, Binary, &AllRows));
+            TEST_CHECK(run, GHDFCompound_GetEntryCount(Binary) == 2U);
+            TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&RecordListHolderTable, Binary, &Other, NULL));
+            TEST_CHECK(run, Other.Items == NULL);
+            TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(BinaryPool, Binary, true));
+        }
+        JSONCompound* Text = NULL;
+        if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Text)))
+        {
+            TEST_CHECK_SUCCESS(run, Properties_WriteJSON(&RecordListHolderTable, &Holder, Pool, Text, &AllRows));
+            JSONObjectValue Array;
+            TEST_CHECK(run, TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Text, u8"items", JSONValueType_Array, &Array))
+                && (JSONArray_GetElementCount(Array.Value.Array) == 0U));
+            TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Text, true));
+        }
+    }
+    Properties_Deconstruct(&RecordListHolderTable, &Holder);
+    Properties_Deconstruct(&RecordListHolderTable, &Other);
+    if (Pool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    }
+    if (BinaryPool != NULL)
+    {
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(BinaryPool));
+    }
+    PropertyRecordList_Destroy(OfOther);
+    PropertyRecordList_Destroy(List);
+}
+
+/* Record list rows are checked: their count, their table, a table with hooks or with a row that nests. */
+static void CheckBrokenRecordRow(TestRun* run, PropertyDescriptor row, const char* fragment)
+{
+    PropertyTable Table = RecordListHolderTable;
+    PropertyDescriptor Rows[2] = { row, RecordListHolderProperties[1] };
+    Table.Descriptors = Rows;
+    Table.DescriptorCount = 2U;
+    const char* const Fragments[] = { "test_holder", fragment, NULL };
+    TestText_CheckErrorMessage(run, PropertyTable_Check(&Table), ErrorCode_IllegalArgument, Fragments);
+}
+
+static void NoteAfterSet(void* instance, const PropertyDescriptor* descriptor)
+{
+    (void)instance;
+    (void)descriptor;
+}
+
+static void RecordListRowsAreChecked(TestRun* run)
+{
+    PropertyDescriptor Row = RecordListHolderProperties[0];
+    Row.Rules = (PropertyRules)PROPERTY_RULES_NONE;
+    CheckBrokenRecordRow(run, Row, "a MaxCount of 1 to");
+    Row = RecordListHolderProperties[0];
+    Row.Rules = (PropertyRules)PROPERTY_RULES_RECORD_LIST(PROPERTY_RECORD_LIST_MAX_COUNT + 1U);
+    CheckBrokenRecordRow(run, Row, "a MaxCount of 1 to");
+    Row = RecordListHolderProperties[0];
+    Row.RecordTable = NULL;
+    CheckBrokenRecordRow(run, Row, "needs a RecordTable");
+    Row = RecordListHolderProperties[1];
+    Row.RecordTable = &TestItemTable;
+    CheckBrokenRecordRow(run, Row, "only record lists take a RecordTable");
+    Row = RecordListHolderProperties[1];
+    Row.Rules = (PropertyRules)PROPERTY_RULES_RECORD_LIST(4U);
+    CheckBrokenRecordRow(run, Row, "take a MaxCount");
+
+    PropertyTable Hooked = TestItemTable;
+    Hooked.AfterSet = NoteAfterSet;
+    Row = RecordListHolderProperties[0];
+    Row.RecordTable = &Hooked;
+    CheckBrokenRecordRow(run, Row, "no AfterSet");
+
+    // A record table with no rows at all is reported, not walked.
+    PropertyTable Rowless = TestItemTable;
+    Rowless.Descriptors = NULL;
+    Row = RecordListHolderProperties[0];
+    Row.RecordTable = &Rowless;
+    CheckBrokenRecordRow(run, Row, "needs its descriptors");
+
+    // A record table holding a list of records: one level only, so no walk over a value needs a depth limit.
+    PropertyTable Nesting = RecordListHolderTable;
+    Row = RecordListHolderProperties[0];
+    Row.RecordTable = &Nesting;
+    CheckBrokenRecordRow(run, Row, "no data map and no record list");
+
+    // A broken record table fails its holder's check, named.
+    PropertyDescriptor BrokenRows[2] = { TestItemProperties[0], TestItemProperties[1] };
+    BrokenRows[1].WireId = BrokenRows[0].WireId;
+    PropertyTable BrokenTable = TestItemTable;
+    BrokenTable.Descriptors = BrokenRows;
+    BrokenTable.DescriptorCount = 2U;
+    Row = RecordListHolderProperties[0];
+    Row.RecordTable = &BrokenTable;
+    CheckBrokenRecordRow(run, Row, "test_item");
+}
+
+
 void PropertyDescriptorTests_Run(TestRun* run)
 {
     static const TestCase Cases[] =
@@ -3173,6 +3726,8 @@ void PropertyDescriptorTests_Run(TestRun* run)
         { "asset_name_list_rows_are_checked", AssetNameListRowsAreChecked },
         { "instance_lists_go_through_the_tables", InstanceListsGoThroughTheTables },
         { "instance_list_rows_are_checked", InstanceListRowsAreChecked },
+        { "record_lists_go_through_the_tables", RecordListsGoThroughTheTables },
+        { "record_list_rows_are_checked", RecordListRowsAreChecked },
         { "enum_sets_go_through_the_tables", EnumSetsGoThroughTheTables },
         { "big_structs_read_through_a_heap_scratch", BigStructsReadThroughAHeapScratch },
         { "migration_runs_for_older_data", MigrationRunsForOlderData },

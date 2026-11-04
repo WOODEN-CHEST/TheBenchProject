@@ -28,7 +28,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | WorldWater | `source/WorldWater.h`, `source/WorldWater.c` (private) | Water as pure maths (see "Water"): the drift every water's patterns share (the flows' seconds, the wind's travel, in double), a water material's maps' frames for an origin (turned, wrapped by their tiles in double), the waves' strength in the wind, the bottom's transmittance and the foam: the C mirror of `shaders/common/water.glsl`. |
 | CloudNoise | `source/CloudNoise.h`, `source/CloudNoise.c` (private) | The clouds' noise (see "Clouds"): tileable gradient and Worley noise, and the three textures made from them at load (the shape volume, the erosion volume, the weather map), the same every time. |
 | WorldInterior | `source/WorldInterior.h`, `source/WorldInterior.c` (private) | Interior lighting as pure maths (see "Interior lighting"): ambient zones in render space, their weights, the draws' choice of zones and their composition, the haze inside them, the sky's occupancy volume (its map, slices and window) and the march through it, the camera's interior and the light the eye is in: the C mirror of `shaders/common/interior.glsl`. |
-| WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c`, `source/WorldTestCharacters.{h,c}` (private: walk mode and the test NPCs), `source/WorldTestAnimation.{h,c}` (private: the animation system and its keys), `source/WorldTestInstances.{h,c}` (private: the pebble field and the instancing A/B), `source/WorldTestScreens.{h,c}` (private: the test monitor's UI and its use) | A concrete GameFrame: a WASD + mouse-look flycam over a test world, and walk mode (the player as a character) and test NPCs. |
+| WorldTestFrame | `include/WorldTestFrame.h`, `source/WorldTestFrame.c`, `source/WorldTestCharacters.{h,c}` (private: walk mode and the test NPCs), `source/WorldTestAnimation.{h,c}` (private: the animation system and its keys), `source/WorldTestInstances.{h,c}` (private: the pebble field and the instancing A/B), `source/WorldTestScreens.{h,c}` (private: the test monitor's UI and its use), `source/WorldTestPaths.{h,c}` (private: the paths' debug view and its keys) | A concrete GameFrame: a WASD + mouse-look flycam over a test world, and walk mode (the player as a character) and test NPCs. |
 
 `source/main.c` is the composition root (bootstrap).
 
@@ -2175,6 +2175,7 @@ get no AO and no outlines.
 | `WorldRendererSurfaces.c` | The surfaces' pictures (see "Surfaces' pictures"): the list handed over for one render, each put into its surface's material copy (a screen's or a CRT's emissive map, a paper's albedo map) with its rows' orientation, the status's counts; the screens' light (see "Screen light"): the render's lights from the shown glowing screens, each lit draw's nearest one and its upload. Not a pass: the lit passes' material copies and light uploads call it. |
 | `WorldRendererCrt.c` | The CRT programs (see "CRT screens"): `world_crt` and its skinned twin loaded as PBR programs, their own uniforms (the pass's window pixel scale, a CRT draw's shape, look, power with its flicker, mask and tile, the glass's reflection), the mask override. Not a pass: the lit passes draw a CRT's glass with it. |
 | `WorldRendererCollision.c` | Debug wireframes of a collision world's shapes and its contact points (`WorldRenderer_SetCollisionDebug`), drawn in the scene pass after the light gizmos from its read-only debug lists ([WorldCollision.md](WorldCollision.md)). |
+| `WorldRendererDebugLines.c` | A list of debug lines handed over by the update side (`WorldRenderer_SetDebugLines`: the paths' view, [Paths.md](Paths.md)), drawn in the scene pass after the collider wireframes, in render space, faint behind things and solid in view, against the eye's exposure. |
 | `WorldVisibility.c` (with the cache, not a pass) | The frame's visibility lists (per pass, the entries it draws, and every entry's fades) and the dither's C mirror; see "Visibility". |
 | `WorldLod.c` (with the cache, not a pass) | LOD selection and the cross-fade's state; the cache's `WorldRenderCache_UpdateLods` runs it per entry; see "LODs". |
 | `WorldAtmosphere.c` (pure maths, not a pass) | The atmosphere's model: the air from the environment, the stale check and the tables' build record, the view height, the tables' layout (the C mirror of `common/atmosphere`); see "Atmosphere". |
@@ -2520,8 +2521,8 @@ not while walking, and the UI takes it first while the pointer is over a widget)
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11, the
 digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/`, the backslash, Insert, Home, End, Page Up, Page Down, the
 keypad's digits, its `.`, `+`, `-`, `*`, `/` and Enter, Scroll Lock and Pause are taken already, and with Shift the grave
-key, L, keypad `-`, `/`, Enter, `+` and `*`; the keypad's `=` is free (with Shift the keypad's digits and `.` turn into other
-keys on Windows while Num Lock is on). Leave F12 free:
+key, L, keypad `-`, `/`, Enter, `+` and `*`, and Backspace with and without Shift; the keypad's `=`, Caps Lock, Num Lock, Print
+Screen and Menu are free (with Shift the keypad's digits and `.` turn into other keys on Windows while Num Lock is on). Leave F12 free:
 raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
@@ -2572,6 +2573,11 @@ raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writi
   slope is its shore and the test world an island; its edge lies 100 km out, past the horizon from up to about 780 m;
   a plane knows no shore, so the terrain's low places under its level fill with it too); logged, and the I key's status
   says whether it is shown, beside the renderer's water line;
+- **the paths ([Paths.md](Paths.md); `source/WorldTestPaths.{h,c}`, test content):** Backspace steps the debug view (off; the
+  paths: their curves by section, their nodes by mode with a bezier node's handles, a tall tick where a section starts, a closed
+  path's area hatched; those with their samples, frames and the ground under them), Shift with Backspace starts and stops one node
+  of the walk moving, so its curve follows live; the camera entering and leaving the park is logged, and the I key's status tells
+  how many objects a query finds inside it;
 - **the far terrain, the curve and the far shadows (see "Far terrain shadows", "Render space"; `source/WorldTestFarTerrain.{h,c}`,
   test content):** Shift with keypad * shows and hides the far terrain (made when first shown, not saved with the world:
   a root object at the terrain's object and a tile for every terrain definition named `tbp:test_far_terrain_<a>_<b>`, at

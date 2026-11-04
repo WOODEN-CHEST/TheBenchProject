@@ -97,7 +97,7 @@ and rules. The tables and their defaults are listed in `agents/WorldData.md` ("P
 | `mobility` | `"static"` / `"movable"` | |
 | `tags` | array of keys | See "Tags and data". |
 | `data` | object | See "Tags and data". |
-| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`, `collider`, `character`, `animator`, `terrain`, `model_instances`, `ambient_zone`, `screen`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component`, `collider_component`, `character_component`, `animator_component`, `terrain_component`, `model_instances_component`, `ambient_zone_component`, `screen_component` in `agents/WorldData.md`, `agents/Characters.md`, `agents/Animation.md` and `agents/Terrain.md`). |
+| `components` | object | One block per component, keyed by the type's name: `model`, `sprite`, `light`, `collider`, `character`, `animator`, `terrain`, `model_instances`, `ambient_zone`, `screen`, `path`. Each block holds that type's keys (`model_component`, `sprite_component`, `light_component`, `collider_component`, `character_component`, `animator_component`, `terrain_component`, `model_instances_component`, `ambient_zone_component`, `screen_component`, `path_component` in `agents/WorldData.md`, `agents/Characters.md`, `agents/Animation.md` and `agents/Terrain.md`). |
 
 An object has at most one component of each type. A block whose values are all defaults is still written (`"light":
 {}`): the component is there.
@@ -464,6 +464,59 @@ The test world's monitor (object 70, a child of its table's pivot) takes every d
 "screen": {}
 ```
 
+### The path block
+
+The `path` component is a line through nodes, any length, that bends (`agents/Paths.md`): fences, hedges, roads and rows of
+lamps read it, and a closed one is also a region, an area for scattering, painting and scripts (tags name it). It holds raw
+geometry: nothing about the ground, which each reader decides for itself.
+
+| Key | Value (default) | |
+|---|---|---|
+| `nodes` | an array of nodes (`[]`) | At most 16 384, each an object of the keys below, any left out at its default. A key no node has is skipped with one warning per name for the whole file, as everywhere; a wrong value refuses the file, naming the node (`path_component.nodes: [12]: path_node.width: ...`). |
+| `is_closed` | boolean (false) | Whether a segment runs from the last node back to the first. A closed path is also a region: the area it encloses in its object's X and Z. |
+| `up_mode` | `upright` or `rotation_minimizing` (`upright`) | How frames along it find their up. `upright` stays as near the object's +Y as it can, for anything on the ground. `rotation_minimizing` turns as little as it can from one point to the next, for paths that climb steeply or loop. |
+| `sample_spacing` | above 0 (1) | The most metres between two points where a reader samples this path; closer where it bends. |
+
+A node:
+
+| Key | Value (default) | |
+|---|---|---|
+| `position` | `[x, y, z]`, within 10 000 km on each axis (`[0, 0, 0]`) | Where it lies, in metres from the object, in its space. |
+| `mode` | `smooth`, `corner` or `bezier` (`smooth`) | `smooth`: the curve passes through with no kink. `corner`: sharp, and a segment touching it is straight (a `smooth` neighbour bends away along that line, so straight, bend, straight is `corner`, `smooth`, `smooth`, `corner`). `bezier`: the curve follows its two handles, even next to a corner. |
+| `in_handle`, `out_handle` | `[x, y, z]` metres from the node, within 10 000 km on each axis (`[0, 0, 0]`) | A `bezier` node's handles toward the node before and after it; kept but unused in the other modes. |
+| `roll` | degrees (0) | How far what follows the path leans about it; positive leans its top to the right, as a road banks into a right-hand bend. |
+| `width` | in [0, 1000000] (1) | How wide what follows the path is across it here, as a factor of what its own settings say. |
+| `scale` | in [0, 1000000] (1) | How large it is here in every direction, as a factor. |
+| `starts_section` | boolean (false) | Whether a section starts here. Node 0 of an open path and every `corner` node always start one; the last node of an open path starts none. Each section fits what follows the path on its own, and takes the settings below from the node that starts it. |
+| `skips_section` | boolean (false) | Whether nothing follows the path along the section this node starts: a gate's opening, a gap in a wall. |
+| `overrides_snaps_to_terrain`, `snaps_to_terrain` | boolean (false), boolean (true) | The section sets its own terrain snapping over its reader's, while the flag is on: off for a bridge. |
+
+The writer leaves each node's defaults out, and puts each node on lines of its own. Three nodes of the form of the test world's
+walk (object 95), a curve, a corner that starts a section skipped as a gate, and a bridge's node:
+```
+"path": {
+    "nodes": [
+        {
+            "position": [30.0, 7.0, 20.0],
+            "roll": 20.0,
+            "width": 2.0,
+            "scale": 1.5
+        },
+        {
+            "position": [50.0, 2.5, 30.0],
+            "mode": "corner",
+            "skips_section": true
+        },
+        {
+            "position": [62.0, 2.0, 30.0],
+            "starts_section": true,
+            "overrides_snaps_to_terrain": true,
+            "snaps_to_terrain": false
+        }
+    ]
+}
+```
+
 ### Values
 
 - Numbers: integers or decimals; a float keeps its fraction when written (`2.0`). Angles are degrees.
@@ -551,7 +604,7 @@ every integer in the smallest GHDF type that holds it.
 | Object entry | Value |
 |---|---|
 | 1 | The id (an unsigned integer). |
-| 2 | The components: a compound whose entry ids are the component type's value + 1 (1 `model`, 2 `sprite`, 3 `light`, 4 `collider`, 5 `character`, 6 `animator`, 7 `terrain`, 8 `model_instances`), each a compound keyed by the type's wire ids (`model_instances` shares the model block's, without 3 and 9, `omit_pixelation`'s pair, and adds 22 `instances`). |
+| 2 | The components: a compound whose entry ids are the component type's value + 1 (1 `model`, 2 `sprite`, 3 `light`, 4 `collider`, 5 `character`, 6 `animator`, 7 `terrain`, 8 `model_instances`, 9 `ambient_zone`, 10 `screen`, 11 `path`), each a compound keyed by the type's wire ids (`model_instances` shares the model block's, without 3 and 9, `omit_pixelation`'s pair, and adds 22 `instances`). |
 | 3 and up | The `world_object` table's wire ids: 3 `name`, 4 `position`, 5 `rotation`, 6 `scale`, 7 `tint`, 8 `is_enabled`, 9 `is_visible`, 10 `mobility`, 11 the tags and data, 12 `parent`, 13 `parent_socket`. |
 
 How each type is stored (`agents/PropertyDescriptors.md`, "Types"): integers in the smallest integer type (readers take
@@ -559,7 +612,8 @@ any integer type whose value fits), floats as Float (angles in radians), vectors
 positions as Double arrays (a Float array of three also reads as a position),
 colours as UInt8 arrays, render colours as a compound, strings as strings, enums and dates as encoded integers, sets of
 enum entries as their mask in the smallest unsigned integer type, the tags
-and data as an array of entry compounds (`agents/ObjectData.md`, "GHDF"), and a model instances block's copies as a
+and data as an array of entry compounds (`agents/ObjectData.md`, "GHDF"), a path's nodes as an array of compounds keyed by the
+`path_node` table's wire ids, each with its defaults left out (`agents/PropertyDescriptors.md`, "Record lists"), and a model instances block's copies as a
 compound of parallel arrays: 1 the positions (a Double array, three per copy), then only when a copy differs from its
 default 2 the rotations (a Float array, radians, three each), 3 the scales (a Float array, three each) and 4 the tints
 (a UInt8 array, four each), each exactly as long as the positions say. A document must end where its root ends.
@@ -578,8 +632,8 @@ Downloaded worlds use the same code, so loading treats every file as hostile:
 - **A JSON key given twice** in one object: the last value counts.
 - **Parents:** every object is created before any parent is linked, so the file may list objects in any order; a
   parent must exist, must not be the object or one of its descendants, and the hierarchy is at most 64 levels deep.
-- **Unknown names** (keys or entries no table knows, component types this game does not have) are skipped with one
-  warning per name for the whole file, so a world from a newer game version still loads without the parts it does
+- **Unknown names** (keys or entries no table knows, also inside a list's records such as a path's nodes, and component
+  types this game does not have) are skipped with one warning per name for the whole file, so a world from a newer game version still loads without the parts it does
   not know. GHDF entry ids a table retired are skipped silently.
 - **Versions:** the format version is raised only for changes an older game cannot read by skipping what it does not
   know (a renamed key, a value read another way); new keys and new component types keep it. Format 3 writes asset names

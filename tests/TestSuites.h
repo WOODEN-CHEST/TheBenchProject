@@ -411,3 +411,15 @@ void TerrainBlendTests_Run(TestRun* run);
  *  compared with one on a box); the characters' slope limit; only changed chunks rebuilt; a collider wins over a
  *  terrain on one object; problems warned once; run again 173 km out (WorldTerrainCollisionTests.c). */
 void WorldTerrainCollisionTests_Run(TestRun* run);
+
+/** @brief Paths as pure maths: every pair of node modes (against independent centripetal Catmull-Rom and de Casteljau
+ *  evaluations), arc length, closing and wrapping, sections, samples by spacing and curvature, the nearest point against a
+ *  dense walk, upright and rotation-minimizing frames, values without overshoot, degenerate and hostile input, regions
+ *  (PathCurveTests.c). */
+void PathCurveTests_Run(TestRun* run);
+
+/** @brief The path component: the curve follows every change, by setter or table; a reader finds the nearest path above
+ *  it and watches it; points and regions in the world, in double; queries by region; ground projection (terrain only, chosen
+ *  layers, a surface it starts inside, a tunnel, what collides); world files in both formats; run again 173 km out
+ *  (WorldPathTests.c). */
+void WorldPathTests_Run(TestRun* run);

@@ -22,6 +22,7 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | WorldAmbientZoneComponent | `include/WorldAmbientZoneComponent.h`, `source/WorldAmbientZoneComponent.c` | A volume that sets a room's own light (a box or a sphere: its light, the sky's share in it, the eye's exposure bias, its priority and its air's haze). |
 | WorldScreenComponent | `include/WorldScreenComponent.h`, `source/WorldScreenComponent.c` | Which surface of the object's world model shows a picture made while the game runs ([WorldModels.md](WorldModels.md), "Surfaces"), whether the screen is on and how bright it is. |
 | WorldScreens | `include/WorldScreens.h`, `source/WorldScreens.c` | The screens system: every screen component's surface resolved on its object's world model (under its own asset user), the ray that finds which screen the player points at and where on its picture (through a CRT's curvature), and each screen's power transition moved toward its power state (below, "Screen component"). |
+| WorldPathComponent | `include/WorldPathComponent.h`, `source/WorldPathComponent.c` | A line through nodes that generators read; a closed one is also a region ([Paths.md](Paths.md)). |
 | WorldColliderComponent | `include/WorldColliderComponent.h`, `source/WorldColliderComponent.c` | How the object collides ([WorldCollision.md](WorldCollision.md)): its world model's collision set (or one primitive of its own), its layer, mask and trigger flag (each overriding the world model's default with an explicit flag), a local offset, rotation and scale, and a rotation mode, with the pure function that resolves the settings in effect. |
 | WorldCharacterComponent | `include/WorldCharacterComponent.h`, `source/WorldCharacterComponent.c` | The player or an NPC ([Characters.md](Characters.md)): a character asset by name and every setting this placement overrides (explicit flags next to its own values), the input its driver gives it and the state it is in; the first transform driver. |
 | WorldAnimatorComponent | `include/WorldAnimatorComponent.h`, `source/WorldAnimatorComponent.c` | What plays the object's skeletal animation ([Animation.md](Animation.md)): the clip row and how it plays, the placement's own libraries, and the pose the animation system publishes. |
@@ -201,10 +202,12 @@ carries **at most one component of each type**; a street lamp is one object with
 | `WorldComponentType_ModelInstances` | 7 | `model_instances` | `WorldModelInstancesComponent` (the renderer's side in [WorldRuntime.md](WorldRuntime.md), "Model instances") |
 | `WorldComponentType_AmbientZone` | 8 | `ambient_zone` | `WorldAmbientZoneComponent` (the renderer's side in [WorldRuntime.md](WorldRuntime.md), "Interior lighting") |
 | `WorldComponentType_Screen` | 9 | `screen` | `WorldScreenComponent` (below, "Screen component") |
+| `WorldComponentType_Path` | 10 | `path` | `WorldPathComponent` ([Paths.md](Paths.md)) |
 
 The values are explicit and never renumbered (world files save them). `WorldComponentType_Count` is the number
-of standard types; `WORLD_MAX_COMPONENT_TYPES` (16) is how many a world can hold, room for the types still to come
-(10 onward: an interactable, vehicles, rigid bodies) and for test-only types.
+of standard types; `WORLD_MAX_COMPONENT_TYPES` (32) is how many a world can hold, room for the types still to come
+(11 onward: path generators, scatter, prefabs, roads, an interactable, vehicles, rigid bodies) and for test-only types. Every
+object holds one pointer per type.
 
 **The registry.** Each type has one `WorldComponentTypeInfo` (a static constant of its module, handed out by
 `Xxx_GetTypeInfo`; `WorldComponent_GetStandardTypeInfo(type)` maps the standard types): `Type`, `Name` (the key of its
@@ -709,6 +712,11 @@ share their key, type, default, rules and texts with the world sprite's tables (
 the JSON writer's order), and `PropertyTable_Check` checks the pairing. The collider's table is in
 [WorldCollision.md](WorldCollision.md), the character's in [Characters.md](Characters.md) and the animator's in
 [Animation.md](Animation.md). The ambient zone component's next free wire id is 11.
+
+The path component's table (`path_component`, next free wire id 5): `nodes` 1 (a RecordList of `path_node`, at most 16 384),
+`is_closed` 2, `up_mode` 3, `sample_spacing` 4. Its nodes' table (`path_node`, next free wire id 12): `position` 1, `mode` 2,
+`in_handle` 3, `out_handle` 4, `roll` 5, `width` 6, `scale` 7, `starts_section` 8, `skips_section` 9,
+`overrides_snaps_to_terrain` 10, `snaps_to_terrain` 11 ([Paths.md](Paths.md)).
 
 The object table's wire ids start at 3: 1 and 2 are the world file's own entries per object (the id and the
 components, [WorldFile.md](WorldFile.md)). `data` is one row (the tags and the values are one map, written as two JSON

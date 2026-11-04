@@ -61,7 +61,34 @@ static bool IsOneOf(const unsigned char* key, const unsigned char* const* keys, 
     return false;
 }
 
-/* Notes every key of @p compound that is neither one of @p ownKeys nor a key @p table reads (NULL: no table). */
+static Error NoteUnknownKeys(WorldFileLoad* load, JSONCompound* compound, const PropertyTable* table,
+    const unsigned char* const* ownKeys, size_t ownKeyCount, const unsigned char* where, uint64_t objectId);
+
+/* Notes the keys no record's table reads, in a record list's array. A record table holds no record list, so this goes one
+ * level down and no further. A value that is no array, or an element that is no object, is left for the read to refuse. */
+static Error NoteUnknownRecordKeys(WorldFileLoad* load, const JSONObjectValue* value, const PropertyTable* records,
+    uint64_t objectId)
+{
+    if (value->Type != JSONValueType_Array)
+    {
+        return Error_CreateSuccess();
+    }
+    Error Result = Error_CreateSuccess();
+    size_t Count = JSONArray_GetElementCount(value->Value.Array);
+    for (size_t Index = 0U; (Index < Count) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        JSONObjectValue Element;
+        Result = JSONArray_Get(value->Value.Array, Index, &Element);
+        if ((Result.Code == ErrorCode_Success) && (Element.Type == JSONValueType_Compound))
+        {
+            Result = NoteUnknownKeys(load, Element.Value.Compound, records, NULL, 0U, records->Name, objectId);
+        }
+    }
+    return Result;
+}
+
+/* Notes every key of @p compound that is neither one of @p ownKeys nor a key @p table reads (NULL: no table), and those of
+ * the records in its record lists. */
 static Error NoteUnknownKeys(WorldFileLoad* load, JSONCompound* compound, const PropertyTable* table,
     const unsigned char* const* ownKeys, size_t ownKeyCount, const unsigned char* where, uint64_t objectId)
 {
@@ -81,12 +108,19 @@ static Error NoteUnknownKeys(WorldFileLoad* load, JSONCompound* compound, const 
         {
             break;
         }
-        bool IsKnown = IsOneOf(Entry.Key, ownKeys, ownKeyCount)
-            || ((table != NULL) && (PropertyTable_FindByJSONKey(table, Entry.Key) != NULL));
-        if (!IsKnown)
+        const PropertyDescriptor* Row = (table != NULL) ? PropertyTable_FindByJSONKey(table, Entry.Key) : NULL;
+        if (!IsOneOf(Entry.Key, ownKeys, ownKeyCount) && (Row == NULL))
         {
             WorldFileLoad_NoteUnknown(load, WorldFileUnknownKind_Key, where, Entry.Key,
                 StringUTF8_GetByteLength(Entry.Key), objectId);
+        }
+        if ((Row != NULL) && (Row->Type == PropertyType_RecordList))
+        {
+            Result = NoteUnknownRecordKeys(load, &Entry.Value, Row->RecordTable, objectId);
+        }
+        if (Result.Code != ErrorCode_Success)
+        {
+            break;
         }
         Result = CollectionEnumerator_HasNext(Enumerator, &HasNext);
     }

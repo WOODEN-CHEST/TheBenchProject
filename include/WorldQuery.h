@@ -18,8 +18,8 @@
  *
  * A WorldQuery holds optional filters, combined with AND: tags (all of, any of, none of), data keys present, data
  * comparisons, component types present, enabled and visible only (effectively: a disabled or hidden ancestor counts),
- * within a distance of a point, inside a box (both by the object's world position, through its parents). It also
- * holds the order (object ids ascending, or nearest first) and a limit. World_Query appends the ids of the matching
+ * within a distance of a point, inside a box, inside a region (a closed path: "is the player in the park", all by the
+ * object's world position, through its parents). It also holds the order (object ids ascending, or nearest first) and a limit. World_Query appends the ids of the matching
  * objects. Start from WorldQuery_Create (no filter: every object) and set what is needed; the arrays are borrowed for
  * the call.
  *
@@ -117,6 +117,13 @@ typedef struct WorldQueryStruct
     Vector3Double BoxMinimum;
     /** @brief The box's highest corner, in double; world positions on the faces are inside. */
     Vector3Double BoxMaximum;
+    /** @brief A region the object must lie inside: the id of an object holding a closed path (0: no such filter). An
+     *  object that no longer exists, has no path, or has an open one matches nothing. With IsEnabledOnly, a disabled
+     *  region matches nothing either. */
+    uint64_t InsideRegionObject;
+    /** @brief A tag naming regions: the object must lie inside at least one of the closed paths whose objects carry it
+     *  (0: no such filter; none carrying it matches nothing). With IsEnabledOnly, disabled regions do not count. */
+    uint32_t InsideRegionTag;
     /** @brief true: nearest to Origin first (ties by id); false: object ids ascending. */
     bool IsSortedByDistance;
     /** @brief The most ids to give, after ordering; 0 for no limit. */

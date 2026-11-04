@@ -1676,6 +1676,12 @@ bool WorldRenderer_AreLightGizmosEnabled(const WorldRenderer* self)
     return self->_lightGizmosEnabled;
 }
 
+void WorldRenderer_SetDebugLines(WorldRenderer* self, const WorldDebugLine* lines, size_t count)
+{
+    self->_debugLines = lines;
+    self->_debugLineCount = (lines != NULL) ? count : 0U;
+}
+
 void WorldRenderer_SetCollisionDebug(WorldRenderer* self, const WorldCollision* collision)
 {
     self->_collisionDebug = collision;

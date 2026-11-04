@@ -55,6 +55,17 @@ PropertyFloatList* PropertyInternal_AllocateFloatList(size_t count);
  *  owns it (PropertyInstanceList_Destroy). */
 PropertyInstanceList* PropertyInternal_AllocateInstanceList(size_t count);
 
+/** Allocates a record list of @p count records of @p table (1 to PROPERTY_RECORD_LIST_MAX_COUNT), each constructed at its
+ *  defaults (Properties_Construct), for a reader to fill in place before it hands the list to a field; the caller owns it
+ *  (PropertyRecordList_Destroy). */
+PropertyRecordList* PropertyInternal_AllocateRecordList(const PropertyTable* table, size_t count);
+
+/** Returns the record of a list at @p index, for a reader to fill (a list it just allocated and still owns alone). */
+static inline void* PropertyInternal_GetWritableRecord(PropertyRecordList* list, size_t index)
+{
+    return list->_records + (index * list->_table->StructSize);
+}
+
 /** Returns whether @p descriptor has every flag in @p flags. */
 static inline bool PropertyInternal_HasFlags(const PropertyDescriptor* descriptor, uint32_t flags)
 {

@@ -317,6 +317,62 @@ static Error CreateDateValue(JSONObjectPool* pool, int64_t dayNumber, JSONObject
     return GameJSON_CreateStringValue(pool, Storage, outValue);
 }
 
+/* One record as a compound, through its own table. */
+static Error CreateRecordValue(JSONObjectPool* pool, const PropertyTable* table, const void* record,
+    const PropertyWriteOptions* options, JSONObjectValue* outValue)
+{
+    JSONCompound* Compound = NULL;
+    Error Result = JSONObjectPool_BorrowCompound(pool, &Compound);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = Properties_WriteJSON(table, record, pool, Compound, options);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = JSONObjectPool_ReturnCompound(pool, Compound, true);
+        Error_Deconstruct(&ReturnResult);
+        return Result;
+    }
+    *outValue = JSONObjectValue_CreateCompound(Compound);
+    return Error_CreateSuccess();
+}
+
+/* A record list as an array of its records' compounds; [] when empty. */
+static Error CreateRecordListValue(JSONObjectPool* pool, const PropertyRecordList* list,
+    const PropertyWriteOptions* options, JSONObjectValue* outValue)
+{
+    JSONArray* Array = NULL;
+    Error Result = JSONObjectPool_BorrowArray(pool, &Array);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    const unsigned char* Records = PropertyRecordList_GetRecords(list);
+    for (size_t Index = 0; (Index < PropertyRecordList_GetCount(list)) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        JSONObjectValue Element;
+        Result = CreateRecordValue(pool, list->_table, Records + (Index * list->_table->StructSize), options, &Element);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = JSONArray_Add(Array, &Element);
+            if (Result.Code != ErrorCode_Success)
+            {
+                Error ReturnResult = JSONObjectPool_ReturnValue(pool, &Element);
+                Error_Deconstruct(&ReturnResult);
+            }
+        }
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = JSONObjectPool_ReturnArray(pool, Array, true);
+        Error_Deconstruct(&ReturnResult);
+        return Result;
+    }
+    *outValue = JSONObjectValue_CreateArray(Array);
+    return Error_CreateSuccess();
+}
+
 static Error CreateValue(JSONObjectPool* pool, const PropertyDescriptor* descriptor, const PropertyData* data,
     JSONObjectValue* outValue)
 {
@@ -387,6 +443,8 @@ static Error CreateValue(JSONObjectPool* pool, const PropertyDescriptor* descrip
             return CreateAssetNameListValue(pool, data->AssetNameListValue, outValue);
         case PropertyType_InstanceList:
             return CreateInstanceListValue(pool, data->InstanceListValue, outValue);
+        case PropertyType_RecordList:
+            return Error_Construct2(ErrorCode_InvalidState, "Record lists are written separately.");
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -602,6 +660,8 @@ static Error ParseValue(const PropertyDescriptor* descriptor, const JSONObjectVa
             return Error_Construct2(ErrorCode_InvalidState, "Asset name lists are read separately.");
         case PropertyType_InstanceList:
             return Error_Construct2(ErrorCode_InvalidState, "Instance lists are read separately.");
+        case PropertyType_RecordList:
+            return Error_Construct2(ErrorCode_InvalidState, "Record lists are read separately.");
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -948,13 +1008,84 @@ static Error ReadString(const PropertyDescriptor* descriptor, const JSONObjectVa
     return Error_CreateSuccess();
 }
 
+static Error CountUnknownKeys(const PropertyTable* table, JSONCompound* compound, size_t* outCount);
+
+/* An array of records, its length checked before anything is allocated; [] is the empty list. Each record reads through
+ * its own table, all or nothing with the list; a broken one is named by its index ("[12]: path_node.width: ..."). In the
+ * Warn mode a list warns about unknown keys once, at the first record that holds any. */
+static Error ReadRecordList(const PropertyDescriptor* descriptor, const JSONObjectValue* value,
+    const PropertyReadOptions* options, void* target)
+{
+    if (value->Type != JSONValueType_Array)
+    {
+        return Error_Construct2(ErrorCode_InvalidJSON, "Expected an array of records.");
+    }
+    size_t Count = JSONArray_GetElementCount(value->Value.Array);
+    if (Count > descriptor->Rules.MaxCount)
+    {
+        return Error_Construct4(ErrorCode_InvalidJSON, "The list has %" PRIu64 " records; at most %" PRIu64
+            " are allowed.", (uint64_t)Count, (uint64_t)descriptor->Rules.MaxCount);
+    }
+    if (Count == 0U)
+    {
+        PropertyInternal_AdoptOwned(descriptor, target, NULL);
+        return Error_CreateSuccess();
+    }
+    PropertyReadOptions RecordOptions = PropertyReadOptions_CreateDefault();
+    RecordOptions.UnknownKeyMode = options->UnknownKeyMode;
+    RecordOptions.Logger = options->Logger;
+    PropertyRecordList* List = PropertyInternal_AllocateRecordList(descriptor->RecordTable, Count);
+    Error Result = Error_CreateSuccess();
+    for (size_t Index = 0; (Index < Count) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        JSONObjectValue Element;
+        Result = JSONArray_Get(value->Value.Array, Index, &Element);
+        if ((Result.Code == ErrorCode_Success) && (Element.Type != JSONValueType_Compound))
+        {
+            Result = Error_Construct2(ErrorCode_InvalidJSON, "Expected a record: an object.");
+        }
+        size_t UnknownCount = 0U;
+        if ((Result.Code == ErrorCode_Success) && (RecordOptions.UnknownKeyMode == PropertyUnknownKeyMode_Warn))
+        {
+            Result = CountUnknownKeys(descriptor->RecordTable, Element.Value.Compound, &UnknownCount);
+        }
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = Properties_ReadJSON(descriptor->RecordTable, Element.Value.Compound,
+                PropertyInternal_GetWritableRecord(List, Index), &RecordOptions);
+        }
+        if (UnknownCount > 0U)
+        {
+            RecordOptions.UnknownKeyMode = PropertyUnknownKeyMode_Ignore;
+        }
+        if (Result.Code != ErrorCode_Success)
+        {
+            Error Wrapped = Error_Construct4(ErrorCode_InvalidJSON, "[%" PRIu64 "]: %s", (uint64_t)Index,
+                (Result.Message != NULL) ? (const char*)Result.Message : "invalid record.");
+            Error_Deconstruct(&Result);
+            Result = Wrapped;
+        }
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        PropertyRecordList_Destroy(List);
+        return Result;
+    }
+    PropertyInternal_AdoptOwned(descriptor, target, List);
+    return Error_CreateSuccess();
+}
+
 static Error ReadValue(const PropertyTable* table, const PropertyDescriptor* descriptor, const JSONObjectValue* value,
-    void* target)
+    const PropertyReadOptions* options, void* target)
 {
     Error Result = Error_CreateSuccess();
     if (PropertyInternal_IsStringType(descriptor->Type))
     {
         Result = ReadString(descriptor, value, target);
+    }
+    else if (descriptor->Type == PropertyType_RecordList)
+    {
+        Result = ReadRecordList(descriptor, value, options, target);
     }
     else if (descriptor->Type == PropertyType_FloatList)
     {
@@ -1110,6 +1241,15 @@ static Error CollectUnknownKeys(const PropertyTable* table, JSONCompound* compou
     return Result;
 }
 
+static Error CountUnknownKeys(const PropertyTable* table, JSONCompound* compound, size_t* outCount)
+{
+    GenericBuffer List;
+    GenericBuffer_AllocateVariable(&List, 0U, sizeof(unsigned char));
+    Error Result = CollectUnknownKeys(table, compound, &List, outCount);
+    Memory_Free(List._data);
+    return Result;
+}
+
 /* Error mode fails the read; Warn mode logs one warning naming the keys; Ignore (or Warn without a logger) does
  * nothing. */
 static Error HandleUnknownKeys(const PropertyTable* table, JSONCompound* compound, const PropertyReadOptions* options)
@@ -1185,7 +1325,9 @@ Error Properties_WriteJSON(const PropertyTable* table, const void* instance, JSO
             continue;
         }
         JSONObjectValue Value;
-        Result = CreateValue(pool, Descriptor, &Data, &Value);
+        Result = (Descriptor->Type == PropertyType_RecordList)
+            ? CreateRecordListValue(pool, Data.RecordListValue, &Options, &Value)
+            : CreateValue(pool, Descriptor, &Data, &Value);
         if (Result.Code != ErrorCode_Success)
         {
             return PropertyInternal_WrapError(Result.Code, table, Descriptor, &Result);
@@ -1259,7 +1401,7 @@ Error Properties_ReadJSON(const PropertyTable* table, JSONCompound* compound, vo
         if ((Result.Code == ErrorCode_Success) && IsFound)
         {
             FoundCount++;
-            Result = ReadValue(table, Descriptor, &Value, Scratch._instance);
+            Result = ReadValue(table, Descriptor, &Value, &Options, Scratch._instance);
         }
         if (Result.Code != ErrorCode_Success)
         {

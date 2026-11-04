@@ -356,6 +356,50 @@ static Error PutDataMap(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryI
     return Result;
 }
 
+/* A record list as a Compound array, each record through its own table; an empty array when empty. */
+static Error PutRecordList(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id, const PropertyRecordList* list,
+    const PropertyWriteOptions* options)
+{
+    GHDFArray* Array = NULL;
+    Error Result = GHDFObjectPool_BorrowArray(pool, GHDFValueType_Compound, &Array);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    const unsigned char* Records = PropertyRecordList_GetRecords(list);
+    for (size_t Index = 0; (Index < PropertyRecordList_GetCount(list)) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        GHDFCompound* Record = NULL;
+        Result = GHDFObjectPool_BorrowCompound(pool, &Record);
+        if (Result.Code != ErrorCode_Success)
+        {
+            break;
+        }
+        Result = Properties_WriteGHDF(list->_table, Records + (Index * list->_table->StructSize), pool, Record, options);
+        if (Result.Code == ErrorCode_Success)
+        {
+            GHDFObjectValue Element = GHDFObjectValue_CreateCompound(Record);
+            Result = GHDFArray_AddValue(Array, &Element);
+        }
+        if (Result.Code != ErrorCode_Success)
+        {
+            Error ReturnResult = GHDFObjectPool_ReturnCompound(pool, Record, true);
+            Error_Deconstruct(&ReturnResult);
+        }
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        GHDFObjectValue ArrayValue = GHDFObjectValue_CreateArray(Array, GHDFValueType_Compound);
+        Result = GHDFCompound_SetValue(compound, id, GHDF_CreateArrayType(GHDFValueType_Compound), &ArrayValue);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = GHDFObjectPool_ReturnArray(pool, Array, true);
+        Error_Deconstruct(&ReturnResult);
+    }
+    return Result;
+}
+
 static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const PropertyDescriptor* descriptor,
     const PropertyData* data)
 {
@@ -418,6 +462,8 @@ static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const Proper
             return PutAssetNameList(pool, compound, Id, data->AssetNameListValue);
         case PropertyType_InstanceList:
             return PutInstanceList(pool, compound, Id, data->InstanceListValue);
+        case PropertyType_RecordList:
+            return Error_Construct2(ErrorCode_InvalidState, "Record lists are written separately.");
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -812,6 +858,57 @@ static Error ReadInstanceList(GHDFCompound* compound, const PropertyDescriptor* 
     return Error_CreateSuccess();
 }
 
+/* A record list from its Compound array, the count checked before anything is allocated; each record reads through its
+ * own table, all or nothing with the list; a broken one is named by its index ("[12]: path_node.width: ...". An empty
+ * array is the empty list. */
+static Error ReadRecordList(GHDFCompound* compound, const PropertyDescriptor* descriptor, void* target)
+{
+    GHDFObjectValue Entry;
+    bool IsFound = false;
+    Error Result = GHDFCompound_GetOptionalVerified(compound, (GHDFEntryID)descriptor->WireId,
+        GHDF_CreateArrayType(GHDFValueType_Compound), &Entry, &IsFound);
+    if ((Result.Code != ErrorCode_Success) || !IsFound)
+    {
+        return Result;
+    }
+    GHDFArray* Array = Entry.Value.Array;
+    size_t Count = GHDFArray_GetElementCount(Array);
+    if (Count > descriptor->Rules.MaxCount)
+    {
+        return Error_Construct4(ErrorCode_Deserialize, "The list has %" PRIu64 " records; at most %" PRIu64
+            " are allowed.", (uint64_t)Count, (uint64_t)descriptor->Rules.MaxCount);
+    }
+    if (Count == 0U)
+    {
+        PropertyInternal_AdoptOwned(descriptor, target, NULL);
+        return Error_CreateSuccess();
+    }
+    PropertyRecordList* List = PropertyInternal_AllocateRecordList(descriptor->RecordTable, Count);
+    for (size_t Index = 0; (Index < Count) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        GHDFObjectValue Element = GetElement(Array, Index, &Result);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = Properties_ReadGHDF(descriptor->RecordTable, Element.Value.Compound,
+                PropertyInternal_GetWritableRecord(List, Index), NULL);
+        }
+        if (Result.Code != ErrorCode_Success)
+        {
+            Error Wrapped = Error_Construct4(ErrorCode_Deserialize, "[%" PRIu64 "]: %s", (uint64_t)Index,
+                (Result.Message != NULL) ? (const char*)Result.Message : "invalid record.");
+            Error_Deconstruct(&Result);
+            Result = Wrapped;
+        }
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        PropertyRecordList_Destroy(List);
+        return Result;
+    }
+    PropertyInternal_AdoptOwned(descriptor, target, List);
+    return Error_CreateSuccess();
+}
+
 /* Reads a scalar entry of @p type into *outEntry; *outFound false when absent, and on an error. */
 static Error GetScalar(GHDFCompound* compound, GHDFEntryID id, GHDFValueType type, GHDFObjectValue* outEntry,
     bool* outFound)
@@ -919,6 +1016,8 @@ static Error ParseEntry(GHDFCompound* compound, const PropertyDescriptor* descri
             return Error_Construct2(ErrorCode_InvalidState, "Asset name lists are read separately.");
         case PropertyType_InstanceList:
             return Error_Construct2(ErrorCode_InvalidState, "Instance lists are read separately.");
+        case PropertyType_RecordList:
+            return Error_Construct2(ErrorCode_InvalidState, "Record lists are read separately.");
         case PropertyType_EnumSet:
         {
             // Bits outside the enum are refused when the read commits, like every rule.
@@ -950,6 +1049,10 @@ static Error ReadEntry(const PropertyTable* table, GHDFCompound* compound, const
     else if (descriptor->Type == PropertyType_InstanceList)
     {
         Result = ReadInstanceList(compound, descriptor, target);
+    }
+    else if (descriptor->Type == PropertyType_RecordList)
+    {
+        Result = ReadRecordList(compound, descriptor, target);
     }
     else if (PropertyInternal_IsStringType(descriptor->Type))
     {
@@ -996,7 +1099,9 @@ Error Properties_WriteGHDF(const PropertyTable* table, const void* instance, GHD
             continue;
         }
         PropertyData Data = PropertyInternal_ReadField(Descriptor, instance);
-        Result = PutValue(pool, compound, Descriptor, &Data);
+        Result = (Descriptor->Type == PropertyType_RecordList)
+            ? PutRecordList(pool, compound, (GHDFEntryID)Descriptor->WireId, Data.RecordListValue, &Options)
+            : PutValue(pool, compound, Descriptor, &Data);
         if (Result.Code != ErrorCode_Success)
         {
             return PropertyInternal_WrapError(Result.Code, table, Descriptor, &Result);

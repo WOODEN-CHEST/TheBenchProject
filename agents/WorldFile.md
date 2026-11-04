@@ -69,7 +69,8 @@ Downloaded worlds will use this, so every file is treated as hostile.
    the file (a key, a name) is made printable first (`WorldFileLoad_Wrap`: control characters, C1 controls too, and
    every byte of text that is not UTF-8 show as `?`), so a hostile file cannot put terminal escapes in the log.
 
-**Unknown names** (`WorldFileLoad_NoteUnknown`): keys (JSON) or entry ids (GHDF) that neither the block nor its table
+**Unknown names** (`WorldFileLoad_NoteUnknown`, also inside a list's records, such as a path's nodes, under the record's table):
+keys (JSON) or entry ids (GHDF) that neither the block nor its table
 knows, and component types the world does not have, are skipped and logged **once per name for the whole file**, with
 a count and the first object (`World file: skipped the unknown key "positon" in world_object (3 times; first in object
 1).`). At most 32 distinct names are listed, the rest counted; names are cut to 64 bytes and their control characters

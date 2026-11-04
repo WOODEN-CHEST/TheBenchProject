@@ -250,6 +250,18 @@ Current module list:
     when asked) with exact float clear values; direct OpenGL calls in GLTextureArray's manner. Used by the terrain's far
     shadows (WorldRendererFarShadows.c: their height maps and sweeps); without them terrain casts only within the shadow
     levels' reach.
+* Paths (Paths.md) - A line through nodes that bends, any length, which every generator reads (fences, sweeps, terrain
+  effects, roads, ponds); a closed one is also a region. Covers:
+  * PathCurve - A path as pure maths (include/PathCurve.h, source/PathCurve.c): its segments from the nodes' modes (smooth:
+    centripetal Catmull-Rom; corner: straight on both sides; bezier: its handles), arc length exact by Gauss-Legendre over a
+    table, a point at a distance with its frame (upright or rotation minimizing, its roll) and its values (roll, width, scale,
+    a monotone cubic), sections, samples by spacing and curvature, the nearest point, the region's polygon; in double.
+  * WorldPathComponent - Component type 10 (`path`): the nodes (a RecordList of the `path_node` table), closed or not, the up
+    mode, the sample spacing and the curve, rebuilt on every change; the nearest path at or above an object, WorldPathWatch for
+    readers that rebuild live, positions and regions in the world in double.
+  * PathGround - Ground projection (include/PathGround.h, source/PathGround.c): the one function every generator shares, a
+    straight ray down from a little above a point, onto terrain only or chosen collision layers, with an offset.
+  * WorldPathDebug - What the paths' debug view draws, as a list of lines (private, source/WorldPathDebug.{h,c}).
 * World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
   animation stands, is lit and is seen in the world, kept apart from its placements. WorldSprite (include/WorldSprite.h,
   source/WorldSprite.c) holds the animation it plays (loaded as its dependency) and the defaults of its placements
@@ -299,8 +311,8 @@ Current module list:
     variables. Byte accounting, owner-given limits, JSON (tags and values as two keys) and GHDF.
   * World data (source/WorldData.c) - The world's data functions (World_SetData and the tag sugar), the object and
     world limits, the data revision, and the tag index queries use.
-  * WorldQuery - Searches over a world's objects by tags, data comparisons, components, flags, distance and box, ordered
-    by id or distance, with a limit: the engine side of selectors.
+  * WorldQuery - Searches over a world's objects by tags, data comparisons, components, flags, distance, box and region
+    (a closed path: "is the player in the park"), ordered by id or distance, with a limit: the engine side of selectors.
 * World data layer (WorldData.md) - The rendering-independent 3D world model: one object type made of components, in a
   hierarchy. Covers these modules (plus the private source/WorldInternal.h they share):
   * WorldObject - The one object type: id, name, parent, transform (relative to the parent), tint, enabled, visible,
@@ -351,6 +363,7 @@ Current module list:
     "Interior lighting").
   * WorldColliderComponent - How the object collides (World collision, WorldCollision.md).
   * WorldTerrainComponent - Where a terrain lies and how it draws and collides (Terrain, Terrain.md).
+  * WorldPathComponent - A line through nodes that generators read; a closed one is also a region (Paths, Paths.md).
   * WorldEnvironment - Per-world sky/sun/moon/night-sky/haze/effect settings, described by its property table
     (defaults, validation, copy, JSON and GHDF all come from it; see PropertyDescriptors.md; it owns its sky texture
     names). Its date and time of day are what the sky shows: the game clock writes them every tick, the environment
@@ -588,7 +601,9 @@ Current module list:
     tbp:test_far_terrain_* definitions, the private source/WorldTestFarTerrain.{h,c}), Scroll Lock switches the world's
     curve and Pause the terrain's far shadows (the A/B). Its world has local lights: two street lamps (spots casting
     shadows, one of them broken), a desk lamp's spot and a fluorescent tube in the test room and a candle on the monitor's
-    table; Shift with L switches every light off and on.
+    table; Shift with L switches every light off and on. Its world has test paths: a walk mixing every node mode and section
+    setting, a closed park and two helices (the private source/WorldTestPaths.{h,c}); Backspace steps their debug view, Shift
+    with Backspace moves one of the walk's nodes while the game runs.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
@@ -602,7 +617,9 @@ Current module list:
   array of names) carries a collider's layer mask; an AssetNameList type (PropertyAssetNameList: an owned list of
   asset names, JSON an array of strings) carries an animator's own animation libraries; an InstanceList type
   (PropertyInstanceList: an owned list of copies, each a double position, a rotation, a scale and a tint; JSON an array
-  of objects with the defaults left out, GHDF parallel arrays) carries a model instances component's copies. A setting a placement overrides
+  of objects with the defaults left out, GHDF parallel arrays) carries a model instances component's copies; a RecordList type
+  (PropertyRecordList: an owned list of small structs a table of their own describes, so their keys, rules, codecs and the
+  inspector come from it, one level deep) carries a path's nodes. A setting a placement overrides
   is two rows, a Bool
   `overrides_<key>` and the value `<key>` (the table check enforces the pairing). A DataMap property (tags and typed
   data) is written as two JSON keys.

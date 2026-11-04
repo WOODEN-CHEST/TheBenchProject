@@ -1,5 +1,6 @@
 #include "WorldQuery.h"
 #include "WorldInternal.h"
+#include "WorldPathComponent.h"
 #include "wr/WRCompile.h"
 #include "wr/WRComparator.h"
 #include "wr/WRMath.h"
@@ -247,7 +248,51 @@ static bool MatchesPlace(const WorldObject* object, const WorldQuery* query)
         && (Position.Z >= query->BoxMinimum.Z) && (Position.Z <= query->BoxMaximum.Z));
 }
 
-static bool Matches(const WorldObject* object, const WorldQuery* query)
+/* Whether a position lies inside the region one object holds, if it counts for this query. */
+static bool IsInsideRegionOf(const WorldObject* region, const WorldQuery* query, Vector3Double position)
+{
+    if (query->IsEnabledOnly && !WorldObject_IsEffectivelyEnabled(region))
+    {
+        return false;
+    }
+    const WorldPathComponent* Path = WorldPathComponent_FromComponent(WorldObject_GetComponent(region,
+        WorldComponentType_Path));
+    return (Path != NULL) && WorldPathComponent_IsWorldPointInside(Path, position);
+}
+
+static bool MatchesRegions(World* world, const WorldObject* object, const WorldQuery* query)
+{
+    if ((query->InsideRegionObject == 0U) && (query->InsideRegionTag == NAMESPACED_KEY_ID_NONE))
+    {
+        return true;
+    }
+    Vector3Double Position = WorldObject_GetWorldPosition(object);
+    if (query->InsideRegionObject != 0U)
+    {
+        const WorldObject* Region = WorldInternal_FindObject(world, query->InsideRegionObject);
+        if ((Region == NULL) || !IsInsideRegionOf(Region, query, Position))
+        {
+            return false;
+        }
+    }
+    if (query->InsideRegionTag == NAMESPACED_KEY_ID_NONE)
+    {
+        return true;
+    }
+    size_t Count = 0U;
+    const uint64_t* Ids = WorldInternal_GetTagMembers(world, query->InsideRegionTag, &Count);
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        const WorldObject* Region = WorldInternal_FindObject(world, Ids[Index]);
+        if ((Region != NULL) && IsInsideRegionOf(Region, query, Position))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool Matches(World* world, const WorldObject* object, const WorldQuery* query)
 {
     if ((query->IsEnabledOnly && !WorldObject_IsEffectivelyEnabled(object))
         || (query->IsVisibleOnly && !WorldObject_IsEffectivelyVisible(object)))
@@ -261,7 +306,8 @@ static bool Matches(const WorldObject* object, const WorldQuery* query)
             return false;
         }
     }
-    return MatchesTags(object, query) && MatchesData(object, query) && MatchesPlace(object, query);
+    return MatchesTags(object, query) && MatchesData(object, query) && MatchesPlace(object, query)
+        && MatchesRegions(world, object, query);
 }
 
 
@@ -379,7 +425,7 @@ Error World_Query(World* self, const WorldQuery* query, GenericBuffer* outIds)
                 continue; // carries more than one of the any-of tags
             }
             WorldObject* Object = WorldInternal_FindObject(self, Candidates[Index]);
-            if ((Object != NULL) && Matches(Object, query) && !KeepMatch(self, query, Object, true))
+            if ((Object != NULL) && Matches(self, Object, query) && !KeepMatch(self, query, Object, true))
             {
                 break;
             }
@@ -391,7 +437,7 @@ Error World_Query(World* self, const WorldQuery* query, GenericBuffer* outIds)
         {
             WorldObject* Object = NULL;
             GenericBuffer_GetAt(&self->_objects, Index, &Object);
-            if (Matches(Object, query))
+            if (Matches(self, Object, query))
             {
                 KeepMatch(self, query, Object, false);
             }
@@ -432,6 +478,6 @@ Error World_DoesObjectMatch(World* self, const WorldQuery* query, uint64_t id, b
         return Result;
     }
     WorldObject* Object = WorldInternal_FindObject(self, id);
-    *outIsMatch = (Object != NULL) && Matches(Object, query);
+    *outIsMatch = (Object != NULL) && Matches(self, Object, query);
     return Error_CreateSuccess();
 }
