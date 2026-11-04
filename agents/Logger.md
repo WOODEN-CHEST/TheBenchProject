@@ -107,3 +107,7 @@ needs to log (no global/static logger instance).
   `va_list`-accepting formatter to forward variadic arguments into.
 - The Windows ANSI-color path is intentionally omitted for now; enabling it will require turning on
   virtual-terminal processing on the Windows console (a candidate for a future WRFramework hook).
+- raylib's own messages do not go through this logger: raylib prints them straight to the console,
+  so they are not in the log file. `RAYLIB_LOG_LEVEL` in `main.c` sets the lowest level that shows:
+  warnings and errors, which include why a window could not open and a shader's compiler output.
+  Set it to `LOG_INFO` to see raylib's information lines too.

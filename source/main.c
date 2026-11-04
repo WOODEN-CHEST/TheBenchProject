@@ -43,6 +43,10 @@
 #define BASE_DIRECTORY_INITIAL_CAPACITY ((size_t)256)
 /** Window title shown in the title bar. */
 #define WINDOW_TITLE ((const char*)u8"The Bench Project")
+/** The lowest level of raylib's own messages that reach the console: warnings and errors, which include why a window
+ *  could not open and a shader's compiler output. LOG_INFO shows its information lines too (each texture and shader
+ *  loaded, the GPU's details at start-up, each mipmap generation, which a screen's picture does every frame). */
+#define RAYLIB_LOG_LEVEL LOG_WARNING
 /** Fixed update rate in hertz. Deliberately a code constant (not a config value) and higher than the
  *  render rate so simulation stays smooth and deterministic regardless of frame rate. */
 #define UPDATE_RATE_HZ 480.0
@@ -414,6 +418,9 @@ int main(int argc, char** argv)
 {
     UNUSED(argc);
     UNUSED(argv);
+
+    // Before any other raylib call, so its start-up lines obey it too.
+    SetTraceLogLevel(RAYLIB_LOG_LEVEL);
 
     // Every game file (config, assets, logs, the asset cache) is resolved against the executable's directory,
     // so the game works no matter which directory it is started from.
