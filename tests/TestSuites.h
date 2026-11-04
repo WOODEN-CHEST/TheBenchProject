@@ -423,3 +423,18 @@ void PathCurveTests_Run(TestRun* run);
  *  layers, a surface it starts inside, a tunnel, what collides); world files in both formats; run again 173 km out
  *  (WorldPathTests.c). */
 void WorldPathTests_Run(TestRun* run);
+
+/** @brief Where a path object's pieces lie, as pure maths: the fits and alignments against their closed forms on a line, chords and
+ *  arcs on a circle, caps, separators, joints, skipped sections, closed runs, too-short spans, picks, limits, fuzz
+ *  (PathObjectLayoutTests.c). */
+void PathObjectLayoutTests_Run(TestRun* run);
+
+/** @brief The path object's asset and its pure maths: the tables, what is in effect (defaults, asset, placement), the definition's
+ *  checks, measuring a mesh, rigid copies (their ends, the slope's rules, turned pieces, offsets, jitter), bending (surface kept,
+ *  following slices, what reaches past them, cuts, indexed meshes, limits), a copy's shear (PathObjectTests.c). */
+void PathObjectTests_Run(TestRun* run);
+
+/** @brief The path objects system: copies and generated models on runtime children, reading a path above them, live rebuilds that
+ *  write only what changed, placements' overrides, world files, the ground and its changes, the slots' collision, the render
+ *  cache's entries; run again 173 km out (WorldPathObjectTests.c). */
+void WorldPathObjectTests_Run(TestRun* run);

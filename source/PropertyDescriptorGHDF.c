@@ -28,6 +28,7 @@
 #define PROPERTY_GHDF_INSTANCE_ROTATIONS ((GHDFEntryID)2)
 #define PROPERTY_GHDF_INSTANCE_SCALES ((GHDFEntryID)3)
 #define PROPERTY_GHDF_INSTANCE_TINTS ((GHDFEntryID)4)
+#define PROPERTY_GHDF_INSTANCE_SHEARS ((GHDFEntryID)5)
 /** Elements per instance in each of those arrays. */
 #define PROPERTY_GHDF_INSTANCE_VECTOR_ELEMENTS 3U
 #define PROPERTY_GHDF_INSTANCE_TINT_ELEMENTS 4U
@@ -209,12 +210,13 @@ typedef struct InstanceArrayNeedsStruct
 {
     bool HasRotations;
     bool HasScales;
+    bool HasShears;
     bool HasTints;
 } InstanceArrayNeeds;
 
 static InstanceArrayNeeds GetInstanceArrayNeeds(const PropertyInstanceList* list)
 {
-    InstanceArrayNeeds Needs = { .HasRotations = false, .HasScales = false, .HasTints = false };
+    InstanceArrayNeeds Needs = { .HasRotations = false, .HasScales = false, .HasShears = false, .HasTints = false };
     const PropertyInstanceEntry* Entries = PropertyInstanceList_GetEntries(list);
     for (size_t Index = 0; Index < PropertyInstanceList_GetCount(list); Index++)
     {
@@ -223,6 +225,7 @@ static InstanceArrayNeeds GetInstanceArrayNeeds(const PropertyInstanceList* list
             || (Entry->Rotation.z != 0.0f);
         Needs.HasScales = Needs.HasScales || (Entry->Scale.x != 1.0f) || (Entry->Scale.y != 1.0f)
             || (Entry->Scale.z != 1.0f);
+        Needs.HasShears = Needs.HasShears || (Entry->Shear != 0.0f);
         Needs.HasTints = Needs.HasTints || (Entry->Tint.r != 255U) || (Entry->Tint.g != 255U) || (Entry->Tint.b != 255U)
             || (Entry->Tint.a != 255U);
     }
@@ -251,6 +254,11 @@ static void MakeScaleElements(const PropertyInstanceEntry* entry, GHDFObjectValu
     outElements[0] = GHDFObjectValue_CreateFloat(entry->Scale.x);
     outElements[1] = GHDFObjectValue_CreateFloat(entry->Scale.y);
     outElements[2] = GHDFObjectValue_CreateFloat(entry->Scale.z);
+}
+
+static void MakeShearElements(const PropertyInstanceEntry* entry, GHDFObjectValue* outElements)
+{
+    outElements[0] = GHDFObjectValue_CreateFloat(entry->Shear);
 }
 
 static void MakeTintElements(const PropertyInstanceEntry* entry, GHDFObjectValue* outElements)
@@ -296,7 +304,7 @@ static Error PutInstanceArray(GHDFObjectPool* pool, GHDFCompound* compound, GHDF
 }
 
 /* A compound of the list's parallel arrays: its positions always (an empty array for the empty list), its rotations,
- * scales and tints when some instance has one other than the default. */
+ * scales, shears and tints when some instance has one other than the default. */
 static Error PutInstanceList(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id,
     const PropertyInstanceList* list)
 {
@@ -318,6 +326,11 @@ static Error PutInstanceList(GHDFObjectPool* pool, GHDFCompound* compound, GHDFE
     {
         Result = PutInstanceArray(pool, ListCompound, PROPERTY_GHDF_INSTANCE_SCALES, GHDFValueType_Float, list,
             PROPERTY_GHDF_INSTANCE_VECTOR_ELEMENTS, MakeScaleElements);
+    }
+    if ((Result.Code == ErrorCode_Success) && Needs.HasShears)
+    {
+        Result = PutInstanceArray(pool, ListCompound, PROPERTY_GHDF_INSTANCE_SHEARS, GHDFValueType_Float, list, 1U,
+            MakeShearElements);
     }
     if ((Result.Code == ErrorCode_Success) && Needs.HasTints)
     {
@@ -797,6 +810,7 @@ static Error ReadInstanceList(GHDFCompound* compound, const PropertyDescriptor* 
     }
     GHDFArray* Rotations = NULL;
     GHDFArray* Scales = NULL;
+    GHDFArray* Shears = NULL;
     GHDFArray* Tints = NULL;
     size_t VectorElements = Count * PROPERTY_GHDF_INSTANCE_VECTOR_ELEMENTS;
     Result = GetInstanceArray(ListCompound, PROPERTY_GHDF_INSTANCE_ROTATIONS, GHDFValueType_Float, VectorElements,
@@ -805,6 +819,10 @@ static Error ReadInstanceList(GHDFCompound* compound, const PropertyDescriptor* 
     {
         Result = GetInstanceArray(ListCompound, PROPERTY_GHDF_INSTANCE_SCALES, GHDFValueType_Float, VectorElements,
             "scale", &Scales);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = GetInstanceArray(ListCompound, PROPERTY_GHDF_INSTANCE_SHEARS, GHDFValueType_Float, Count, "shear", &Shears);
     }
     if (Result.Code == ErrorCode_Success)
     {
@@ -839,6 +857,10 @@ static Error ReadInstanceList(GHDFCompound* compound, const PropertyDescriptor* 
             Instance->Scale.x = GetElement(Scales, First, &Result).Value.Float;
             Instance->Scale.y = GetElement(Scales, First + 1U, &Result).Value.Float;
             Instance->Scale.z = GetElement(Scales, First + 2U, &Result).Value.Float;
+        }
+        if (Shears != NULL)
+        {
+            Instance->Shear = GetElement(Shears, Index, &Result).Value.Float;
         }
         if (Tints != NULL)
         {

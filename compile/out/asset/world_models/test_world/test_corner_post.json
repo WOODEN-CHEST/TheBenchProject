@@ -1,0 +1,8 @@
+{
+    "name": "tbp:test_corner_post",
+    "lods": [
+        { "model": "tbp:test_corner_post", "max_distance": 60 }
+    ],
+    "draw_distance": 150,
+    "collision": "bounds"
+}

@@ -248,11 +248,28 @@ static void UpdateModel(WorldRenderModel* entry, Vector3Double origin, AssetMana
     entry->Pose = NULL;
     entry->CameraPose = NULL;
     UpdateScreen(entry, Owner, logger);
+    entry->Generated = WorldModelComponent_GetGeneratedModel(ModelComponent);
+    entry->GeneratedSerial = WorldComponent_GetSerial(&ModelComponent->Base);
+    entry->GeneratedRevision = WorldModelComponent_GetGeneratedRevision(ModelComponent);
+    entry->GeneratedLods = NULL;
     if (entry->Asset == NULL)
     {
         return;
     }
 
+    if (entry->Generated != NULL)
+    {
+        // Its meshes lie in the object's space, import transform and all, with bounds of their own.
+        entry->LocalCenter = entry->Generated->Center;
+        entry->LocalRadius = entry->Generated->Radius;
+        entry->BoundsTransform = MatrixIdentity();
+    }
+    else
+    {
+        entry->LocalCenter = WorldModel_GetBoundsCenter(entry->Asset);
+        entry->LocalRadius = WorldModel_GetBoundsRadius(entry->Asset);
+        entry->BoundsTransform = WorldModel_GetBoundsTransform(entry->Asset);
+    }
     entry->Pose = GetPose(Owner, entry->Asset);
     entry->CameraPose = entry->Pose;
     Vector3 LocalCenter = entry->LocalCenter;

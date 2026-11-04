@@ -2092,6 +2092,28 @@ typedef struct WorldRendererInstanceBufferStruct
     bool _isUsed;
 } WorldRendererInstanceBuffer;
 
+/** @brief The GPU's copy of one model component's generated model: a model per LOD, over its world model's materials. Held on the
+ *  heap, so the pointers the cache's entry borrows stay put. */
+typedef struct WorldRendererGeneratedRecordStruct
+{
+    /** @brief The component it was made for, its generated revision and the world model whose materials it borrows. */
+    uint64_t _serial;
+    uint32_t _revision;
+    const WorldModel* _asset;
+    /** @brief Set while a cache entry holds it this frame. */
+    bool _isUsed;
+    size_t _lodCount;
+    GameModel _lods[WORLD_MODEL_MAX_LODS];
+    GameModel* _lodPointers[WORLD_MODEL_MAX_LODS];
+} WorldRendererGeneratedRecord;
+
+/** @brief The generated models on the GPU. */
+typedef struct WorldRendererGeneratedStateStruct
+{
+    /** @brief WorldRendererGeneratedRecord*, roughly in the entries' order. */
+    GenericBuffer _records;
+} WorldRendererGeneratedState;
+
 /**
  * @brief The model instances components' copies: the instanced twins of the G-buffer and shadow shaders (the lit
  *        one is _pbr._instanced), the records' GPU buffers and the A/B toggle.
@@ -2629,6 +2651,7 @@ struct WorldRendererStruct
     WorldRendererCrispState _crisp;
     WorldRendererTerrainState _terrain;
     WorldRendererInstanceState _instances;
+    WorldRendererGeneratedState _generated;
     WorldRendererSkyVisibilityState _skyVisibility;
     WorldRendererInteriorState _interior;
     WorldRendererCloudState _clouds;
@@ -4293,6 +4316,23 @@ void WorldRendererInstances_LoadShaders(WorldRenderer* self);
 
 /** @brief Unloads every records buffer (when the world changes: WorldRenderer_PrepareWorld). Needs the GL context. */
 void WorldRendererInstances_ReleaseBuffers(WorldRenderer* self);
+
+/** @brief Sets up the generated models' state. */
+void WorldRendererGenerated_Construct(WorldRenderer* self);
+
+/** @brief Unloads and frees it. Needs the GL context. */
+void WorldRendererGenerated_Deconstruct(WorldRenderer* self);
+
+/** @brief Unloads the GPU's copy of every generated model (when the world changes, and when the renderer goes). Needs the GL
+ *         context. */
+void WorldRendererGenerated_ReleaseMeshes(WorldRenderer* self);
+
+/**
+ * @brief Brings the GPU's copy of the generated models in step with the cache's entries: a model entry whose generated model was
+ *        replaced is uploaded again, every such entry gets its LODs' models for the frame (WorldRenderCache_SetGeneratedLods), and
+ *        those no entry holds are unloaded. Once per frame, right after the Sync. Needs the GL context.
+ */
+void WorldRendererGenerated_PrepareFrame(WorldRenderer* self);
 
 /**
  * @brief Brings the records' GPU buffers up to date with the render cache, synced for this frame: each entry's build of

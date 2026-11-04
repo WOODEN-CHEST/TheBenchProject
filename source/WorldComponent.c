@@ -11,6 +11,7 @@
 #include "WorldAmbientZoneComponent.h"
 #include "WorldScreenComponent.h"
 #include "WorldPathComponent.h"
+#include "WorldPathObjectComponent.h"
 
 
 // Static functions.
@@ -68,6 +69,8 @@ const WorldComponentTypeInfo* WorldComponent_GetStandardTypeInfo(WorldComponentT
             return WorldScreenComponent_GetTypeInfo();
         case WorldComponentType_Path:
             return WorldPathComponent_GetTypeInfo();
+        case WorldComponentType_PathObject:
+            return WorldPathObjectComponent_GetTypeInfo();
         case WorldComponentType_Count:
             break;
     }

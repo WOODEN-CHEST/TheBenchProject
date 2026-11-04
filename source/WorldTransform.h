@@ -34,6 +34,17 @@
 Matrix4Double WorldTransform_Compose(Vector3Double position, Vector3 rotation, Vector3 scale);
 
 /**
+ * @brief The matrix of a transform that also leans: @p scale, then the shear (Y rises by @p shear times X), then the Euler
+ *        XYZ @p rotation, then the translation to @p position. With a shear of 0, WorldTransform_Compose's matrix exactly.
+ * @param position The translation.
+ * @param rotation Euler angles in radians.
+ * @param scale The per-axis scale.
+ * @param shear How much Y rises per unit of X, after the scale.
+ * @returns The matrix.
+ */
+Matrix4Double WorldTransform_ComposeSheared(Vector3Double position, Vector3 rotation, Vector3 scale, float shear);
+
+/**
  * @brief Splits a matrix into the position, Euler XYZ rotation and scale that WorldTransform_Compose turns back into
  *        it (within float precision for the rotation and the scale; the position exactly).
  *

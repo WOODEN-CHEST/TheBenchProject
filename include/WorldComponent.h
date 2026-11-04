@@ -86,8 +86,11 @@ typedef enum WorldComponentTypeEnum
     /** @brief A path: a line through nodes that bends, which generators read; a closed one is also a region
      *  (WorldPathComponent.h). */
     WorldComponentType_Path = 10,
+    /** @brief A path object: a fence, hedge, railing or row of lamps along the nearest path at or above it
+     *  (WorldPathObjectComponent.h). */
+    WorldComponentType_PathObject = 11,
     /** @brief The number of standard types (not a type). */
-    WorldComponentType_Count = 11
+    WorldComponentType_Count = 12
 } WorldComponentType;
 
 /**

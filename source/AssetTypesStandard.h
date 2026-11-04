@@ -74,6 +74,10 @@
  *  texture dependencies). */
 #define ASSET_TYPE_NAME_WATER_MATERIAL      ((const unsigned char*)u8"water_material")
 #define ASSET_TYPE_DIRECTORY_WATER_MATERIAL ((const unsigned char*)u8"water_materials")
+/** @brief Standard path object type name / directory (PathObject.h: a fence, hedge, railing or row of lamps as slots of
+ *  weighted world models, loaded as dependencies, and how they fill a path). */
+#define ASSET_TYPE_NAME_PATH_OBJECT      ((const unsigned char*)u8"path_object")
+#define ASSET_TYPE_DIRECTORY_PATH_OBJECT ((const unsigned char*)u8"path_objects")
 
 /** @brief Definition-file extension (without the dot) for every standard type: their definitions are JSON.
  *  AssetManager_ReadDefinitions uses it to skip non-definition resource files sharing the type directory. */
@@ -145,6 +149,10 @@ Error TerrainMaterialDefinition_Construct(AssetManager* manager, const UserData*
 /** @brief Builds a water material definition from a JSON blob (WaterMaterialDefinition.c). See
  *  AssetDefinitionConstructor. */
 Error WaterMaterialDefinition_Construct(AssetManager* manager, const UserData* userData, const GenericBuffer* rawData,
+    const unsigned char* sourceDescription, AssetDefinition** outDefinition);
+
+/** @brief Builds a path object definition from a JSON blob. See AssetDefinitionConstructor. */
+Error PathObjectDefinition_Construct(AssetManager* manager, const UserData* userData, const GenericBuffer* rawData,
     const unsigned char* sourceDescription, AssetDefinition** outDefinition);
 
 /**

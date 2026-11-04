@@ -15,7 +15,7 @@ snap, so two generators on one path can differ, and only a node's section settin
 | WorldPathDebug (private) | `source/WorldPathDebug.{h,c}` | What the debug view draws, as a list of lines. The renderer draws any such list (`WorldRenderer_SetDebugLines`, `source/WorldRendererDebugLines.c`). |
 | Test content | objects 95 to 98 of the test world, `source/WorldTestPaths.{h,c}` | A walk, a park, two helices; the view's keys. |
 
-The format: `references/world_structure.md`, "The path block". Tests: `tests/PathCurveTests.c`, `tests/WorldPathTests.c` (also
+What reads a path so far: path objects ([PathObjects.md](PathObjects.md)). The format: `references/world_structure.md`, "The path block". Tests: `tests/PathCurveTests.c`, `tests/WorldPathTests.c` (also
 173 km out), the record list cases of `tests/PropertyDescriptorTests.c`, the unknown names in records in `tests/WorldFileTests.c`.
 
 ## Nodes

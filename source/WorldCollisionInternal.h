@@ -60,6 +60,18 @@
 
 
 // Types.
+/** How many of the latest ground changes the collision world remembers; a reader further behind than that takes everything as
+ *  changed. */
+#define WORLD_COLLISION_GROUND_CHANGE_COUNT 32U
+
+/** One change of the static world: which revision it was, the box it touched and whether a terrain made it. */
+typedef struct WorldCollisionGroundChangeStruct
+{
+    uint64_t Revision;
+    BoundingBoxDouble Box;
+    bool IsTerrain;
+} WorldCollisionGroundChange;
+
 /** An affine placement in the world: point p goes to X * p.x + Y * p.y + Z * p.z + Translation. The axes are floats
  *  (they mean the same anywhere); the translation is a double, so a far placement keeps a double's precision. */
 typedef struct WorldCollisionPlacementStruct
@@ -82,8 +94,10 @@ typedef struct WorldCollisionPoseStruct
 /** One shape of an instance, in world space. */
 typedef struct WorldCollisionShapeStruct
 {
-    /** The shape (borrowed from the world model, or the instance's OwnShape block). */
+    /** The shape (borrowed from the world model, the instance's OwnShape block or its PlacedShapes). */
     const CollisionShape* Shape;
+    /** Its matrix to the object's space while it is a placed shape (borrowed from PlacedShapes), or NULL: none. */
+    const Matrix4Double* Placement;
     /** Its index in its set (0 for an own shape). */
     uint32_t ShapeIndex;
     /** Shape space to the world, and the inverse of its axes (no translation): WorldCollisionInternal_PlaceShape gives
@@ -168,6 +182,9 @@ typedef struct WorldCollisionInstanceStruct
     /** The collider's own primitive, while Settings.UsesOwnShape: an owned block, allocated the first time, so its
      *  address survives the instances' buffer growing (its shape points at it); NULL before. */
     CollisionShape* OwnShape;
+    /** The shapes placed by code its shapes point into (a reference of its own, taken at a rebuild and given back at the next,
+     *  so what it was synced with stays valid until then); NULL for none. */
+    WorldColliderPlacedShapes* PlacedShapes;
     /** WorldCollisionShape elements. */
     GenericBuffer Shapes;
     /** The object's world placement and the inverse of its axes (local contact positions). */
@@ -439,6 +456,12 @@ struct WorldCollisionStruct
     uint64_t _moveCount;
     /** How many terrain chunks' collision meshes were built. */
     uint64_t _terrainChunkBuildCount;
+    /** What changed under what stands on the static world: a ring of the latest changes, and the revision of the newest
+     *  (WorldCollision_GetGroundRevision; each change takes the next). */
+    WorldCollisionGroundChange _groundChanges[WORLD_COLLISION_GROUND_CHANGE_COUNT];
+    uint64_t _groundRevision;
+    /** The revision of the last change that was a terrain's. */
+    uint64_t _terrainRevision;
 
     /* The step. */
     float _deltaSeconds;

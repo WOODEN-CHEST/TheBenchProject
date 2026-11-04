@@ -138,6 +138,31 @@ typedef struct WorldColliderSettingsStruct
 /**
  * @brief The collider component. Underscore-prefixed fields are read-only: use the accessors and setters (or the table).
  */
+/**
+ * @brief Shapes placed by code: what a generator (a path object's posts, a bent rail) hands a collider instead of a collision
+ *        set. Each shape has a matrix of its own in the object's space, so a copy of a world model's set can stand anywhere,
+ *        scaled and sheared, sharing that set's hulls and meshes.
+ *
+ * Counted references: WorldColliderPlacedShapes_Create gives the caller one, a collider and the collision world each hold one
+ * while they use the block, and it goes with the last. So a query between a change and the next sync still reads what it was
+ * synced with. The shapes' hulls and meshes are borrowed from whoever holds them (a world model under its holder's asset user)
+ * unless they are this block's own (Meshes). Filled once by the caller, then read-only.
+ */
+typedef struct WorldColliderPlacedShapesStruct
+{
+    /** @brief How many holders it has. */
+    uint32_t _referenceCount;
+    /** @brief How many shapes. */
+    size_t Count;
+    /** @brief The shapes, Count of them (a shape's own centre and rotation apply inside its placement). */
+    CollisionShape* Shapes;
+    /** @brief Each shape's matrix, from its space to the object's. */
+    Matrix4Double* Placements;
+    /** @brief The meshes this block owns, destroyed with it, and how many. */
+    CollisionMesh** Meshes;
+    size_t MeshCount;
+} WorldColliderPlacedShapes;
+
 typedef struct WorldColliderComponentStruct
 {
     /** @brief The component base (must be first). */
@@ -203,6 +228,9 @@ typedef struct WorldColliderComponentStruct
     bool _isContinuous;
     /** @brief Whether its contacts report every tick while they last (default false). */
     bool _reportsPersistingContacts;
+    /** @brief Runtime only: shapes placed by code, which replace its own shape and its world model's sets while it holds any
+     *  (a reference of its own, or NULL). Not a row: what a generator makes is never saved. */
+    WorldColliderPlacedShapes* _placedShapes;
 } WorldColliderComponent;
 
 
@@ -219,6 +247,35 @@ extern const PropertyEnumTable WORLD_COLLIDER_BLOCKED_MODE_ENUM;
  * @returns The entry (static).
  */
 const WorldComponentTypeInfo* WorldColliderComponent_GetTypeInfo(void);
+
+/**
+ * @brief Makes a block of placed shapes for the caller to fill: one allocation, every shape a default box at the identity, the
+ *        meshes all NULL. The caller holds the one reference.
+ * @param shapeCount How many shapes.
+ * @param meshCount How many meshes the block will own.
+ * @returns The block; never NULL (allocations in this project do not fail softly).
+ */
+WorldColliderPlacedShapes* WorldColliderPlacedShapes_Create(size_t shapeCount, size_t meshCount);
+
+/**
+ * @brief Takes one more reference.
+ * @param self The block, or NULL.
+ */
+void WorldColliderPlacedShapes_Retain(WorldColliderPlacedShapes* self);
+
+/**
+ * @brief Gives one reference back; the last frees the block and the meshes it owns.
+ * @param self The block, or NULL.
+ */
+void WorldColliderPlacedShapes_Release(WorldColliderPlacedShapes* self);
+
+/**
+ * @brief Gives the collider these shapes instead of its own shape and its world model's sets (NULL goes back to those), and
+ *        advances its revision, so the next sync rebuilds it. The shapes are never saved.
+ * @param self The collider; must not be NULL.
+ * @param shapes The block (the collider takes a reference of its own), or NULL.
+ */
+void WorldColliderComponent_SetPlacedShapes(WorldColliderComponent* self, WorldColliderPlacedShapes* shapes);
 
 /**
  * @brief Returns the collider component's property table ("collider_component").
@@ -249,6 +306,16 @@ static inline WorldComponent* WorldColliderComponent_AsComponent(WorldColliderCo
 
 
 // Functions: reading.
+/**
+ * @brief The shapes placed by code it holds.
+ * @param self The collider; must not be NULL.
+ * @returns The block (borrowed), or NULL for none.
+ */
+static inline WorldColliderPlacedShapes* WorldColliderComponent_GetPlacedShapes(const WorldColliderComponent* self)
+{
+    return self->_placedShapes;
+}
+
 /** @brief Whether the collider is in the collision world. @param self The component; must not be NULL. */
 static inline bool WorldColliderComponent_IsEnabled(const WorldColliderComponent* self)
 {

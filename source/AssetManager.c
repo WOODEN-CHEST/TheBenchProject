@@ -1841,6 +1841,8 @@ Error AssetManager_CreateStandardAssetTypes(AssetManager* self, StandardAssetTyp
             &outTypes->InputActions },
         { ASSET_TYPE_NAME_WATER_MATERIAL, ASSET_TYPE_DIRECTORY_WATER_MATERIAL, WaterMaterialDefinition_Construct,
             &outTypes->WaterMaterial },
+        { ASSET_TYPE_NAME_PATH_OBJECT, ASSET_TYPE_DIRECTORY_PATH_OBJECT, PathObjectDefinition_Construct,
+            &outTypes->PathObject },
     };
 
     for (size_t i = 0; i < (sizeof(Standard) / sizeof(Standard[0])); i++)
@@ -2786,6 +2788,12 @@ Error AssetManager_LoadWaterMaterial(AssetManager* self, const unsigned char* na
     WaterMaterial** outAsset)
 {
     return LoadStandard(self, (self != NULL) ? self->_standardTypes.WaterMaterial : ASSET_TYPE_ID_INVALID, name, user,
+        (void**)outAsset);
+}
+
+Error AssetManager_LoadPathObject(AssetManager* self, const unsigned char* name, AssetUserID user, PathObject** outAsset)
+{
+    return LoadStandard(self, (self != NULL) ? self->_standardTypes.PathObject : ASSET_TYPE_ID_INVALID, name, user,
         (void**)outAsset);
 }
 

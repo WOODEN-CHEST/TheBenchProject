@@ -733,6 +733,27 @@ void WorldCollision_ClearTriggerEvents(WorldCollision* self);
  */
 WorldCollisionStats WorldCollision_GetStats(const WorldCollision* self);
 
+/**
+ * @brief A number that moves whenever something static joined, left or moved in the collision world (a sync found it): what lies
+ *        on the ground needs looking at again. Movable colliders do not count.
+ * @param self The collision world; must not be NULL.
+ * @returns The revision.
+ */
+uint64_t WorldCollision_GetGroundRevision(const WorldCollision* self);
+
+/**
+ * @brief Whether the static world changed since a revision over an area, seen from above (only X and Z count: a change anywhere
+ *        below a point can be its ground). Reads the latest changes the collision world remembers; further back than those it
+ *        says yes (for a reader of terrains alone, whether any terrain changed since).
+ * @param self The collision world; must not be NULL.
+ * @param sinceRevision The revision the reader last looked at (WorldCollision_GetGroundRevision).
+ * @param area The area, in the world; must not be NULL.
+ * @param isTerrainOnly Whether only terrains count: what snaps to terrain alone cares for nothing else.
+ * @returns true when something in the area changed.
+ */
+bool WorldCollision_HasGroundChanged(const WorldCollision* self, uint64_t sinceRevision, const BoundingBoxDouble* area,
+    bool isTerrainOnly);
+
 
 // Functions: queries.
 /**

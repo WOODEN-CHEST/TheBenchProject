@@ -1,0 +1,8 @@
+{
+    "name": "tbp:test_hedge",
+    "lods": [
+        { "model": "tbp:test_hedge", "max_distance": 40 },
+        { "model": "tbp:test_hedge_lod1", "max_distance": 120 }
+    ],
+    "draw_distance": 200
+}

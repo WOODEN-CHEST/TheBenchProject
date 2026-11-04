@@ -47,6 +47,7 @@ typedef struct TestModelMeshStruct
 {
     float* Vertices;          // owned copies of a CPU-side mesh
     float* Texcoords;         // NULL: none
+    float* Tangents;          // NULL: none
     int VertexCount;
     unsigned short* Indices;  // NULL: every three vertices are a triangle
     int TriangleCount;
@@ -291,6 +292,7 @@ static void TestModelLoaded_Destroy(LoadedAsset* self, AssetManager* manager)
         {
             Memory_Free(Loaded->Model._rayModel.meshes[MeshIndex].vertices);
             Memory_Free(Loaded->Model._rayModel.meshes[MeshIndex].texcoords);
+            Memory_Free(Loaded->Model._rayModel.meshes[MeshIndex].tangents);
             Memory_Free(Loaded->Model._rayModel.meshes[MeshIndex].indices);
         }
         Memory_Free(Loaded->Model._rayModel.meshes);
@@ -325,6 +327,7 @@ static void AddTestMeshes(const TestModelDefinition* definition, Model* model)
         Mesh* Target = &Built[Index];
         Target->vertices = CopyFloats(Source->Vertices, (size_t)Source->VertexCount * 3U);
         Target->texcoords = CopyFloats(Source->Texcoords, (size_t)Source->VertexCount * 2U);
+        Target->tangents = CopyFloats(Source->Tangents, (size_t)Source->VertexCount * 4U);
         Target->vertexCount = Source->VertexCount;
         if (Source->Indices != NULL)
         {
@@ -383,6 +386,7 @@ static void TestModelDefinition_Destroy(void* self)
     {
         Memory_Free(Definition->Meshes[Index].Vertices);
         Memory_Free(Definition->Meshes[Index].Texcoords);
+        Memory_Free(Definition->Meshes[Index].Tangents);
         Memory_Free(Definition->Meshes[Index].Indices);
     }
     Memory_Free(Definition->Meshes);
@@ -749,6 +753,7 @@ bool TestAssets_AddPartsModel(TestRun* run, TestAssetFixture* fixture, const cha
         TestModelMesh* Copy = &Definition->Meshes[Index];
         Copy->Vertices = CopyFloats(Part->Vertices, (size_t)Part->VertexCount * 3U);
         Copy->Texcoords = CopyFloats(Part->Texcoords, (size_t)Part->VertexCount * 2U);
+        Copy->Tangents = CopyFloats(Part->Tangents, (size_t)Part->VertexCount * 4U);
         Copy->VertexCount = Part->VertexCount;
         if (Part->Indices != NULL)
         {

@@ -1,0 +1,8 @@
+{
+    "name": "tbp:test_panel",
+    "lods": [
+        { "model": "tbp:test_panel", "max_distance": 30 },
+        { "model": "tbp:test_panel_lod1", "max_distance": 90 }
+    ],
+    "draw_distance": 150
+}

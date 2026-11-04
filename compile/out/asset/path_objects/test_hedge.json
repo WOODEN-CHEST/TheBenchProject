@@ -1,0 +1,19 @@
+{
+    "name": "tbp:test_hedge",
+    "models": [
+        {
+            "slot": "middle",
+            "world_model": "tbp:test_hedge"
+        }
+    ],
+    "seed": 3,
+    "slots": [
+        {
+            "slot": "middle",
+            "curve": "bent",
+            "slice_spacing": 0.5,
+            "collision": "mesh",
+            "flip": "random"
+        }
+    ]
+}

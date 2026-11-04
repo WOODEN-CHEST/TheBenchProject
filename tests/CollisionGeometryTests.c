@@ -122,6 +122,71 @@ static CollisionMesh* MakeQuadMesh(TestRun* run)
 
 
 // Static functions: maths.
+/* Two shapes compare by their fields, whatever their padding holds, and every field counts. */
+static void ShapesCompareByTheirFields(TestRun* run)
+{
+    CollisionShape First;
+    CollisionShape Second;
+    Memory_Set(&First, 0x00, sizeof(First));
+    Memory_Set(&Second, -91, sizeof(Second));
+    CollisionShape Made = CollisionShape_Create(CollisionShapeType_Box);
+    CollisionShape* const Both[2] = { &First, &Second };
+    for (size_t Index = 0U; Index < 2U; Index++)
+    {
+        CollisionShape* Into = Both[Index];
+        Into->Type = Made.Type;
+        Into->Center = Made.Center;
+        Into->Rotation = Made.Rotation;
+        Into->Name = NULL;
+        Into->Radius = Made.Radius;
+        Into->HalfHeight = Made.HalfHeight;
+        Into->HalfExtents = Made.HalfExtents;
+        Into->IsBounded = Made.IsBounded;
+        Into->PlaneHalfExtents = Made.PlaneHalfExtents;
+        Into->Depth = Made.Depth;
+        Into->Hull = NULL;
+        Into->Mesh = NULL;
+        Into->IsTwoSided = Made.IsTwoSided;
+    }
+    TEST_CHECK(run, CollisionShape_Equals(&First, &Second));
+    // Every change counts, and an equal name in another block is equal.
+    int Dummy = 0;
+    static const unsigned char NameA[] = u8"post";
+    static const unsigned char NameB[] = u8"post";
+    static const unsigned char NameC[] = u8"rail";
+    for (size_t Field = 0U; Field < 16U; Field++)
+    {
+        CollisionShape Changed = First;
+        switch (Field)
+        {
+            case 0U: Changed.Type = CollisionShapeType_Sphere; break;
+            case 1U: Changed.Center.x = 1.0f; break;
+            case 2U: Changed.Center.z = 1.0f; break;
+            case 3U: Changed.Rotation.y = 1.0f; break;
+            case 4U: Changed.Name = NameA; break;
+            case 5U: Changed.Radius = 3.0f; break;
+            case 6U: Changed.HalfHeight = 3.0f; break;
+            case 7U: Changed.HalfExtents.x = 3.0f; break;
+            case 8U: Changed.HalfExtents.y = 3.0f; break;
+            case 9U: Changed.IsBounded = !Changed.IsBounded; break;
+            case 10U: Changed.PlaneHalfExtents.x = 3.0f; break;
+            case 11U: Changed.PlaneHalfExtents.y = 3.0f; break;
+            case 12U: Changed.Depth = 3.0f; break;
+            case 13U: Changed.Hull = (const CollisionHull*)&Dummy; break;
+            case 14U: Changed.Mesh = (const CollisionMesh*)&Dummy; break;
+            default: Changed.IsTwoSided = !Changed.IsTwoSided; break;
+        }
+        TEST_CHECK(run, !CollisionShape_Equals(&First, &Changed) && !CollisionShape_Equals(&Changed, &First));
+    }
+    CollisionShape Named = First;
+    CollisionShape NamedToo = First;
+    Named.Name = NameA;
+    NamedToo.Name = NameB;
+    TEST_CHECK(run, CollisionShape_Equals(&Named, &NamedToo));
+    NamedToo.Name = NameC;
+    TEST_CHECK(run, !CollisionShape_Equals(&Named, &NamedToo));
+}
+
 static void AffineTransformsInvertAndCompose(TestRun* run)
 {
     CollisionAffine Placed = MakeTransform(V3(1.0f, -2.0f, 3.0f), V3(30.0f, 45.0f, -60.0f), V3(2.0f, 0.5f, 3.0f));
@@ -1468,6 +1533,7 @@ void CollisionGeometryTests_Run(TestRun* run)
 {
     static const TestCase Cases[] =
     {
+        { "shapes_compare_by_their_fields", ShapesCompareByTheirFields },
         { "affine_transforms_invert_and_compose", AffineTransformsInvertAndCompose },
         { "closest_points_on_segments_and_triangles", ClosestPointsOnSegmentsAndTriangles },
         { "poses_turn_at_a_constant_rate", PosesTurnAtAConstantRate },

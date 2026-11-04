@@ -36,6 +36,7 @@
 #define PROPERTY_JSON_INSTANCE_POSITION_KEY ((const unsigned char*)u8"position")
 #define PROPERTY_JSON_INSTANCE_ROTATION_KEY ((const unsigned char*)u8"rotation")
 #define PROPERTY_JSON_INSTANCE_SCALE_KEY ((const unsigned char*)u8"scale")
+#define PROPERTY_JSON_INSTANCE_SHEAR_KEY ((const unsigned char*)u8"shear")
 #define PROPERTY_JSON_INSTANCE_TINT_KEY ((const unsigned char*)u8"tint")
 /** The channel value of an opaque white tint, an instance's default. */
 #define PROPERTY_JSON_INSTANCE_TINT_DEFAULT_CHANNEL 255U
@@ -174,7 +175,8 @@ static bool IsInstanceTintDefault(Color tint)
 }
 
 /* One instance as a compound: its position always; its rotation (in degrees), its scale (one number while its three
- * components are equal) and its tint only when they are not the defaults (no turn, its model's size, opaque white). */
+ * components are equal), its shear and its tint only when they are not the defaults (no turn, its model's size, no
+ * shear, opaque white). */
 static Error CreateInstanceValue(JSONObjectPool* pool, const PropertyInstanceEntry* entry, JSONObjectValue* outValue)
 {
     JSONCompound* Compound = NULL;
@@ -216,6 +218,11 @@ static Error CreateInstanceValue(JSONObjectPool* pool, const PropertyInstanceEnt
         {
             Result = SetPooledValue(pool, Compound, PROPERTY_JSON_INSTANCE_SCALE_KEY, &Value);
         }
+    }
+    if ((Result.Code == ErrorCode_Success) && (entry->Shear != 0.0f))
+    {
+        Value = GameJSON_CreateFloatValue(entry->Shear);
+        Result = SetPooledValue(pool, Compound, PROPERTY_JSON_INSTANCE_SHEAR_KEY, &Value);
     }
     if ((Result.Code == ErrorCode_Success) && !IsInstanceTintDefault(entry->Tint))
     {
@@ -803,6 +810,17 @@ static Error ReadInstanceScaleKey(const JSONObjectValue* value, void* outValue)
     return ReadInstanceScale(value, outValue);
 }
 
+static Error ReadInstanceShear(const JSONObjectValue* value, void* outValue)
+{
+    double Shear = 0.0;
+    Error Result = GameJSON_ValueToDouble(value, &Shear);
+    if (Result.Code == ErrorCode_Success)
+    {
+        *(float*)outValue = (float)Shear;
+    }
+    return Result;
+}
+
 static Error ReadInstanceTint(const JSONObjectValue* value, void* outValue)
 {
     return GameJSON_ParseColor(value, outValue);
@@ -833,11 +851,11 @@ static Error ReadInstanceKey(JSONCompound* compound, const unsigned char* key, I
 
 static void AppendKey(GenericBuffer* list, const unsigned char* key, bool isFirst);
 
-/* Whether a key is one of an instance's four. */
+/* Whether a key is one of an instance's five. */
 static bool IsInstanceKey(const unsigned char* key)
 {
     const unsigned char* const Keys[] = { PROPERTY_JSON_INSTANCE_POSITION_KEY, PROPERTY_JSON_INSTANCE_ROTATION_KEY,
-        PROPERTY_JSON_INSTANCE_SCALE_KEY, PROPERTY_JSON_INSTANCE_TINT_KEY };
+        PROPERTY_JSON_INSTANCE_SCALE_KEY, PROPERTY_JSON_INSTANCE_SHEAR_KEY, PROPERTY_JSON_INSTANCE_TINT_KEY };
     size_t Length = StringUTF8_GetByteLength(key);
     for (size_t Index = 0U; Index < (sizeof(Keys) / sizeof(Keys[0])); Index++)
     {
@@ -849,7 +867,7 @@ static bool IsInstanceKey(const unsigned char* key)
     return false;
 }
 
-/* The error for an instance's compound that holds a key other than its four, naming the first such key (quoted and cut
+/* The error for an instance's compound that holds a key other than its five, naming the first such key (quoted and cut
  * as the tables' unknown keys are). */
 static Error CreateUnknownInstanceKeyError(JSONCompound* compound)
 {
@@ -880,9 +898,10 @@ static Error CreateUnknownInstanceKeyError(JSONCompound* compound)
     }
     Error Refusal = IsNamed
         ? Error_Construct4(ErrorCode_InvalidJSON, ": %s is not a key of an instance (\"position\", \"rotation\", "
-            "\"scale\" or \"tint\").", (const char*)Name._data)
+            "\"scale\", \"shear\" or \"tint\").", (const char*)Name._data)
         : Error_Construct2(ErrorCode_InvalidJSON,
-            ": An instance holds a key other than \"position\", \"rotation\", \"scale\" and \"tint\".");
+            ": An instance holds a key other than \"position\", \"rotation\", \"scale\", \"shear\" and "
+            "\"tint\".");
     Memory_Free(Name._data);
     return Refusal;
 }
@@ -895,7 +914,7 @@ static Error ReadInstance(const JSONObjectValue* value, PropertyInstanceEntry* o
     if (value->Type != JSONValueType_Compound)
     {
         return Error_Construct2(ErrorCode_InvalidJSON, ": Expected an instance: an object with a position, and "
-            "optionally a rotation, a scale and a tint.");
+            "optionally a rotation, a scale, a shear and a tint.");
     }
     JSONCompound* Compound = value->Value.Compound;
     PropertyInstanceEntry Entry = PropertyInstanceEntry_CreateDefault();
@@ -911,6 +930,10 @@ static Error ReadInstance(const JSONObjectValue* value, PropertyInstanceEntry* o
     {
         Result = ReadInstanceKey(Compound, PROPERTY_JSON_INSTANCE_SCALE_KEY, ReadInstanceScaleKey, &Entry.Scale,
             &FoundCount);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadInstanceKey(Compound, PROPERTY_JSON_INSTANCE_SHEAR_KEY, ReadInstanceShear, &Entry.Shear, &FoundCount);
     }
     if (Result.Code == ErrorCode_Success)
     {

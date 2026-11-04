@@ -1,0 +1,45 @@
+{
+    "name": "tbp:test_fence",
+    "models": [
+        {
+            "slot": "middle",
+            "world_model": "tbp:test_panel"
+        },
+        {
+            "slot": "separator",
+            "world_model": "tbp:test_post"
+        },
+        {
+            "slot": "start_cap",
+            "world_model": "tbp:test_post"
+        },
+        {
+            "slot": "end_cap",
+            "world_model": "tbp:test_post"
+        }
+    ],
+    "has_separator": true,
+    "has_start_cap": true,
+    "has_end_cap": true,
+    "slots": [
+        {
+            "slot": "separator",
+            "length": 0.0,
+            "collision": "model"
+        },
+        {
+            "slot": "start_cap",
+            "length": 0.0,
+            "collision": "model"
+        },
+        {
+            "slot": "end_cap",
+            "length": 0.0,
+            "collision": "model"
+        },
+        {
+            "slot": "middle",
+            "collision": "none"
+        }
+    ]
+}

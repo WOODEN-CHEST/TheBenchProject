@@ -104,6 +104,48 @@ static uint32_t AllocateSlot(WorldCollision* self)
     return Slot;
 }
 
+/* Remembers that the static world changed in a box. */
+static void RecordGroundChange(WorldCollision* self, const BoundingBoxDouble* box, bool isTerrain)
+{
+    self->_groundRevision++;
+    self->_terrainRevision = isTerrain ? self->_groundRevision : self->_terrainRevision;
+    self->_groundChanges[self->_groundRevision % WORLD_COLLISION_GROUND_CHANGE_COUNT] =
+        (WorldCollisionGroundChange){ .Revision = self->_groundRevision, .Box = *box, .IsTerrain = isTerrain };
+}
+
+/* Remembers that a static instance's shapes changed where they stand now: the box of its shapes in the trees (an unbounded plane
+ * counts everywhere). Nothing for a movable one. */
+static void RecordInstanceGroundChange(WorldCollision* self, const WorldCollisionInstance* instance)
+{
+    if (!instance->IsStatic)
+    {
+        return;
+    }
+    BoundingBoxDouble Box = { .Min = Vector3Double_Create(DBL_MAX, DBL_MAX, DBL_MAX),
+        .Max = Vector3Double_Create(-DBL_MAX, -DBL_MAX, -DBL_MAX) };
+    bool HasAny = false;
+    for (uint32_t Index = 0U; Index < (uint32_t)instance->Shapes._count; Index++)
+    {
+        const WorldCollisionShape* Shape = WorldCollisionInternal_GetShape((WorldCollisionInstance*)instance, Index);
+        if (!Shape->IsValid)
+        {
+            continue;
+        }
+        HasAny = true;
+        if (Shape->IsUnbounded)
+        {
+            Box.Min = Vector3Double_Create(-DBL_MAX, -DBL_MAX, -DBL_MAX);
+            Box.Max = Vector3Double_Create(DBL_MAX, DBL_MAX, DBL_MAX);
+            break;
+        }
+        Box = BoundingBoxDouble_Union(Box, Shape->Box);
+    }
+    if (HasAny)
+    {
+        RecordGroundChange(self, &Box, instance->Terrain != NULL);
+    }
+}
+
 /* Takes an instance's shapes out of the trees and the planes list. */
 static void Deactivate(WorldCollision* self, WorldCollisionInstance* instance, uint32_t slot)
 {
@@ -113,6 +155,7 @@ static void Deactivate(WorldCollision* self, WorldCollisionInstance* instance, u
     {
         return;
     }
+    RecordInstanceGroundChange(self, instance);
     CollisionTree* Tree = instance->IsStatic ? &self->_staticTree : &self->_movableTree;
     for (uint32_t Index = 0U; Index < (uint32_t)instance->Shapes._count; Index++)
     {
@@ -171,6 +214,7 @@ static void FreeSlot(WorldCollision* self, uint32_t slot)
     Memory_Free(Instance->WorldModelName);
     Memory_Free(Instance->TerrainName);
     Memory_Free(Instance->OwnShape);
+    WorldColliderPlacedShapes_Release(Instance->PlacedShapes);
     Memory_Zero(Instance, sizeof(*Instance));
     Instance->NextFree = self->_freeSlot;
     self->_freeSlot = slot;
@@ -441,6 +485,10 @@ static bool UpdatePoseShapes(WorldCollisionInstance* instance)
 static bool PlaceShape(WorldCollisionShape* shape, const Matrix4Double* colliderToWorld)
 {
     Matrix4Double ShapeTransform = GameMath_FromMatrix(CollisionShape_GetTransform(shape->Shape));
+    if (shape->Placement != NULL)
+    {
+        ShapeTransform = Matrix4Double_Multiply(&ShapeTransform, shape->Placement);
+    }
     Matrix4Double ShapeToWorld = Matrix4Double_Multiply(&ShapeTransform, colliderToWorld);
     shape->ShapeToWorld = MakePlacement(&ShapeToWorld);
     bool IsValid = TryInvertAxes(&shape->ShapeToWorld, &shape->WorldToShapeAxes);
@@ -487,12 +535,18 @@ static void Activate(WorldCollision* self, WorldCollisionInstance* instance, uin
         Shape->Proxy = CollisionTree_Insert(Tree, Shape->Box, Key);
     }
     instance->IsActive = true;
+    RecordInstanceGroundChange(self, instance);
 }
 
-/* The shapes the settings in effect name: the collider's own, a set of the world model, or none. */
+/* The shapes the settings in effect name: those placed by code, the collider's own, a set of the world model, or none. */
 static const CollisionShape* GetSourceShapes(WorldCollisionInstance* instance, uint32_t* outCount)
 {
     *outCount = 0U;
+    if (instance->PlacedShapes != NULL)
+    {
+        *outCount = (uint32_t)instance->PlacedShapes->Count;
+        return instance->PlacedShapes->Shapes;
+    }
     if (instance->Settings.UsesOwnShape)
     {
         if (instance->OwnShape == NULL)
@@ -556,10 +610,15 @@ static void Rebuild(WorldCollision* self, WorldCollisionInstance* instance, uint
     Deactivate(self, instance, slot);
     instance->HasLastPose = HadLastPose;
     GenericBuffer_Clear(&instance->Shapes);
+    // The block the old shapes pointed into goes now that they do; this one stays until the next rebuild.
+    WorldColliderPlacedShapes* Placed = WorldColliderComponent_GetPlacedShapes(instance->Collider);
+    WorldColliderPlacedShapes_Retain(Placed);
+    WorldColliderPlacedShapes_Release(instance->PlacedShapes);
+    instance->PlacedShapes = Placed;
     const WorldModelCollision* Collision = (instance->WorldModel != NULL) ? WorldModel_GetCollision(instance->WorldModel)
         : NULL;
     WorldColliderComponent_ResolveSettings(instance->Collider, Collision, &instance->Settings);
-    if (instance->Settings.IsSetMissing && !instance->HasWarnedSet)
+    if (instance->Settings.IsSetMissing && !instance->HasWarnedSet && (Placed == NULL))
     {
         instance->HasWarnedSet = true;
         WarnAbout(self, instance, "has no collision: its world model has no collision set",
@@ -567,7 +626,8 @@ static void Rebuild(WorldCollision* self, WorldCollisionInstance* instance, uint
     }
     uint32_t Count = 0U;
     const CollisionShape* Shapes = GetSourceShapes(instance, &Count);
-    if ((Count == 0U) && !instance->Settings.IsSetMissing && !instance->HasWarnedNoShapes && (instance->WorldModel != NULL))
+    if ((Count == 0U) && !instance->Settings.IsSetMissing && !instance->HasWarnedNoShapes && (instance->WorldModel != NULL)
+        && (Placed == NULL))
     {
         instance->HasWarnedNoShapes = true;
         WarnAbout(self, instance, "has a collider but no shapes: it uses no own shape and its world model",
@@ -583,10 +643,11 @@ static void Rebuild(WorldCollision* self, WorldCollisionInstance* instance, uint
         WorldCollisionShape Shape;
         Memory_Zero(&Shape, sizeof(Shape));
         Shape.Shape = &Shapes[Index];
+        Shape.Placement = (Placed != NULL) ? &Placed->Placements[Index] : NULL;
         Shape.ShapeIndex = Index;
         Shape.Proxy = COLLISION_TREE_NULL;
         Shape.IsSizeValid = true;
-        if (instance->Settings.UsesOwnShape)
+        if ((Placed == NULL) && instance->Settings.UsesOwnShape)
         {
             // An own shape's sizes come from the rows: a cylinder of half height 0 is flat.
             Error Check = CollisionShape_Validate(Shape.Shape);
@@ -614,6 +675,7 @@ static void Move(WorldCollision* self, WorldCollisionInstance* instance, uint32_
     UpdateObjectTransform(instance, &ObjectWorld);
     Matrix4Double Frame = GetInstanceFrame(instance, Object, &ObjectWorld, &instance->Pose);
     CollisionTree* Tree = instance->IsStatic ? &self->_staticTree : &self->_movableTree;
+    RecordInstanceGroundChange(self, instance); // where it was
     for (uint32_t Index = 0U; Index < (uint32_t)instance->Shapes._count; Index++)
     {
         WorldCollisionShape* Shape = WorldCollisionInternal_GetShape(instance, Index);
@@ -638,6 +700,7 @@ static void Move(WorldCollision* self, WorldCollisionInstance* instance, uint32_
     }
     if (instance->IsStatic)
     {
+        RecordInstanceGroundChange(self, instance); // where it is
         // A static object never moves in play: its move is a teleport, with no sweep.
         instance->IsChanged = true;
         instance->LastPose = instance->Pose;
@@ -809,6 +872,10 @@ static void UpdateTerrainChunks(WorldCollision* self, WorldCollisionInstance* in
             continue;
         }
         WorldCollisionShape* Shape = isPlacing ? WorldCollisionInternal_GetShape(instance, Chunk) : NULL;
+        if ((Shape != NULL) && Shape->IsValid && instance->IsStatic)
+        {
+            RecordGroundChange(self, &Shape->Box, true); // where it was
+        }
         if ((Shape != NULL) && (Shape->Proxy != COLLISION_TREE_NULL))
         {
             CollisionTree_Remove(Tree, Shape->Proxy);
@@ -823,6 +890,10 @@ static void UpdateTerrainChunks(WorldCollision* self, WorldCollisionInstance* in
             if (Shape->IsValid)
             {
                 Shape->Proxy = CollisionTree_Insert(Tree, Shape->Box, WorldCollisionInternal_MakeKey(slot, Chunk));
+                if (instance->IsStatic)
+                {
+                    RecordGroundChange(self, &Shape->Box, true); // where it is
+                }
             }
         }
     }
@@ -1176,6 +1247,7 @@ void WorldCollision_Destroy(WorldCollision* self)
             Memory_Free(Instance->WorldModelName);
             Memory_Free(Instance->TerrainName);
             Memory_Free(Instance->OwnShape);
+            WorldColliderPlacedShapes_Release(Instance->PlacedShapes);
         }
     }
     CollisionTree_Deconstruct(&self->_staticTree);
@@ -1236,6 +1308,35 @@ const WorldTriggerEvent* WorldCollision_GetTriggerEvents(const WorldCollision* s
 void WorldCollision_ClearTriggerEvents(WorldCollision* self)
 {
     GenericBuffer_Clear(&self->_triggerEvents);
+}
+
+uint64_t WorldCollision_GetGroundRevision(const WorldCollision* self)
+{
+    return self->_groundRevision;
+}
+
+bool WorldCollision_HasGroundChanged(const WorldCollision* self, uint64_t sinceRevision, const BoundingBoxDouble* area,
+    bool isTerrainOnly)
+{
+    if (self->_groundRevision <= sinceRevision)
+    {
+        return false;
+    }
+    if ((self->_groundRevision - sinceRevision) > WORLD_COLLISION_GROUND_CHANGE_COUNT)
+    {
+        return !isTerrainOnly || (self->_terrainRevision > sinceRevision);
+    }
+    for (uint64_t Revision = sinceRevision + 1U; Revision <= self->_groundRevision; Revision++)
+    {
+        const WorldCollisionGroundChange* Change = &self->_groundChanges[Revision % WORLD_COLLISION_GROUND_CHANGE_COUNT];
+        if ((isTerrainOnly && !Change->IsTerrain) || (Change->Box.Max.X < area->Min.X) || (Change->Box.Min.X > area->Max.X)
+            || (Change->Box.Max.Z < area->Min.Z) || (Change->Box.Min.Z > area->Max.Z))
+        {
+            continue;
+        }
+        return true;
+    }
+    return false;
 }
 
 WorldCollisionStats WorldCollision_GetStats(const WorldCollision* self)

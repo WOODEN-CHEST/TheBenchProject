@@ -10,6 +10,8 @@
 #include "NamespacedKey.h"
 #include "WorldEnvironment.h"
 #include "WorldObject.h"
+#include "PathObject.h"
+#include "WorldPathObjectComponent.h"
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
 #include "WorldLightComponent.h"
@@ -697,6 +699,8 @@ static void TablesPassTheirCheck(TestRun* run)
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldSprite_GetRenderPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldLightComponent_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldColliderComponent_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldPathObjectComponent_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(PathObject_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldTerrainComponent_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldModelInstancesComponent_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldPathComponent_GetPropertyTable()));
@@ -2808,6 +2812,132 @@ static Error ReadHandMadeInstances(TestRun* run, GHDFObjectPool* pool, size_t po
     return Result;
 }
 
+/* Reads a hand-made instance list compound of two instances whose shear array holds @p shears elements of @p shear. */
+static Error ReadHandMadeShears(TestRun* run, GHDFObjectPool* pool, size_t shears, float shear, InstanceListRecord* record)
+{
+    GHDFCompound* Root = NULL;
+    GHDFCompound* List = NULL;
+    if (!TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(pool, &Root))
+        || !TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(pool, &List)))
+    {
+        return Error_Construct2(ErrorCode_InvalidState, "no compound");
+    }
+    PutInstanceArray(run, pool, List, 1U, GHDFObjectValue_CreateDouble(1.0), 6U);
+    PutInstanceArray(run, pool, List, 5U, GHDFObjectValue_CreateFloat(shear), shears);
+    GHDFObjectValue ListValue = GHDFObjectValue_CreateCompound(List);
+    TEST_CHECK_SUCCESS(run, GHDFCompound_SetValue(Root, 1U, GHDF_CreateRegularType(GHDFValueType_Compound), &ListValue));
+    Error Result = Properties_ReadGHDF(&InstanceListTable, Root, record, NULL);
+    TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(pool, Root, true));
+    return Result;
+}
+
+/* A copy's shear: part of its comparison, written only by the instances (JSON) and the lists (GHDF) that have one, and checked
+ * on the way in as a rotation and a scale are. */
+static void AnInstancesShearGoesThroughTheTables(TestRun* run)
+{
+    PropertyInstanceEntry Entries[2] = { PropertyInstanceEntry_CreateDefault(), PropertyInstanceEntry_CreateDefault() };
+    Entries[1].Shear = 0.375f;
+    PropertyInstanceList* List = NULL;
+    PropertyInstanceList* Level = NULL;
+    InstanceListRecord Record;
+    InstanceListRecord Other;
+    JSONObjectPool* Pool = NULL;
+    GHDFObjectPool* BinaryPool = NULL;
+    TEST_CHECK(run, PropertyInstanceEntry_CreateDefault().Shear == 0.0f);
+    if (!TEST_CHECK_SUCCESS(run, PropertyInstanceList_Create(Entries, 2U, &List))
+        || !TEST_CHECK_SUCCESS(run, Properties_Construct(&InstanceListTable, &Record))
+        || !TEST_CHECK_SUCCESS(run, Properties_Construct(&InstanceListTable, &Other))
+        || !TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)) || !TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&BinaryPool)))
+    {
+        return;
+    }
+    Entries[1].Shear = 0.0f;
+    if (TEST_CHECK_SUCCESS(run, PropertyInstanceList_Create(Entries, 2U, &Level)))
+    {
+        TEST_CHECK(run, !PropertyInstanceList_Equals(List, Level));
+    }
+    PropertyValue Value = PropertyValue_FromInstanceList(List);
+    TEST_CHECK_SUCCESS(run, Properties_Set(&InstanceListTable, &Record, u8"instances", &Value));
+
+    // JSON: only the leaning instance names one.
+    JSONCompound* Compound = NULL;
+    if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Compound)))
+    {
+        TEST_CHECK_SUCCESS(run, Properties_WriteJSON(&InstanceListTable, &Record, Pool, Compound, NULL));
+        JSONObjectValue Array;
+        if (TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Compound, u8"instances", JSONValueType_Array, &Array)))
+        {
+            const char* const OnlyPosition[] = { "position" };
+            const char* const WithShear[] = { "position", "shear" };
+            CheckWrittenInstance(run, Array.Value.Array, 0U, OnlyPosition, 1U);
+            CheckWrittenInstance(run, Array.Value.Array, 1U, WithShear, 2U);
+        }
+        TEST_CHECK_SUCCESS(run, Properties_ReadJSON(&InstanceListTable, Compound, &Other, NULL));
+        TEST_CHECK(run, PropertyInstanceList_Equals(Other.Instances, List));
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnCompound(Pool, Compound, true));
+    }
+    static const char* const RefusedTexts[] =
+    {
+        "{\"instances\": [{}, {\"shear\": \"steep\"}]}",
+        "{\"instances\": [{}, {\"shear\": 1e300}]}",
+    };
+    for (size_t Index = 0U; Index < (sizeof(RefusedTexts) / sizeof(RefusedTexts[0])); Index++)
+    {
+        const char* const Fragments[] = { "test_instance_list", (Index == 0U) ? "[1].shear" : "instance 1", NULL };
+        TestText_CheckErrorMessage(run, ReadInstanceListFromText(run, Pool, RefusedTexts[Index], &Other), ErrorCode_InvalidJSON,
+            Fragments);
+        TEST_CHECK(run, PropertyInstanceList_Equals(Other.Instances, List));
+    }
+
+    // GHDF: an array of one float per instance under its id, and none for a list with no shear at all.
+    GHDFCompound* Binary = NULL;
+    if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(BinaryPool, &Binary)))
+    {
+        TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&InstanceListTable, &Record, BinaryPool, Binary, NULL));
+        GHDFObjectValue Entry;
+        GHDFObjectValue Shears;
+        TEST_CHECK(run, TEST_CHECK_SUCCESS(run, GHDFCompound_GetVerified(Binary, 1U,
+            GHDF_CreateRegularType(GHDFValueType_Compound), &Entry))
+            && TEST_CHECK_SUCCESS(run, GHDFCompound_GetVerified(Entry.Value.Compound, 5U,
+                GHDF_CreateArrayType(GHDFValueType_Float), &Shears))
+            && (GHDFArray_GetElementCount(Shears.Value.Array) == 2U));
+        TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&InstanceListTable, Binary, &Other, NULL));
+        TEST_CHECK(run, PropertyInstanceList_Equals(Other.Instances, List));
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(BinaryPool, Binary, true));
+    }
+    TEST_CHECK_ERROR(run, ReadHandMadeShears(run, BinaryPool, 1U, 0.5f, &Other), ErrorCode_Deserialize);
+    TEST_CHECK_ERROR(run, ReadHandMadeShears(run, BinaryPool, 3U, 0.5f, &Other), ErrorCode_Deserialize);
+    const char* const NotFinite[] = { "shear", "instance 0", NULL };
+    TestText_CheckErrorMessage(run, ReadHandMadeShears(run, BinaryPool, 2U, NAN, &Other), ErrorCode_Deserialize, NotFinite);
+    TestText_CheckErrorMessage(run, ReadHandMadeShears(run, BinaryPool, 2U, INFINITY, &Other), ErrorCode_Deserialize, NotFinite);
+    TEST_CHECK(run, PropertyInstanceList_Equals(Other.Instances, List));
+    TEST_CHECK_SUCCESS(run, ReadHandMadeShears(run, BinaryPool, 2U, -0.5f, &Other));
+    TEST_CHECK(run, (PropertyInstanceList_GetCount(Other.Instances) == 2U)
+        && (PropertyInstanceList_GetEntries(Other.Instances)[1].Shear == -0.5f));
+
+    // A list with no shear leaves the array out, and reads back level.
+    if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(BinaryPool, &Binary)))
+    {
+        PropertyValue LevelValue = PropertyValue_FromInstanceList(Level);
+        TEST_CHECK_SUCCESS(run, Properties_Set(&InstanceListTable, &Record, u8"instances", &LevelValue));
+        TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&InstanceListTable, &Record, BinaryPool, Binary, NULL));
+        GHDFObjectValue Entry;
+        TEST_CHECK(run, TEST_CHECK_SUCCESS(run, GHDFCompound_GetVerified(Binary, 1U,
+            GHDF_CreateRegularType(GHDFValueType_Compound), &Entry))
+            && (GHDFCompound_GetEntryCount(Entry.Value.Compound) == 1U));
+        TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&InstanceListTable, Binary, &Other, NULL));
+        TEST_CHECK(run, PropertyInstanceList_Equals(Other.Instances, Level)
+            && (PropertyInstanceList_GetEntries(Other.Instances)[1].Shear == 0.0f));
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_ReturnCompound(BinaryPool, Binary, true));
+    }
+    Properties_Deconstruct(&InstanceListTable, &Record);
+    Properties_Deconstruct(&InstanceListTable, &Other);
+    TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(BinaryPool));
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+    PropertyInstanceList_Destroy(Level);
+    PropertyInstanceList_Destroy(List);
+}
+
 static void InstanceListsGoThroughTheTables(TestRun* run)
 {
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(&InstanceListTable));
@@ -3725,6 +3855,7 @@ void PropertyDescriptorTests_Run(TestRun* run)
         { "asset_name_lists_go_through_the_tables", AssetNameListsGoThroughTheTables },
         { "asset_name_list_rows_are_checked", AssetNameListRowsAreChecked },
         { "instance_lists_go_through_the_tables", InstanceListsGoThroughTheTables },
+        { "an_instances_shear_goes_through_the_tables", AnInstancesShearGoesThroughTheTables },
         { "instance_list_rows_are_checked", InstanceListRowsAreChecked },
         { "record_lists_go_through_the_tables", RecordListsGoThroughTheTables },
         { "record_list_rows_are_checked", RecordListRowsAreChecked },

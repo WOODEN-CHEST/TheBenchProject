@@ -832,6 +832,7 @@ Error WorldRenderer_Create(AssetManager* assetManager, Logger* logger, const Gam
     WorldRendererSprites_Construct(Renderer);
     WorldRendererTerrain_Construct(Renderer);
     WorldRendererInstances_Construct(Renderer);
+    WorldRendererGenerated_Construct(Renderer);
     WorldRendererInterior_Construct(Renderer);
     WorldRendererRain_Construct(Renderer);
     WorldRendererReflections_Construct(Renderer);
@@ -880,6 +881,7 @@ Error WorldRenderer_Deconstruct(WorldRenderer* self)
     // The cache's asset pointers die with the model user, so the cache (and the terrains' GPU meshes) go first.
     WorldRendererTerrain_Deconstruct(self);
     WorldRendererInstances_Deconstruct(self);
+    WorldRendererGenerated_Deconstruct(self);
     WorldVisibility_Deconstruct(&self->_visibility);
     WorldRenderCache_Deconstruct(&self->_cache);
     Memory_Free(self->_pbr._forwardLights._data);
@@ -940,6 +942,7 @@ Error WorldRenderer_PrepareWorld(WorldRenderer* self, World* world)
     // live at the same address. The copies' buffers go too: the new world's entries build their cells afresh.
     WorldRendererTerrain_ReleaseMeshes(self);
     WorldRendererInstances_ReleaseBuffers(self);
+    WorldRendererGenerated_ReleaseMeshes(self);
     self->_modelUser = NewUser;
 
     // Any origin will do: this sync resolves the world models, and every render syncs again for its camera.
@@ -975,6 +978,8 @@ static Error RenderFrame(WorldRenderer* self, World* world, const GameCamera* ca
     WorldRendererTerrain_PrepareFrame(self);
     // The copies' records on the GPU: new builds of cells uploaded, the buffers no component holds unloaded.
     WorldRendererInstances_PrepareFrame(self);
+    // The generators' meshes on the GPU: new ones uploaded, those no component holds unloaded.
+    WorldRendererGenerated_PrepareFrame(self);
     // Recreates the targets after a resize or a pixelation change; only a missing scene target is fatal.
     Error TargetResult = WorldRendererScene_EnsureTargets(self, target.texture.width, target.texture.height);
     if (TargetResult.Code != ErrorCode_Success)

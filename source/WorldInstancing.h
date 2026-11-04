@@ -19,8 +19,8 @@
  * object's own X and Z (a cell is a grid square, floor(x / size) and floor(z / size)), cell by cell in grid order and
  * within a cell in the list's order. A cell keeps its centre in double, in the object's space (the middle of its square
  * in X and Z, the middle of its copies' heights in Y), and each copy's record: the first three rows of its matrix
- * relative to that centre (scale, then the Euler XYZ rotation, then the position minus the centre, composed in double and
- * rounded once), its tint and a stable random value from the object's id and the copy's index. Its bounding sphere holds
+ * relative to that centre (scale, then its shear, then the Euler XYZ rotation, then the position minus the centre, composed
+ * in double and rounded once), its tint and a stable random value from the object's id and the copy's index. Its bounding sphere holds
  * every copy's sphere (the world model's under the copy's matrix) in the object's space. Records are what the GPU reads
  * (WorldInstanceRecord): a cell is drawn with one matrix, the object's world matrix times the translation to its centre in
  * render space, so the camera's movement never touches the records.

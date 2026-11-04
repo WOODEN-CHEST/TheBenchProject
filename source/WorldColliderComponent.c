@@ -1,4 +1,5 @@
 #include <math.h>
+#include <stdalign.h>
 #include "WorldColliderComponent.h"
 #include "WorldInternal.h"
 #include "WorldTransform.h"
@@ -353,6 +354,7 @@ static Error ConstructCollider(WorldComponent* component)
 
 static void DeconstructCollider(WorldComponent* component)
 {
+    WorldColliderPlacedShapes_Release(((WorldColliderComponent*)component)->_placedShapes);
     Properties_Deconstruct(&ColliderTable, component);
 }
 
@@ -523,6 +525,66 @@ void WorldColliderComponent_ResolveSettings(const WorldColliderComponent* self, 
     }
     outSettings->HasSet = WorldModelCollision_TryFindSet(collision, self->_collisionSet, &outSettings->SetIndex);
     outSettings->IsSetMissing = !outSettings->HasSet;
+}
+
+
+// Public functions: placed shapes.
+WorldColliderPlacedShapes* WorldColliderPlacedShapes_Create(size_t shapeCount, size_t meshCount)
+{
+    // One block: the header, the matrices (double aligned, like the header), the shapes and the mesh pointers.
+    size_t ShapesAt = sizeof(WorldColliderPlacedShapes) + (shapeCount * sizeof(Matrix4Double));
+    size_t Alignment = alignof(CollisionShape);
+    ShapesAt = ((ShapesAt + Alignment - 1U) / Alignment) * Alignment;
+    size_t MeshesAt = ShapesAt + (shapeCount * sizeof(CollisionShape));
+    Alignment = alignof(CollisionMesh*);
+    MeshesAt = ((MeshesAt + Alignment - 1U) / Alignment) * Alignment;
+    unsigned char* Block = Memory_Allocate(MeshesAt + (meshCount * sizeof(CollisionMesh*)));
+    WorldColliderPlacedShapes* Shapes = (WorldColliderPlacedShapes*)(void*)Block;
+    Shapes->_referenceCount = 1U;
+    Shapes->Count = shapeCount;
+    Shapes->Placements = (Matrix4Double*)(void*)(Block + sizeof(WorldColliderPlacedShapes));
+    Shapes->Shapes = (CollisionShape*)(void*)(Block + ShapesAt);
+    Shapes->Meshes = (CollisionMesh**)(void*)(Block + MeshesAt);
+    Shapes->MeshCount = meshCount;
+    for (size_t Index = 0U; Index < shapeCount; Index++)
+    {
+        Shapes->Shapes[Index] = CollisionShape_Create(CollisionShapeType_Box);
+        Shapes->Placements[Index] = Matrix4Double_Identity();
+    }
+    for (size_t Index = 0U; Index < meshCount; Index++)
+    {
+        Shapes->Meshes[Index] = NULL;
+    }
+    return Shapes;
+}
+
+void WorldColliderPlacedShapes_Retain(WorldColliderPlacedShapes* self)
+{
+    if (self != NULL)
+    {
+        self->_referenceCount++;
+    }
+}
+
+void WorldColliderPlacedShapes_Release(WorldColliderPlacedShapes* self)
+{
+    if ((self == NULL) || (--self->_referenceCount > 0U))
+    {
+        return;
+    }
+    for (size_t Index = 0U; Index < self->MeshCount; Index++)
+    {
+        CollisionMesh_Destroy(self->Meshes[Index]);
+    }
+    Memory_Free(self);
+}
+
+void WorldColliderComponent_SetPlacedShapes(WorldColliderComponent* self, WorldColliderPlacedShapes* shapes)
+{
+    WorldColliderPlacedShapes_Retain(shapes);
+    WorldColliderPlacedShapes_Release(self->_placedShapes);
+    self->_placedShapes = shapes;
+    self->Base._revision++;
 }
 
 

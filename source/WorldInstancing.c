@@ -142,8 +142,8 @@ static bool BuildCell(WorldInstanceCells* self, const PropertyInstanceEntry* ins
     {
         size_t Index = keys[Position].Index;
         const PropertyInstanceEntry* Instance = &instances[Index];
-        Matrix4Double Relative = WorldTransform_Compose(Vector3Double_Subtract(Instance->Position, Cell.Center),
-            Instance->Rotation, Instance->Scale);
+        Matrix4Double Relative = WorldTransform_ComposeSheared(Vector3Double_Subtract(Instance->Position, Cell.Center),
+            Instance->Rotation, Instance->Scale, Instance->Shear);
         WorldInstanceRecord Record = MakeRecord(&Relative, Instance->Tint, WorldInstancing_GetRandom(objectId, Index));
         if (!GenericBuffer_AddLast(&self->_records, &Record) || !GenericBuffer_AddLast(&self->_sources, &Index))
         {
@@ -159,8 +159,8 @@ static bool BuildCell(WorldInstanceCells* self, const PropertyInstanceEntry* ins
     for (size_t Position = first; Position < end; Position++)
     {
         const PropertyInstanceEntry* Instance = &instances[keys[Position].Index];
-        Matrix4Double Relative = WorldTransform_Compose(Vector3Double_Subtract(Instance->Position, Cell.Center),
-            Instance->Rotation, Instance->Scale);
+        Matrix4Double Relative = WorldTransform_ComposeSheared(Vector3Double_Subtract(Instance->Position, Cell.Center),
+            Instance->Rotation, Instance->Scale, Instance->Shear);
         Vector3Double SphereCenter = Matrix4Double_TransformPoint(&Relative, BoundsCenter);
         double Radius = (double)bounds->Radius * WorldTransform_GetMaxScale(&Relative);
         SphereRadius = fmax(SphereRadius, Vector3Double_Distance(Middle, SphereCenter) + Radius);

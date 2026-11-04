@@ -475,9 +475,25 @@ once, each mesh of each LOD in one instanced draw, so tens of thousands of copie
 - **Costs** (GTX 980 Ti, the start of the pebble field, a 1280 x 720 frame to a `glFinish`): 3.85 ms without
   copies, 4.98 ms with the grove's 400 trees, 6.40 ms with the 20 000 pebbles and a lamp casting a cube shadow among
   them; one at a time, 212.6 ms. The instanced lit pass's own GPU time is 0.67 ms there.
-- **Not built**: GPU culling (a cell is all or nothing for the frustum), collision for copies (the repeat and
-  place-along tools and scattering will add them as a static source), scattering rules, grass and wind (the random
+- **Not built**: GPU culling (a cell is all or nothing for the frustum), scattering rules, grass and wind (the random
   value is in every record and unused). Copies never skin (a skinned world model's copies draw rigid, in the bind pose) and never draw crisp.
+
+### Generated models
+
+Meshes a generator made while the game runs (`WorldGeneratedModel.h`: a path object's bent hedge, a cut rail), which a model component draws in place
+of its world model's (`WorldModelComponent_SetGeneratedModel`). **Only the meshes change:** the component still names a world model, and that gives the
+materials (each mesh names a material slot of the same LOD's model), the variants, the LOD distances and fades and the render defaults, with every override
+the component holds. A generated model has as many LODs as its world model, in its object's own space with the import transform applied, unindexed, in CPU
+arrays. Never saved. New generators (roads, sweeps) use the same type.
+
+- **The cache** (`WorldRenderCache`): an entry takes the generated model each frame, with the component's serial and generated revision, and its
+  bounds come from it (`WorldGeneratedModel_UpdateBounds`). `WorldRenderModel_GetLodModel` hands out the renderer's copy of the LOD, so every pass
+  draws it through its ordinary path; an entry the renderer has not given its copy yet draws nothing.
+- **The GPU's copy** (`WorldRendererGenerated_PrepareFrame`, right after the Sync): a record per component, by its serial and generated revision: one raylib
+  `Model` per LOD with its meshes uploaded, borrowing the world model's materials (`WorldRenderCache_SetGeneratedLods`). A replaced generated model uploads
+  again and what no entry holds unloads. `WorldRendererGenerated_ReleaseMeshes` goes with the world.
+- **Rule 3 stands:** rendering never writes to the world. A generator writes in Update; rendering reads.
+- **Sky visibility and interiors** read its box like any model's.
 
 ### Pipeline (one `WorldRenderer_RenderToTarget`)
 
@@ -2139,6 +2155,7 @@ get no AO and no outlines.
 | `WorldRendererScene.c` | Scene target size, HDR tiers and recreation on resize (asks each pass to recreate its targets); the scene pass. |
 | `WorldRendererGeometry.c` | Model meshes one LOD at a time with per-draw materials (both LODs of a cross-fade in the lit passes; `WorldRendererGeometry_PrepareMaterial` builds each, the instanced draws use it too), each mesh with its pass's rigid shader or, posed and skinned, its skinned twin after the pose's palette, of the set of meshes its pass draws (`WorldRendererMeshSet`: the water slots' for the water pass, with their water materials; every other mesh for every other pass; the G-buffer draws both); the unlit fallback's skinned shader; the LOD tinting, light gizmos (a sphere at each light, a spot's outer and inner cones as wire cones whose sides are 1 m or its range long), the pixelation filter. |
 | `WorldRendererInstances.c` | The model instances' copies (see "Model instances"): each entry's records buffer, the G-buffer's and the shadows' instanced twins (the lit one is the lighting file's), the instanced draw that mirrors `DrawMesh`, each pass's cells instanced or one at a time (the A/B and every fallback), the status line. |
+| `WorldRendererGenerated.c` | Generated models on the GPU (see "Generated models"): a record per component, a raylib model per LOD over its world model's materials, uploaded when replaced, unloaded when no entry holds it. |
 | `WorldRendererSprites.c` | The sprites: the unit quad, the lit sprite shader, each frame's sprite matrices (camera, the shadow levels' light, cube's lamp) and transparent draw order, the lit cutout / decal / sorted transparent draws. The G-buffer and shadow passes draw sprites with this file's quad and matrices. |
 | `WorldRendererLighting.c` | The PBR programs (rigid, skinned, instanced: `WorldRendererPbrProgram`) and their location tables, the lit shaders' frame uniforms (`PrepareLitShader`, `UploadFrame`: every PBR program, the sprite shader and the terrain shader, the night vision's and interior lighting's among them), forward local lights (the frame's candidates with their flickered radiance, cones and shadow layers: `WorldRendererLighting_BuildForwardLights`, packed per draw by `_PackForwardLights`, pure; the log of a draw with more lights than it takes) and the spots' maps' uniforms, each lit draw's place (`WorldRendererLighting_SetDrawPlace`: its haze multiplier and its ambient zones), the same two for a draw in a run of lit draws in one program (`WorldRendererLitRun`, `WorldRendererLighting_UploadRunLights`, `_SetRunDrawPlace`: only what differs from the run's last upload), per-material factors. |
 | `WorldRendererShadows.c` | The shadow levels of the sun or the moon (their settings from the config and the world, their maps through `GLShadowArray`, each frame's levels from `WorldShadowLevels`, the levels' passes with depth clamping, the maps' bind, the status line), the point-light cube shadow (models, model instances, terrain chunks, and cutout sprites through alpha-tested depth shaders), and the shadowed spots' maps (`WorldLocalShadows`: a `GLShadowArray` of a layer per spot, made at the first frame with one; their frames, their pass through the levels' depth shaders, their bind on unit 33). |
@@ -2521,7 +2538,7 @@ not while walking, and the UI takes it first while the pointer is over a widget)
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11, the
 digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/`, the backslash, Insert, Home, End, Page Up, Page Down, the
 keypad's digits, its `.`, `+`, `-`, `*`, `/` and Enter, Scroll Lock and Pause are taken already, and with Shift the grave
-key, L, keypad `-`, `/`, Enter, `+` and `*`, and Backspace with and without Shift; the keypad's `=`, Caps Lock, Num Lock, Print
+key, L, keypad `-`, `/`, Enter, `+` and `*`, and Backspace with and without Shift, and with Control (with or without Shift); the keypad's `=`, Caps Lock, Num Lock, Print
 Screen and Menu are free (with Shift the keypad's digits and `.` turn into other keys on Windows while Num Lock is on). Leave F12 free:
 raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
@@ -2578,6 +2595,9 @@ raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writi
   path's area hatched; those with their samples, frames and the ground under them), Shift with Backspace starts and stops one node
   of the walk moving, so its curve follows live; the camera entering and leaving the park is logged, and the I key's status tells
   how many objects a query finds inside it;
+- **the path objects ([PathObjects.md](PathObjects.md); `source/WorldTestPathObjects.{h,c}`, test content):** Control with Backspace steps
+  the walk's fence's fit (stretch, its ends resized by scaling, its ends cut, fixed and flush at both ends), Control and Shift with Backspace how its panels
+  take a slope (shear, tilt, step); each is logged, and the moving node above carries the fence and the lamps along; the I key's status gives the counts;
 - **the far terrain, the curve and the far shadows (see "Far terrain shadows", "Render space"; `source/WorldTestFarTerrain.{h,c}`,
   test content):** Shift with keypad * shows and hides the far terrain (made when first shown, not saved with the world:
   a root object at the terrain's object and a tile for every terrain definition named `tbp:test_far_terrain_<a>_<b>`, at

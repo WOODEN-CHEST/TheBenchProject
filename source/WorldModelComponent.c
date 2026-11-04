@@ -322,6 +322,7 @@ static Error ConstructModel(WorldComponent* component)
 
 static void DeconstructModel(WorldComponent* component)
 {
+    WorldGeneratedModel_Destroy(((WorldModelComponent*)component)->_generatedModel);
     Properties_Deconstruct(&ModelTable, component);
 }
 
@@ -455,6 +456,13 @@ static const WorldComponentTypeInfo ModelTypeInfo =
 
 
 // Public functions.
+void WorldModelComponent_SetGeneratedModel(WorldModelComponent* self, WorldGeneratedModel* model)
+{
+    WorldGeneratedModel_Destroy(self->_generatedModel);
+    self->_generatedModel = model;
+    self->_generatedRevision++;
+}
+
 const WorldComponentTypeInfo* WorldModelComponent_GetTypeInfo(void)
 {
     return &ModelTypeInfo;

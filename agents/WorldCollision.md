@@ -167,6 +167,19 @@ Component type 3, `collider`, with the table `collider_component`. Its rows:
 - **Exact under any transform.** Every scale applies exactly to every shape: the object's, its parents' and the
   collider's. An unevenly scaled sphere is an ellipsoid; a sheared box is a parallelepiped.
 
+### Placed shapes
+
+`WorldColliderPlacedShapes`: what a generator hands a collider instead of a collision set (`WorldColliderComponent_SetPlacedShapes`, NULL goes
+back). Each shape has a matrix of its own in the object's space, so a copy of a world model's set can stand anywhere, scaled and sheared, sharing
+that set's hulls and meshes. It replaces the collider's own shape and its world model's sets; the layer, the mask and the rest stay the
+collider's rows. Never saved: not a row.
+
+The block is reference counted (`_Create` gives the caller one, `_Retain`, `_Release`): a collider and the collision world each hold one while
+they use it, so a query between a change and the next sync still reads what it was synced with. Its hulls and meshes are borrowed from whoever
+holds them (a world model under its holder's asset user), and that holder must keep them while the block is in use, unless they are the block's
+own (`Meshes`, destroyed with it). `CollisionShape_Equals` compares shapes by their fields: a shape has padding, so never compare its bytes.
+A path object's posts and bent rails are the first users ([PathObjects.md](PathObjects.md), "Collision").
+
 ## Terrain
 
 A terrain component ([Terrain.md](Terrain.md)) is the collision world's second source, next to colliders.
@@ -246,6 +259,10 @@ the last step).
     it is **rebuilt**;
   - only its object's transform revision changed (a parent moving changes it too): it is **moved**. A movable shape
     is re-inserted only once it leaves its fattened box.
+- **Ground changes.** Whatever static joins, leaves or moves in a sync goes into a ring of the latest 32 changes, each its box and whether it is a
+  terrain, and `WorldCollision_GetGroundRevision` moves on. `WorldCollision_HasGroundChanged(self, since, area, isTerrainOnly)` tells a
+  reader that lies on the ground whether anything changed over an area, seen from above (only X and Z count: a change anywhere below a point can be its
+  ground); further back than the ring it says yes. Movable colliders do not count.
 - **The trees.**
   - Static colliders (the object and every ancestor `static`) sit in one dynamic AABB tree, movable ones in another
     whose boxes are fattened by `WORLD_COLLISION_MOVABLE_MARGIN` (0.1 m). The tree is a port of Box2D's
@@ -539,7 +556,7 @@ it, so colliders at rest cost little beyond the sync.
 From [WorldData.md](WorldData.md) ("Ready for things that move"):
 1. input;
 2. scripts;
-3. the transform drivers;
+3. the transform drivers, then what follows the ground (`WorldPathObjects_Update`);
 4. **`WorldCollision_Step`** (the sync is its first part);
 5. the queued events: trigger, contact and motion events;
 6. animation;

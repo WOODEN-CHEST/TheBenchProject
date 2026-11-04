@@ -1,4 +1,5 @@
 #include <math.h>
+#include <string.h>
 #include "CollisionShape.h"
 #include "CollisionMath.h"
 
@@ -109,6 +110,23 @@ CollisionShape CollisionShape_Create(CollisionShapeType type)
         .IsBounded = true, .PlaneHalfExtents = { COLLISION_SHAPE_DEFAULT_SIZE, COLLISION_SHAPE_DEFAULT_SIZE },
         .Depth = 0.0f, .Hull = NULL, .Mesh = NULL, .IsTwoSided = true
     };
+}
+
+/* Whether two vectors are exactly equal (raymath's Vector3Equals has a tolerance). */
+static bool AreVectorsEqual(Vector3 a, Vector3 b)
+{
+    return (a.x == b.x) && (a.y == b.y) && (a.z == b.z);
+}
+
+bool CollisionShape_Equals(const CollisionShape* a, const CollisionShape* b)
+{
+    bool AreNamesEqual = (a->Name == b->Name) || ((a->Name != NULL) && (b->Name != NULL)
+        && (strcmp((const char*)a->Name, (const char*)b->Name) == 0));
+    return (a->Type == b->Type) && AreVectorsEqual(a->Center, b->Center) && AreVectorsEqual(a->Rotation, b->Rotation) && AreNamesEqual
+        && (a->Radius == b->Radius) && (a->HalfHeight == b->HalfHeight) && AreVectorsEqual(a->HalfExtents, b->HalfExtents)
+        && (a->IsBounded == b->IsBounded) && (a->PlaneHalfExtents.x == b->PlaneHalfExtents.x)
+        && (a->PlaneHalfExtents.y == b->PlaneHalfExtents.y) && (a->Depth == b->Depth) && (a->Hull == b->Hull) && (a->Mesh == b->Mesh)
+        && (a->IsTwoSided == b->IsTwoSided);
 }
 
 Error CollisionShape_Validate(const CollisionShape* self)

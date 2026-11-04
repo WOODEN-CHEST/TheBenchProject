@@ -514,7 +514,8 @@ static Error CheckAssetNameList(const PropertyTable* table, const PropertyDescri
 }
 
 /* "hold at most 262144 instances", "have every position's components finite and in [-1e+07, 1e+07]; instance 12's are
- * not", "have every rotation and scale finite; instance 3's are not": a hostile list is refused naming the instance. */
+ * not", "have every rotation, scale and shear finite; instance 3's are not": a hostile list is refused naming the
+ * instance. */
 static Error CheckInstanceList(const PropertyTable* table, const PropertyDescriptor* descriptor,
     const PropertyInstanceList* list)
 {
@@ -542,13 +543,13 @@ static Error CheckInstanceList(const PropertyTable* table, const PropertyDescrip
                 return MakeRuleError(table, descriptor, Text);
             }
         }
-        const float Floats[6] = { Entry->Rotation.x, Entry->Rotation.y, Entry->Rotation.z, Entry->Scale.x,
-            Entry->Scale.y, Entry->Scale.z };
-        for (size_t Component = 0; Component < 6U; Component++)
+        const float Floats[7] = { Entry->Rotation.x, Entry->Rotation.y, Entry->Rotation.z, Entry->Scale.x,
+            Entry->Scale.y, Entry->Scale.z, Entry->Shear };
+        for (size_t Component = 0; Component < 7U; Component++)
         {
             if (!IsFloatFinite(Floats[Component]))
             {
-                snprintf(Text, sizeof(Text), "have every rotation and scale finite; instance %" PRIu64 "'s are not",
+                snprintf(Text, sizeof(Text), "have every rotation, scale and shear finite; instance %" PRIu64 "'s are not",
                     (uint64_t)Index);
                 return MakeRuleError(table, descriptor, Text);
             }
@@ -1697,7 +1698,7 @@ bool PropertyInstanceList_Equals(const PropertyInstanceList* a, const PropertyIn
         bool IsSame = (A->Position.X == B->Position.X) && (A->Position.Y == B->Position.Y)
             && (A->Position.Z == B->Position.Z) && (A->Rotation.x == B->Rotation.x) && (A->Rotation.y == B->Rotation.y)
             && (A->Rotation.z == B->Rotation.z) && (A->Scale.x == B->Scale.x) && (A->Scale.y == B->Scale.y)
-            && (A->Scale.z == B->Scale.z) && (A->Tint.r == B->Tint.r) && (A->Tint.g == B->Tint.g)
+            && (A->Scale.z == B->Scale.z) && (A->Shear == B->Shear) && (A->Tint.r == B->Tint.r) && (A->Tint.g == B->Tint.g)
             && (A->Tint.b == B->Tint.b) && (A->Tint.a == B->Tint.a);
         if (!IsSame)
         {

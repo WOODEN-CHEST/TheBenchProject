@@ -1,0 +1,8 @@
+{
+    "name": "tbp:test_lamp",
+    "lods": [
+        { "model": "tbp:test_lamp", "max_distance": 100 }
+    ],
+    "draw_distance": 300,
+    "collision": "bounds"
+}

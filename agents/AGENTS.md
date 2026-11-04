@@ -57,7 +57,7 @@ Current module list:
 * Logger (Logger.md) - Writes timestamped, level-tagged messages to <base>/logs/latest.log and stdout, and rotates the previous log into <base>/logs/archived/ (keeping the newest 30).
 * AssetManager (AssetManager.md) - Loads, shares and unloads assets built from JSON definitions in prioritized search
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
-  caches failed loads, registers the seventeen standard types, and reads a texture asset's image file as CPU pixels
+  caches failed loads, registers the eighteen standard types, and reads a texture asset's image file as CPU pixels
   without loading it (AssetManager_LoadTexturePixels). Asset names are namespaced keys (`tbp:desk`; written without a
   namespace, `tbp`'s), accepted as written and kept, logged and listed in full (AssetManager_GetDefinitionNames by
   prefix). Read its lifetime rules before touching assets.
@@ -262,6 +262,23 @@ Current module list:
   * PathGround - Ground projection (include/PathGround.h, source/PathGround.c): the one function every generator shares, a
     straight ray down from a little above a point, onto terrain only or chosen collision layers, with an offset.
   * WorldPathDebug - What the paths' debug view draws, as a list of lines (private, source/WorldPathDebug.{h,c}).
+* Path objects (PathObjects.md) - A fence, hedge, railing or row of lamps as one reusable asset filling a path, with every
+  setting overridable per placement and everything rebuilt live. Covers:
+  * PathObject - The path_object asset type (a standard type, JSON in path_objects/; include/PathObject.h, source/PathObject.c,
+    source/PathObjectDefinition.c): the sequence of slots (start cap, middle, separator, end cap, single, corner), the fit, the
+    alignment, the snapping, each slot's settings and weighted models, which setting is in effect.
+  * WorldPathObjectComponent - Component type 11 (`path_object`): the asset's name and the same settings as overrides; it reads
+    the nearest path at or above its object, and holds settings only.
+  * PathObjectLayout - Where pieces lie along a path, as pure maths (include/PathObjectLayout.h, source/PathObjectLayout.c):
+    runs, spans, joints, the fit solved over the real walk (a rigid piece's ends on the curve by chords).
+  * PathObjectPlacement - What a piece turns into, as pure maths (include/PathObjectPlacement.h, source/PathObjectPlacement.c): a
+    mesh's measure, a rigid copy by its slope's rule (shear, tilt, step), a bent mesh by slicing it along its length.
+  * WorldPathObjects - The system (include/WorldPathObjects.h, source/WorldPathObjects*.c): once a tick it keeps what every
+    component generates up to date, when a row, the path or the ground under it changed: rigid copies on model_instances
+    children, bent pieces as generated models per ~32 m, collision as placed shapes; it writes only what came out different.
+  * WorldGeneratedModel - Meshes a generator made while the game runs (include/WorldGeneratedModel.h,
+    source/WorldGeneratedModel.c), which a model component draws in place of its world model's, its materials, LOD distances and
+    render settings still the world model's, in every pass (the GPU's copies: source/WorldRendererGenerated.c).
 * World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
   animation stands, is lit and is seen in the world, kept apart from its placements. WorldSprite (include/WorldSprite.h,
   source/WorldSprite.c) holds the animation it plays (loaded as its dependency) and the defaults of its placements
@@ -364,6 +381,7 @@ Current module list:
   * WorldColliderComponent - How the object collides (World collision, WorldCollision.md).
   * WorldTerrainComponent - Where a terrain lies and how it draws and collides (Terrain, Terrain.md).
   * WorldPathComponent - A line through nodes that generators read; a closed one is also a region (Paths, Paths.md).
+  * WorldPathObjectComponent - A fence, hedge, railing or row of lamps along a path (Path objects, PathObjects.md).
   * WorldEnvironment - Per-world sky/sun/moon/night-sky/haze/effect settings, described by its property table
     (defaults, validation, copy, JSON and GHDF all come from it; see PropertyDescriptors.md; it owns its sky texture
     names). Its date and time of day are what the sky shows: the game clock writes them every tick, the environment
@@ -603,7 +621,9 @@ Current module list:
     shadows, one of them broken), a desk lamp's spot and a fluorescent tube in the test room and a candle on the monitor's
     table; Shift with L switches every light off and on. Its world has test paths: a walk mixing every node mode and section
     setting, a closed park and two helices (the private source/WorldTestPaths.{h,c}); Backspace steps their debug view, Shift
-    with Backspace moves one of the walk's nodes while the game runs.
+    with Backspace moves one of the walk's nodes while the game runs. Its world has path objects along them and on their own
+    (objects 99 to 110; the private source/WorldTestPathObjects.{h,c}): Control with Backspace steps the walk's fence's fit, and
+    with Shift too how its panels take a slope.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown

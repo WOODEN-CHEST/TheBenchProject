@@ -54,6 +54,7 @@ static void MakeCopies(PropertyInstanceEntry* outCopies, size_t count, uint32_t 
         float Even = (float)RandomBetween(&State, 0.25, 3.0);
         Copy->Scale = ((Index % 3U) == 0U) ? (Vector3){ Even, Even, Even }
             : (Vector3){ Even, (float)RandomBetween(&State, 0.2, 4.0), (float)RandomBetween(&State, 0.5, 2.0) };
+        Copy->Shear = ((Index % 3U) == 1U) ? (float)RandomBetween(&State, -1.5, 1.5) : 0.0f;
         Copy->Tint = (Color){ (unsigned char)(NextRandom(&State) & 255U), 180U, 90U, (unsigned char)(255U - (Index % 4U)) };
     }
 }
@@ -235,7 +236,7 @@ static void CellMatricesComposeBackToTheCopies(TestRun* run)
                 + List[CellIndex].RecordCount); Index++)
             {
                 const PropertyInstanceEntry* Copy = &Copies[Sources[Index]];
-                Matrix4Double Expected = WorldTransform_Compose(Copy->Position, Copy->Rotation, Copy->Scale);
+                Matrix4Double Expected = WorldTransform_ComposeSheared(Copy->Position, Copy->Rotation, Copy->Scale, Copy->Shear);
                 Matrix Relative = WorldInstanceRecord_GetMatrix(&Records[Index]);
                 Matrix4Double Back = GameMath_FromMatrix(Relative);
                 Back.M[12] += List[CellIndex].Center.X;
@@ -270,7 +271,7 @@ static void CellMatricesComposeBackToTheCopies(TestRun* run)
 }
 
 /* A cell's sphere holds every copy's sphere: points on the bounds' surface in 26 directions under each copy's matrix
- * (turned, scaled evenly and unevenly) lie inside it. */
+ * (turned, scaled evenly and unevenly, leaning) lie inside it. */
 static void CellBoundsHoldEveryCopy(TestRun* run)
 {
     PropertyInstanceEntry* Copies = Memory_Allocate(TEST_COPY_COUNT * sizeof(PropertyInstanceEntry));
@@ -293,7 +294,7 @@ static void CellBoundsHoldEveryCopy(TestRun* run)
             for (size_t Index = Cell->FirstRecord; Index < (Cell->FirstRecord + Cell->RecordCount); Index++)
             {
                 const PropertyInstanceEntry* Copy = &Copies[Sources[Index]];
-                Matrix4Double Composed = WorldTransform_Compose(Copy->Position, Copy->Rotation, Copy->Scale);
+                Matrix4Double Composed = WorldTransform_ComposeSheared(Copy->Position, Copy->Rotation, Copy->Scale, Copy->Shear);
                 for (int X = -1; X <= 1; X++)
                 {
                     for (int Y = -1; Y <= 1; Y++)

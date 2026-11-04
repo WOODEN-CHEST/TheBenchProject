@@ -5,6 +5,7 @@
 #include "wr/WRError.h"
 #include "PropertyDescriptor.h"
 #include "WorldComponent.h"
+#include "WorldGeneratedModel.h"
 #include "WorldModel.h"
 
 
@@ -194,6 +195,11 @@ typedef struct WorldModelComponentStruct
     /** @brief The LOD drawn while _isLodForced is on, 0 the finest (default 0); past the world model's last LOD it draws
      *  the last. Kept while _isLodForced is off. */
     uint32_t _forcedLod;
+    /** @brief Runtime only: meshes a generator made, drawn in place of its world model's (owned; NULL for none). Not a row:
+     *  what a generator makes is never saved. */
+    WorldGeneratedModel* _generatedModel;
+    /** @brief Runtime only: advances whenever the generated model is replaced. */
+    uint32_t _generatedRevision;
 } WorldModelComponent;
 
 
@@ -203,6 +209,36 @@ typedef struct WorldModelComponentStruct
  * @returns The entry (static).
  */
 const WorldComponentTypeInfo* WorldModelComponent_GetTypeInfo(void);
+
+/**
+ * @brief Hands the component meshes a generator made, which the renderer draws in place of its world model's LOD meshes: every
+ *        pass, its LODs by its world model's distances, its materials and variants still the world model's
+ *        (WorldGeneratedModel.h).
+ *        Replaces and frees what it held. Never saved.
+ * @param self The component; must not be NULL.
+ * @param model The model, taken over; NULL goes back to the world model's meshes.
+ */
+void WorldModelComponent_SetGeneratedModel(WorldModelComponent* self, WorldGeneratedModel* model);
+
+/**
+ * @brief The meshes a generator made.
+ * @param self The component; must not be NULL.
+ * @returns The model (borrowed: valid until it is replaced), or NULL for none.
+ */
+static inline const WorldGeneratedModel* WorldModelComponent_GetGeneratedModel(const WorldModelComponent* self)
+{
+    return self->_generatedModel;
+}
+
+/**
+ * @brief A number that changes whenever the generated model is replaced.
+ * @param self The component; must not be NULL.
+ * @returns The revision.
+ */
+static inline uint32_t WorldModelComponent_GetGeneratedRevision(const WorldModelComponent* self)
+{
+    return self->_generatedRevision;
+}
 
 /**
  * @brief Returns the model component's property table ("model_component").

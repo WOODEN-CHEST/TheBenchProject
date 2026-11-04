@@ -1,0 +1,7 @@
+{
+    "name": "tbp:test_rail",
+    "lods": [
+        { "model": "tbp:test_rail", "max_distance": 60 }
+    ],
+    "draw_distance": 120
+}

@@ -160,9 +160,10 @@ over the pixelated image), and applies them to every copy; and `instances`, the 
 
 | Key | Value (default) | |
 |---|---|---|
-| `instances` | an array of instances (`[]`) | At most 262 144. Each is an object of up to four keys, any left out at its default: `position` (`[x, y, z]` metres from the object, in its own space; within 10 000 km on each axis), `rotation` (`[x, y, z]` degrees, Euler XYZ like an object's; 0), `scale` (one number, the same on every axis, or `[x, y, z]`; 1) and `tint` (a colour; its alpha is the copy's opacity, times the object's; white). Any other key is refused, naming the copy and the key (`[12]: "size" is not a key of an instance ...`). |
+| `instances` | an array of instances (`[]`) | At most 262 144. Each is an object of up to five keys, any left out at its default: `position` (`[x, y, z]` metres from the object, in its own space; within 10 000 km on each axis), `rotation` (`[x, y, z]` degrees, Euler XYZ like an object's; 0), `scale` (one number, the same on every axis, or `[x, y, z]`; 1) and `tint` (a colour; its alpha is the copy's opacity, times the object's; white). Any other key is refused, naming the copy and the key (`[12]: "size" is not a key of an instance ...`). |
 
-The object's transform places every copy, its tint and opacity multiply theirs, and hiding it hides them all. A copy's
+A copy may also have a `shear`: how much its Y rises per unit of its X, after its scale (default 0), so a panel climbs a slope with its
+verticals vertical. The object's transform places every copy, its tint and opacity multiply theirs, and hiding it hides them all. A copy's
 LOD and fade are its own: it changes LOD inside a band around each switch distance and fades out at the draw distance
 by itself. The writer leaves each copy's defaults out (the position is always written), writes a scale that is the same
 on every axis as one number, and puts each copy on lines of its own. Two copies in the form of the test world's grove
@@ -517,6 +518,28 @@ walk (object 95), a curve, a corner that starts a section skipped as a gate, and
 }
 ```
 
+### The path object block
+
+The `path_object` component fills the nearest path at or above its object with a path object's pieces: a fence, a hedge, a railing, a row of lamps
+(`agents/PathObjects.md`). The asset (`asset_structure.md`, "Path objects") says what they are, and this block overrides any of it. What it generates lies
+on runtime children of the object, which are never saved.
+
+| Key | Value (default) | |
+|---|---|---|
+| `path_object` | an asset name (none) | The path object. Without one, or with one that does not load, it generates nothing (logged once). |
+| every setting of a path object | as in the asset | Each is two keys, `overrides_<key>` (false) and `<key>`: only while the flag is true does the value count. |
+| `overrides_models`, `models` | as in the asset | While on, a slot this list names takes these models; the others keep the asset's. |
+| `slots` | an array of slot records (`[]`) | Add to the asset's, slot by slot and setting by setting: a record's `overrides_<key>` flags work the same way, and multipliers multiply. |
+
+A floating fence, from the shared asset:
+```
+"path_object": {
+    "path_object": "tbp:test_fence",
+    "overrides_snaps_to_terrain": true,
+    "snaps_to_terrain": false
+}
+```
+
 ### Values
 
 - Numbers: integers or decimals; a float keeps its fraction when written (`2.0`). Angles are degrees.
@@ -612,11 +635,11 @@ any integer type whose value fits), floats as Float (angles in radians), vectors
 positions as Double arrays (a Float array of three also reads as a position),
 colours as UInt8 arrays, render colours as a compound, strings as strings, enums and dates as encoded integers, sets of
 enum entries as their mask in the smallest unsigned integer type, the tags
-and data as an array of entry compounds (`agents/ObjectData.md`, "GHDF"), a path's nodes as an array of compounds keyed by the
-`path_node` table's wire ids, each with its defaults left out (`agents/PropertyDescriptors.md`, "Record lists"), and a model instances block's copies as a
+and data as an array of entry compounds (`agents/ObjectData.md`, "GHDF"), a path's nodes and a path object's slots and models as arrays of compounds keyed by
+their tables' wire ids, each with its defaults left out (`agents/PropertyDescriptors.md`, "Record lists"), and a model instances block's copies as a
 compound of parallel arrays: 1 the positions (a Double array, three per copy), then only when a copy differs from its
-default 2 the rotations (a Float array, radians, three each), 3 the scales (a Float array, three each) and 4 the tints
-(a UInt8 array, four each), each exactly as long as the positions say. A document must end where its root ends.
+default 2 the rotations (a Float array, radians, three each), 3 the scales (a Float array, three each), 4 the tints
+(a UInt8 array, four each) and 5 the shears (a Float array, one each), each exactly as long as the positions say. A document must end where its root ends.
 
 ## Loading rules
 

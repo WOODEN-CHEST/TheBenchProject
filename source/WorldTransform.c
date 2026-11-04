@@ -295,3 +295,22 @@ double WorldTransform_GetMaxScale(const Matrix4Double* matrix)
     }
     return sqrt(Largest);
 }
+
+Matrix4Double WorldTransform_ComposeSheared(Vector3Double position, Vector3 rotation, Vector3 scale, float shear)
+{
+    Matrix4Double Result = WorldTransform_Compose(position, rotation, scale);
+    if (shear == 0.0f)
+    {
+        return Result;
+    }
+    // The X column gains the shear of the scaled X, along the Y axis as the rotation turns it: Y's column over its scale,
+    // so a Y scale of 0 (which flattens Y's column) still leans along the turned axis.
+    Matrix4Double Turned = WorldTransform_Compose(Vector3Double_Create(0.0, 0.0, 0.0), rotation,
+        (Vector3){ 1.0f, 1.0f, 1.0f });
+    double Rise = (double)shear * (double)scale.x;
+    for (size_t Row = 0U; Row < 3U; Row++)
+    {
+        Result.M[Row] += Rise * Turned.M[4U + Row];
+    }
+    return Result;
+}

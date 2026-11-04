@@ -48,6 +48,9 @@ int main(void)
     WorldTerrainCollisionTests_Run(&Run);
     PathCurveTests_Run(&Run);
     WorldPathTests_Run(&Run);
+    PathObjectLayoutTests_Run(&Run);
+    PathObjectTests_Run(&Run);
+    WorldPathObjectTests_Run(&Run);
     WorldCharacterTests_Run(&Run);
     WorldSpriteTests_Run(&Run);
     WorldHierarchyTests_Run(&Run);

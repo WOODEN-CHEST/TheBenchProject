@@ -21,6 +21,7 @@
 #include "WorldModelInstancesComponent.h"
 #include "WorldObject.h"
 #include "WorldPathComponent.h"
+#include "WorldPathObjectComponent.h"
 #include "WorldSpriteComponent.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRGHDF.h"
@@ -1676,7 +1677,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 98U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 110U);
             // The terrain: one object placing the placeholder terrain around the ground slab.
             WorldComponent* Ground = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 51U, WorldComponentType_Terrain, &Ground)
@@ -1926,6 +1927,14 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
             WorldComponent* GroveLamp = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 53U, WorldComponentType_Light, &GroveLamp)
                 && WorldLightComponent_CastsShadows(WorldLightComponent_FromComponent(GroveLamp)));
+            // Its path objects: a fence as a child of the walk, its asset named, a floating one's placement overriding it.
+            WorldComponent* WalkFence = NULL;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 99U, WorldComponentType_PathObject, &WalkFence)
+                && AreNamesEqual(WorldPathObjectComponent_GetPathObject(WorldPathObjectComponent_FromComponent(WalkFence)),
+                    (const unsigned char*)u8"tbp:test_fence"));
+            WorldComponent* Floating = NULL;
+            TEST_CHECK(run, World_TryGetComponent(&Loaded, 102U, WorldComponentType_PathObject, &Floating)
+                && WorldPathObjectComponent_GetSettings(WorldPathObjectComponent_FromComponent(Floating))->OverridesSnapsToTerrain);
             // The file is in the writer's own form, so a save of the unchanged world diffs empty against it.
             TEST_CHECK_SUCCESS(run, WorldFile_WriteJSON(&Loaded, &Written));
             TEST_CHECK(run, BytesEqual(&Shipped, &Written));

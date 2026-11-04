@@ -203,10 +203,11 @@ carries **at most one component of each type**; a street lamp is one object with
 | `WorldComponentType_AmbientZone` | 8 | `ambient_zone` | `WorldAmbientZoneComponent` (the renderer's side in [WorldRuntime.md](WorldRuntime.md), "Interior lighting") |
 | `WorldComponentType_Screen` | 9 | `screen` | `WorldScreenComponent` (below, "Screen component") |
 | `WorldComponentType_Path` | 10 | `path` | `WorldPathComponent` ([Paths.md](Paths.md)) |
+| `WorldComponentType_PathObject` | 11 | `path_object` | `WorldPathObjectComponent` ([PathObjects.md](PathObjects.md)) |
 
 The values are explicit and never renumbered (world files save them). `WorldComponentType_Count` is the number
 of standard types; `WORLD_MAX_COMPONENT_TYPES` (32) is how many a world can hold, room for the types still to come
-(11 onward: path generators, scatter, prefabs, roads, an interactable, vehicles, rigid bodies) and for test-only types. Every
+(12 onward: scatter, prefabs, roads, an interactable, vehicles, rigid bodies) and for test-only types. Every
 object holds one pointer per type.
 
 **The registry.** Each type has one `WorldComponentTypeInfo` (a static constant of its module, handed out by
@@ -717,6 +718,10 @@ The path component's table (`path_component`, next free wire id 5): `nodes` 1 (a
 `is_closed` 2, `up_mode` 3, `sample_spacing` 4. Its nodes' table (`path_node`, next free wire id 12): `position` 1, `mode` 2,
 `in_handle` 3, `out_handle` 4, `roll` 5, `width` 6, `scale` 7, `starts_section` 8, `skips_section` 9,
 `overrides_snaps_to_terrain` 10, `snaps_to_terrain` 11 ([Paths.md](Paths.md)).
+
+The path object component's table (`path_object_component`): `path_object` 64, and the settings' rows it shares with the asset's table
+(`path_object`), 1 to 55, next free 56 (`source/PathObjectInternal.h`). Its slots' records (`path_object_slot`, next free wire id 83) and
+models' (`path_object_model`, next free wire id 7) have tables of their own ([PathObjects.md](PathObjects.md)).
 
 The object table's wire ids start at 3: 1 and 2 are the world file's own entries per object (the id and the
 components, [WorldFile.md](WorldFile.md)). `data` is one row (the tags and the values are one map, written as two JSON

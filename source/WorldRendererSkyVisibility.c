@@ -80,12 +80,13 @@ static RenderTexture2D GetLevelTarget(const WorldRendererSkyVisibilityState* sta
  * around its bounding sphere where that is all there is (the world model's own bounds, a posed placement). */
 static BoundingBox GetModelBox(const WorldRenderModel* model)
 {
-    if (WorldModel_HasOwnBounds(model->Asset) || (model->Pose != NULL))
+    if ((model->Generated == NULL) && (WorldModel_HasOwnBounds(model->Asset) || (model->Pose != NULL)))
     {
         Vector3 Half = { model->Radius, model->Radius, model->Radius };
         return (BoundingBox){ Vector3Subtract(model->RenderCenter, Half), Vector3Add(model->RenderCenter, Half) };
     }
-    BoundingBox Local = GameModel_GetLocalBounds(WorldModel_GetLodModel(model->Asset, 0U));
+    BoundingBox Local = (model->Generated != NULL) ? model->Generated->Box
+        : GameModel_GetLocalBounds(WorldModel_GetLodModel(model->Asset, 0U));
     Matrix ToRender = MatrixMultiply(model->BoundsTransform, model->RenderMatrix);
     BoundingBox Box = { { INFINITY, INFINITY, INFINITY }, { -INFINITY, -INFINITY, -INFINITY } };
     for (int Corner = 0; Corner < 8; Corner++)

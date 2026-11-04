@@ -59,6 +59,8 @@ typedef struct TestModelPartStruct
     int TriangleCount;
     /** @brief The mesh's material index (raylib's meshMaterial). */
     int Material;
+    /** @brief Four tangent floats per vertex, or NULL: the mesh has none. */
+    const float* Tangents;
 } TestModelPart;
 
 /** @brief An asset manager with the standard asset types and no search roots; tests add definitions in code. */

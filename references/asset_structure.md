@@ -1553,3 +1553,107 @@ foam to 0.2 m), `test_stream` (the `uv` flow at 0.8 m/s, small waves at 1.4 m an
 `test_fountain_clear` and `test_fountain_murky` (still water, barely moved by the wind; the murky one absorbs twenty
 to a hundred and forty times faster, dark green, with fine ripples only: its one map is `normal_b`'s texture). They share the maps in `textures/water/`: `normal_a` and `normal_b` (tileable sums of
 waves running every way, the larger ones stronger) and `foam` (a tileable pattern spread evenly over its range).
+
+## Path objects.
+A path object is a fence, hedge, railing or row of lamps as one reusable thing: it fills a path with pieces, each a copy of a world
+model (see "World models"). A placement (`world_structure.md`, "The path object block") overrides any setting here, so a floating fence
+needs no second asset. Definitions live under `path_objects/`; how it all works is in `agents/PathObjects.md`.
+
+A run along a path is filled with this sequence, of which only `middle` is required:
+
+```
+start_cap  middle  separator  middle  separator  middle  end_cap
+```
+
+`single` replaces a whole span, caps too, where exactly one middle fits; `corner` replaces the separator at a corner node.
+
+```
+{
+    "name": "tbp:test_fence",
+    "models": [                                 // the world models each slot picks from; at most 256
+        {
+            "slot": "middle",                   // start_cap, middle, separator, end_cap, single or corner
+            "world_model": "tbp:test_panel",
+            "weight": 1.0,                      // [OPTIONAL] above 0: how often "random" picks it
+            "uses_variant": true,               // [OPTIONAL, with "variant"] a variant of the world model
+            "variant": "green",
+            "tint": "#ffffff"                   // [OPTIONAL] each of its copies' tint
+        }
+    ],
+    "slots": [                                  // [OPTIONAL] the slots' settings, one record per slot that has any (below)
+        { "slot": "separator", "length": 0.0 }
+    ],
+
+    "has_start_cap": false,                     // [OPTIONAL] whether a slot is in use: each needs a model
+    "has_end_cap": false,                       // [OPTIONAL]
+    "has_separator": false,                     // [OPTIONAL]
+    "has_single": false,                        // [OPTIONAL]
+    "has_corner": false,                        // [OPTIONAL]
+    "separator_every": 1,                       // [OPTIONAL] a separator after every this many middles
+
+    "fit": "stretch",                           // [OPTIONAL] stretch, resize_ends or fixed
+    "rounding": "nearest",                      // [OPTIONAL] nearest, up or down: how stretch and resize_ends count middles
+    "resized_ends": "both",                     // [OPTIONAL] start, end or both: which middles resize_ends resizes
+    "resize_method": "scale",                   // [OPTIONAL] scale, or cut (the mesh cut off, the cut hidden in the cap)
+    "align": "start",                           // [OPTIONAL] fixed: start, end, center, between, around or evenly
+    "uses_count": false,                        // [OPTIONAL, with "count"] exactly so many middles a span, as far as they fit
+    "count": 1,
+    "uses_gap": false,                          // [OPTIONAL, with "gap"] fixed: this free space between middles, in metres
+    "gap": 0.0,
+    "when_too_short": "squeeze",                // [OPTIONAL] squeeze, single, caps_only or nothing: where one middle does not fit
+    "minimum_stretch": 0.25,                    // [OPTIONAL] (0, 1]: the most a squeezed middle shrinks
+    "caps_at": "path",                          // [OPTIONAL] path or run: where caps sit when a fixed run leaves a gap
+    "fits_each_section": true,                  // [OPTIONAL] so a corner never falls in the middle of a piece
+    "seed": 0,                                  // [OPTIONAL] of every random choice
+
+    "snaps_to_terrain": true,                   // [OPTIONAL] whether its points snap to the ground; a section's node may say otherwise
+    "ground_offset": 0.0,                       // [OPTIONAL] metres above the ground; negative sinks them
+    "ground_search_height": 5.0,                // [OPTIONAL] how far above a point the search starts
+    "ground_search_depth": 1000.0,              // [OPTIONAL] how far below a point it goes
+    "ground_target": "terrain",                 // [OPTIONAL] terrain, or layers: anything solid on ground_layers
+    "ground_layers": ["world", "prop"]          // [OPTIONAL] every layer by default
+}
+```
+
+In a definition, **writing a setting sets it**. Each setting is also an `overrides_<key>` flag, as in a placement, and a definition may leave the flag out.
+A definition must name a `middle` model, a model for every slot in use, and no slot twice in `slots`. Unknown keys are refused.
+
+A slot's record:
+
+| Key | Value (default) | |
+|---|---|---|
+| `slot` | a slot's name (`middle`) | Which slot. |
+| `pick` | `random` or `in_order` (`random`) | How a piece chooses among the slot's models. |
+| `length` | at least 0 (the mesh's) | The piece's length along the path, in metres. 0 stands it on a point (a post between panels modelled post centre to post centre). |
+| `entry_depth_start`, `entry_depth_end` | at least 0 (0) | How far the mesh reaches past its length into its neighbour, which hides the seam. |
+| `stretches` | boolean (the middle and the single yes) | Whether the `stretch` fit scales it. |
+| `position_offset` | `[along, up, right]` metres (`[0, 0, 0]`) | A position off its place. |
+| `rotation_offset` | `[x, y, z]` degrees (`[0, 0, 0]`) | A rotation on top of its frame, through its middle. A bent piece takes none. |
+| `flip` | `none`, `always`, `alternating` or `random` (`none`) | Whether a piece is turned end for end, about its up, through its middle. |
+| `curve` | `rigid` or `bent` (`rigid`) | `rigid` stays straight with its ends on the curve; `bent` follows it: the game slices the mesh along its length, so a plain box bends with no edge loops. |
+| `slice_spacing` | above 0 (1) | How far apart a bent piece's slices lie at LOD 0, in metres, closer where the path bends; each coarser LOD doubles it. |
+| `slope` | `shear`, `tilt` or `step` (the middle `shear`, the others `step`) | How a rigid piece takes a slope: `shear` keeps its verticals vertical, `tilt` leans it, `step` keeps it level. |
+| `step_anchor` | `middle`, `higher` or `lower` (`middle`) | Which height a level piece takes. |
+| `side` | `on_path`, `left`, `right`, `both` or `alternating` (`on_path`) | Which side of the path it stands on. A left piece is its right twin turned end for end. |
+| `side_offset` | at least 0 (0) | How far from the path a side piece stands, in metres, times the node's width. |
+| `aligned_to` | `path` or `world` (`path`) | What its frame follows: `world` is the object's axes, with only its place from the path. |
+| `position_jitter` | `[along, up, right]`, each at least 0 (`[0, 0, 0]`) | How far each piece strays at most, in metres. |
+| `yaw_jitter` | at least 0 (0) | How far each piece turns about its up at most, in degrees, through its middle. A bent piece takes none. |
+| `scale_jitter` | [0, 1) (0) | How much each piece's size varies at most, as a share of it. |
+| `collision` | `none`, `model`, `mesh` or `boxes` (`model`) | What its pieces collide as: the world model's set per copy, the bent mesh itself, or simple boxes. |
+| `collision_set` | a set's name (the world model's default) | The set `model` uses. |
+| `collision_layer`, `collides_with` | a layer; an array of layers (the world model's) | So posts can block while rails do not. |
+| `box_size` | `[extra length, height, width]`, each at least 0 (the mesh's) | A box's size: `extra length` is added to the piece's. |
+| `box_offset` | `[along, up, right]` metres (`[0, 0, 0]`) | A box's centre off the mesh's. |
+| `box_spacing` | above 0 (2) | How far apart a bent piece's boxes lie, in metres. |
+| the render rows | as in the model block | Everything a `model_instances` block overrides of its world model but its name and variant (`world_structure.md`, "The model block"): the outline, the shadows, the haze, the reflections, the draw distance and the LOD distances. |
+
+**A piece's mesh** runs along its own +X, stands on its Y = 0 and is centred on its Z = 0, with its +Z to the right of the path's direction. Where it sits along X
+does not matter. A piece's length is its mesh's size along X (LOD 0's) less its entry depths. No edge loops are needed for bending.
+
+**In Blender:** Front view, the piece along X, standing on Z = 0, centred on Y = 0, anywhere along X. The side you see in Front view faces right of the path's direction. For
+entry depth, make the mesh that much longer at that end and set the depth. Panels modelled from post centre to post centre with a separator of `"length": 0` need no entry depth: the
+rails end inside the post, at corners too.
+
+`path_objects/`: `test_fence` (posts in three slots, one panel in the middle, the posts colliding), `test_hedge` (bent along the path, colliding as its mesh, flipped at random),
+`test_railing` (a plain rail bent along the path, posts every third metre, boxes), `test_lamp_row` (a lamp every 12 m, on both sides of the path).

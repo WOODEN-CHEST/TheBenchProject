@@ -117,6 +117,8 @@ typedef struct TerrainAssetStruct TerrainAsset;
 typedef struct TerrainMaterialStruct TerrainMaterial;
 /** @brief A water material asset (WaterMaterial.h). */
 typedef struct WaterMaterialStruct WaterMaterial;
+/** @brief A path object asset (PathObject.h). */
+typedef struct PathObjectStruct PathObject;
 /** @brief A climate asset (Climate.h). */
 typedef struct ClimateStruct Climate;
 /** @brief An input actions asset (InputActions.h). */
@@ -401,6 +403,9 @@ typedef struct StandardAssetTypesStruct
     /** @brief Water material type id: the look of a body of water (its waves, colour, absorption, foam), its maps
      *  loaded as texture dependencies, which world models name for their water slots (WaterMaterial.h). */
     AssetTypeID WaterMaterial;
+    /** @brief Path object type id: a fence, hedge, railing or row of lamps as slots of weighted world models, loaded as
+     *  dependencies, and how they fill a path (PathObject.h). */
+    AssetTypeID PathObject;
 } StandardAssetTypes;
 
 
@@ -1135,6 +1140,12 @@ Error AssetManager_LoadInputActions(AssetManager* self, const unsigned char* nam
  */
 Error AssetManager_LoadWaterMaterial(AssetManager* self, const unsigned char* name, AssetUserID user,
     WaterMaterial** outAsset);
+
+/**
+ * @brief Loads a path object by name (PathObject.h): its settings, with the world models its slots name loaded as its
+ *        dependencies. Thin wrapper over AssetManager_LoadAssetSingle with the standard path object type.
+ */
+Error AssetManager_LoadPathObject(AssetManager* self, const unsigned char* name, AssetUserID user, PathObject** outAsset);
 
 /**
  * @brief Decodes the image file a texture asset's definition names into 8-bit RGBA pixels on the CPU, for a loader that

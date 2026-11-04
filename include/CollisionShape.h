@@ -299,6 +299,15 @@ CollisionShape CollisionShape_Create(CollisionShapeType type);
 Error CollisionShape_Validate(const CollisionShape* self);
 
 /**
+ * @brief Whether two shapes are the same, field by field (never compare a shape's bytes: it has padding). A borrowed hull or mesh
+ *        counts by its pointer, a name by its text.
+ * @param a A shape; must not be NULL.
+ * @param b A shape; must not be NULL.
+ * @returns Whether every field is equal, 0 and -0 being equal.
+ */
+bool CollisionShape_Equals(const CollisionShape* a, const CollisionShape* b);
+
+/**
  * @brief The shape's transform in its owner's space: its rotation, then its centre.
  * @param self The shape; must not be NULL.
  * @returns The matrix (raylib's convention).

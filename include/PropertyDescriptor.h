@@ -328,6 +328,9 @@ typedef struct PropertyInstanceEntryStruct
     Vector3 Rotation;
     /** @brief Its size along each of its axes; 1 is the model's own size. */
     Vector3 Scale;
+    /** @brief How far it leans: after its scale and before its rotation, its Y rises by this times its X, so its verticals
+     *  stay vertical while its length climbs (a fence's panel on a slope). 0 is none. */
+    float Shear;
     /** @brief A colour multiplied into its own (red, green, blue), and its opacity (alpha: 255 opaque, 0 invisible). */
     Color Tint;
 } PropertyInstanceEntry;
@@ -989,7 +992,7 @@ static inline PropertyInstanceEntry PropertyInstanceEntry_CreateDefault(void)
 {
     return (PropertyInstanceEntry)
     {
-        .Position = { 0.0, 0.0, 0.0 }, .Rotation = { 0.0f, 0.0f, 0.0f }, .Scale = { 1.0f, 1.0f, 1.0f },
+        .Position = { 0.0, 0.0, 0.0 }, .Rotation = { 0.0f, 0.0f, 0.0f }, .Scale = { 1.0f, 1.0f, 1.0f }, .Shear = 0.0f,
         .Tint = { 255, 255, 255, 255 }
     };
 }

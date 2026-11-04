@@ -194,6 +194,13 @@ typedef struct WorldRenderModelStruct
      *  (the cache's) with their skinning collapsed to their joint, so the camera riding its eyes does not see them. Its
      *  shadows keep Pose. */
     const WorldAnimatorPose* CameraPose;
+    /** @brief The meshes a generator made, drawn in place of the world model's while not NULL (this frame; borrowed from the
+     *  component), its component's serial and generated revision, and the GPU's copy of them: one GameModel per LOD, set by
+     *  the renderer for the frame (WorldRenderCache_SetGeneratedLods; NULL until then, and such an entry draws nothing). */
+    const WorldGeneratedModel* Generated;
+    uint64_t GeneratedSerial;
+    uint32_t GeneratedRevision;
+    GameModel* const* GeneratedLods;
     /** @brief The surface the object's screen component shows on (one of Asset's, borrowed from it), or NULL: no screen
      *  component, or one naming a surface the world model lacks (logged once). The lit passes put the picture handed
      *  over for it into its slot's material copy (WorldRendererSurfaces_Apply). */
@@ -633,11 +640,27 @@ void WorldRenderCache_UpdateLods(WorldRenderCache* self, const WorldRenderLodVie
  * @brief Returns one LOD's model of a cached model entry.
  * @param model The entry; must not be NULL and must have an asset.
  * @param lod The LOD, 0 the finest.
- * @returns The model (borrowed from the world model), or NULL for a LOD past the last.
+ * @returns The model (borrowed from the world model, or the renderer's copy of the entry's generated meshes), or NULL for a
+ *          LOD past the last.
  */
 static inline GameModel* WorldRenderModel_GetLodModel(const WorldRenderModel* model, size_t lod)
 {
+    if (model->Generated != NULL)
+    {
+        return ((model->GeneratedLods != NULL) && (lod < model->Generated->LodCount)) ? model->GeneratedLods[lod] : NULL;
+    }
     return WorldModel_GetLodModel(model->Asset, lod);
+}
+
+/**
+ * @brief Gives a model entry the GPU's copy of its generated meshes for this frame: the renderer's, after the Sync.
+ * @param self The cache; must not be NULL.
+ * @param index The entry, below the count of WorldRenderCache_GetModels.
+ * @param lods One model per LOD (borrowed: valid until the renderer replaces them), or NULL.
+ */
+static inline void WorldRenderCache_SetGeneratedLods(WorldRenderCache* self, size_t index, GameModel* const* lods)
+{
+    ((WorldRenderModel*)self->_models._data)[index].GeneratedLods = lods;
 }
 
 /**
