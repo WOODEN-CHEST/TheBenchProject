@@ -1844,6 +1844,7 @@ Error AssetManager_CreateStandardAssetTypes(AssetManager* self, StandardAssetTyp
         { ASSET_TYPE_NAME_PATH_OBJECT, ASSET_TYPE_DIRECTORY_PATH_OBJECT, PathObjectDefinition_Construct,
             &outTypes->PathObject },
         { ASSET_TYPE_NAME_PREFAB, ASSET_TYPE_DIRECTORY_PREFAB, PrefabDefinition_Construct, &outTypes->Prefab },
+        { ASSET_TYPE_NAME_UI_THEME, ASSET_TYPE_DIRECTORY_UI_THEME, UIThemeDefinition_Construct, &outTypes->UITheme },
     };
 
     for (size_t i = 0; i < (sizeof(Standard) / sizeof(Standard[0])); i++)
@@ -2801,6 +2802,12 @@ Error AssetManager_LoadPathObject(AssetManager* self, const unsigned char* name,
 Error AssetManager_LoadPrefab(AssetManager* self, const unsigned char* name, AssetUserID user, Prefab** outAsset)
 {
     return LoadStandard(self, (self != NULL) ? self->_standardTypes.Prefab : ASSET_TYPE_ID_INVALID, name, user,
+        (void**)outAsset);
+}
+
+Error AssetManager_LoadUITheme(AssetManager* self, const unsigned char* name, AssetUserID user, UITheme** outAsset)
+{
+    return LoadStandard(self, (self != NULL) ? self->_standardTypes.UITheme : ASSET_TYPE_ID_INVALID, name, user,
         (void**)outAsset);
 }
 

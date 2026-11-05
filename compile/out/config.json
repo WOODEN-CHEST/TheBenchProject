@@ -27,6 +27,8 @@
     "cloud_quality": 2,
     "reflection_quality": 2,
 
+    "ui_scale": 1.0,
+
     "global_brightness": 1.0,
     "global_saturation": 1.0,
     "global_contrast": 1.0,

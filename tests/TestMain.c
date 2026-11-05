@@ -102,6 +102,9 @@ int main(void)
     InputActionsTests_Run(&Run);
     UIAnimationTests_Run(&Run);
     UIScreenTests_Run(&Run);
+    UILayoutTests_Run(&Run);
+    UIThemeTests_Run(&Run);
+    UIElementTests_Run(&Run);
     UITestFrameTests_Run(&Run);
     GameFrameManagerTests_Run(&Run);
 

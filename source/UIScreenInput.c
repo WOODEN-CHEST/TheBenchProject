@@ -83,13 +83,19 @@ static Error DeliverKey(UIScreen* self, UIKeyboardInputType type, GameKey key, u
     return DeliverKeyboardInput(self, &Arguments, outHandlerId);
 }
 
+/* Whether a widget a press or a held key began on is still there for what follows: attached, taking input and shown. */
+static bool TakesPressedInput(const Widget* widget)
+{
+    return Widget_IsInputEnabled(widget) && UIScreen_InternalIsAttached(widget) && UIScreen_InternalIsShown(widget);
+}
+
 /* Hands a repeat or the release of a key to the widget that handled its press, and to no other, while that widget still
- * takes input (alive, attached, input-enabled); otherwise it is dropped. Either way the key stays consumed for everyone
- * else until it is released. */
+ * takes input (alive, attached, input-enabled, shown); otherwise it is dropped. Either way the key stays consumed for
+ * everyone else until it is released. */
 static Error DeliverKeyToOwner(UIScreen* self, uint64_t ownerId, UIKeyboardInputType type, GameKey key, uint8_t modifiers)
 {
     Widget* Owner = UIScreen_InternalResolve(self, ownerId);
-    if ((Owner == NULL) || !Widget_IsInputEnabled(Owner) || !UIScreen_InternalIsAttached(Owner))
+    if ((Owner == NULL) || !TakesPressedInput(Owner))
     {
         return Error_CreateSuccess();
     }
@@ -188,7 +194,7 @@ static Error PressButton(UIScreen* self, ProgramTime time, GameKey button, size_
     // The focus hooks may have destroyed, detached or disabled the widget: the press only reaches it while it still
     // takes input (it stays consumed either way).
     Target = UIScreen_InternalResolve(self, TargetId);
-    if ((Target == NULL) || !Widget_IsInputEnabled(Target) || !UIScreen_InternalIsAttached(Target))
+    if ((Target == NULL) || !TakesPressedInput(Target))
     {
         self->_buttons[index].IsPressed = false;
         self->_buttons[index].TargetWidgetId = WIDGET_ID_INVALID;
@@ -210,7 +216,8 @@ static Error PressButton(UIScreen* self, ProgramTime time, GameKey button, size_
 }
 
 /* A press this screen took: its release and drags go to the widget it started on (followed with the raw state, since
- * the screen itself consumed the press). */
+ * the screen itself consumed the press), for as long as that widget takes input and shows. A pointer that moved in the
+ * release's tick arrives as a move first: the end of a drag is where the pointer ended. */
 static Error FollowPressedButton(UIScreen* self, ProgramTime time, GameKey button, size_t index, bool hasPointerMoved)
 {
     UIScreenButtonTracking Tracking = self->_buttons[index];
@@ -231,9 +238,32 @@ static Error FollowPressedButton(UIScreen* self, ProgramTime time, GameKey butto
     {
         return Error_CreateSuccess();
     }
-    WidgetMouseInputArgs Arguments = MakeMouseArgs(self, IsReleased ? UIMouseInputType_ButtonRelease : UIMouseInputType_Move,
-        button, Target, Tracking.StartScreenPosition, time.TotalTime - Tracking.StartTime, (Vector2){ .x = 0.0f, .y = 0.0f });
-    return Widget_OnMouseInput(Target, &Arguments);
+    if (!TakesPressedInput(Target))
+    {
+        self->_buttons[index].IsPressed = false;
+        self->_buttons[index].TargetWidgetId = WIDGET_ID_INVALID;
+        return Error_CreateSuccess();
+    }
+    double Duration = time.TotalTime - Tracking.StartTime;
+    if (hasPointerMoved && self->_hasPointer)
+    {
+        WidgetMouseInputArgs Move = MakeMouseArgs(self, UIMouseInputType_Move, button, Target, Tracking.StartScreenPosition, Duration,
+            (Vector2){ .x = 0.0f, .y = 0.0f });
+        Error Result = Widget_OnMouseInput(Target, &Move);
+        if ((Result.Code != ErrorCode_Success) || !IsReleased)
+        {
+            return Result;
+        }
+        // The move's hook may have taken the widget away.
+        Target = UIScreen_InternalResolve(self, Tracking.TargetWidgetId);
+        if ((Target == NULL) || !TakesPressedInput(Target))
+        {
+            return Error_CreateSuccess();
+        }
+    }
+    WidgetMouseInputArgs Release = MakeMouseArgs(self, UIMouseInputType_ButtonRelease, button, Target, Tracking.StartScreenPosition,
+        Duration, (Vector2){ .x = 0.0f, .y = 0.0f });
+    return Widget_OnMouseInput(Target, &Release);
 }
 
 static Error RouteButtons(UIScreen* self, ProgramTime time, bool hasPointerMoved)
@@ -451,7 +481,7 @@ Error UIScreen_InternalRouteInput(UIScreen* self, ProgramTime time, const UIScre
 bool UIScreen_InternalCanFocus(const Widget* widget)
 {
     return (widget != NULL) && !widget->_isDying && widget->_isInitialized && widget->_isFocusable
-        && widget->_isInputEnabled && UIScreen_InternalIsAttached(widget);
+        && widget->_isInputEnabled && UIScreen_InternalIsAttached(widget) && UIScreen_InternalIsShown(widget);
 }
 
 Error UIScreen_InternalSetFocus(UIScreen* self, uint64_t widgetId)

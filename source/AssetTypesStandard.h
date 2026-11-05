@@ -82,6 +82,9 @@
  *  sets; no dependencies: what its objects name is loaded by those objects). */
 #define ASSET_TYPE_NAME_PREFAB      ((const unsigned char*)u8"prefab")
 #define ASSET_TYPE_DIRECTORY_PREFAB ((const unsigned char*)u8"prefabs")
+/** @brief Standard UI theme type name / directory (UITheme.h: the look of the UI's elements as data). */
+#define ASSET_TYPE_NAME_UI_THEME      ((const unsigned char*)u8"ui_theme")
+#define ASSET_TYPE_DIRECTORY_UI_THEME ((const unsigned char*)u8"ui_themes")
 
 /** @brief Definition-file extension (without the dot) for every standard type: their definitions are JSON.
  *  AssetManager_ReadDefinitions uses it to skip non-definition resource files sharing the type directory. */
@@ -159,7 +162,11 @@ Error WaterMaterialDefinition_Construct(AssetManager* manager, const UserData* u
 Error PathObjectDefinition_Construct(AssetManager* manager, const UserData* userData, const GenericBuffer* rawData,
     const unsigned char* sourceDescription, AssetDefinition** outDefinition);
 
-/** @brief Builds a prefab definition from a JSON blob. See AssetDefinitionConstructor. */
+/** @brief Builds a UI theme definition from a JSON blob (UIThemeDefinition.c). See AssetDefinitionConstructor. */
+Error UIThemeDefinition_Construct(AssetManager* manager, const UserData* userData, const GenericBuffer* rawData,
+    const unsigned char* sourceDescription, AssetDefinition** outDefinition);
+
+/** @brief Builds a prefab definition from a JSON blob (PrefabDefinition.c). See AssetDefinitionConstructor. */
 Error PrefabDefinition_Construct(AssetManager* manager, const UserData* userData, const GenericBuffer* rawData,
     const unsigned char* sourceDescription, AssetDefinition** outDefinition);
 

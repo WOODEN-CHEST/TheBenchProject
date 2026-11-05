@@ -1,0 +1,10 @@
+{
+    "name": "tbp:ui_box",
+    "location": "ui/ui_box",
+    "texture_properties": {
+        "filtering": "point",
+        "wrap": "clamp",
+        "mipmaps": false
+    },
+    "color_space": "srgb"
+}

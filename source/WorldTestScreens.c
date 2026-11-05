@@ -17,6 +17,7 @@
 #include "wr/WRChar.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
+#include "wr/WRUserData.h"
 
 
 // Macros.
@@ -48,6 +49,17 @@
 #define POINTER_MARK_THICKNESS 2.0f
 /** How many backgrounds the picture steps through, one per click (the screen's light takes their colour). */
 #define BACKGROUND_COUNT 4U
+/** The kit's theme on the picture and its scale: the picture is seen from afar. */
+#define ELEMENT_THEME_NAME ((const unsigned char*)u8"tbp:test_flat")
+#define ELEMENT_SCALE 1.5f
+/** Where the row of kit elements stands: an anchor in the picture's [0;1] space, its size in UI pixels. */
+#define ELEMENT_ROW_TOP 0.72f
+#define ELEMENT_ROW_WIDTH 370.0f
+#define ELEMENT_ROW_HEIGHT 24.0f
+#define ELEMENT_ROW_SPACING 8.0f
+/** The range of the brightness slider. */
+#define BRIGHTNESS_MINIMUM 0.2
+#define BRIGHTNESS_MAXIMUM 2.0
 
 
 // Types.
@@ -223,6 +235,83 @@ static Error SetLabelText(WorldTestScreens* self, uint64_t labelId, const char* 
 }
 
 
+// Static functions: the kit's elements.
+/* The screen's component, or NULL. */
+static WorldScreenComponent* FindScreenComponent(const WorldTestScreens* self)
+{
+    WorldObject* Monitor = NULL;
+    if (!World_TryGetObject(self->_world, self->_monitorId, &Monitor))
+    {
+        return NULL;
+    }
+    return WorldScreenComponent_FromComponent(WorldObject_GetComponent(Monitor, WorldComponentType_Screen));
+}
+
+/* The button clears what the desk counted; the slider moves the screen's brightness as it goes, and back when cancelled. */
+static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserData* userData)
+{
+    (void)screen;
+    WorldTestScreens* Self = UserData_GetPointer(userData);
+    if ((event->WidgetId == Self->_clearButtonId) && (event->WidgetEventId == (int32_t)UIElementEvent_Clicked))
+    {
+        Self->_clickCount = 0U;
+        Self->_typedByteCount = 0U;
+        Self->_typedCount = 0U;
+        Self->_typed[0] = 0U;
+        Self->_isTextChanged = true;
+        return Error_CreateSuccess();
+    }
+    WorldScreenComponent* Component = FindScreenComponent(Self);
+    if ((event->WidgetId == Self->_brightnessSliderId) && event->HasValue && (event->Value.Type == UIPropertyType_Double) && (Component != NULL))
+    {
+        return WorldScreenComponent_SetBrightness(Component, (float)event->Value.Data.DoubleValue);
+    }
+    return Error_CreateSuccess();
+}
+
+/* A row on the desk: the kit's button and slider. */
+static Error BuildElements(WorldTestScreens* self)
+{
+    Error Result = UIScreen_SetScale(&self->_screen, ELEMENT_SCALE);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIScreen_SetTheme(&self->_screen, self->_services->Assets, ELEMENT_THEME_NAME);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        UserData SelfData = UserData_FromPointer(self);
+        uint64_t Subscription = UI_SCREEN_ID_INVALID;
+        Result = UIScreen_Subscribe(&self->_screen, WIDGET_ID_INVALID, UI_EVENT_KIND_MASK(UIEventKind_Widget), OnElementEvent, &SelfData, &Subscription);
+    }
+    uint64_t Row = WIDGET_ID_INVALID;
+    if (Result.Code == ErrorCode_Success)
+    {
+        UIStackOptions Options = UIStackOptions_Create(UIStackDirection_Row);
+        Options.Layout.Spacing = ELEMENT_ROW_SPACING;
+        Options.Element.HasPlacement = true;
+        Options.Element.Placement = UIPlacement_Fixed((Vector2){ LABEL_LEFT, ELEMENT_ROW_TOP }, (Vector2){ 0.0f, 0.0f }, (Vector2){ 0.0f, 0.0f },
+            (Vector2){ ELEMENT_ROW_WIDTH, ELEMENT_ROW_HEIGHT });
+        Result = UIKit_CreateStack(&self->_kit, &self->_screen, self->_deskId, &Options, &Row);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        UIButtonOptions Options = UIButtonOptions_Create(u8"Clear");
+        Result = UIKit_CreateButton(&self->_kit, &self->_screen, Row, &Options, &self->_clearButtonId);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        const WorldScreenComponent* Component = FindScreenComponent(self);
+        UISliderOptions Options = UISliderOptions_Create();
+        Options.Minimum = BRIGHTNESS_MINIMUM;
+        Options.Maximum = BRIGHTNESS_MAXIMUM;
+        Options.Value = (Component != NULL) ? (double)WorldScreenComponent_GetBrightness(Component) : 1.0;
+        Options.Element.Hint = UIStackHint_Fill(1.0f);
+        Result = UIKit_CreateSlider(&self->_kit, &self->_screen, Row, &Options, &self->_brightnessSliderId);
+    }
+    return Result;
+}
+
+
 // Static functions: building the UI.
 /* Destroys a widget that was never added, if it can still be found. */
 static void DestroyUnadded(WorldTestScreens* self, uint64_t id)
@@ -352,6 +441,10 @@ static Error BuildUi(WorldTestScreens* self)
         Result = AddLabel(self, "E or a click: use it. Escape or looking away: let go.", HINT_SIZE, HINT_TOP, Hint,
             &self->_hintId);
     }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = BuildElements(self);
+    }
     return Result;
 }
 
@@ -371,6 +464,11 @@ static Error ConstructUi(WorldTestScreens* self)
     if (Result.Code == ErrorCode_Success)
     {
         Result = UIWidgetFactory_RegisterType(&self->_widgetFactory, &DeskDescriptor, &self->_deskType);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIKit_Construct(&self->_kit, &self->_widgetFactory, &self->_textFactory, self->_services->Assets, self->_services->Logger);
+        self->_isKitConstructed = (Result.Code == ErrorCode_Success);
     }
     if (Result.Code == ErrorCode_Success)
     {
@@ -429,13 +527,32 @@ static bool Point(WorldTestScreens* self, GameInput* input, const GameCamera* ca
     return WorldScreens_Raycast(self->_screens, camera->Position, Direction, Reach, self->_collision, &Filter, outHit);
 }
 
-/* While the screen is in use the desk has the UI's focus: given it when the use starts, and the use ends when the UI
- * lets go of it (Escape), so one Escape gives control back to the world. Logs the use starting and ending. */
+/* Whether the desk or an element on it has the UI's focus. */
+static bool IsFocusOnDesk(const WorldTestScreens* self)
+{
+    Widget* Focused = NULL;
+    if (!UIScreen_TryGetWidgetById(&self->_screen, UIScreen_GetFocusedWidgetId(&self->_screen), &Focused))
+    {
+        return false;
+    }
+    for (const Widget* Current = Focused; Current != NULL; Current = Widget_GetParent(Current))
+    {
+        if (Widget_GetId(Current) == self->_deskId)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* While the screen is in use the desk or an element on it has the UI's focus: the desk is given it when the use starts,
+ * and the use ends when the UI lets go of it (Escape), so one Escape gives control back to the world. Logs the use
+ * starting and ending. */
 static Error KeepDeskFocus(WorldTestScreens* self)
 {
     Widget* Desk = NULL;
     bool IsInUse = WorldScreenHost_IsFocused(&self->_host);
-    bool IsDeskFocused = (UIScreen_GetFocusedWidgetId(&self->_screen) == self->_deskId);
+    bool IsDeskFocused = IsFocusOnDesk(self);
     if (IsInUse && !IsDeskFocused && self->_wasInUse && self->_wasDeskFocused)
     {
         WorldScreenHost_Release(&self->_host);
@@ -448,7 +565,7 @@ static Error KeepDeskFocus(WorldTestScreens* self)
         {
             return Result;
         }
-        IsDeskFocused = (UIScreen_GetFocusedWidgetId(&self->_screen) == self->_deskId);
+        IsDeskFocused = IsFocusOnDesk(self);
     }
     if (IsInUse != self->_wasInUse)
     {
@@ -561,6 +678,12 @@ void WorldTestScreens_Deconstruct(WorldTestScreens* self)
         Error_Deconstruct(&Result);
         self->_isScreenConstructed = false;
     }
+    if (self->_isKitConstructed)
+    {
+        Error Result = UIKit_Deconstruct(&self->_kit);
+        Error_Deconstruct(&Result);
+        self->_isKitConstructed = false;
+    }
     if (self->_isWidgetFactoryConstructed)
     {
         Error Result = UIWidgetFactory_Deconstruct(&self->_widgetFactory);
@@ -670,9 +793,7 @@ void WorldTestScreens_HandleInput(WorldTestScreens* self, GameInput* input, Worl
         Log(self, Text);
         return;
     }
-    WorldObject* Monitor = NULL;
-    WorldScreenComponent* Screen = World_TryGetObject(self->_world, self->_monitorId, &Monitor)
-        ? WorldScreenComponent_FromComponent(WorldObject_GetComponent(Monitor, WorldComponentType_Screen)) : NULL;
+    WorldScreenComponent* Screen = FindScreenComponent(self);
     if (Screen == NULL)
     {
         return;

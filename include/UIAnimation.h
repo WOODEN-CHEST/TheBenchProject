@@ -88,7 +88,11 @@ typedef enum UIPropertyTypeEnum
     /** @brief A raylib Color (r, g, b, a channels, each blended and rounded). */
     UIPropertyType_Color,
     /** @brief A RenderColor (tint channels + brightness + opacity). */
-    UIPropertyType_RenderColor
+    UIPropertyType_RenderColor,
+    /** @brief A bool: an event's or a property's plain value. Nothing interpolates it, so keyframes refuse it. */
+    UIPropertyType_Bool,
+    /** @brief A double: an event's or a property's plain value. Nothing interpolates it, so keyframes refuse it. */
+    UIPropertyType_Double
 } UIPropertyType;
 
 /**
@@ -104,6 +108,10 @@ typedef union UIPropertyDataUnion
     Color ColorValue;
     /** @brief The value when the type is UIPropertyType_RenderColor. */
     RenderColor RenderColorValue;
+    /** @brief The value when the type is UIPropertyType_Bool. */
+    bool BoolValue;
+    /** @brief The value when the type is UIPropertyType_Double. */
+    double DoubleValue;
 } UIPropertyData;
 
 /**
@@ -207,6 +215,26 @@ static inline UIPropertyValue UIPropertyValue_FromRenderColor(RenderColor value)
 }
 
 /**
+ * @brief Makes a bool property value.
+ * @param value The value.
+ * @returns The typed value.
+ */
+static inline UIPropertyValue UIPropertyValue_FromBool(bool value)
+{
+    return (UIPropertyValue){ .Type = UIPropertyType_Bool, .Data.BoolValue = value };
+}
+
+/**
+ * @brief Makes a double property value.
+ * @param value The value.
+ * @returns The typed value.
+ */
+static inline UIPropertyValue UIPropertyValue_FromDouble(double value)
+{
+    return (UIPropertyValue){ .Type = UIPropertyType_Double, .Data.DoubleValue = value };
+}
+
+/**
  * @brief Returns whether @p type is one of the UIPropertyType values.
  * @param type The type.
  * @returns true if valid.
@@ -214,8 +242,15 @@ static inline UIPropertyValue UIPropertyValue_FromRenderColor(RenderColor value)
 bool UIPropertyType_IsValid(UIPropertyType type);
 
 /**
- * @brief Returns whether every float in a value is finite (vector components, a render color's brightness and
- *        opacity; Colors are always finite). A value with an invalid type is not finite.
+ * @brief Returns whether keyframes can drive a property of @p type: the values that blend, not a bool or a double.
+ * @param type The type.
+ * @returns true if animations of the type are accepted.
+ */
+bool UIPropertyType_IsAnimatable(UIPropertyType type);
+
+/**
+ * @brief Returns whether every number in a value is finite (a float or a double, vector components, a render color's
+ *        brightness and opacity; Colors and bools are always finite). A value with an invalid type is not finite.
  * @param value The value; must not be NULL.
  * @returns true if finite.
  */
@@ -237,15 +272,15 @@ float UIInterpolation_Ease(UIInterpolation method, UIEasingFunction custom, floa
 /**
  * @brief Checks that keyframes form a valid animation of a property type.
  *
- * Valid means: at least one keyframe; every time finite, >= 0 and not earlier than the previous one; every
- * interpolation a UIInterpolation value, with a custom easing function where it is UIInterpolation_Custom; every value
- * finite for the type.
+ * Valid means: a type that blends (UIPropertyType_IsAnimatable); at least one keyframe; every time finite, >= 0 and not
+ * earlier than the previous one; every interpolation a UIInterpolation value, with a custom easing function where it is
+ * UIInterpolation_Custom; every value finite for the type.
  * @param keyframes The keyframes; must not be NULL.
  * @param keyframeCount The number of keyframes.
  * @param type The property type the values are read as.
  * @returns Success; ErrorCode_IllegalArgument if @p keyframes is NULL, @p keyframeCount is 0 or a custom easing
- *          function is missing; ErrorCode_ArgumentOutOfRange for an invalid type, time, interpolation or value. The
- *          message names the keyframe.
+ *          function is missing; ErrorCode_ArgumentOutOfRange for an invalid or unanimatable type, time, interpolation or
+ *          value. The message names the keyframe.
  */
 Error UIAnimation_ValidateKeyframes(const UIKeyframe* keyframes, size_t keyframeCount, UIPropertyType type);
 
@@ -260,7 +295,7 @@ Error UIAnimation_ValidateKeyframes(const UIKeyframe* keyframes, size_t keyframe
  * @param time The evaluation time, in seconds from the animation's start.
  * @param outValue [out] Receives the typed value; must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if @p keyframes or @p outValue is NULL or @p keyframeCount is 0;
- *          ErrorCode_ArgumentOutOfRange if @p type is invalid.
+ *          ErrorCode_ArgumentOutOfRange if @p type is invalid or does not blend (UIPropertyType_IsAnimatable).
  */
 Error UIAnimation_EvaluateKeyframes(const UIKeyframe* keyframes,
     size_t keyframeCount,

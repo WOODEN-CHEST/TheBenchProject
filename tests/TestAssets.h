@@ -252,6 +252,13 @@ bool TestAssets_AddClimate(TestRun* run, TestAssetFixture* fixture, const char* 
 bool TestAssets_AddWaterMaterial(TestRun* run, TestAssetFixture* fixture, const char* json);
 
 /**
+ * @brief Builds a UI theme definition from @p json with the real "ui_theme" type (AssetManager_BuildDefinition) and registers
+ *        it. Its font and textures must be code-built (TestAssets_AddFont, TestAssets_AddTexture) for it to use them.
+ * @returns true when it was built and registered.
+ */
+bool TestAssets_AddUITheme(TestRun* run, TestAssetFixture* fixture, const char* json);
+
+/**
  * @brief Builds an input actions definition from @p json with the real "input_actions" type and registers it (plain
  *        data: it loads without a GL context).
  * @returns true when it was built and registered.

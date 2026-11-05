@@ -73,6 +73,9 @@ static UIPropertyData InterpolateValue(UIPropertyType type, const UIPropertyData
             Value.RenderColorValue.Brightness = Math_LerpFloat(a->RenderColorValue.Brightness, b->RenderColorValue.Brightness, t);
             Value.RenderColorValue.Opacity = Math_LerpFloat(a->RenderColorValue.Opacity, b->RenderColorValue.Opacity, t);
             break;
+        case UIPropertyType_Bool:
+        case UIPropertyType_Double:
+            break; // Refused before any blending: they do not interpolate.
     }
     return Value;
 }
@@ -87,7 +90,25 @@ bool UIPropertyType_IsValid(UIPropertyType type)
         case UIPropertyType_Vector2:
         case UIPropertyType_Color:
         case UIPropertyType_RenderColor:
+        case UIPropertyType_Bool:
+        case UIPropertyType_Double:
             return true;
+    }
+    return false;
+}
+
+bool UIPropertyType_IsAnimatable(UIPropertyType type)
+{
+    switch (type)
+    {
+        case UIPropertyType_Float:
+        case UIPropertyType_Vector2:
+        case UIPropertyType_Color:
+        case UIPropertyType_RenderColor:
+            return true;
+        case UIPropertyType_Bool:
+        case UIPropertyType_Double:
+            return false;
     }
     return false;
 }
@@ -104,6 +125,10 @@ bool UIPropertyValue_IsFinite(const UIPropertyValue* value)
             return true;
         case UIPropertyType_RenderColor:
             return IsFloatFinite(value->Data.RenderColorValue.Brightness) && IsFloatFinite(value->Data.RenderColorValue.Opacity);
+        case UIPropertyType_Bool:
+            return true;
+        case UIPropertyType_Double:
+            return !Math_IsNaNDouble(value->Data.DoubleValue) && !Math_IsInfinityDouble(value->Data.DoubleValue);
     }
     return false;
 }
@@ -146,9 +171,9 @@ Error UIAnimation_ValidateKeyframes(const UIKeyframe* keyframes, size_t keyframe
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "UI animation: at least one keyframe is required.");
     }
-    if (!UIPropertyType_IsValid(type))
+    if (!UIPropertyType_IsAnimatable(type))
     {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UI animation: unknown property type.");
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UI animation: the property type does not blend.");
     }
 
     for (size_t Index = 0; Index < keyframeCount; Index++)
@@ -195,9 +220,9 @@ Error UIAnimation_EvaluateKeyframes(const UIKeyframe* keyframes,
         return Error_Construct2(ErrorCode_IllegalArgument,
             "UIAnimation_EvaluateKeyframes: keyframes and outValue must be non-NULL and keyframeCount > 0.");
     }
-    if (!UIPropertyType_IsValid(type))
+    if (!UIPropertyType_IsAnimatable(type))
     {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIAnimation_EvaluateKeyframes: unknown property type.");
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIAnimation_EvaluateKeyframes: the property type does not blend.");
     }
 
     outValue->Type = type;

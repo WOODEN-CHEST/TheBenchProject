@@ -8,9 +8,19 @@
 #include "TextDocument.h"
 #include "TextLayout.h"
 #include "Renderer.h"
+#include "UITheme.h"
 #include "raylib/raylib.h"
 #include "wr/WRMemory.h"
 #include "wr/WRMath.h"
+
+
+// Macros.
+/** The size of a kit label's string: the label's size multiplier is then its line height in normalized-fitted units. */
+#define KIT_LABEL_COMPONENT_SIZE 1.0f
+/** How far past a whole pixel a text may reach and still be that long as a box: less than the slack it wraps with. */
+#define MEASURE_ROUNDING_TOLERANCE_PIXELS 0.25f
+/** How far past its box a text may reach before it wraps, in surface pixels: a box made for a text never wraps it again. */
+#define WRAP_SLACK_PIXELS 0.5f
 
 
 // Static functions: small helpers.
@@ -74,10 +84,87 @@ static TextLayoutOptions GetLayoutOptions(const LabelWidget* self)
     return Options;
 }
 
+/* Whether the label's Size follows from a line height in UI pixels. */
+static bool UsesPixelSize(const LabelWidget* self)
+{
+    return self->_element._hasTextSize || self->_element._usesTheme;
+}
+
+/* A kit label takes its font from the theme; its Size, when it has a line height, follows from the scale and the viewport. */
+static Error ApplyElementLook(LabelWidget* self)
+{
+    const UIScreen* Screen = Widget_GetScreen(&self->Base);
+    const UITheme* Theme = UIScreen_GetTheme(Screen);
+    UILabelCapability* Element = &self->_element;
+    if (Element->_usesTheme)
+    {
+        uint64_t Revision = UIScreen_GetThemeRevision(Screen);
+        if (!Element->_hasAppliedTheme || (Element->_appliedThemeRevision != Revision))
+        {
+            Error Result = TextDocument_SetDefaultFontName(&self->_document, UITheme_GetFontName(Theme));
+            if (Result.Code != ErrorCode_Success)
+            {
+                return Result;
+            }
+            Element->_hasAppliedTheme = true;
+            Element->_appliedThemeRevision = Revision;
+        }
+    }
+    if (UsesPixelSize(self))
+    {
+        float Pixels = (Element->_hasTextSize ? Element->_textSize : UITheme_GetTextSize(Theme)) * UIScreen_GetScale(Screen);
+        self->_size = Math_ClampFloat(UIScreen_PixelsToFitted(Screen, Pixels), 0.0f, TEXT_LAYOUT_SIZE_MULTIPLIER_MAX);
+    }
+    return Error_CreateSuccess();
+}
+
+/* Lays the text out if it is out of date; a block of another size means another preferred size. */
 static Error RefreshLayout(LabelWidget* self)
 {
+    Error Result = ApplyElementLook(self);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
     TextLayoutOptions Options = GetLayoutOptions(self);
-    return TextLayout_Refresh(&self->_layout, &self->_document, &Options);
+    Result = TextLayout_Refresh(&self->_layout, &self->_document, &Options);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Vector2 Size = TextLayout_GetSize(&self->_layout);
+    if ((Size.x != self->_lastLaidOutSize.x) || (Size.y != self->_lastLaidOutSize.y))
+    {
+        self->_lastLaidOutSize = Size;
+        Widget_InvalidateMeasure(&self->Base);
+    }
+    return Error_CreateSuccess();
+}
+
+/* The options for an answer about a width in UI pixels: the label's own, wrapped there; an unbounded width has no bound. */
+static TextLayoutOptions GetMeasureOptions(const LabelWidget* self, float availableWidth)
+{
+    const UIScreen* Screen = Widget_GetScreen(&self->Base);
+    TextLayoutOptions Options = GetLayoutOptions(self);
+    Options.HasMaxWidth = !Math_IsInfinityFloat(availableWidth);
+    Options.MaxWidth = Options.HasMaxWidth ? UIScreen_PixelsToFitted(Screen, availableWidth * UIScreen_GetScale(Screen)) : 0.0f;
+    Options.IsWrapEnabled = Options.HasMaxWidth;
+    Options.IsShrinkEnabled = false;
+    return Options;
+}
+
+/* A text's length in surface pixels as a box must have it: whole, and not shorter than the text, float noise aside. */
+static float RoundUpToPixel(float pixels)
+{
+    return Math_CeilFloat(pixels - MEASURE_ROUNDING_TOLERANCE_PIXELS);
+}
+
+/* A wrapping label's bound is the width of its box, in UI pixels. */
+static void SetWrapWidth(LabelWidget* self, float uiPixels)
+{
+    const UIScreen* Screen = Widget_GetScreen(&self->Base);
+    self->_hasBounds = true;
+    self->_bounds.x = UIScreen_PixelsToFitted(Screen, uiPixels * UIScreen_GetScale(Screen));
 }
 
 /* Converts a fitted-units vector to a screen-relative [0;1] vector via the render context. */
@@ -98,12 +185,20 @@ static Error LabelWidget_UpdateVT(void* self, ProgramTime time)
     {
         return Result;
     }
+    if (Label->_element._usesTheme)
+    {
+        UIElementLook_Update(&Label->_element._look, Widget_GetScreen(&Label->Base), UIElementState_Normal, time.PassedTime);
+    }
     return RefreshLayout(Label);
 }
 
 static Error LabelWidget_RenderVT(void* self, UIRenderContext* context)
 {
     LabelWidget* Label = self;
+    if (Label->_element._usesTheme && Widget_HasPlacement(&Label->Base) && UIElement_IsBoxEmpty(UIRenderContext_GetPixelBox(context)))
+    {
+        return Error_CreateSuccess();
+    }
     RenderContext* Context = UIRenderContext_GetRenderContext(context);
     Vector2 Anchor = UIRenderContext_LocalToScreen(context, (Vector2){ .x = 0.0f, .y = 0.0f });
     Vector2 DrawSize = TextLayout_GetSize(&Label->_layout);
@@ -119,6 +214,13 @@ static Error LabelWidget_RenderVT(void* self, UIRenderContext* context)
     Arguments.RelativeOrigin = Label->_origin;
     Arguments.RotationRad = Label->_rotation;
     Arguments.Tint = UIRenderColor_Multiply(UIRenderContext_GetTint(context), Label->_tint);
+    if (Label->_element._usesTheme)
+    {
+        const UIElementLook* Look = &Label->_element._look;
+        const UIThemeStyle* Style = UIElementLook_GetStyle(Look, Widget_GetScreen(&Label->Base));
+        Color Text = UIElementLook_BlendColors(Look, UIThemeStyle_GetColors(Style, UILabelPart_Text), WHITE);
+        Arguments.Tint = UIRenderColor_Multiply(Arguments.Tint, UIRenderColor_FromColor(Text));
+    }
     if (ShouldCut(Label))
     {
         Vector2 BoundsScreen = FittedToScreenRel(Context, Label->_bounds);
@@ -141,6 +243,24 @@ static Error LabelWidget_LayoutVT(void* self, const UILayoutContext* context)
     {
         return Error_CreateSuccess();
     }
+    if (Widget_HasPlacement(&Label->Base))
+    {
+        // Its box is what it was given.
+        if (Label->_element._isWrapped)
+        {
+            float BoxPixels = Widget_GetSize(&Label->Base).x * ParentSize.x * context->SurfaceSizePixels.x;
+            SetWrapWidth(Label, (BoxPixels + WRAP_SLACK_PIXELS) / context->Sizing->Scale);
+        }
+        return RefreshLayout(Label);
+    }
+    if (UsesPixelSize(Label))
+    {
+        Error Result = RefreshLayout(Label); // The scale or the viewport may have changed the Size since Update.
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+    }
     Vector2 BoxScreen = FittedToScreenRel(context->Measure, TextLayout_GetSize(&Label->_layout));
     Vector2 Size = { .x = BoxScreen.x / ParentSize.x, .y = BoxScreen.y / ParentSize.y };
     Vector2 CurrentSize = Widget_GetSize(&Label->Base);
@@ -151,18 +271,47 @@ static Error LabelWidget_LayoutVT(void* self, const UILayoutContext* context)
     return Widget_SetSize(&Label->Base, Size);
 }
 
+/* The text block's size in UI pixels; a wrapping label wraps at the width it is asked about. */
+static Error LabelWidget_MeasureVT(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
+{
+    LabelWidget* Label = self;
+    Error Result = RefreshLayout(Label);
+    Vector2 Fitted = { .x = 0.0f, .y = 0.0f };
+    if ((Result.Code == ErrorCode_Success) && Label->_element._isWrapped)
+    {
+        TextLayoutOptions Options = GetMeasureOptions(Label, availableWidth);
+        Result = TextLayout_Refresh(&Label->_measureLayout, &Label->_document, &Options);
+        Fitted = TextLayout_GetSize(&Label->_measureLayout);
+    }
+    else if (Result.Code == ErrorCode_Success)
+    {
+        Fitted = TextLayout_GetSize(&Label->_layout);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    float SurfacePixels = RenderContext_SizeFittedToPixel(context->Measure, 1.0f);
+    outSize->x = RoundUpToPixel(Fitted.x * SurfacePixels) / context->Scale;
+    outSize->y = RoundUpToPixel(Fitted.y * SurfacePixels) / context->Scale;
+    return Error_CreateSuccess();
+}
+
 static Error LabelWidget_OnDeconstructVT(void* self)
 {
     LabelWidget* Label = self;
     Error First = TextLayout_Deconstruct(&Label->_layout);
-    Error DocumentResult = TextDocument_Deconstruct(&Label->_document);
-    if ((DocumentResult.Code != ErrorCode_Success) && (First.Code == ErrorCode_Success))
+    Error Results[] = { TextLayout_Deconstruct(&Label->_measureLayout), TextDocument_Deconstruct(&Label->_document) };
+    for (size_t Index = 0U; Index < (sizeof(Results) / sizeof(Results[0])); Index++)
     {
-        First = DocumentResult;
-    }
-    else
-    {
-        Error_Deconstruct(&DocumentResult);
+        if ((Results[Index].Code != ErrorCode_Success) && (First.Code == ErrorCode_Success))
+        {
+            First = Results[Index];
+        }
+        else
+        {
+            Error_Deconstruct(&Results[Index]);
+        }
     }
     return First;
 }
@@ -203,6 +352,7 @@ static const WidgetVTable LabelWidgetVTable =
     .Update = LabelWidget_UpdateVT,
     .Layout = LabelWidget_LayoutVT,
     .Render = LabelWidget_RenderVT,
+    .Measure = LabelWidget_MeasureVT,
     .OnDeconstruct = LabelWidget_OnDeconstructVT,
     .GetProperty = LabelWidget_GetPropertyVT,
     .SetProperty = LabelWidget_SetPropertyVT
@@ -216,6 +366,65 @@ static const WidgetPropertyDescriptor LabelProperties[] =
     { .Id = LabelProperty_Tint, .Type = UIPropertyType_RenderColor, .Name = u8"tint" },
     { .Id = LabelProperty_Origin, .Type = UIPropertyType_Vector2, .Name = u8"origin" },
 };
+
+
+// Static functions: a kit label.
+/* Makes it a kit label: its look from the theme, its one plain string (a root the label owns from here on). */
+static Error ConstructElement(LabelWidget* self, const LabelWidgetArgs* arguments)
+{
+    const UILabelOptions* Options = arguments->ElementOptions;
+    if (Options->HasTextSize && (!(Options->TextSize > 0.0f) || Math_IsInfinityFloat(Options->TextSize)))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UILabel: the text size must be a finite number above 0.");
+    }
+    Error Result = UIElementLook_Construct(&self->_element._look, UIElementKind_Label, Options->Element.Variant);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIElement_ApplyOptions(&self->Base, &Options->Element);
+    }
+    StringComponent* String = NULL;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = TextComponentFactory_CreateString(arguments->ComponentFactory,
+            (Options->Text != NULL) ? Options->Text : (const unsigned char*)u8"", &String);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = StringComponent_SetSize(String, KIT_LABEL_COMPONENT_SIZE);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = TextDocument_SetRoot(&self->_document, StringComponent_AsComponent(String));
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        if (String != NULL)
+        {
+            Error Cleanup = TextComponentFactory_ReturnTree(arguments->ComponentFactory, StringComponent_AsComponent(String));
+            Error_Deconstruct(&Cleanup);
+        }
+        return Result;
+    }
+    self->_element._usesTheme = true;
+    self->_element._hasTextSize = Options->HasTextSize;
+    self->_element._textSize = Options->TextSize;
+    self->_element._isWrapped = Options->IsWrapped;
+    if (Options->IsWrapped)
+    {
+        self->_boundHandling = LabelBoundHandling_Wrap;
+    }
+    return Widget_SetIsInputEnabled(&self->Base, false); // Only the flag: the widget is not initialized yet.
+}
+
+static void* ResolveLook(void* widget)
+{
+    return &((LabelWidget*)widget)->_element._look;
+}
+
+static void* ResolveElement(void* widget)
+{
+    return &((LabelWidget*)widget)->_element;
+}
 
 
 // Static functions: the widget constructor (registered with the factory).
@@ -235,10 +444,19 @@ static Error LabelWidget_ConstructVT(void* widget, void* args)
     {
         return Result;
     }
-    Result = TextDocument_Construct(&Label->_document, Arguments->ComponentFactory, Arguments->Assets, Arguments->Logger);
+    Result = TextLayout_Construct(&Label->_measureLayout);
     if (Result.Code != ErrorCode_Success)
     {
         Error Cleanup = TextLayout_Deconstruct(&Label->_layout);
+        Error_Deconstruct(&Cleanup);
+        return Result;
+    }
+    Result = TextDocument_Construct(&Label->_document, Arguments->ComponentFactory, Arguments->Assets, Arguments->Logger);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error Cleanup = TextLayout_Deconstruct(&Label->_measureLayout);
+        Error_Deconstruct(&Cleanup);
+        Cleanup = TextLayout_Deconstruct(&Label->_layout);
         Error_Deconstruct(&Cleanup);
         return Result;
     }
@@ -247,15 +465,6 @@ static Error LabelWidget_ConstructVT(void* widget, void* args)
         // On failure the text stays where it was (the caller's).
         Result = TextDocument_SetRoot(&Label->_document, Arguments->Text);
     }
-    if (Result.Code != ErrorCode_Success)
-    {
-        Error Cleanup = TextDocument_Deconstruct(&Label->_document);
-        Error_Deconstruct(&Cleanup);
-        Cleanup = TextLayout_Deconstruct(&Label->_layout);
-        Error_Deconstruct(&Cleanup);
-        return Result;
-    }
-
     Label->_alignment = LabelAlignment_Left;
     Label->_origin = (Vector2){ .x = 0.0f, .y = 0.0f };
     Label->_rotation = 0.0f;
@@ -264,6 +473,21 @@ static Error LabelWidget_ConstructVT(void* widget, void* args)
     Label->_hasBounds = false;
     Label->_bounds = (Vector2){ .x = 0.0f, .y = 0.0f };
     Label->_boundHandling = LabelBoundHandling_Cut;
+    Label->_element._document = &Label->_document;
+    if ((Result.Code == ErrorCode_Success) && (Arguments->ElementOptions != NULL))
+    {
+        Result = ConstructElement(Label, Arguments);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error Cleanup = TextDocument_Deconstruct(&Label->_document);
+        Error_Deconstruct(&Cleanup);
+        Cleanup = TextLayout_Deconstruct(&Label->_measureLayout);
+        Error_Deconstruct(&Cleanup);
+        Cleanup = TextLayout_Deconstruct(&Label->_layout);
+        Error_Deconstruct(&Cleanup);
+        return Result;
+    }
     return Error_CreateSuccess();
 }
 
@@ -283,6 +507,33 @@ Error LabelWidget_RegisterType(UIWidgetFactory* factory, uint64_t* outTypeId)
         .Constructor = LabelWidget_ConstructVT,
         .Capabilities = NULL,
         .CapabilityCount = 0U,
+        .Properties = LabelProperties,
+        .PropertyCount = sizeof(LabelProperties) / sizeof(LabelProperties[0]),
+        .IsFocusable = false
+    };
+    return UIWidgetFactory_RegisterType(factory, &Descriptor, outTypeId);
+}
+
+Error LabelWidget_RegisterElementType(UIWidgetFactory* factory, uint64_t lookCapabilityId, uint64_t labelCapabilityId, uint64_t* outTypeId)
+{
+    if ((factory == NULL) || (outTypeId == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "LabelWidget_RegisterElementType: factory and outTypeId must not be NULL.");
+    }
+    WidgetCapabilityEntry Capabilities[] =
+    {
+        { .CapabilityId = lookCapabilityId, .Resolver = ResolveLook },
+        { .CapabilityId = labelCapabilityId, .Resolver = ResolveElement }
+    };
+    WidgetTypeDescriptor Descriptor =
+    {
+        .Name = u8"UILabel",
+        .StructSize = sizeof(LabelWidget),
+        .VTable = &LabelWidgetVTable,
+        .Constructor = LabelWidget_ConstructVT,
+        .Capabilities = Capabilities,
+        .CapabilityCount = sizeof(Capabilities) / sizeof(Capabilities[0]),
         .Properties = LabelProperties,
         .PropertyCount = sizeof(LabelProperties) / sizeof(LabelProperties[0]),
         .IsFocusable = false
@@ -511,6 +762,33 @@ Error LabelWidget_SetBoundHandling(LabelWidget* self, LabelBoundHandling mode)
             return Error_CreateSuccess();
     }
     return Error_Construct2(ErrorCode_IllegalArgument, "LabelWidget_SetBoundHandling: mode out of range.");
+}
+
+Error LabelWidget_SetUIPixelSize(LabelWidget* self, float pixels)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "LabelWidget_SetUIPixelSize: self must not be NULL.");
+    }
+    if (!(pixels > 0.0f) || Math_IsInfinityFloat(pixels))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "LabelWidget_SetUIPixelSize: the height must be a finite number above 0.");
+    }
+    self->_element._hasTextSize = true;
+    self->_element._textSize = pixels;
+    Widget_InvalidateMeasure(&self->Base);
+    return Error_CreateSuccess();
+}
+
+Error LabelWidget_ClearUIPixelSize(LabelWidget* self)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "LabelWidget_ClearUIPixelSize: self must not be NULL.");
+    }
+    self->_element._hasTextSize = false;
+    Widget_InvalidateMeasure(&self->Base);
+    return Error_CreateSuccess();
 }
 
 Error LabelWidget_GetDrawSize(LabelWidget* self, Vector2* outSize)

@@ -113,7 +113,7 @@ for its viewport. Never begin rendering or draw through it.
 ## Who uses it
 
 `TextLayout_Draw` ([TextDocument.md](TextDocument.md)), `UIRenderContext` (the per-widget wrapper, see
-[UIFramework.md](UIFramework.md)), `UIScreen_Render` (widgets, clipping, keyboard navigation outlines) and `LabelWidget`.
+[UIFramework.md](UIFramework.md)), `UIBoxStyle_Draw` ([UIElements.md](UIElements.md)), `UIScreen_Render` (widgets, clipping, keyboard navigation outlines) and `LabelWidget`.
 Running users: `WorldTestFrame`'s text sample (a `RenderContext` on its frame target after the world is drawn) and
 `UITestFrame` (its screen, on its own transparent target). `WorldRenderer` and `GameFrameManager` draw with raylib
 directly.

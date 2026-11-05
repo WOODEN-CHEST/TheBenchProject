@@ -7,7 +7,9 @@ the world (a paper on a desk, the office computer).
 
 All positions and sizes are normalized `[0;1]` of the screen's surface: `(0,0)` is top-left, `(1,1)` bottom-right. A
 widget's position and size are relative to its parent (or the screen, for a root), so a child at `p` inside a parent at
-`P` with size `S` sits at absolute `P + p*S`.
+`P` with size `S` sits at absolute `P + p*S`. Widgets sized in pixels get there through placements (below, "UI pixels").
+
+The elements calling code builds a UI from (the kit, panels, buttons, stacks, themes) are in [UIElements.md](UIElements.md).
 
 ## Modules
 
@@ -32,6 +34,7 @@ widget's position and size are relative to its parent (or the screen, for a root
   [WorldRuntime.md](WorldRuntime.md)).
 - **WorldScreenHost** (`WorldScreenHost.h/.c`): the host of a screen shown on a screen in the world (below, "World
   screens").
+- **UIPlacement** (`UIPlacement.h/.c`): placements, insets and a stack's hints, with their pure arithmetic (below, "UI pixels").
 
 ## Setting up a screen
 
@@ -66,6 +69,29 @@ a world surface, the host raycasts the pointer onto the surface, passes the hit'
 keyboard to the surface in use. The host also keeps the `UIViewport` (the surface's size in pixels and the fitted-area
 settings) current; the Layout pass converts units with it. A screen in the world has a host of its own:
 `WorldScreenHost` (below, "World screens").
+
+## UI pixels, placements and preferred sizes
+
+A **UI pixel** is a surface pixel times the screen's scale (`UIScreen_SetScale`: the player's `ui_scale` for a UI in the window; a
+screen in the world has its own, and its pixels are its render target's). Results round to whole surface pixels, so edges stay crisp.
+
+A widget may have a **placement** (`Widget_SetPlacement`, `UIPlacement.h`): two anchors in `[0;1]` of its parent's box and two offsets from
+them in UI pixels, which covers a fixed size at any corner (`UIPlacement_Fixed`, `UIPlacement_FromTopLeft`) and a stretch (`UIPlacement_Stretch`).
+The layout pass turns it into the normalized `_position` and `_size`, parents first, before the widget's `Layout` hook, each edge
+rounded to a whole surface pixel and written only when it changes, so an idle screen does not hit-test again. Two boxes sharing an edge in UI
+pixels share it on the surface at any scale, and a box a whole number of pixels long keeps that length wherever it lies. A parent of zero size gives zero, never a
+NaN. Offsets past `UI_PLACEMENT_MAX_OFFSET` are refused, and a stack's padding, spacing and hints past `UI_LAYOUT_MAX_LENGTH`: what a stack adds up always stays a number. A widget without a placement behaves as its
+position and size say, in normalized units. **A placement wins** over the position and the size set any other way: an animation of a placed
+widget's `Position` or `Size` changes nothing, so animate its tint or its placement. `Widget_ClearPlacement` leaves the box as it is.
+
+A widget's **preferred size** is an optional vtable slot, `Measure`: its size in UI pixels for an available width (`UI_MEASURE_UNBOUNDED_WIDTH` when
+nothing limits it). Containers ask through `Widget_Measure`, which caches the answer until `Widget_InvalidateMeasure` reaches the widget (from itself or
+anything in its subtree: adding or removing a child, showing or hiding it and changing its stack hint do so themselves), the width changes (compared at a
+sixteenth of a UI pixel, so float noise does not count) or the screen's scale, viewport or theme changes. Nothing allocates. A size that is not a finite
+number `>= 0` counts as 0, and one past `UI_LAYOUT_MAX_LENGTH` is kept to it. The hook runs in the layout pass: it may load assets and refresh its own text, and must not destroy widgets or move focus.
+
+The `Layout` hook's `UILayoutContext` also has the parent's absolute position, the surface's size in pixels and what to hand to `Widget_Measure`.
+`UIRenderContext_GetPixelBox` gives a widget its box in whole surface pixels at render, and the `UIRenderContext_RenderPixel*` calls draw in them.
 
 ## World screens
 
@@ -153,7 +179,9 @@ The screen routes, in this order, from its `UIScreenInput`:
    claims it (`GameInput_ConsumePointer`). Pointer movement ends keyboard navigation (focus stays).
 2. **Mouse buttons.** A press over a widget is **consumed**, focuses the nearest focusable widget under the pointer (or
    clears focus), raises that widget's root, and reaches the widget; its release and drags go to that widget even
-   outside it. If a focus hook destroys, detaches or disables the widget, the press stays consumed but reaches nobody.
+   outside it, for as long as it stays attached, takes input and shows (a press it stops being there for is over for it: nothing
+   more reaches it). A pointer that moved in the release's tick arrives as a drag first, so a drag ends where the pointer ended.
+   If a focus hook destroys, detaches or disables the widget, the press stays consumed but reaches nobody.
    A press that hits no widget is a **click outside**: it ends navigation and clears focus, and the game gets it. That
    includes any press while the screen has no pointer (the cursor captured for mouse look, or the pointer over UI of a
    higher frame), so clicking into the world blurs the UI.
@@ -186,7 +214,9 @@ Whatever is not consumed reaches the game: the frame's game logic (and frames be
 
 **States.** Hovered (pointer), focused (keyboard target; at most one per screen), tabbed (entered by navigation), active
 (hovered or tabbed). Widgets get `IsFocusable` from their type (`Widget_SetIsFocusable` changes it); an input-disabled
-widget is transparent to the pointer and cannot keep focus.
+widget is transparent to the pointer and cannot keep focus. A hidden widget (`Widget_SetIsRendered`) is not there for the pointer or the keyboard, with its
+subtree: nothing in it can have the focus (hiding takes it away), navigation passes it, navigation inside it ends, and a press or a held key that began on it is over
+for it. A box of no size holds no point.
 
 ## Notifications
 
@@ -219,7 +249,7 @@ update. Render reads state only (the navigation outlines read the bounds without
 Each widget has a float `ZLayer` relative to its siblings. Siblings are kept in a **draw order** sorted by (z, insertion)
 and updated only when a z value or the child set changes, so siblings of equal z keep their insertion order and
 `Widget_GetSubWidgetAt` / `UIScreen_GetRootAt` (insertion order) never change meaning. The screen draws roots in draw
-order, each widget before its children. `AreSubWidgetsCut` clips a subtree (rendering and hit testing) to the widget's
+order, each widget before its children, and a hidden widget hides its subtree. `AreSubWidgetsCut` clips a subtree (rendering and hit testing) to the widget's
 box through the render context's **clip stack** (`RenderContext_PushClip`), so nested clips intersect and a label's own
 cut nests inside its parent's. While navigating, outlines are drawn on top.
 
@@ -228,7 +258,8 @@ cut nests inside its parent's. While navigating, outlines are drawn on top.
 Properties are typed. Every widget has the base properties (`WidgetBaseProperty_Position` / `Size` (Vector2), `ZLayer`
 (float), `RenderTint` (RenderColor)); a type declares its own in its descriptor (`WidgetPropertyDescriptor`: id below
 `WIDGET_BASE_PROPERTY_START`, type, name). `Widget_GetProperty` / `Widget_SetProperty` take `UIPropertyValue`s and
-reject a value of the wrong type; `Widget_TryGetPropertyType` looks a property up.
+reject a value of the wrong type; `Widget_TryGetPropertyType` looks a property up. A value is a float, a vector, a colour, a render colour, a bool or a
+double; nothing blends the last two, so keyframes refuse them (they travel in events and plain properties).
 
 `UIScreen_StartAnimation(screen, widgetId, propertyId, type, keyframes, count, options, &id)` validates the keyframes
 (times finite, >= 0 and non-decreasing; values finite; a custom curve present when used) and the property's type, copies
@@ -248,9 +279,11 @@ detaching it does not. `UIScreen_StopAnimation`, `UIScreen_StopWidgetAnimations`
   the text; Render only draws. Typed properties (`LabelProperty_*`): Size, Rotation (float), Tint (RenderColor), Origin
   (Vector2). Not focusable by default. Build with `LabelWidget_RegisterType` (once) and `LabelWidget_Create`
   (borrowed `TextComponentFactory`, optional `AssetManager` and `Logger`, optional initial text whose ownership passes to
-  the label on success); give it text with `LabelWidget_SetText` or edit the tree in place.
+  the label on success); give it text with `LabelWidget_SetText` or edit the tree in place. `LabelWidget_SetUIPixelSize` gives it a line height in UI
+  pixels in place of its Size (followed through the scale and the viewport at each layout). It answers `Measure` with its text block's size, and with a
+  placement it keeps the box it is given. As an element of the kit it also takes its font and colours from the theme ([UIElements.md](UIElements.md)).
 
-Writing a new widget type: embed `Widget` first; give the type a static `WidgetVTable` and a descriptor (declare its
+Writing a new widget type (an element of the kit: [UIElements.md](UIElements.md)): embed `Widget` first; give the type a static `WidgetVTable` and a descriptor (declare its
 typed properties there); construct only the concrete part in the constructor; create child widgets in `Initialize`;
 report keys you handle through `outIsHandled` (handle a key's press to get its repeats and release); post your own
 events with `UIScreen_PostWidgetEvent` (they reach subscribers even if the widget is destroyed in the same update);

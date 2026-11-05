@@ -58,6 +58,15 @@
  * dropped when its widget is destroyed before delivery. A widget's own event is delivered even then (it carries
  * everything by value). A widget's own vtable hooks are still called immediately.
  *
+ * SCALE. A UI pixel is a surface pixel times the screen's scale (UIScreen_SetScale): the player's ui_scale for a UI in the
+ * window, a screen's own for one in the world. It sizes placements (UIPlacement.h), stacks and every element of the kit;
+ * widgets placed in normalized units do not change with it.
+ *
+ * THEME. A screen may have a theme (UIScreen_SetTheme, UITheme.h): the look of the elements on it, as data. It is held
+ * under an asset user of the screen's own, so the look can change at any time, and a screen in the world can have a look
+ * of its own. Elements read it at layout and at render, and never keep a pointer into it. A missing theme or a part it
+ * leaves out draws a plain box, logged once.
+ *
  * Construct with UIScreen_Construct and release with UIScreen_Deconstruct (which destroys every widget still in it).
  * Not thread-safe.
  */
@@ -68,6 +77,10 @@
 typedef struct WidgetStruct Widget;
 /** @brief The logger; full type in Logger.h. Borrowed. */
 typedef struct LoggerStruct Logger;
+/** @brief The asset manager; full type in AssetManager.h. Borrowed. */
+typedef struct AssetManagerStruct AssetManager;
+/** @brief A theme asset; full type in UITheme.h. Borrowed from the asset manager. */
+typedef struct UIThemeStruct UITheme;
 
 
 // Macros.
@@ -82,6 +95,11 @@ typedef struct LoggerStruct Logger;
 #define UI_EVENT_KIND_MASK_ALL ((uint32_t)0xFFFFFFFFU)
 /** @brief Invalid subscription or animation id (a real one is >= 1). */
 #define UI_SCREEN_ID_INVALID ((uint64_t)0)
+/** @brief The bounds of a screen's scale. */
+#define UI_SCREEN_MIN_SCALE 0.25f
+#define UI_SCREEN_MAX_SCALE 8.0f
+/** @brief How many element kinds a screen remembers reporting missing theme parts of. */
+#define UI_SCREEN_THEME_REPORT_KINDS ((size_t)32)
 
 
 // Types.
@@ -246,6 +264,25 @@ typedef struct UIScreenStruct
 
     /** @brief The surface the screen is drawn on. */
     UIViewport _viewport;
+    /** @brief The height in pixels of one normalized-fitted unit on that surface. */
+    float _fittedPixelsPerUnit;
+    /** @brief Surface pixels per UI pixel. */
+    float _scale;
+    /** @brief Moves on whenever the scale, the viewport or the theme changes: widgets' cached preferred sizes are then old. */
+    uint64_t _measureGeneration;
+
+    /** @brief The asset manager the theme came from; borrowed, meaningful while _theme is set. */
+    AssetManager* _themeAssets;
+    /** @brief The asset user that holds the theme, of its own (an AssetUserID); meaningful while _theme is set. */
+    uint64_t _themeUser;
+    /** @brief The current theme; borrowed from the manager under _themeUser, NULL for none. */
+    const UITheme* _theme;
+    /** @brief Moves on whenever the theme changes. */
+    uint64_t _themeRevision;
+    /** @brief Whether a missing theme was logged since the theme last changed. */
+    bool _isMissingThemeReported;
+    /** @brief Per element kind, a bit per part already logged as missing from the current theme. */
+    uint32_t _reportedThemeParts[UI_SCREEN_THEME_REPORT_KINDS];
 
     /** @brief The running animations (private element type). */
     GenericBuffer _animations;
@@ -383,6 +420,106 @@ static inline UIViewport UIScreen_GetViewport(const UIScreen* self)
 {
     return self->_viewport;
 }
+
+/**
+ * @brief Sets the screen's scale: how many surface pixels one UI pixel takes (the player's ui_scale; a screen in the world
+ *        has its own). Takes effect at the next layout pass.
+ * @param self The screen; must not be NULL.
+ * @param scale The scale; finite and within [UI_SCREEN_MIN_SCALE, UI_SCREEN_MAX_SCALE].
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if @p scale is not.
+ */
+Error UIScreen_SetScale(UIScreen* self, float scale);
+
+/**
+ * @brief Returns the screen's scale.
+ * @param self The screen; must not be NULL.
+ * @returns Surface pixels per UI pixel; 1 unless set.
+ */
+static inline float UIScreen_GetScale(const UIScreen* self)
+{
+    return self->_scale;
+}
+
+/**
+ * @brief Converts surface pixels to normalized-fitted units on this screen's viewport (the units of text): a size for a
+ *        label from its height in pixels.
+ * @param self The screen; must not be NULL.
+ * @param pixels The length in surface pixels.
+ * @returns The length in normalized-fitted units.
+ */
+static inline float UIScreen_PixelsToFitted(const UIScreen* self, float pixels)
+{
+    return pixels / self->_fittedPixelsPerUnit;
+}
+
+/**
+ * @brief Returns the number that moves on whenever the scale, the viewport or the theme changes, which cached preferred
+ *        sizes are compared against.
+ * @param self The screen; must not be NULL.
+ * @returns The generation.
+ */
+static inline uint64_t UIScreen_GetMeasureGeneration(const UIScreen* self)
+{
+    return self->_measureGeneration;
+}
+
+
+// Theme.
+/**
+ * @brief Gives the screen a theme by name: the look of the kit's elements on it, from the next layout and render on.
+ *
+ * Loads the theme under a new asset user of the screen's, then retires the user of the one it had, which releases it. A
+ * theme that does not load is logged once by the asset manager and changes nothing: the screen keeps what it had, and with
+ * no theme its elements draw plain boxes. That is never an error of this call, so a pack's broken theme cannot stop a frame.
+ * @param self The screen; must not be NULL. May be called from a handler or a hook.
+ * @param assets The asset manager; borrowed, must outlive the screen (or its next theme). Must not be NULL.
+ * @param themeName The theme's asset name; must not be NULL.
+ * @returns Success (also when the theme did not load: see UIScreen_GetTheme); ErrorCode_IllegalArgument if a pointer is
+ *          NULL; otherwise an error from the asset users.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error UIScreen_SetTheme(UIScreen* self, AssetManager* assets, const unsigned char* themeName);
+
+/**
+ * @brief Takes the screen's theme away: its elements draw plain boxes.
+ * @param self The screen; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; otherwise an error from retiring the asset user.
+ */
+Error UIScreen_ClearTheme(UIScreen* self);
+
+/**
+ * @brief Returns the screen's theme. Valid until the screen's theme next changes: read it where it is used, never keep it.
+ * @param self The screen; must not be NULL.
+ * @returns The theme, or NULL for none.
+ */
+static inline const UITheme* UIScreen_GetTheme(const UIScreen* self)
+{
+    return self->_theme;
+}
+
+/**
+ * @brief Returns the number that moves on whenever the screen's theme changes.
+ * @param self The screen; must not be NULL.
+ * @returns The revision.
+ */
+static inline uint64_t UIScreen_GetThemeRevision(const UIScreen* self)
+{
+    return self->_themeRevision;
+}
+
+/**
+ * @brief Logs, once until the theme changes, that the screen's theme has no such part: the element draws a plain box.
+ *
+ * Elements call it on the update side when they find a part missing (never in Render). With no theme at all it logs that
+ * once instead.
+ * @param self The screen; must not be NULL.
+ * @param elementKindName The element kind's name in the theme's format, e.g. u8"button"; must not be NULL.
+ * @param elementKindIndex The kind's index, below UI_SCREEN_THEME_REPORT_KINDS.
+ * @param partName The part's name, e.g. u8"background"; must not be NULL.
+ * @param partIndex The part's index, below 32.
+ */
+void UIScreen_ReportMissingThemePart(UIScreen* self, const unsigned char* elementKindName, size_t elementKindIndex,
+    const unsigned char* partName, size_t partIndex);
 
 
 // Widgets by id.

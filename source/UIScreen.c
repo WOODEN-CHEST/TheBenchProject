@@ -4,6 +4,9 @@
 #include "UIWidgetFactory.h"
 #include "UIRenderContext.h"
 #include "Renderer.h"
+#include "AssetManager.h"
+#include "Logger.h"
+#include "UITheme.h"
 #include "wr/WRMemory.h"
 #include "wr/WRMath.h"
 #include "wr/WRCompile.h"
@@ -23,6 +26,9 @@
 #define ID_SLOT_MASK ((uint64_t)0xFFFFFFFFU)
 /** Most registry slots (the slot index + 1 must fit in ID_SLOT_BITS). */
 #define MAX_SLOT_COUNT ((size_t)UINT32_MAX - 1U)
+/** A clip's edges within this many pixels of a whole one are that whole pixel: a placed box's edges are whole pixels that
+ *  came back through normalized floats, and rounding them outwards would clip a pixel too wide. */
+#define CLIP_SNAP_PIXELS 0.002f
 
 
 // Types.
@@ -259,15 +265,21 @@ static Error FlushDestroyedWidgets(UIScreen* self)
 
 
 // Static functions: hit testing and rendering.
+/* A box of no size holds no point, also where its corner lies exactly on one. */
 static bool PointInBox(Vector2 point, Vector2 position, Vector2 size)
 {
-    return (point.x >= position.x) && (point.x <= (position.x + size.x))
+    return (size.x > 0.0f) && (size.y > 0.0f) && (point.x >= position.x) && (point.x <= (position.x + size.x))
         && (point.y >= position.y) && (point.y <= (position.y + size.y));
 }
 
-/* The top-most input-enabled widget of a subtree at a point; recursion is bounded by WIDGET_MAX_TREE_DEPTH. */
+/* The top-most input-enabled widget of a subtree at a point; a widget that is not rendered is not there, with its subtree.
+ * Recursion is bounded by WIDGET_MAX_TREE_DEPTH. */
 static Widget* HitTestNode(Widget* widget, Vector2 screenPosition, Vector2 parentPosition, Vector2 parentSize)
 {
+    if (!Widget_IsRendered(widget))
+    {
+        return NULL;
+    }
     Vector2 Position = Widget_GetPosition(widget);
     Vector2 Size = Widget_GetSize(widget);
     Vector2 AbsolutePosition = { .x = parentPosition.x + (Position.x * parentSize.x), .y = parentPosition.y + (Position.y * parentSize.y) };
@@ -290,32 +302,45 @@ static Widget* HitTestNode(Widget* widget, Vector2 screenPosition, Vector2 paren
     return (Widget_IsInputEnabled(widget) && IsInside) ? widget : NULL;
 }
 
+/* A pixel edge, snapped when float noise is all that keeps it from a whole pixel. */
+static float SnapClipEdge(float edge)
+{
+    float Nearest = Math_FloorFloat(edge + 0.5f);
+    return (Math_AbsFloat(edge - Nearest) <= CLIP_SNAP_PIXELS) ? Nearest : edge;
+}
+
 static Rectangle ScreenBoxToPixels(RenderContext* renderContext, Vector2 position, Vector2 size)
 {
     Vector2 PixelPosition = RenderContext_VectorRelativeToPixel(renderContext, position);
     Vector2 PixelSize = RenderContext_VectorRelativeToPixel(renderContext, size);
-    return (Rectangle){ .x = PixelPosition.x, .y = PixelPosition.y, .width = PixelSize.x, .height = PixelSize.y };
+    float Left = SnapClipEdge(PixelPosition.x);
+    float Top = SnapClipEdge(PixelPosition.y);
+    float Right = SnapClipEdge(PixelPosition.x + PixelSize.x);
+    float Bottom = SnapClipEdge(PixelPosition.y + PixelSize.y);
+    return (Rectangle){ .x = Left, .y = Top, .width = Right - Left, .height = Bottom - Top };
 }
 
-/* Draws a subtree: the widget, then its children by draw order; recursion is bounded by WIDGET_MAX_TREE_DEPTH. */
+/* Draws a subtree: the widget, then its children by draw order; one that is not rendered hides its subtree. Recursion is
+ * bounded by WIDGET_MAX_TREE_DEPTH. */
 static Error RenderNode(RenderContext* renderContext, Widget* widget, Vector2 parentPosition, Vector2 parentSize,
     RenderColor parentTint)
 {
+    if (!Widget_IsRendered(widget))
+    {
+        return Error_CreateSuccess();
+    }
     Vector2 Position = Widget_GetPosition(widget);
     Vector2 Size = Widget_GetSize(widget);
     Vector2 AbsolutePosition = { .x = parentPosition.x + (Position.x * parentSize.x), .y = parentPosition.y + (Position.y * parentSize.y) };
     Vector2 AbsoluteSize = { .x = Size.x * parentSize.x, .y = Size.y * parentSize.y };
     RenderColor Tint = UIRenderColor_Multiply(parentTint, Widget_GetRenderTint(widget));
 
-    if (Widget_IsRendered(widget))
+    UIRenderContext Context;
+    UIRenderContext_Create(&Context, renderContext, AbsolutePosition, AbsoluteSize, Tint);
+    Error RenderResult = Widget_Render(widget, &Context);
+    if (RenderResult.Code != ErrorCode_Success)
     {
-        UIRenderContext Context;
-        UIRenderContext_Create(&Context, renderContext, AbsolutePosition, AbsoluteSize, Tint);
-        Error RenderResult = Widget_Render(widget, &Context);
-        if (RenderResult.Code != ErrorCode_Success)
-        {
-            return RenderResult;
-        }
+        return RenderResult;
     }
     if (widget->_drawOrder._count == 0U)
     {
@@ -430,12 +455,45 @@ static Error UpdateWidgets(UIScreen* self, ProgramTime time)
     return Error_CreateSuccess();
 }
 
-/* Lays out every snapshot widget that is still alive and attached, parents first (the snapshot is in pre-order). */
+/* Turns a widget's placement into its position and size, writing them only when they change: an idle screen does not
+ * hit-test again every tick. */
+static Error ApplyPlacement(const UIScreen* self, Widget* widget, Vector2 parentPosition, Vector2 parentSize)
+{
+    Vector2 Position;
+    Vector2 Size;
+    UIPlacement_Resolve(&widget->_placement, parentPosition, parentSize, self->_viewport.SizePixels, self->_scale, &Position,
+        &Size);
+    if ((Position.x != widget->_position.x) || (Position.y != widget->_position.y))
+    {
+        Error Result = Widget_SetPosition(widget, Position);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+    }
+    if ((Size.x != widget->_size.x) || (Size.y != widget->_size.y))
+    {
+        return Widget_SetSize(widget, Size);
+    }
+    return Error_CreateSuccess();
+}
+
+/* The height in pixels of one normalized-fitted unit: the target area's height on the surface. */
+static float GetFittedPixelsPerUnit(const UIViewport* viewport)
+{
+    float BufferAspectRatio = viewport->SizePixels.x / viewport->SizePixels.y;
+    float Quotient = viewport->TargetAspectRatio / BufferAspectRatio;
+    return viewport->SizePixels.y * ((Quotient >= 1.0f) ? (1.0f / Quotient) : 1.0f);
+}
+
+/* Lays out every snapshot widget that is still alive and attached, parents first (the snapshot is in pre-order): a widget's
+ * placement, which its parent's Layout hook may just have written, then its own hook. */
 static Error LayoutWidgets(UIScreen* self)
 {
     RenderContext Measure;
     RenderContext_CreateMeasuring(&Measure, self->_viewport.SizePixels, self->_viewport.TargetAspectRatio,
         self->_viewport.TargetRelativePosition);
+    UIMeasureContext Sizing = { .Measure = &Measure, .Scale = self->_scale };
     for (size_t Index = 0; Index < self->_updateSnapshot._count; Index++)
     {
         Widget* Target = UIScreen_InternalResolve(self, *(uint64_t*)GenericBuffer_GetPointerToElement(&self->_updateSnapshot, Index));
@@ -449,7 +507,22 @@ static Error LayoutWidgets(UIScreen* self)
         {
             UIScreen_InternalGetAbsoluteBox(Widget_GetParent(Target), &ParentPosition, &ParentSize);
         }
-        UILayoutContext Context = { .Measure = &Measure, .ParentAbsoluteSize = ParentSize };
+        if (Target->_hasPlacement)
+        {
+            Error PlacementResult = ApplyPlacement(self, Target, ParentPosition, ParentSize);
+            if (PlacementResult.Code != ErrorCode_Success)
+            {
+                return PlacementResult;
+            }
+        }
+        UILayoutContext Context =
+        {
+            .Measure = &Measure,
+            .ParentAbsoluteSize = ParentSize,
+            .ParentAbsolutePosition = ParentPosition,
+            .SurfaceSizePixels = self->_viewport.SizePixels,
+            .Sizing = &Sizing
+        };
         Error Result = Widget_Layout(Target, &Context);
         if (Result.Code != ErrorCode_Success)
         {
@@ -686,6 +759,18 @@ bool UIScreen_InternalIsAttached(const Widget* widget)
     return false;
 }
 
+bool UIScreen_InternalIsShown(const Widget* widget)
+{
+    for (const Widget* Current = widget; Current != NULL; Current = Current->_parent)
+    {
+        if (!Current->_isRendered)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 void UIScreen_InternalGetAbsoluteBox(const Widget* widget, Vector2* outPosition, Vector2* outSize)
 {
     Vector2 ParentPosition = { .x = 0.0f, .y = 0.0f };
@@ -724,6 +809,9 @@ Error UIScreen_Construct(UIScreen* self, UIWidgetFactory* factory, Logger* logge
     self->_logger = logger;
     self->_viewport = UIViewport_Create((Vector2){ .x = DEFAULT_VIEWPORT_WIDTH, .y = DEFAULT_VIEWPORT_HEIGHT },
         DEFAULT_VIEWPORT_ASPECT_RATIO, RenderTargetPosition_Centered());
+    self->_fittedPixelsPerUnit = GetFittedPixelsPerUnit(&self->_viewport);
+    self->_scale = 1.0f;
+    self->_measureGeneration = 1U;
 
     Error AnimationResult = UIScreen_InternalInitializeAnimations(self);
     if (AnimationResult.Code != ErrorCode_Success)
@@ -768,6 +856,11 @@ Error UIScreen_Deconstruct(UIScreen* self)
     }
     Error FlushResult = FlushDestroyedWidgets(self);
     KeepFirstError(&FirstError, &FlushResult);
+    if (self->_theme != NULL)
+    {
+        Error RetireResult = AssetManager_RetireUser(self->_themeAssets, self->_themeUser);
+        KeepFirstError(&FirstError, &RetireResult);
+    }
 
     Error AnimationResult = UIScreen_InternalReleaseAnimations(self);
     KeepFirstError(&FirstError, &AnimationResult);
@@ -801,8 +894,130 @@ Error UIScreen_SetViewport(UIScreen* self, const UIViewport* viewport)
         return Error_Construct2(ErrorCode_ArgumentOutOfRange,
             "UIScreen_SetViewport: the size and aspect ratio must be finite and positive, the placement finite.");
     }
+    bool HasFittedAreaChanged = (viewport->SizePixels.x != self->_viewport.SizePixels.x)
+        || (viewport->SizePixels.y != self->_viewport.SizePixels.y)
+        || (viewport->TargetAspectRatio != self->_viewport.TargetAspectRatio);
     self->_viewport = *viewport;
+    if (HasFittedAreaChanged)
+    {
+        self->_fittedPixelsPerUnit = GetFittedPixelsPerUnit(&self->_viewport);
+        self->_measureGeneration++; // Text in fitted units measures differently in UI pixels now.
+    }
     return Error_CreateSuccess();
+}
+
+Error UIScreen_SetScale(UIScreen* self, float scale)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_SetScale: self must not be NULL.");
+    }
+    if (!(scale >= UI_SCREEN_MIN_SCALE) || !(scale <= UI_SCREEN_MAX_SCALE))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIScreen_SetScale: the scale must be a finite number within "
+            "[UI_SCREEN_MIN_SCALE, UI_SCREEN_MAX_SCALE].");
+    }
+    if (scale != self->_scale)
+    {
+        self->_scale = scale;
+        self->_measureGeneration++;
+    }
+    return Error_CreateSuccess();
+}
+
+
+// Public functions: theme.
+/* The theme has just changed: cached sizes are old, and what was logged about the last one may hold again. */
+static void OnThemeChanged(UIScreen* self, const UITheme* theme)
+{
+    self->_theme = theme;
+    self->_themeRevision++;
+    self->_measureGeneration++;
+    self->_isMissingThemeReported = false;
+    Memory_Zero(self->_reportedThemeParts, sizeof(self->_reportedThemeParts));
+    self->_isHitTestDirty = true;
+}
+
+Error UIScreen_SetTheme(UIScreen* self, AssetManager* assets, const unsigned char* themeName)
+{
+    if ((self == NULL) || (assets == NULL) || (themeName == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_SetTheme: self, assets and themeName must not be NULL.");
+    }
+
+    // Under a user of its own, and the new one first: a theme that does not load leaves the screen as it was (the manager
+    // logged why, once), and retiring the old user afterwards releases exactly the old theme.
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    Error UserResult = AssetManager_GetNewUserID(assets, &User);
+    if (UserResult.Code != ErrorCode_Success)
+    {
+        return UserResult;
+    }
+    UITheme* Loaded = NULL;
+    Error LoadResult = AssetManager_LoadUITheme(assets, themeName, User, &Loaded);
+    if ((LoadResult.Code != ErrorCode_Success) || (Loaded == self->_theme))
+    {
+        Error_Deconstruct(&LoadResult);
+        return AssetManager_RetireUser(assets, User);
+    }
+
+    Error RetireResult = Error_CreateSuccess();
+    if (self->_theme != NULL)
+    {
+        RetireResult = AssetManager_RetireUser(self->_themeAssets, self->_themeUser);
+    }
+    self->_themeAssets = assets;
+    self->_themeUser = User;
+    OnThemeChanged(self, Loaded);
+    return RetireResult;
+}
+
+Error UIScreen_ClearTheme(UIScreen* self)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_ClearTheme: self must not be NULL.");
+    }
+    if (self->_theme == NULL)
+    {
+        return Error_CreateSuccess();
+    }
+    Error RetireResult = AssetManager_RetireUser(self->_themeAssets, self->_themeUser);
+    OnThemeChanged(self, NULL);
+    return RetireResult;
+}
+
+void UIScreen_ReportMissingThemePart(UIScreen* self, const unsigned char* elementKindName, size_t elementKindIndex,
+    const unsigned char* partName, size_t partIndex)
+{
+    if (self->_theme == NULL)
+    {
+        if (!self->_isMissingThemeReported && (self->_logger != NULL))
+        {
+            Error LogResult = Logger_LogWarning(self->_logger,
+                (const unsigned char*)u8"UI: a screen with elements has no theme: they draw as plain boxes.");
+            Error_Deconstruct(&LogResult);
+        }
+        self->_isMissingThemeReported = true;
+        return;
+    }
+    if ((elementKindIndex >= UI_SCREEN_THEME_REPORT_KINDS) || (partIndex >= 32U))
+    {
+        return;
+    }
+    uint32_t Bit = (uint32_t)1U << (uint32_t)partIndex;
+    if ((self->_reportedThemeParts[elementKindIndex] & Bit) != 0U)
+    {
+        return;
+    }
+    self->_reportedThemeParts[elementKindIndex] |= Bit;
+    if (self->_logger != NULL)
+    {
+        Error LogResult = Logger_LogWarningFormatted(self->_logger,
+            (const unsigned char*)u8"UI theme \"%s\" has no \"%s\" for the element \"%s\": it draws as a plain box.",
+            (const char*)UITheme_GetName(self->_theme), (const char*)partName, (const char*)elementKindName);
+        Error_Deconstruct(&LogResult);
+    }
 }
 
 

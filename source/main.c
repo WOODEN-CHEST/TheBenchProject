@@ -22,6 +22,7 @@
 #include "AssetManager.h"
 #include "Services.h"
 #include "WorldTestFrame.h"
+#include "UIGalleryFrame.h"
 #include "UITestFrame.h"
 #include "raylib/raylib.h"
 #include "wr/WRStopwatch.h"
@@ -55,6 +56,8 @@
 #define MAX_FRAME_TIME_SECONDS 0.25
 /** Aspect ratio (width / height) the game's content is designed and fitted for. */
 #define TARGET_ASPECT_RATIO (16.0f / 9.0f)
+/** The command-line argument that runs the UI gallery instead of the world test. */
+#define ARGUMENT_UI_GALLERY "--ui-gallery"
 /** Idle threshold in seconds: while the next update tick and the next paced render are both at least this
  *  far away, the loop sleeps instead of spinning. Matches IDLE_SLEEP_MILLISECONDS. */
 #define IDLE_SLEEP_THRESHOLD_SECONDS 0.001
@@ -413,12 +416,52 @@ static Error SetUpAssetManager(Logger* logger, const unsigned char* baseDirector
 }
 
 
+/* What the command line asked for: the UI gallery instead of the world test. Anything else is warned about and ignored.
+ * TODO: until a main menu exists the command line is how the game's other modes start. */
+static bool ReadArguments(int argc, char** argv, Logger* logger)
+{
+    bool IsGalleryWanted = false;
+    for (int Index = 1; Index < argc; Index++)
+    {
+        bool IsSame = false;
+        Error Compare = StringUTF8_EqualsExact((const unsigned char*)argv[Index], (const unsigned char*)ARGUMENT_UI_GALLERY, &IsSame);
+        Error_Deconstruct(&Compare);
+        if (IsSame)
+        {
+            IsGalleryWanted = true;
+            continue;
+        }
+        Error LogResult = Logger_LogWarningFormatted(logger, (const unsigned char*)u8"Ignored the command-line argument \"%s\".", argv[Index]);
+        Error_Deconstruct(&LogResult);
+    }
+    return IsGalleryWanted;
+}
+
+/* Adds a frame the factory made, warning (and carrying on) when either fails. */
+static void AddFrameOrWarn(GameFrameManager* frameManager, Logger* logger, const char* what, Error createResult, GameFrame* frame)
+{
+    Error Result = createResult;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = GameFrameManager_AddFrame(frameManager, frame, GameFrameAddOptions_Default());
+        if (Result.Code != ErrorCode_Success)
+        {
+            GameFrame_Destroy(frame);
+        }
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error LogResult = Logger_LogWarningFormatted(logger, (const unsigned char*)u8"Failed to start the %s frame: %s", what,
+            (Result.Message != NULL) ? (const char*)Result.Message : "no details");
+        Error_Deconstruct(&LogResult);
+        Error_Deconstruct(&Result);
+    }
+}
+
+
 // Program entry.
 int main(int argc, char** argv)
 {
-    UNUSED(argc);
-    UNUSED(argv);
-
     // Before any other raylib call, so its start-up lines obey it too.
     SetTraceLogLevel(RAYLIB_LOG_LEVEL);
 
@@ -454,6 +497,8 @@ int main(int argc, char** argv)
         GenericBuffer_AppendString(&BaseDirectory, (const unsigned char*)GetWorkingDirectory());
         GenericBuffer_NullTerminate(&BaseDirectory);
     }
+
+    bool IsGalleryWanted = ReadArguments(argc, argv, &Log);
 
     GameConfig Config;
     LoadConfig(&Log, BaseDirectory._data, &Config);
@@ -594,41 +639,23 @@ int main(int argc, char** argv)
     GameServices.Registries = &Registries;
     GameServices.BaseDirectory = BaseDirectory._data;
 
-    // The world-test frame needs the asset manager; only add it if the asset manager came up.
-    if (Assets != NULL)
+    // Both need the asset manager; only add a frame if it came up.
+    if ((Assets != NULL) && IsGalleryWanted)
+    {
+        GameFrame* GalleryFrame = NULL;
+        Error GalleryResult = UIGalleryFrame_Create(&GameServices, &GalleryFrame);
+        AddFrameOrWarn(&FrameManager, &Log, "UI gallery", GalleryResult, GalleryFrame);
+    }
+    else if (Assets != NULL)
     {
         GameFrame* TestFrame = NULL;
         Error FrameResult = WorldTestFrame_Create(&GameServices, &TestFrame);
-        if (FrameResult.Code != ErrorCode_Success)
-        {
-            LogWarningAndRelease(&Log, (const unsigned char*)u8"Failed to create the world-test frame: %s", &FrameResult);
-        }
-        else
-        {
-            Error AddResult = GameFrameManager_AddFrame(&FrameManager, TestFrame, GameFrameAddOptions_Default());
-            if (AddResult.Code != ErrorCode_Success)
-            {
-                LogWarningAndRelease(&Log, (const unsigned char*)u8"Failed to add the world-test frame: %s", &AddResult);
-                GameFrame_Destroy(TestFrame);
-            }
-        }
+        AddFrameOrWarn(&FrameManager, &Log, "world test", FrameResult, TestFrame);
 
         // The UI test runs in its own frame on top of the world, so it gets the input first (frames update top-down).
         GameFrame* UIFrame = NULL;
         Error UIFrameResult = UITestFrame_Create(&GameServices, &UIFrame);
-        if (UIFrameResult.Code != ErrorCode_Success)
-        {
-            LogWarningAndRelease(&Log, (const unsigned char*)u8"Failed to create the UI test frame: %s", &UIFrameResult);
-        }
-        else
-        {
-            Error AddResult = GameFrameManager_AddFrame(&FrameManager, UIFrame, GameFrameAddOptions_Default());
-            if (AddResult.Code != ErrorCode_Success)
-            {
-                LogWarningAndRelease(&Log, (const unsigned char*)u8"Failed to add the UI test frame: %s", &AddResult);
-                GameFrame_Destroy(UIFrame);
-            }
-        }
+        AddFrameOrWarn(&FrameManager, &Log, "UI test", UIFrameResult, UIFrame);
     }
 
     // Render pacing target (seconds/frame); 0 = unlocked (render every loop iteration). The update loop

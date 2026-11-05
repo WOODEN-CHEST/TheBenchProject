@@ -9,6 +9,7 @@
 #include "ProgramTime.h"
 #include "Services.h"
 #include "TextComponentFactory.h"
+#include "UIKit.h"
 #include "UIScreen.h"
 #include "UIWidgetFactory.h"
 #include "World.h"
@@ -26,14 +27,15 @@
  * on it and keeps a line of what is typed while it has the keyboard, with labels over it (input-disabled, so every
  * click reaches the desk): a title, the game clock, where the player points, the clicks, the typed line and a hint. Each
  * click also steps the picture's background (blue, green, amber, white), so the monitor's light on the table changes
- * colour. The monitor is a CRT: the grave key (`) turns it off and on (its power animation), Shift and the grave key
+ * colour. A row of kit elements stands on the desk, checked through the CRT's curved pointer: a button that clears the
+ * clicks and the typed line, and a slider for the screen's brightness. The monitor is a CRT: the grave key (`) turns it off and on (its power animation), Shift and the grave key
  * step every CRT's mask (its own, the aperture grille, the shadow mask, none).
  *
  * The player points at the monitor with the camera's aim (walk mode: the eyes, out to the character's reach, the
  * player's own body left out; fly mode: the flycam, out to WORLD_TEST_SCREEN_FLY_REACH) or, while the mouse is free (M),
  * with the cursor's ray, and uses it through a WorldScreenHost: E or a click gives the screen the keyboard, Escape or
- * pointing away lets go. While it is in use the desk has the UI's focus, and the UI letting go of it (Escape) lets go of
- * the screen too, so one Escape gives control back to the world.
+ * pointing away lets go. While it is in use the desk or an element on it has the UI's focus, and the UI letting go of it
+ * (Escape) lets go of the screen too, so one Escape gives control back to the world.
  */
 
 
@@ -59,11 +61,13 @@ typedef struct WorldTestScreensStruct
     WorldScreenHost _host;
     TextComponentFactory _textFactory;
     UIWidgetFactory _widgetFactory;
+    UIKit _kit;
     UIScreen _screen;
-    /** Which of the three above are constructed (for teardown after a failed construction), and whether the UI is
+    /** Which of the four above are constructed (for teardown after a failed construction), and whether the UI is
      *  built. */
     bool _isTextFactoryConstructed;
     bool _isWidgetFactoryConstructed;
+    bool _isKitConstructed;
     bool _isScreenConstructed;
     bool _isBuilt;
     uint64_t _labelType;
@@ -75,6 +79,9 @@ typedef struct WorldTestScreensStruct
     uint64_t _clicksId;
     uint64_t _typedId;
     uint64_t _hintId;
+    /** The kit's button and slider on the desk. */
+    uint64_t _clearButtonId;
+    uint64_t _brightnessSliderId;
     /** The clicks on the picture and where the last one was (the UI's [0;1] space). */
     uint32_t _clickCount;
     Vector2 _lastClick;

@@ -7,20 +7,20 @@ sets), and one loader per type: `source/SpriteSheetDefinition.c`, `source/Sprite
 `source/ShaderSource.{h,c}`), `source/ModelDefinition.c`, `source/TextureDefinition.c`, `source/WorldModelDefinition.c`,
 and the other types' (`WorldSpriteDefinition.c`, `CharacterDefinition.c`, `AnimationLibraryDefinition.c`,
 `AnimationGraphDefinition.c`, `TerrainDefinition.c`, `TerrainMaterialDefinition.c`, `ClimateDefinition.c`,
-`WaterMaterialDefinition.c`, `PathObjectDefinition.c`, `PrefabDefinition.c`).
+`WaterMaterialDefinition.c`, `PathObjectDefinition.c`, `PrefabDefinition.c`, `UIThemeDefinition.c`).
 The definition JSON format is specified in `references/asset_structure.md`.
 
 ## Purpose
 
 Loads, shares and unloads game assets. The manager stores **definitions** (named recipes, normally JSON files
 under the asset search roots) and builds an asset from its definition the first time someone loads it. Asset
-types are registered at runtime (`AssetManager_CreateAssetType`); the nineteen standard types (sprite sheet, sprite
+types are registered at runtime (`AssetManager_CreateAssetType`); the twenty standard types (sprite sheet, sprite
 animation, sound, font, shader, model, texture, world model, world sprite, character, animation library, animation
-graph, terrain, terrain material, climate, input actions, water material, path object, prefab) are
+graph, terrain, terrain material, climate, input actions, water material, path object, prefab, UI theme) are
 registered together by `AssetManager_CreateStandardAssetTypes`. The wrappers it hands out are documented in
 [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md),
 [WorldModels.md](WorldModels.md), [WorldSprites.md](WorldSprites.md), [Characters.md](Characters.md),
-[Animation.md](Animation.md), [Terrain.md](Terrain.md), [WeatherSystem.md](WeatherSystem.md) and
+[Animation.md](Animation.md), [Terrain.md](Terrain.md), [WeatherSystem.md](WeatherSystem.md), [UIElements.md](UIElements.md) and
 [GameInput.md](GameInput.md) (input actions: the input registers every definition at startup with
 `InputActions_RegisterDefinitions`, which lists them with `AssetManager_GetDefinitionNames`).
 
@@ -125,7 +125,7 @@ Error_Deconstruct(&RetireResult);
 
 The typed loaders (`AssetManager_LoadSpriteSheet`, `LoadSpriteAnimation`, `LoadSound`, `LoadFont`, `LoadShader`,
 `LoadModel`, `LoadTexture`, `LoadWorldModel`, `LoadWorldSprite`, `LoadCharacter`, `LoadAnimationLibrary`,
-`LoadAnimationGraph`, `LoadTerrain`, `LoadTerrainMaterial`, `LoadClimate`, `LoadWaterMaterial`) return
+`LoadAnimationGraph`, `LoadTerrain`, `LoadTerrainMaterial`, `LoadClimate`, `LoadWaterMaterial`, `LoadUITheme`) return
 `ErrorCode_InvalidState` if the
 standard types were never registered. `AssetManager_LoadTexturePixels` is not a load: it decodes the image file of the texture
 definition registered under a name (a pack's override wins) into CPU pixels, each call, without holding or caching
@@ -301,6 +301,7 @@ with `TextureProperties_Apply`, the sprite sheet, sprite animation and font load
 | `water_material` (`water_materials`) | `AssetManager_LoadWaterMaterial` | `WaterMaterial` | Only its own data: its settings (read through a property table that a later per-placement override can share; unknown keys are refused). The texture assets its maps name (two normal maps and a foam pattern, each optional) are held under its dependency user and unload right after it; a map that does not load fails the material, naming it. World models load the water materials their water slots and variants name as their dependencies ([WorldModels.md](WorldModels.md), "Water"). |
 | `path_object` (`path_objects`) | `AssetManager_LoadPathObject` | `PathObject` | Only its own data: its settings (read through a property table whose rows the path object component shares; unknown keys are refused, and writing a setting in a file sets its flag). The world models its slots name are held under its dependency user and unload right after it. Its settings must name a middle model, a model for every slot in use and no slot twice. See [PathObjects.md](PathObjects.md). |
 | `prefab` (`prefabs`) | `AssetManager_LoadPrefab` | `Prefab` | A template of its objects, in a world and a key registry of its own, and its declared properties. The definition keeps the file's bytes, checks them when it is read and reads them again at each load, so the two share nothing. No dependencies: what its objects name is loaded by those objects, and nested prefabs when a copy makes them, since a property may choose one. Unknown keys are refused everywhere. See [Prefabs.md](Prefabs.md). |
+| `ui_theme` (`ui_themes`) | `AssetManager_LoadUITheme` | `UITheme` | A copy of the values its definition read, per element kind and variant, with no pointer into the definition. Its nine-slice textures and its font are held under its dependency user; a texture that cannot be used leaves only its parts plain, and a font that cannot be loaded leaves the built-in one. |
 
 Details per type: [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md),
 [WorldModels.md](WorldModels.md) (water materials too: its "Water"), [WorldSprites.md](WorldSprites.md),

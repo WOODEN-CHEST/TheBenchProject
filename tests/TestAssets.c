@@ -913,6 +913,11 @@ bool TestAssets_AddWaterMaterial(TestRun* run, TestAssetFixture* fixture, const 
     return AddFromJSON(run, fixture, fixture->Types.WaterMaterial, json, "test water material");
 }
 
+bool TestAssets_AddUITheme(TestRun* run, TestAssetFixture* fixture, const char* json)
+{
+    return AddFromJSON(run, fixture, fixture->Types.UITheme, json, "test UI theme");
+}
+
 bool TestAssets_AddInputActions(TestRun* run, TestAssetFixture* fixture, const char* json)
 {
     return AddFromJSON(run, fixture, fixture->Types.InputActions, json, "test input actions");

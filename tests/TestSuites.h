@@ -367,6 +367,18 @@ void UIAnimationTests_Run(TestRun* run);
  *  notifications (UIScreenTests.c). */
 void UIScreenTests_Run(TestRun* run);
 
+/** @brief UI pixels: placements, the scale, preferred sizes and their cache, stacks and their children's hints, labels in UI
+ *  pixels (UILayoutTests.c). */
+void UILayoutTests_Run(TestRun* run);
+
+/** @brief The ui_theme asset type: every key, each refusal with its message, state fallbacks, variants, hostile sizes and
+ *  counts, a screen's theme swap and teardown; box styles; the nine-slice's quads (UIThemeTests.c). */
+void UIThemeTests_Run(TestRun* run);
+
+/** @brief The kit and its elements: the panel, the label, the button, the toggle and the slider, their input, states,
+ *  events and refusals; a second widget type behind a capability (UIElementTests.c). */
+void UIElementTests_Run(TestRun* run);
+
 /** @brief The UI test frame run headless: how its menu shares input with the world below (UITestFrameTests.c). */
 void UITestFrameTests_Run(TestRun* run);
 

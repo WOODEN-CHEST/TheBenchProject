@@ -37,6 +37,8 @@ typedef struct WidgetStruct Widget;
 typedef struct WidgetVTableStruct WidgetVTable;
 /** @brief A UI screen; full type in UIScreen.h. Borrowed. */
 typedef struct UIScreenStruct UIScreen;
+/** @brief The kit of elements over a factory; full type in UIKit.h. Borrowed. */
+typedef struct UIKitStruct UIKit;
 
 
 // Macros.
@@ -133,6 +135,9 @@ typedef struct UIWidgetFactoryStruct
     GenericBuffer _capabilities;
     /** @brief Registry of widget types (one record per type id; id is index + 1). Records hold each type's pool. */
     GenericBuffer _types;
+    /** @brief The kit over this factory, the one way element functions find their capability ids from a screen; borrowed,
+     *  NULL for none. */
+    UIKit* _kit;
 } UIWidgetFactory;
 
 
@@ -225,6 +230,26 @@ Error UIWidgetFactory_UnregisterType(UIWidgetFactory* self, uint64_t typeId);
  * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
  */
 Error UIWidgetFactory_CreateWidget(UIWidgetFactory* self, UIScreen* screen, uint64_t typeId, void* args, Widget** outWidget);
+
+/**
+ * @brief Says which kit stands over this factory (UIKit_Construct does; one kit per factory).
+ * @param self The factory; must not be NULL.
+ * @param kit The kit, or NULL for none; borrowed.
+ */
+static inline void UIWidgetFactory_SetKit(UIWidgetFactory* self, UIKit* kit)
+{
+    self->_kit = kit;
+}
+
+/**
+ * @brief Returns the kit over this factory.
+ * @param self The factory; must not be NULL.
+ * @returns The borrowed kit, or NULL for none.
+ */
+static inline UIKit* UIWidgetFactory_GetKit(const UIWidgetFactory* self)
+{
+    return self->_kit;
+}
 
 /**
  * @brief Returns how many widgets of a type are alive (created and not yet torn down; a widget counts from the moment

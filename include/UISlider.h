@@ -1,0 +1,269 @@
+#pragma once
+#include <stdbool.h>
+#include <stdint.h>
+#include "wr/WRError.h"
+#include "GameKey.h"
+#include "UIElement.h"
+#include "UIWidget.h"
+
+
+/**
+ * @file UISlider.h
+ * @brief The slider element: a value in a range, by a drag, the arrows or the wheel, with an optional step.
+ *
+ * A press on the track puts the thumb under the pointer; a press on the thumb holds it where it was grabbed, so a click on it
+ * changes nothing. Dragging then maps the pointer to the value, clamped when the pointer leaves the box. The arrows step (the
+ * ui_left and ui_right actions' keys, repeats following), Home and End jump. The wheel changes it only while it is focused, so scrolling a panel
+ * never changes a value by accident. A change posts UIElementEvent_Changed each time the value moves, then
+ * UIElementEvent_Committed at the release or the key's release (a wheel notch is a whole change: both at once) unless the
+ * value ended where it began; Escape during one puts the first value back and posts UIElementEvent_Cancelled. The events
+ * carry the value as a double. Code setting the value posts nothing, and a value that is not a finite number is refused.
+ *
+ * Calling code uses the UISlider_* functions by widget id; widget types of their own embed the capability and call the
+ * UISliderCapability_* helpers. The value's arithmetic is pure, at the end of this file.
+ */
+
+
+// Types.
+/**
+ * @brief What a slider is created with (UIKit_CreateSlider). A plain value; build one with UISliderOptions_Create.
+ */
+typedef struct UISliderOptionsStruct
+{
+    /** @brief What every element is created with. */
+    UIElementOptions Element;
+    /** @brief The range's lower end; finite and below Maximum, with a finite span. */
+    double Minimum;
+    /** @brief The range's upper end. */
+    double Maximum;
+    /** @brief The value; clamped into the range and onto the step. */
+    double Value;
+    /** @brief Whether the value keeps to whole steps from Minimum. */
+    bool HasStep;
+    /** @brief The step, when HasStep; finite and > 0. */
+    double Step;
+    /** @brief Whether it takes input. */
+    bool IsEnabled;
+} UISliderOptions;
+
+/**
+ * @brief What a slider type's constructor gets (UIKit_CreateSlider passes it): the kit and the options.
+ */
+typedef struct UISliderArgsStruct
+{
+    /** @brief The kit; borrowed. */
+    UIKit* Kit;
+    /** @brief The options; borrowed for the call. */
+    const UISliderOptions* Options;
+} UISliderArgs;
+
+/**
+ * @brief A slider's capability. Embedded by a widget type; its fields are read-only outside the slider's module.
+ */
+typedef struct UISliderCapabilityStruct
+{
+    /** @brief The look. */
+    UIElementLook _look;
+    /** @brief The value. */
+    double _value;
+    /** @brief The range's lower end. */
+    double _minimum;
+    /** @brief The range's upper end. */
+    double _maximum;
+    /** @brief Whether the value keeps to whole steps. */
+    bool _hasStep;
+    /** @brief The step. */
+    double _step;
+    /** @brief Whether it takes input. */
+    bool _isEnabled;
+    /** @brief A left press on it is being dragged. */
+    bool _isDragging;
+    /** @brief The key whose hold is a change in progress, or GameKey_Unknown. */
+    GameKey _sessionKey;
+    /** @brief The key whose change was cancelled: its repeats and release do nothing until it is pressed anew. GameKey_Unknown when none. */
+    GameKey _cancelledKey;
+    /** @brief The value when the change in progress began. */
+    double _sessionStartValue;
+    /** @brief How far from the thumb's centre a drag holds it, in surface pixels. */
+    double _grabOffsetPixels;
+} UISliderCapability;
+
+
+// Helpers.
+/**
+ * @brief Default options: the range [0, 1] at 0, no step, enabled.
+ * @returns The options.
+ */
+static inline UISliderOptions UISliderOptions_Create(void)
+{
+    return (UISliderOptions)
+    {
+        .Element = UIElementOptions_Create(),
+        .Minimum = 0.0,
+        .Maximum = 1.0,
+        .Value = 0.0,
+        .HasStep = false,
+        .Step = 0.0,
+        .IsEnabled = true
+    };
+}
+
+
+// Calling code: by widget id.
+/**
+ * @brief Sets a slider's value, clamped into its range and onto its step. Posts no event. A change in progress goes on from it.
+ * @param screen The slider's screen; must not be NULL.
+ * @param widgetId The slider.
+ * @param value The value; finite.
+ * @returns Success; ErrorCode_InvalidOperation for a stale id or a widget that is no slider; ErrorCode_ArgumentOutOfRange for
+ *          a NaN or an infinite value, which changes nothing.
+ */
+Error UISlider_SetValue(UIScreen* screen, uint64_t widgetId, double value);
+
+/**
+ * @brief Reads a slider's value.
+ * @param screen The slider's screen; must not be NULL.
+ * @param widgetId The slider.
+ * @param outValue [out] Receives it. Must not be NULL.
+ * @returns Success; ErrorCode_InvalidOperation for a stale id or a widget that is no slider.
+ */
+Error UISlider_GetValue(UIScreen* screen, uint64_t widgetId, double* outValue);
+
+/**
+ * @brief Sets a slider's range; its value is clamped into it.
+ * @param screen The slider's screen; must not be NULL.
+ * @param widgetId The slider.
+ * @param minimum The lower end.
+ * @param maximum The upper end; above @p minimum, with a finite span.
+ * @returns Success; ErrorCode_InvalidOperation for a stale id or a widget that is no slider; ErrorCode_ArgumentOutOfRange for a
+ *          range that is not valid, which changes nothing.
+ */
+Error UISlider_SetRange(UIScreen* screen, uint64_t widgetId, double minimum, double maximum);
+
+/**
+ * @brief Sets whether a slider's value keeps to whole steps from its lower end, and the step; its value is snapped.
+ * @param screen The slider's screen; must not be NULL.
+ * @param widgetId The slider.
+ * @param hasStep Whether it does.
+ * @param step The step, when @p hasStep; finite and > 0.
+ * @returns Success; ErrorCode_InvalidOperation for a stale id or a widget that is no slider; ErrorCode_ArgumentOutOfRange for a
+ *          step that is not valid, which changes nothing.
+ */
+Error UISlider_SetStep(UIScreen* screen, uint64_t widgetId, bool hasStep, double step);
+
+/**
+ * @brief Enables or disables a slider. Disabling it cancels a change in progress and takes its focus away.
+ * @param screen The slider's screen; must not be NULL.
+ * @param widgetId The slider.
+ * @param isEnabled Whether it takes input.
+ * @returns Success; ErrorCode_InvalidOperation for a stale id or a widget that is no slider; otherwise a hook's or the event
+ *          queue's error.
+ */
+Error UISlider_SetIsEnabled(UIScreen* screen, uint64_t widgetId, bool isEnabled);
+
+
+// Behaviour helpers, for widget types embedding the capability.
+/**
+ * @brief Constructs the capability from a widget type's constructor.
+ * @param self The capability; must not be NULL.
+ * @param widget The widget; must not be NULL.
+ * @param args The constructor's arguments; must not be NULL.
+ * @returns Success; ErrorCode_ArgumentOutOfRange for a range, a value or a step that is not valid.
+ */
+Error UISliderCapability_Construct(UISliderCapability* self, Widget* widget, const UISliderArgs* args);
+
+/**
+ * @brief Advances the look, and ends a change whose release cannot reach the slider any more; call it from Update.
+ * @param self The capability; must not be NULL.
+ * @param widget The widget; must not be NULL.
+ * @param time The tick's time.
+ * @returns Success, or the event queue's error.
+ */
+Error UISliderCapability_Update(UISliderCapability* self, Widget* widget, ProgramTime time);
+
+/**
+ * @brief Interprets mouse input; call it from OnMouseInput.
+ * @param self The capability; must not be NULL.
+ * @param widget The widget; must not be NULL.
+ * @param args The input; must not be NULL.
+ * @returns Success, or the event queue's error.
+ */
+Error UISliderCapability_OnMouseInput(UISliderCapability* self, Widget* widget, const WidgetMouseInputArgs* args);
+
+/**
+ * @brief Interprets keyboard input; call it from OnKeyboardInput.
+ * @param self The capability; must not be NULL.
+ * @param widget The widget; must not be NULL.
+ * @param args The input; must not be NULL.
+ * @param outIsHandled [out] Set when the input was used. Must not be NULL.
+ * @returns Success, or the event queue's error.
+ */
+Error UISliderCapability_OnKeyboardInput(UISliderCapability* self, Widget* widget, const WidgetKeyboardInputArgs* args,
+    bool* outIsHandled);
+
+/**
+ * @brief Gives its preferred size: the theme's minimum, at least the thumb's height; call it from Measure.
+ * @param self The capability; must not be NULL.
+ * @param widget The widget; must not be NULL.
+ * @param outSize [out] Receives the size in UI pixels. Must not be NULL.
+ */
+void UISliderCapability_Measure(const UISliderCapability* self, Widget* widget, Vector2* outSize);
+
+/**
+ * @brief Registers the slider's standard widget type. Once per factory (the kit does).
+ * @param factory The factory; must not be NULL.
+ * @param lookCapabilityId The look's capability id.
+ * @param sliderCapabilityId The slider's capability id.
+ * @param outTypeId [out] Receives the type's id. Must not be NULL.
+ * @returns Success, or the factory's error.
+ */
+Error UISlider_RegisterType(UIWidgetFactory* factory, uint64_t lookCapabilityId, uint64_t sliderCapabilityId, uint64_t* outTypeId);
+
+
+// The value's arithmetic.
+/**
+ * @brief Clamps a value into a range and, with a step, onto the nearest whole step from the lower end. The upper end counts
+ *        as a step, so it stays reachable when the range is not a whole number of steps.
+ * @param value The value; a NaN gives the lower end.
+ * @param minimum The lower end.
+ * @param maximum The upper end.
+ * @param hasStep Whether it keeps to steps.
+ * @param step The step, when @p hasStep; one that is no positive finite number, or too small to count with, is no step.
+ * @returns The value.
+ */
+double UISlider_ClampAndSnap(double value, double minimum, double maximum, bool hasStep, double step);
+
+/**
+ * @brief Moves a value by steps: what the arrows and the wheel do.
+ *
+ * With a step it goes to whole steps from the one it is on (a value between two counts from the next one in that direction), so
+ * from an upper end that is no whole step it comes to the last one below it. @p count is rounded to whole steps there: less
+ * than half a step moves nothing. Without a step a step is a hundredth of the range. The answer stays in the range.
+ * @param value The value; a NaN counts as the lower end.
+ * @param minimum The lower end.
+ * @param maximum The upper end.
+ * @param hasStep Whether it keeps to steps.
+ * @param step The step, when @p hasStep; one that is no positive finite number, or too small to count with, is no step.
+ * @param count How many steps, up for positive; a NaN is none.
+ * @returns The value.
+ */
+double UISlider_GetStepped(double value, double minimum, double maximum, bool hasStep, double step, double count);
+
+/**
+ * @brief Returns where a value lies in its range.
+ * @param value The value.
+ * @param minimum The lower end.
+ * @param maximum The upper end.
+ * @returns The share in [0;1]; 0 for an empty range.
+ */
+double UISlider_GetFraction(double value, double minimum, double maximum);
+
+/**
+ * @brief Returns the share of the range a pointer means: the thumb's centre follows the pointer, so its centre travels the
+ *        box less the thumb's length, and past the ends the share stays at 0 or 1.
+ * @param pointer The pointer along the box, from its start.
+ * @param boxLength The box's length.
+ * @param thumbLength The thumb's length, in the same unit.
+ * @returns The share in [0;1]; 0 when the box is no longer than the thumb.
+ */
+double UISlider_GetPointerFraction(double pointer, double boxLength, double thumbLength);

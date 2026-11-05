@@ -72,9 +72,13 @@ static uint64_t GetNavStackAt(const UIScreen* self, size_t index)
 }
 
 /* Adds the focusable widgets of a subtree: a focusable widget is a candidate (navigation enters it with ui_accept),
- * a non-focusable one is transparent. Recursion is bounded by WIDGET_MAX_TREE_DEPTH. */
+ * a non-focusable one is transparent, a hidden one holds nothing. Recursion is bounded by WIDGET_MAX_TREE_DEPTH. */
 static void CollectCandidates(UIScreen* self, Widget* widget)
 {
+    if (!Widget_IsRendered(widget))
+    {
+        return;
+    }
     if (IsCandidate(widget))
     {
         NavCandidate Candidate = { .Id = Widget_GetId(widget), .Box = UIScreen_InternalGetEstimatedScreenBox(widget) };
@@ -99,7 +103,7 @@ static void GatherCandidates(UIScreen* self, Widget* container)
     GenericBuffer_Clear(&self->_navCandidates);
     if (container != NULL)
     {
-        for (size_t Index = 0; Index < Widget_GetSubWidgetCount(container); Index++)
+        for (size_t Index = 0; UIScreen_InternalIsShown(container) && (Index < Widget_GetSubWidgetCount(container)); Index++)
         {
             CollectCandidates(self, Widget_GetSubWidgetAt(container, Index));
         }

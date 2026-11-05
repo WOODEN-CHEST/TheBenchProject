@@ -57,7 +57,7 @@ Current module list:
 * Logger (Logger.md) - Writes timestamped, level-tagged messages to <base>/logs/latest.log and stdout, and rotates the previous log into <base>/logs/archived/ (keeping the newest 30).
 * AssetManager (AssetManager.md) - Loads, shares and unloads assets built from JSON definitions in prioritized search
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
-  caches failed loads, registers the nineteen standard types, and reads a texture asset's image file as CPU pixels
+  caches failed loads, registers the twenty standard types, and reads a texture asset's image file as CPU pixels
   without loading it (AssetManager_LoadTexturePixels). Asset names are namespaced keys (`tbp:desk`; written without a
   namespace, `tbp`'s), accepted as written and kept, logged and listed in full (AssetManager_GetDefinitionNames by
   prefix). Read its lifetime rules before touching assets.
@@ -623,8 +623,8 @@ Current module list:
     its debug view (how open surfaces are to the rain, the puddles); the test slab and the room's roof are pavement that
     pools water (a world model variant). A monitor on a small table in the start view shows a UI (the private
     source/WorldTestScreens.{h,c}): a CRT; pointing at its picture (the aim, or the free cursor) moves a pointer on it, E
-    or a click uses it (typing and clicks show on it, each click steps its background colour), Escape or pointing away
-    lets go; the grave key turns it off and on, Shift with it steps every CRT's mask. Its world has water: a pond in the
+    or a click uses it (typing and clicks show on it, each click steps its background colour; a kit button clears them and a kit slider sets the screen's brightness), Escape or
+    pointing away lets go; the grave key turns it off and on, Shift with it steps every CRT's mask. Its world has water: a pond in the
     terrain's valley, a stone gutter whose stream flows along it and two fountains, one clear and one murky (a world
     model variant); Shift with the keypad's + shows the sea around the test terrain (a runtime object, the private
     source/WorldTestWater.{h,c}), which makes the test world an island. Shift with the keypad's * shows the far terrain
@@ -702,6 +702,8 @@ Current module list:
     with a separate draw order, capabilities, typed properties, deferred destroy); concrete widgets embed it first.
   * UIScreen - The context: id registry, roots, focus, input routing, keyboard navigation + outlines, animations,
     notifications (subscriptions; queued, delivered at the end of UIScreen_Update), layout pass and rendering.
+  * UIPlacement - Where a widget sits in UI pixels: placements (anchors and offsets), insets and a stack's hints, with their pure arithmetic, each edge a whole
+    surface pixel. Placements are applied in the layout pass; a widget's preferred size is its Measure hook, cached (UIFramework.md, "UI pixels").
   * UITestFrame - A debug game frame over the world test that exercises the UI and the input sharing.
   * WorldScreenHost - The host of a UI shown on a screen in the world: its pointer where the player points (the aim or
     the free cursor, through WorldScreens), the keyboard while the player uses the screen (the use action or a click
@@ -709,6 +711,23 @@ Current module list:
     the player points away (UIFramework.md, "World screens").
   * LabelWidget - The first concrete widget: displays a (possibly multi-line) rich text with per-line alignment and bound handling (cut/wrap/resize/wrap-then-resize/wrap-then-cut). Embeds a TextDocument and a TextLayout (TextDocument.md), lays out in Update, draws in Render. Auto-fits its widget box to the rendered text.
   Also adds 2D rectangle/outline/line primitives to the Renderer module.
+* UI elements (UIElements.md) - What calling code builds a UI from, sized in UI pixels, its looks data: the same elements in flat boxes or nine-slice art with no
+  element's code changing. Covers:
+  * UIBoxStyle - How a box is drawn (nothing, flat, nine-slice), a colour per state; resolving a state and cutting a box into nine quads are pure.
+  * UITheme - The ui_theme asset type (a standard type, JSON in ui_themes/; include/UITheme.h, source/UITheme.c, source/UIThemeDefinition.c, private source/UIThemeInternal.h): a
+    font, a text size, a transition time and per element kind its metrics and parts, with named variants that change only what they name; unknown keys refused, every rule checked
+    when read; its textures and font loaded as dependencies. A screen holds one (UIScreen_SetTheme).
+  * UIElement - What every element kind shares: its look (a kind, a variant, the state shown, eased from state to state), its text, its press behaviour, its options, its events
+    (clicked, changed, committed, cancelled).
+  * UIKit - The one way to make elements, over one widget factory: registers the capabilities and standard widget types, holds the table from element kind to widget type (replaceable:
+    a look with another structure), and UIKit_Create* makes an element and gives its id. Calling code uses a kind's functions by id, never a widget type or a look.
+  * StackWidget - Children in a row or a column, with padding and spacing: fixed, content or filling, aligned across; its arithmetic (UIStackLayout) shared with the panel.
+  * UIPanel - A background and padding for what it holds.
+  * UILabel - LabelWidget as an element of the kit: its text size in UI pixels, its font and colours from the theme.
+  * UIButton - A click, Enter or Space; an enabled flag (a disabled button swallows the click); an optional toggled look.
+  * UIToggle - A checkbox: on, off or mixed.
+  * UISlider - A value in a range, by a drag, the arrows or the wheel (only while focused), with an optional step; changed, committed, cancelled.
+  * UIGalleryFrame - A game frame showing every element in every state, started with --ui-gallery: T the theme, + and - the scale, L the event log.
 * Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text as a STRICT TREE: a parent owns
   its children, a tree has at most 64 levels, components own copies of their strings, and fonts and sprite animations
   are named, never held. Every change gives the component and its ancestors a new revision. Covers three modules (plus

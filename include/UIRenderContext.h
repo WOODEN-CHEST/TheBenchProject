@@ -193,6 +193,50 @@ static inline Vector2 UIRenderContext_LocalSizeToScreen(const UIRenderContext* s
 }
 
 /**
+ * @brief Returns the widget's box in surface pixels, each edge rounded to a whole pixel: what a look draws in, so it stays
+ *        crisp (a placed widget's edges are whole pixels already, and this takes the float noise of its normalized box off).
+ * @param self The context; must not be NULL.
+ * @returns The box.
+ */
+Rectangle UIRenderContext_GetPixelBox(UIRenderContext* self);
+
+/**
+ * @brief Draws a filled rectangle given in surface pixels, its color multiplied with the accumulated tint.
+ * @param self The context; must not be NULL.
+ * @param box The rectangle in surface pixels.
+ * @param color The color; its alpha is the opacity.
+ */
+void UIRenderContext_RenderPixelRectangle(UIRenderContext* self, Rectangle box, Color color);
+
+/**
+ * @brief Draws a rectangle's outline given in surface pixels, inside its bounds, its color multiplied with the accumulated
+ *        tint.
+ * @param self The context; must not be NULL.
+ * @param box The rectangle in surface pixels.
+ * @param thicknessPixels The outline's thickness in surface pixels.
+ * @param color The color; its alpha is the opacity.
+ */
+void UIRenderContext_RenderPixelOutline(UIRenderContext* self, Rectangle box, float thicknessPixels, Color color);
+
+/**
+ * @brief Draws part of a texture given in texels into a rectangle given in surface pixels, its color multiplied with the
+ *        accumulated tint.
+ * @param self The context; must not be NULL.
+ * @param texture The texture; borrowed for the call.
+ * @param sourceTexels The part of the texture, in texels.
+ * @param box The destination in surface pixels.
+ * @param color The color; its alpha is the opacity.
+ */
+void UIRenderContext_RenderPixelTexture(UIRenderContext* self, Texture2D texture, Rectangle sourceTexels, Rectangle box, Color color);
+
+/**
+ * @brief Makes a render color of a plain color: its RGB as the tint, its alpha as the opacity.
+ * @param color The color.
+ * @returns The render color.
+ */
+RenderColor UIRenderColor_FromColor(Color color);
+
+/**
  * @brief Draws a filled rectangle in widget-local coordinates.
  * @param self The context; must not be NULL.
  * @param position Placement of the rectangle's origin, widget-local [0;1].

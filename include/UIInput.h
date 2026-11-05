@@ -69,7 +69,8 @@ typedef struct WidgetHoverArgsStruct
  * @brief The information passed to a widget's OnMouseInput callback.
  *
  * One struct covers presses, releases, drags and scrolls (see Type). A release and a drag are delivered to the widget
- * the press STARTED on (so a drag out of the widget still ends there), and ClickStart* / DurationSeconds describe that
+ * the press STARTED on (so a drag out of the widget still ends there), for as long as it stays attached, takes input and
+ * shows; a pointer that moved in the release's tick arrives as a drag first. ClickStart* / DurationSeconds describe that
  * press.
  */
 typedef struct WidgetMouseInputArgsStruct

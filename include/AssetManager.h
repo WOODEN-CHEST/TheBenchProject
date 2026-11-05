@@ -121,6 +121,8 @@ typedef struct WaterMaterialStruct WaterMaterial;
 typedef struct PathObjectStruct PathObject;
 /** @brief A prefab asset (Prefab.h). */
 typedef struct PrefabStruct Prefab;
+/** @brief A UI theme asset (UITheme.h). */
+typedef struct UIThemeStruct UITheme;
 /** @brief A climate asset (Climate.h). */
 typedef struct ClimateStruct Climate;
 /** @brief An input actions asset (InputActions.h). */
@@ -410,6 +412,9 @@ typedef struct StandardAssetTypesStruct
     AssetTypeID PathObject;
     /** @brief Prefab type id: a group of objects in the world file's format and the properties a copy sets (Prefab.h). */
     AssetTypeID Prefab;
+    /** @brief UI theme type id: the look of the UI's elements as data, its textures and font loaded as dependencies
+     *  (UITheme.h). */
+    AssetTypeID UITheme;
 } StandardAssetTypes;
 
 
@@ -489,9 +494,9 @@ Error AssetManager_CreateAssetType(AssetManager* self, const AssetTypeInfo* info
 /**
  * @brief Registers all standard asset types and a shared JSON pool used to parse their definitions.
  *
- * Registers the sixteen standard types (sprite sheet, sprite animation, sound, font, shader, model, texture, world
- * model, world sprite, character, animation library, animation graph, terrain, terrain material, climate and input
- * actions), writing their ids into @p outTypes. Creates one JSONObjectPool and wires it into every standard type's
+ * Registers the twenty standard types (sprite sheet, sprite animation, sound, font, shader, model, texture, world
+ * model, world sprite, character, animation library, animation graph, terrain, terrain material, climate, input
+ * actions, water material, path object, prefab and UI theme), writing their ids into @p outTypes. Creates one JSONObjectPool and wires it into every standard type's
  * ConstructorUserData so all standard definition parsing recycles JSON compounds/arrays/strings instead of
  * reallocating. The caller OWNS @p *outDefinitionPool and must free it with JSONObjectPool_Deconstruct after (or
  * alongside) the manager. The same pool may be reused as the ConstructorUserData of a custom JSON-based type to
@@ -1156,6 +1161,12 @@ Error AssetManager_LoadPathObject(AssetManager* self, const unsigned char* name,
  *        is loaded by those objects. Thin wrapper over AssetManager_LoadAssetSingle with the standard prefab type.
  */
 Error AssetManager_LoadPrefab(AssetManager* self, const unsigned char* name, AssetUserID user, Prefab** outAsset);
+
+/**
+ * @brief Loads a UI theme by name (UITheme.h): its elements' looks, with the textures and the font it names loaded as its
+ *        dependencies. Thin wrapper over AssetManager_LoadAssetSingle with the standard UI theme type.
+ */
+Error AssetManager_LoadUITheme(AssetManager* self, const unsigned char* name, AssetUserID user, UITheme** outAsset);
 
 /**
  * @brief Decodes the image file a texture asset's definition names into 8-bit RGBA pixels on the CPU, for a loader that

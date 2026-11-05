@@ -209,6 +209,28 @@ static void ReadsTheReflectionQuality(TestRun* run)
     }
 }
 
+/* ui_scale: the bounds themselves are good, anything outside them or of another type keeps the default. */
+static void ReadsTheUIScale(TestRun* run)
+{
+    GameConfig Config;
+    GameConfig_SetDefaults(&Config);
+    TEST_CHECK(run, Config.UIScale == 1.0f);
+    const char* const Texts[] = { "{ \"ui_scale\": 1.5 }", "{ \"ui_scale\": 0.5 }", "{ \"ui_scale\": 4 }" };
+    const float Expected[] = { 1.5f, 0.5f, 4.0f };
+    for (size_t Index = 0U; Index < (sizeof(Texts) / sizeof(Texts[0])); Index++)
+    {
+        TEST_CHECK_SUCCESS(run, LoadConfigText(run, "ui_scale", Texts[Index], &Config));
+        TEST_CHECK(run, Config.UIScale == Expected[Index]);
+    }
+    const char* const Broken[] = { "{ \"ui_scale\": 0.49 }", "{ \"ui_scale\": 4.01 }", "{ \"ui_scale\": 0 }",
+        "{ \"ui_scale\": -1 }", "{ \"ui_scale\": \"big\" }" };
+    for (size_t Index = 0U; Index < (sizeof(Broken) / sizeof(Broken[0])); Index++)
+    {
+        TEST_CHECK_SUCCESS(run, LoadConfigText(run, "ui_scale_broken", Broken[Index], &Config));
+        TEST_CHECK(run, Config.UIScale == 1.0f);
+    }
+}
+
 static void UnknownKeysAreIgnored(TestRun* run)
 {
     GameConfig Config;
@@ -247,6 +269,7 @@ void ConfigTests_Run(TestRun* run)
         { "reads_the_shadow_quality", ReadsTheShadowQuality },
         { "reads_the_cloud_quality", ReadsTheCloudQuality },
         { "reads_the_reflection_quality", ReadsTheReflectionQuality },
+        { "reads_the_ui_scale", ReadsTheUIScale },
         { "unknown_keys_are_ignored", UnknownKeysAreIgnored },
         { "non_object_root_fails_with_defaults", NonObjectRootFailsWithDefaults },
         { "malformed_json_fails_with_defaults", MalformedJsonFailsWithDefaults },

@@ -9,10 +9,11 @@ non-default raylib configuration.
 - **GCC 13 or newer** (C23). Older GCCs type `u8"..."` literals as `char[]`, not `unsigned char[]`, which
   breaks the `-Werror` build at every `u8` string passed as `const unsigned char*`.
 - Linux build: `cd compile && sh compile_linux_x11.sh` (it writes `compile/out/TheBenchProject`). Run the
-  game with `sh run_linux_x11.sh`, also from `compile/`. The game finds `config.json`, `asset/`, `logs/` and
+  game with `sh compile/run_linux_x11.sh`, from any directory; its arguments go to the game (`--ui-gallery` runs the UI gallery
+  instead of the world test). The game finds `config.json`, `asset/`, `logs/` and
   its temp-file cache next to the executable (`compile/out`), whatever the working directory is.
 - Debug build with AddressSanitizer + UndefinedBehaviorSanitizer: `sh compile_linux_debug.sh`, then
-  `sh run_linux_x11_debug.sh` (both from `compile/`). `lsan_suppressions.txt` hides leaks inside GL/X11 system
+  `sh run_linux_x11_debug.sh` (the first from `compile/`, the second from any directory, its arguments going to the game). `lsan_suppressions.txt` hides leaks inside GL/X11 system
   libraries only.
 - Tests: `sh tests/run_linux.sh` from anywhere (`--sanitize` adds the sanitizers). Headless; see
   `tests/TestFramework.h`.

@@ -61,6 +61,13 @@ bool UIScreen_InternalIsInSubtree(const Widget* node, const Widget* ancestor);
 /** Returns whether a widget is attached to one of its screen's roots (so it is updated, laid out and drawn). */
 bool UIScreen_InternalIsAttached(const Widget* widget);
 
+/**
+ * @brief Whether a widget and every widget above it are rendered: a hidden widget hides what it holds.
+ * @param widget The widget; must not be NULL.
+ * @returns true when nothing on its way up is hidden.
+ */
+bool UIScreen_InternalIsShown(const Widget* widget);
+
 /** Composes a widget's absolute box (normalized screen coordinates) from its parent chain. */
 void UIScreen_InternalGetAbsoluteBox(const Widget* widget, Vector2* outPosition, Vector2* outSize);
 

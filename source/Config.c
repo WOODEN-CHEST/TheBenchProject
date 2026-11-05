@@ -42,6 +42,8 @@
 #define CONFIG_KEY_SHADOW_UPDATE_PERIODS ((const unsigned char*)u8"shadow_update_periods")
 #define CONFIG_KEY_ARE_FAR_SHADOWS_ENABLED ((const unsigned char*)u8"are_far_shadows_enabled")
 #define CONFIG_KEY_FAR_SHADOW_MAP_SIZE ((const unsigned char*)u8"far_shadow_map_size")
+/** JSON key for the player's UI scale. */
+#define CONFIG_KEY_UI_SCALE ((const unsigned char*)u8"ui_scale")
 
 /** Index of the width element within the resolution array. */
 #define CONFIG_RESOLUTION_WIDTH_INDEX ((size_t)0)
@@ -51,6 +53,8 @@
 /** Initial capacity (bytes) reserved for the raw config file contents. */
 #define CONFIG_FILE_INITIAL_CAPACITY ((size_t)256)
 
+/** Default UI scale: UI pixels as they are. */
+#define CONFIG_DEFAULT_UI_SCALE 1.0f
 /** Default value for the unlocked-frame-rate flag. */
 #define CONFIG_DEFAULT_IS_FPS_UNLOCKED false
 /** Default value for the vertical-sync flag (off: the buffer swap never blocks the loop). */
@@ -309,6 +313,7 @@ static void ReadConfigValues(JSONCompound* root, GameConfig* config)
     ReadInt32(root, CONFIG_KEY_FAR_SHADOW_MAP_SIZE, &config->FarShadowMapSize);
     ReadInt32(root, CONFIG_KEY_CLOUD_QUALITY, &config->CloudQuality);
     ReadInt32(root, CONFIG_KEY_REFLECTION_QUALITY, &config->ReflectionQuality);
+    ReadFloat(root, CONFIG_KEY_UI_SCALE, &config->UIScale);
 }
 
 /* Parses the raw file bytes as a JSON object and overlays its settings onto the config, then discards the
@@ -383,6 +388,7 @@ void GameConfig_SetDefaults(GameConfig* self)
     self->FarShadowMapSize = CONFIG_DEFAULT_FAR_SHADOW_MAP_SIZE;
     self->CloudQuality = CONFIG_DEFAULT_CLOUD_QUALITY;
     self->ReflectionQuality = CONFIG_DEFAULT_REFLECTION_QUALITY;
+    self->UIScale = CONFIG_DEFAULT_UI_SCALE;
 }
 
 Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
@@ -431,6 +437,10 @@ Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
         || (outConfig->ReflectionQuality > CONFIG_REFLECTION_QUALITY_HIGH))
     {
         outConfig->ReflectionQuality = CONFIG_DEFAULT_REFLECTION_QUALITY;
+    }
+    if (!(outConfig->UIScale >= CONFIG_MIN_UI_SCALE) || (outConfig->UIScale > CONFIG_MAX_UI_SCALE)) // the !(>=) form also rejects NaN
+    {
+        outConfig->UIScale = CONFIG_DEFAULT_UI_SCALE;
     }
     return ParseResult;
 }

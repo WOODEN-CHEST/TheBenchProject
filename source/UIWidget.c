@@ -8,6 +8,12 @@
 #include "wr/WRCompile.h"
 
 
+// Macros.
+/** Available widths are compared at this many steps a UI pixel, so a width that differs by float noise answers from the
+ *  cache: an inner box's width comes back through normalized units and is never quite the same number twice. */
+#define MEASURE_WIDTH_STEPS 16.0f
+
+
 // Fields.
 /* The properties every widget has. */
 static const WidgetPropertyDescriptor BaseProperties[] =
@@ -228,11 +234,42 @@ static bool TryGetBasePropertyType(int32_t propertyId, UIPropertyType* outType)
     return false;
 }
 
+/* An available width as measures compare it: quantized, and never NaN or below zero. */
+static float NormalizeAvailableWidth(float availableWidth)
+{
+    if (!(availableWidth > 0.0f))
+    {
+        return 0.0f;
+    }
+    if (Math_IsInfinityFloat(availableWidth))
+    {
+        return availableWidth;
+    }
+    return Math_FloorFloat((availableWidth * MEASURE_WIDTH_STEPS) + 0.5f) / MEASURE_WIDTH_STEPS;
+}
+
+/* A size a hook gave as measures keep it: finite, not below zero and no longer than a stack can add up. */
+static float NormalizeMeasuredLength(float length)
+{
+    return ((length > 0.0f) && !Math_IsInfinityFloat(length)) ? Math_MinFloat(length, UI_LAYOUT_MAX_LENGTH) : 0.0f;
+}
+
 /* Clears the screen's focus when this widget holds it but can no longer take it. */
 static Error ReleaseFocusIfIneligible(Widget* self)
 {
     bool IsFocusedWidget = (UIScreen_GetFocusedWidgetId(self->_screen) == self->_id) && (self->_id != WIDGET_ID_INVALID);
     if (!IsFocusedWidget || self->_isDying || UIScreen_InternalCanFocus(self))
+    {
+        return Error_CreateSuccess();
+    }
+    return UIScreen_InternalSetFocus(self->_screen, WIDGET_ID_INVALID);
+}
+
+/* What was just hidden may hold the focused widget at any depth. */
+static Error ReleaseFocusOfHidden(const Widget* self)
+{
+    const Widget* Focused = UIScreen_InternalResolve(self->_screen, UIScreen_GetFocusedWidgetId(self->_screen));
+    if ((Focused == NULL) || UIScreen_InternalCanFocus(Focused))
     {
         return Error_CreateSuccess();
     }
@@ -273,6 +310,10 @@ void Widget_InternalInitializeBase(Widget* self, const WidgetVTable* vtable, UIS
 
     self->_cachedBounds = (Rectangle){ .x = 0.0f, .y = 0.0f, .width = 0.0f, .height = 0.0f };
     self->_areBoundsValid = false;
+
+    self->_hasPlacement = false;
+    self->_stackHint = UIStackHint_Content();
+    self->_isMeasureValid = false;
 
     // Capacity 0: most widgets never get children, and these allocate on the first one.
     GenericBuffer_AllocateVariable(&self->_subWidgets, 0U, sizeof(Widget*));
@@ -413,6 +454,7 @@ void Widget_InternalUnlinkFromParent(Widget* child)
     Widget_InternalRemoveFromDrawOrder(&Parent->_drawOrder, child);
     child->_parent = NULL;
     InvalidateBoundsUpTree(Parent);
+    Widget_InvalidateMeasure(Parent);
 }
 
 bool Widget_InternalInsertIntoDrawOrder(GenericBuffer* drawOrder, Widget* widget)
@@ -635,6 +677,89 @@ Error Widget_SetZLayer(Widget* self, float zLayer)
     return Error_CreateSuccess();
 }
 
+Error Widget_SetPlacement(Widget* self, const UIPlacement* placement)
+{
+    if ((self == NULL) || (placement == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetPlacement: self and placement must not be NULL.");
+    }
+    if (!UIPlacement_IsValid(placement))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
+            "Widget_SetPlacement: the anchors must be in [0;1] and the offsets within UI_PLACEMENT_MAX_OFFSET.");
+    }
+    self->_placement = *placement;
+    self->_hasPlacement = true;
+    return Error_CreateSuccess();
+}
+
+Error Widget_ClearPlacement(Widget* self)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_ClearPlacement: self must not be NULL.");
+    }
+    self->_hasPlacement = false;
+    return Error_CreateSuccess();
+}
+
+Error Widget_SetStackHint(Widget* self, const UIStackHint* hint)
+{
+    if ((self == NULL) || (hint == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetStackHint: self and hint must not be NULL.");
+    }
+    if (!UIStackHint_IsValid(hint))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "Widget_SetStackHint: the hint is not valid: a known mode and "
+            "alignment, a size and a cross size within [0, UI_LAYOUT_MAX_LENGTH], and a weight above 0 and no more than that.");
+    }
+    self->_stackHint = *hint;
+    Widget_InvalidateMeasure(self);
+    return Error_CreateSuccess();
+}
+
+Error Widget_Measure(Widget* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
+{
+    if ((self == NULL) || (context == NULL) || (outSize == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_Measure: self, context and outSize must not be NULL.");
+    }
+    float Width = NormalizeAvailableWidth(availableWidth);
+    uint64_t Generation = UIScreen_GetMeasureGeneration(self->_screen);
+    if (self->_isMeasureValid && (self->_measureGeneration == Generation) && (self->_measuredWidth == Width))
+    {
+        *outSize = self->_measuredSize;
+        return Error_CreateSuccess();
+    }
+
+    Vector2 Size = { .x = 0.0f, .y = 0.0f };
+    if (self->VTable->Measure != NULL)
+    {
+        Error Result = self->VTable->Measure(self, context, Width, &Size);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+    }
+    Size.x = NormalizeMeasuredLength(Size.x);
+    Size.y = NormalizeMeasuredLength(Size.y);
+    self->_measuredSize = Size;
+    self->_measuredWidth = Width;
+    self->_measureGeneration = Generation;
+    self->_isMeasureValid = true;
+    *outSize = Size;
+    return Error_CreateSuccess();
+}
+
+void Widget_InvalidateMeasure(Widget* self)
+{
+    for (Widget* Current = self; Current != NULL; Current = Current->_parent)
+    {
+        Current->_isMeasureValid = false;
+    }
+}
+
 Rectangle Widget_GetEstimatedBounds(Widget* self)
 {
     if (!self->_areBoundsValid)
@@ -671,7 +796,14 @@ Error Widget_SetIsRendered(Widget* self, bool isRendered)
         return Error_CreateSuccess();
     }
     self->_isRendered = isRendered;
-    return RunFlagHook(self, isRendered, self->VTable->OnRenderEnable, self->VTable->OnRenderDisable);
+    UIScreen_InternalInvalidateHitTest(self->_screen);
+    Widget_InvalidateMeasure(self); // A hidden child takes no room in its stack.
+    Error HookResult = RunFlagHook(self, isRendered, self->VTable->OnRenderEnable, self->VTable->OnRenderDisable);
+    if (HookResult.Code != ErrorCode_Success)
+    {
+        return HookResult;
+    }
+    return isRendered ? Error_CreateSuccess() : ReleaseFocusOfHidden(self);
 }
 
 Error Widget_SetIsUpdated(Widget* self, bool isUpdated)
@@ -772,6 +904,7 @@ Error Widget_AddSubWidget(Widget* self, Widget* child)
     }
     child->_parent = self;
     InvalidateBoundsUpTree(self);
+    Widget_InvalidateMeasure(self);
     UIScreen_InternalInvalidateHitTest(self->_screen);
     return Error_CreateSuccess();
 }

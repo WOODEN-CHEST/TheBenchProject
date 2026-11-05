@@ -1742,3 +1742,64 @@ Buildings are assembled from a kit of pieces and saved as prefabs (`agents/Prefa
 - **Colours** from material variants or a tint: model walls and roofs pale, so a tint shows. Dirt and signs from decals.
 - **A piece is an ordinary world model.** A bay of a wall that may be a wall, a window or a door is a small prefab with an enum; a house is a prefab of those.
 
+
+## UI themes.
+
+The look of the UI's elements as data (`agents/UIElements.md`): a JSON file in `ui_themes/`. The whole UI changes at once with no element's code changing, and a pack can bring and override themes by their names. Unknown keys are refused everywhere, and every rule is checked when the file is read.
+
+```
+{
+    "name": "tbp:test_flat",
+    "font": asset name,                  // [OPTIONAL] the text's font, loaded with the theme; one that does not load is logged once and
+                                         //            leaves raylib's built-in font. Default: the built-in font
+    "text_size": number,                 // [OPTIONAL] the line height in UI pixels, in [4;256]. Default: 14
+    "transition_time": number,           // [OPTIONAL] how long colours fade from state to state, in seconds, in [0;5]. Default: 0 (at once)
+    "elements": {                        // [OPTIONAL] a block per kind, each [OPTIONAL]: panel, label, button, toggle, slider
+        "button": {
+            "padding": [8, 4],           // metrics: UI pixels, each number in [0;4096]; the table below has each kind's and its default
+            "background": box,           // parts: a box or a colour per state; see below
+            "text": colors,
+            "variants": {                // [OPTIONAL] at most 16, by a name: 1 to 31 of a-z, 0-9, _, . and -, starting with a letter
+                "danger": {              // the kind's values with what this names on top, down to one state's colour
+                    "background": { "colors": { "normal": "#7a2a2a" } }
+                }
+            }
+        }
+    }
+}
+```
+
+| Kind | Metrics (default) | Parts |
+|---|---|---|
+| `panel` | `padding` [0, 0], `spacing` 0, `min_size` [0, 0] | `background`: a box |
+| `label` | | `text`: colors |
+| `button` | `padding` [8, 4], `min_size` [24, 24] | `background`: a box; `text`: colors |
+| `toggle` | `box_size` [16, 16], `spacing` 6, `min_size` [16, 24] | `box`: a box; `check`: a box, inside it while on, as a bar while mixed; `text`: colors |
+| `slider` | `min_size` [64, 24], `thumb_size` [12, 20], `track_thickness` 4 | `track`, `fill` (the track up to the thumb), `thumb`: boxes |
+
+A part a theme leaves out draws a plain box and is logged once; `"kind": "none"` leaves a box empty on purpose.
+
+**Colors** are a color per state, in the form of "Colors" above: `{ "normal": "#3a3a3a", "hovered": "#4a4a4a" }`. The states are `normal`, `hovered`, `pressed`, `focused`, `disabled`, `selected` and `invalid`. A state left out takes `normal`'s; with no `normal` either, opaque white.
+
+**A box:**
+```
+{
+    "kind": "none" or "flat" or "nine_slice",   // required, unless a variant keeps its kind's
+    "colors": colors,                           // [OPTIONAL] the fill's, or what is multiplied into the art
+
+    // "flat" only:
+    "outline": {                                // [OPTIONAL] inside the box, at least one pixel
+        "thickness": number,                    // [OPTIONAL] UI pixels in [0;64]; 0 is no outline. Default: 1
+        "colors": colors                        // [OPTIONAL]
+    },
+
+    // "nine_slice" only: corners keep their size, sides stretch along their length, the centre both ways
+    "texture": asset name,                      // required: a texture, loaded with the theme
+    "margins": 6 or [left, top, right, bottom], // required: the corners' sizes in texels; they shrink evenly in a box smaller than its corners
+    "pixel_scale": number,                      // [OPTIONAL] surface pixels per texel of the corners, before the UI's scale, in [0.125;16]. Default: 1
+    "source": rectangle,                        // [OPTIONAL] the art's rectangle in texels ("Rectangles" above). Default: the whole texture
+    "sources": { "hovered": rectangle, ... }    // [OPTIONAL] a rectangle of its own per state
+}
+```
+
+A theme may name at most 64 different textures. A texture that does not load, or whose art does not fit (a rectangle past the texture's edge, margins wider than a rectangle), is logged once when the theme loads and leaves only its parts plain. Give art `"filtering": "point"` and `"wrap": "clamp"` in its texture definition, so a corner's edge does not take in its neighbour.

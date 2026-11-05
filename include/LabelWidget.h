@@ -8,6 +8,7 @@
 #include "raylib/raylib.h"
 #include "Renderer.h"
 #include "UIWidget.h"
+#include "UILabel.h"
 #include "TextDocument.h"
 #include "TextLayout.h"
 
@@ -31,6 +32,12 @@
  * again when the text (any edit inside the tree) or a layout property changed, then sizes its widget box in its Layout
  * step; render only draws that layout. A label whose update flag is off keeps showing the text of its last update
  * (nothing before its first one).
+ *
+ * UI PIXELS. Everywhere a label may instead give its line height in UI pixels (LabelWidget_SetUIPixelSize): its Size then
+ * follows from the screen's scale and viewport at each layout, so that a text component of size 1 is that tall. Such a label
+ * answers its preferred size in UI pixels (Widget_Measure). A label with a placement keeps the box it is given instead of
+ * fitting it to its text, and a stack places it by its preferred size. A label made by the kit (UIKit_CreateLabel, UILabel.h)
+ * also takes its font and colours from the screen's theme.
  *
  * OWNERSHIP. The text component factory and the asset manager are borrowed (passed at construction) and must
  * outlive the label. The label owns its text tree (through its document): give it a root with LabelWidget_SetText,
@@ -141,6 +148,9 @@ typedef struct LabelWidgetArgsStruct
     /** @brief Optional initial text: a root from ComponentFactory, owned by the label once it is constructed (still the
      *         caller's if construction fails); may be NULL. */
     TextComponent* Text;
+    /** @brief A kit element's options, which make it a label of the kit (UILabel.h) with a plain string of their text;
+     *         NULL for any other label. Borrowed for the call. */
+    const UILabelOptions* ElementOptions;
 } LabelWidgetArgs;
 
 /**
@@ -159,6 +169,8 @@ typedef struct LabelWidgetStruct
     TextDocument _document;
     /** @brief The text laid out with the label's properties; refreshed in Update. */
     TextLayout _layout;
+    /** @brief What a wrapped kit label answers for a width it is asked about: _layout stays wrapped to its box, the one it draws. */
+    TextLayout _measureLayout;
 
     /** @brief Per-line horizontal alignment; defaults to LabelAlignment_Left. */
     LabelAlignment _alignment;
@@ -178,6 +190,11 @@ typedef struct LabelWidgetStruct
     Vector2 _bounds;
     /** @brief The bound handling mode; defaults to LabelBoundHandling_Cut. */
     LabelBoundHandling _boundHandling;
+
+    /** @brief Its contract as a kit element, and its line height in UI pixels when it gives one. */
+    UILabelCapability _element;
+    /** @brief The text block's size at the last layout: when it changes the preferred size may have too. */
+    Vector2 _lastLaidOutSize;
 } LabelWidget;
 
 
@@ -395,6 +412,33 @@ LabelBoundHandling LabelWidget_GetBoundHandling(const LabelWidget* self);
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL or @p mode is out of range.
  */
 Error LabelWidget_SetBoundHandling(LabelWidget* self, LabelBoundHandling mode);
+
+/**
+ * @brief Gives the label a line height in UI pixels, in place of its Size: a text component of size 1 is then that tall, at
+ *        the screen's scale.
+ * @param self The label; must not be NULL.
+ * @param pixels The line height in UI pixels; finite and > 0.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange if @p pixels is not valid.
+ */
+Error LabelWidget_SetUIPixelSize(LabelWidget* self, float pixels);
+
+/**
+ * @brief Takes the label's line height in UI pixels away: its Size stays as it last was, and is the caller's again.
+ * @param self The label; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error LabelWidget_ClearUIPixelSize(LabelWidget* self);
+
+/**
+ * @brief Registers the label as a kit element, with the capabilities that lets UIKit_CreateLabel and the UILabel_* functions
+ *        find it. Once per factory (the kit does); a factory may have this and LabelWidget_RegisterType both.
+ * @param factory The factory; must not be NULL.
+ * @param lookCapabilityId The look's capability id.
+ * @param labelCapabilityId The label's capability id.
+ * @param outTypeId [out] Receives the type's id. Must not be NULL.
+ * @returns Success, or the factory's error.
+ */
+Error LabelWidget_RegisterElementType(UIWidgetFactory* factory, uint64_t lookCapabilityId, uint64_t labelCapabilityId, uint64_t* outTypeId);
 
 /**
  * @brief Returns the text's draw size (includes the Size multiplier), in normalized-fitted units.

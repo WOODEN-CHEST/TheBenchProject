@@ -1,4 +1,5 @@
 #include "UIRenderContext.h"
+#include "wr/WRMath.h"
 
 
 // Static functions.
@@ -20,6 +21,70 @@ void UIRenderContext_Create(UIRenderContext* self,
     self->_absolutePosition = absolutePosition;
     self->_absoluteSize = absoluteSize;
     self->_tint = tint;
+}
+
+Rectangle UIRenderContext_GetPixelBox(UIRenderContext* self)
+{
+    Vector2 TopLeft = RenderContext_VectorRelativeToPixel(self->_renderContext, self->_absolutePosition);
+    Vector2 Size = RenderContext_VectorRelativeToPixel(self->_renderContext, self->_absoluteSize);
+    float Left = Math_FloorFloat(TopLeft.x + 0.5f);
+    float Top = Math_FloorFloat(TopLeft.y + 0.5f);
+    float Right = Math_FloorFloat(TopLeft.x + Size.x + 0.5f);
+    float Bottom = Math_FloorFloat(TopLeft.y + Size.y + 0.5f);
+    return (Rectangle){ .x = Left, .y = Top, .width = Right - Left, .height = Bottom - Top };
+}
+
+RenderColor UIRenderColor_FromColor(Color color)
+{
+    return (RenderColor)
+    {
+        .Tint = { .r = color.r, .g = color.g, .b = color.b, .a = 255U },
+        .Brightness = 1.0f,
+        .Opacity = (float)color.a / 255.0f
+    };
+}
+
+void UIRenderContext_RenderPixelRectangle(UIRenderContext* self, Rectangle box, Color color)
+{
+    RectangleRenderArguments Arguments =
+    {
+        .Position = RenderVector2D_Window((Vector2){ .x = box.x, .y = box.y }),
+        .Size = RenderVector2D_Window((Vector2){ .x = box.width, .y = box.height }),
+        .RelativeOrigin = (Vector2){ .x = 0.0f, .y = 0.0f },
+        .RotationRad = 0.0f,
+        .TargetColor = UIRenderColor_Multiply(self->_tint, UIRenderColor_FromColor(color))
+    };
+    RenderContext_RenderRectangle(self->_renderContext, &Arguments);
+}
+
+void UIRenderContext_RenderPixelOutline(UIRenderContext* self, Rectangle box, float thicknessPixels, Color color)
+{
+    RectangleOutlineRenderArguments Arguments =
+    {
+        .Position = RenderVector2D_Window((Vector2){ .x = box.x, .y = box.y }),
+        .Size = RenderVector2D_Window((Vector2){ .x = box.width, .y = box.height }),
+        .Thickness = RenderFloat_Window(thicknessPixels),
+        .TargetColor = UIRenderColor_Multiply(self->_tint, UIRenderColor_FromColor(color))
+    };
+    RenderContext_RenderRectangleOutline(self->_renderContext, &Arguments);
+}
+
+void UIRenderContext_RenderPixelTexture(UIRenderContext* self, Texture2D texture, Rectangle sourceTexels, Rectangle box, Color color)
+{
+    float Width = (texture.width > 0) ? (float)texture.width : 1.0f;
+    float Height = (texture.height > 0) ? (float)texture.height : 1.0f;
+    TextureRenderArguments Arguments =
+    {
+        .Texture = texture,
+        .Position = RenderVector2D_Window((Vector2){ .x = box.x, .y = box.y }),
+        .RelativeSourceRectangle = { .x = sourceTexels.x / Width, .y = sourceTexels.y / Height,
+            .width = sourceTexels.width / Width, .height = sourceTexels.height / Height },
+        .Size = RenderVector2D_Window((Vector2){ .x = box.width, .y = box.height }),
+        .RelativeOrigin = (Vector2){ .x = 0.0f, .y = 0.0f },
+        .RotationRad = 0.0f,
+        .TargetColor = UIRenderColor_Multiply(self->_tint, UIRenderColor_FromColor(color))
+    };
+    RenderContext_RenderTexture2D(self->_renderContext, &Arguments);
 }
 
 Error UIRenderContext_RenderRectangle(UIRenderContext* self,

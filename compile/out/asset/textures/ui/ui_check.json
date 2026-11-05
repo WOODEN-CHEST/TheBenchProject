@@ -1,0 +1,10 @@
+{
+    "name": "tbp:ui_check",
+    "location": "ui/ui_check",
+    "texture_properties": {
+        "filtering": "point",
+        "wrap": "clamp",
+        "mipmaps": false
+    },
+    "color_space": "srgb"
+}

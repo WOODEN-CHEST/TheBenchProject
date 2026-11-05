@@ -37,6 +37,9 @@
 /** @brief The bounds of GameConfig.FarShadowMapSize (a power of two). */
 #define CONFIG_MIN_FAR_SHADOW_MAP_SIZE 256
 #define CONFIG_MAX_FAR_SHADOW_MAP_SIZE 2048
+/** @brief The bounds of GameConfig.UIScale. */
+#define CONFIG_MIN_UI_SCALE 0.5f
+#define CONFIG_MAX_UI_SCALE 4.0f
 /** @brief GameConfig.CloudQuality's values: no clouds drawn (the weather's clouds as one even deck), low (half the
  *  scene's resolution, fewer steps) and high (the scene's resolution). */
 #define CONFIG_CLOUD_QUALITY_OFF 0
@@ -144,6 +147,9 @@ typedef struct GameConfigStruct
      *  at all: they mirror the sky alone), _LOW (half the scene's resolution, fewer steps: cheaper, coarser) or _HIGH
      *  (the scene's resolution). Default high; another value takes the default. */
     int32_t ReflectionQuality;
+    /** @brief How many surface pixels one UI pixel of the player's UI takes (UIScreen_SetScale): 1 draws the UI's pixel sizes
+     *  as they are, 2 at twice the size. In [CONFIG_MIN_UI_SCALE, CONFIG_MAX_UI_SCALE], otherwise the default of 1. */
+    float UIScale;
 } GameConfig;
 
 

@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <math.h>
 #include "wr/WRError.h"
 // GenericBuffer backs the subwidget lists and the id output of GetSubWidgets; Vector2/Rectangle (geometry),
 // RenderColor (tint), ProgramTime (update time), the UI input/animation/render types and RenderContext (layout
@@ -13,6 +14,7 @@
 #include "UIInput.h"
 #include "UIAnimation.h"
 #include "UIRenderContext.h"
+#include "UIPlacement.h"
 
 
 /**
@@ -28,6 +30,14 @@
  * Geometry is normalized [0;1] and RELATIVE TO THE PARENT (or the screen for a root): a child at position p with a
  * parent at position P and size S sits at absolute P + p*S. Estimated bounds (a cached box that also encloses all
  * subwidgets) drive keyboard-navigation distances and outlines.
+ *
+ * PLACEMENTS AND PREFERRED SIZES. A widget may have a placement (Widget_SetPlacement, UIPlacement.h): anchors and UI pixel
+ * offsets the screen's layout pass turns into its normalized position and size each tick, parents first, before its
+ * Layout hook. A placement wins over the position and the size set any other way, so an animation of a placed widget's
+ * position or size changes nothing: animate its tint, or its placement. A widget without one is placed by hand, as its
+ * position and size say. A widget tells its preferred size in UI pixels for an available width through its Measure hook,
+ * which containers ask through Widget_Measure; the answer is cached until the widget or anything in its subtree changes
+ * (Widget_InvalidateMeasure), or the screen's scale, viewport or theme does.
  *
  * LIFECYCLE. create -> (configure) -> Widget_InitializeWidget -> add to the screen or a parent -> ... ->
  * Widget_Destroy. A widget must be initialized before it is added. Widget_Destroy is always deferred and takes the
@@ -61,6 +71,8 @@ typedef struct WidgetStruct Widget;
 /** @brief The most levels a widget tree may have (a root alone is one level); Widget_AddSubWidget enforces it, so
  *  every walk of a tree is bounded. */
 #define WIDGET_MAX_TREE_DEPTH ((size_t)64)
+/** @brief The available width of a Measure with nothing to limit it: an infinity, so comparisons and minimums just work. */
+#define UI_MEASURE_UNBOUNDED_WIDTH (INFINITY)
 
 
 // Types.
@@ -83,6 +95,20 @@ typedef enum WidgetBasePropertyEnum
 } WidgetBaseProperty;
 
 /**
+ * @brief What a widget's Measure hook gets: a way to convert units for the screen's viewport, and the scale.
+ *
+ * Built by the screen on the stack for its layout pass; owns nothing.
+ */
+typedef struct UIMeasureContextStruct
+{
+    /** @brief A measuring-only render context for the screen's viewport (RenderContext_CreateMeasuring), for converting
+     *  between pixel, relative and fitted units. Borrowed for the call; never draw through it. */
+    RenderContext* Measure;
+    /** @brief The screen's scale: surface pixels per UI pixel. */
+    float Scale;
+} UIMeasureContext;
+
+/**
  * @brief What a widget's Layout hook gets: a way to convert units for the screen's viewport, and where its parent is.
  *
  * Built by the screen on the stack for each call; owns nothing.
@@ -94,6 +120,12 @@ typedef struct UILayoutContextStruct
     RenderContext* Measure;
     /** @brief The parent's box size in screen-normalized units ({1, 1} for a root). */
     Vector2 ParentAbsoluteSize;
+    /** @brief The parent's box top-left in screen-normalized units ({0, 0} for a root). */
+    Vector2 ParentAbsolutePosition;
+    /** @brief The surface's size in pixels (the screen's viewport). */
+    Vector2 SurfaceSizePixels;
+    /** @brief What to hand to Widget_Measure for the widgets it lays out. */
+    const UIMeasureContext* Sizing;
 } UILayoutContext;
 
 /**
@@ -175,6 +207,13 @@ typedef struct WidgetVTableStruct
     /** @brief Writes a concrete property declared by the type (the base has checked the id and that @p value has the
      *  declared type). Optional. */
     Error (*SetProperty)(void* self, int32_t propertyId, const UIPropertyValue* value);
+
+    /** @brief Gives the widget's preferred size in UI pixels when it has @p availableWidth UI pixels to the width
+     *  (possibly UI_MEASURE_UNBOUNDED_WIDTH): a label its text's, a stack its children's. Containers ask through
+     *  Widget_Measure, which caches the answer. Runs in the layout pass, on the update side: it may load assets and refresh
+     *  its own text, and must not destroy widgets, move focus or change another widget. Without a slot the size is zero.
+     *  Optional. */
+    Error (*Measure)(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize);
 } WidgetVTable;
 
 /**
@@ -209,7 +248,7 @@ typedef struct WidgetStruct
     /** @brief Render tint multiplied into this widget's (and its subtree's) drawing; defaults to white. */
     RenderColor _renderTint;
 
-    /** @brief When true (default) the widget is rendered. */
+    /** @brief When true (default) the widget and its subtree are rendered and can be hit by the pointer. */
     bool _isRendered;
     /** @brief When true (default) the widget receives update ticks. */
     bool _isUpdated;
@@ -241,6 +280,22 @@ typedef struct WidgetStruct
     Rectangle _cachedBounds;
     /** @brief True when _cachedBounds is up to date. */
     bool _areBoundsValid;
+
+    /** @brief True when the layout pass sets the position and the size from _placement. */
+    bool _hasPlacement;
+    /** @brief The placement, valid only when _hasPlacement is true. */
+    UIPlacement _placement;
+    /** @brief How the widget wants to sit in the stack that holds it. */
+    UIStackHint _stackHint;
+
+    /** @brief True when _measuredSize answers for _measuredWidth at the screen's _measureGeneration. */
+    bool _isMeasureValid;
+    /** @brief The screen's measure generation the cached answer belongs to. */
+    uint64_t _measureGeneration;
+    /** @brief The available width the cached answer was given for (quantized, UI pixels). */
+    float _measuredWidth;
+    /** @brief The cached preferred size in UI pixels. */
+    Vector2 _measuredSize;
 
     /** @brief Owned buffer of the children (Widget*, borrowed) in insertion order. */
     GenericBuffer _subWidgets;
@@ -423,6 +478,85 @@ static inline Vector2 Widget_GetSize(const Widget* self)
 Error Widget_SetSize(Widget* self, Vector2 size);
 
 /**
+ * @brief Gives the widget a placement: from the next layout pass on its position and size come from it.
+ * @param self The widget; must not be NULL.
+ * @param placement The placement; must not be NULL. Copied.
+ * @returns Success; ErrorCode_IllegalArgument if a pointer is NULL; ErrorCode_ArgumentOutOfRange if the placement is not
+ *          valid (UIPlacement_IsValid).
+ */
+Error Widget_SetPlacement(Widget* self, const UIPlacement* placement);
+
+/**
+ * @brief Takes the widget's placement away: its position and size stay as they are, and are the caller's again.
+ * @param self The widget; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error Widget_ClearPlacement(Widget* self);
+
+/**
+ * @brief Returns whether the widget has a placement.
+ * @param self The widget; must not be NULL.
+ * @returns true if it has one.
+ */
+static inline bool Widget_HasPlacement(const Widget* self)
+{
+    return self->_hasPlacement;
+}
+
+/**
+ * @brief Returns the widget's placement.
+ * @param self The widget; must not be NULL.
+ * @returns The placement; meaningful only when Widget_HasPlacement.
+ */
+static inline UIPlacement Widget_GetPlacement(const Widget* self)
+{
+    return self->_placement;
+}
+
+/**
+ * @brief Returns how the widget wants to sit in the stack that holds it.
+ * @param self The widget; must not be NULL.
+ * @returns The hint; new widgets size to their content, stretched across.
+ */
+static inline UIStackHint Widget_GetStackHint(const Widget* self)
+{
+    return self->_stackHint;
+}
+
+/**
+ * @brief Sets how the widget wants to sit in the stack that holds it (the stack reads it at its next layout).
+ * @param self The widget; must not be NULL.
+ * @param hint The hint; must not be NULL. Copied.
+ * @returns Success; ErrorCode_IllegalArgument if a pointer is NULL; ErrorCode_ArgumentOutOfRange if the hint is not valid
+ *          (UIStackHint_IsValid).
+ */
+Error Widget_SetStackHint(Widget* self, const UIStackHint* hint);
+
+/**
+ * @brief Returns the widget's preferred size in UI pixels for an available width.
+ *
+ * The answer of the Measure hook, cached until Widget_InvalidateMeasure reaches the widget, the available width changes (it
+ * is quantized, so float noise does not count) or the screen's scale, viewport or theme changes. Allocates nothing itself.
+ * A NaN or negative available width counts as 0; a size the hook gives that is not a finite number >= 0 counts as 0. Depth
+ * is bounded by WIDGET_MAX_TREE_DEPTH.
+ * @param self The widget; must not be NULL.
+ * @param context The measuring context; must not be NULL.
+ * @param availableWidth The width available, in UI pixels, or UI_MEASURE_UNBOUNDED_WIDTH.
+ * @param outSize [out] Receives the size. Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if a pointer is NULL; otherwise the hook's error.
+ */
+Error Widget_Measure(Widget* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize);
+
+/**
+ * @brief Says the widget's preferred size may have changed: its cached answer and those of its ancestors are dropped.
+ *
+ * Call it from anything that changes what the Measure hook answers. Adding or removing a child, showing or hiding a widget
+ * and changing a stack hint call it themselves. O(depth).
+ * @param self The widget; must not be NULL.
+ */
+void Widget_InvalidateMeasure(Widget* self);
+
+/**
  * @brief Returns the widget's z layer.
  * @param self The widget; must not be NULL.
  * @returns The z layer.
@@ -473,7 +607,8 @@ static inline RenderColor Widget_GetRenderTint(const Widget* self)
 Error Widget_SetRenderTint(Widget* self, RenderColor tint);
 
 /**
- * @brief Returns whether the widget is rendered.
+ * @brief Returns whether the widget is rendered: its subtree is drawn and can be hit by the pointer, and it takes room in a
+ *        stack.
  * @param self The widget; must not be NULL.
  * @returns true if rendered.
  */
@@ -483,10 +618,12 @@ static inline bool Widget_IsRendered(const Widget* self)
 }
 
 /**
- * @brief Enables or disables rendering, firing OnRenderEnable / OnRenderDisable on a change.
+ * @brief Shows or hides the widget with its subtree, firing OnRenderEnable / OnRenderDisable on a change. A hidden widget is
+ *        not drawn, the pointer goes through it, it takes no room in a stack, and the keyboard cannot reach it: it and what
+ *        it holds lose the focus, navigation passes them, and a press or a held key that began on them is over for them.
  * @param self The widget; must not be NULL.
  * @param isRendered The new render flag.
- * @returns Success, or a non-success Error propagated from the fired hook.
+ * @returns Success, or a non-success Error propagated from the fired hook or the focus's hooks.
  */
 Error Widget_SetIsRendered(Widget* self, bool isRendered);
 

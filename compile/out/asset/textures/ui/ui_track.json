@@ -1,0 +1,10 @@
+{
+    "name": "tbp:ui_track",
+    "location": "ui/ui_track",
+    "texture_properties": {
+        "filtering": "point",
+        "wrap": "clamp",
+        "mipmaps": false
+    },
+    "color_space": "srgb"
+}
