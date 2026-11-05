@@ -791,6 +791,35 @@ Error DataValue_Validate(const DataValue* value, const KeyRegistry* keys)
 }
 
 
+bool DataValue_HoldsKey(const DataValue* value)
+{
+    if (value == NULL)
+    {
+        return false;
+    }
+    if (value->Type == DataType_Key)
+    {
+        return true;
+    }
+    // Bounded: no value nests deeper than DATA_VALUE_MAX_DEPTH.
+    for (size_t Index = 0U; Index < DataValue_GetListCount(value); Index++)
+    {
+        if (DataValue_HoldsKey(DataValue_GetListElement(value, Index)))
+        {
+            return true;
+        }
+    }
+    for (size_t Index = 0U; Index < DataValue_GetCompoundCount(value); Index++)
+    {
+        if (DataValue_HoldsKey(DataValue_GetCompoundEntryValue(value, Index)))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+
 // Public functions: lists.
 DataType DataValue_GetListElementType(const DataValue* list)
 {

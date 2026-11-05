@@ -16,6 +16,7 @@ value, so this module only walks the tree and applies the world's loading rules,
 |---|---|
 | `WorldFile_ReadJSON(bytes, count, options, outWorld)` / `_ReadGHDF` | Load from memory (packed stories, the network). |
 | `WorldFile_WriteJSON(world, outBytes)` / `_WriteGHDF` | Append the file's bytes to a buffer; nothing is appended on failure. The world is const. |
+| `WorldFile_ReadObjectsJSON(root, formatVersion, pool, options, maxObjectCount, outWorld)` | Only the `objects` list of a compound, into a new world, by these rules, except that a key or a component it does not know is refused rather than skipped: what a prefab's file holds ([Prefabs.md](Prefabs.md)). |
 | `WorldFile_LoadJSON(path, options, outWorld)` / `_LoadGHDF` | Read a file (at most `WORLD_FILE_MAX_BYTE_COUNT`, 64 MiB, checked before reading), then as above. |
 | `WorldFile_SaveJSON(world, path)` / `_SaveGHDF` | Write a file atomically: the bytes go to `<path>.tmp` next to it, which then replaces it (`FileSystem_ReplaceEntry`); missing parent folders are made. |
 | `WorldFile_BuildPath(baseDirectory, name, format, outPath)` | `<base>/worlds/<name>.world.json` or `.world.ghdf` (until story packs exist; a `// TODO:` marks it). |

@@ -12,6 +12,7 @@
 #include "WorldScreenComponent.h"
 #include "WorldPathComponent.h"
 #include "WorldPathObjectComponent.h"
+#include "WorldPrefabComponent.h"
 
 
 // Static functions.
@@ -71,6 +72,8 @@ const WorldComponentTypeInfo* WorldComponent_GetStandardTypeInfo(WorldComponentT
             return WorldPathComponent_GetTypeInfo();
         case WorldComponentType_PathObject:
             return WorldPathObjectComponent_GetTypeInfo();
+        case WorldComponentType_Prefab:
+            return WorldPrefabComponent_GetTypeInfo();
         case WorldComponentType_Count:
             break;
     }

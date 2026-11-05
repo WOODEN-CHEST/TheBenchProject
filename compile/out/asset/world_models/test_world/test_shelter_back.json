@@ -1,0 +1,8 @@
+{
+    "name": "tbp:test_shelter_back",
+    "lods": [
+        { "model": "tbp:test_shelter_back", "max_distance": 400 }
+    ],
+    "draw_distance": 400,
+    "collision": "bounds"
+}

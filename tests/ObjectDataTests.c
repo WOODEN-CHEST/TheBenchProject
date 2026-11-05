@@ -640,7 +640,7 @@ static void MalformedQueriesAreRefused(TestRun* run)
     DataValue_Deconstruct(&Text);
 
     Query = WorldQuery_Create();
-    const WorldComponentType Unknown = (WorldComponentType)12;
+    const WorldComponentType Unknown = WorldComponentType_Count;
     Query.ComponentTypes = &Unknown;
     Query.ComponentTypeCount = 1U;
     TEST_CHECK_ERROR(run, World_Query(TestWorld, &Query, &Ids), ErrorCode_IllegalArgument);

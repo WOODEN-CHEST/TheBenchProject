@@ -812,6 +812,7 @@ static bool ConstructRecorderWorld(TestRun* run, World* world, KeyRegistry* keys
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Screen),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Path),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_PathObject),
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Prefab),
         &RecorderType,
     };
     if (!TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(keys)))
@@ -869,6 +870,92 @@ static void RemovalDetachesComponentsChildrenFirst(TestRun* run)
     TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
 }
 
+
+/* Many at once: subtrees overlapping in any order go once each, ids nothing holds are skipped, and the rest keep their order. */
+static void ManyObjectsGoAtOnce(TestRun* run)
+{
+    World TestWorld;
+    KeyRegistry TestKeys;
+    if (!ConstructRecorderWorld(run, &TestWorld, &TestKeys))
+    {
+        return;
+    }
+    // root -> a -> b, root -> c -> d; e; f -> g; h.
+    WorldObject* Root = CreateObject(run, &TestWorld, "root", 0U);
+    WorldObject* A = CreateObject(run, &TestWorld, "a", IdOf(Root));
+    WorldObject* B = CreateObject(run, &TestWorld, "b", IdOf(A));
+    WorldObject* C = CreateObject(run, &TestWorld, "c", IdOf(Root));
+    WorldObject* D = CreateObject(run, &TestWorld, "d", IdOf(C));
+    WorldObject* E = CreateObject(run, &TestWorld, "e", 0U);
+    WorldObject* F = CreateObject(run, &TestWorld, "f", 0U);
+    WorldObject* G = CreateObject(run, &TestWorld, "g", IdOf(F));
+    WorldObject* H = CreateObject(run, &TestWorld, "h", 0U);
+    WorldObject* All[] = { Root, A, B, C, D, E, F, G, H };
+    bool IsBuilt = true;
+    for (size_t Index = 0U; IsBuilt && (Index < 9U); Index++)
+    {
+        IsBuilt = AddRecorder(run, &TestWorld, All[Index]);
+    }
+    if (IsBuilt)
+    {
+        const WorldComponentType Recorder = (WorldComponentType)WorldComponentType_Count;
+        World_UpdateTransforms(&TestWorld);
+        uint64_t ObjectVersion = World_GetObjectSetVersion(&TestWorld);
+        uint64_t ComponentVersion = World_GetComponentSetVersion(&TestWorld);
+        // Nothing there: nothing changes.
+        const uint64_t Nothing[2] = { 0U, 987654U };
+        TEST_CHECK_SUCCESS(run, World_RemoveObjects(&TestWorld, Nothing, 2U));
+        TEST_CHECK_SUCCESS(run, World_RemoveObjects(&TestWorld, NULL, 0U));
+        TEST_CHECK(run, World_GetObjectCount(&TestWorld) == 9U);
+        TEST_CHECK(run, (World_GetObjectSetVersion(&TestWorld) == ObjectVersion) && (World_GetComponentSetVersion(&TestWorld) == ComponentVersion));
+        TEST_CHECK_ERROR(run, World_RemoveObjects(NULL, Nothing, 2U), ErrorCode_IllegalArgument);
+        TEST_CHECK_ERROR(run, World_RemoveObjects(&TestWorld, NULL, 1U), ErrorCode_IllegalArgument);
+
+        // A child before its parent, the parent twice, what nothing holds, a child alone and an object with no parent.
+        uint64_t IdB = IdOf(B);
+        uint64_t IdA = IdOf(A);
+        uint64_t IdG = IdOf(G);
+        uint64_t IdE = IdOf(E);
+        const uint64_t First[7] = { IdB, IdA, IdA, 0U, 987654U, IdG, IdE };
+        uint64_t Expected[4] = { IdB, IdA, IdG, IdE };
+        RecordedDetachCount = 0U;
+        TEST_CHECK_SUCCESS(run, World_RemoveObjects(&TestWorld, First, 7U));
+        TEST_CHECK(run, (RecordedDetachCount == 4U) && Memory_IsEqual(RecordedDetaches, Expected, sizeof(Expected)));
+        TEST_CHECK(run, World_GetObjectCount(&TestWorld) == 5U);
+        TEST_CHECK(run, (World_GetObjectSetVersion(&TestWorld) != ObjectVersion) && (World_GetComponentSetVersion(&TestWorld) != ComponentVersion));
+        WorldObject* Found = NULL;
+        TEST_CHECK(run, !World_TryGetObject(&TestWorld, IdA, &Found) && !World_TryGetObject(&TestWorld, IdB, &Found)
+            && !World_TryGetObject(&TestWorld, IdG, &Found) && !World_TryGetObject(&TestWorld, IdE, &Found));
+        uint64_t RootChildren[] = { IdOf(C) };
+        CheckChildren(run, &TestWorld, Root, RootChildren, 1U);
+        CheckChildren(run, &TestWorld, F, NULL, 0U);
+        uint64_t Left[] = { IdOf(Root), IdOf(C), IdOf(D), IdOf(F), IdOf(H) };
+        CheckComponentOwners(run, &TestWorld, Recorder, Left, 5U);
+        for (size_t Index = 0U; Index < 5U; Index++)
+        {
+            WorldObject* AtIndex = NULL;
+            TEST_CHECK(run, TEST_CHECK_SUCCESS(run, World_GetObjectByIndex(&TestWorld, Index, &AtIndex)) && (IdOf(AtIndex) == Left[Index]));
+        }
+        World_UpdateTransforms(&TestWorld);
+        TEST_CHECK(run, TestWorld._dirtyTransformCount == 0U);
+
+        // A list of everything under a root, from the bottom up: each once, children first, and dirty ones leave the count.
+        TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Root, TestWorld_At((Vector3){ 1.0f, 0.0f, 0.0f })));
+        uint64_t IdRoot = IdOf(Root);
+        uint64_t IdC = IdOf(C);
+        uint64_t IdD = IdOf(D);
+        const uint64_t Second[3] = { IdD, IdRoot, IdC };
+        uint64_t ExpectedSecond[3] = { IdD, IdC, IdRoot };
+        RecordedDetachCount = 0U;
+        TEST_CHECK_SUCCESS(run, World_RemoveObjects(&TestWorld, Second, 3U));
+        TEST_CHECK(run, (RecordedDetachCount == 3U) && Memory_IsEqual(RecordedDetaches, ExpectedSecond, sizeof(ExpectedSecond)));
+        uint64_t LeftLast[] = { IdOf(F), IdOf(H) };
+        CheckComponentOwners(run, &TestWorld, Recorder, LeftLast, 2U);
+        TEST_CHECK(run, TestWorld._dirtyTransformCount == 0U);
+    }
+    RecordedDetachCount = 0U;
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
+}
 
 /* A detach hook sees its object where it is: on a removal the subtree is unlinked only after every hook ran, and when
  * the world is destroyed every hook runs before any object goes (a child made before its parent included). */
@@ -1077,6 +1164,7 @@ void WorldHierarchyTests_Run(TestRun* run)
         { "children_keep_the_order_they_were_attached_in", ChildrenKeepTheOrderTheyWereAttachedIn },
         { "removing_an_object_removes_its_subtree", RemovingAnObjectRemovesItsSubtree },
         { "removal_detaches_components_children_first", RemovalDetachesComponentsChildrenFirst },
+        { "many_objects_go_at_once", ManyObjectsGoAtOnce },
         { "detach_hooks_see_the_hierarchy_in_place", DetachHooksSeeTheHierarchyInPlace },
         { "world_scales_keep_the_signs_of_their_chain", WorldScalesKeepTheSignsOfTheirChain },
         { "effective_flags_follow_the_ancestors", EffectiveFlagsFollowTheAncestors },

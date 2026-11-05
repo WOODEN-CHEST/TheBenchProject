@@ -677,6 +677,36 @@ static void TheChildrenTakeTheSlotsRenderSettingsAndTheObjectsTint(TestRun* run)
     Scene_Deconstruct(run, &S);
 }
 
+/* A loaded asset never changes by itself: a rebuild lets go of what it holds and takes the definitions as they are now. */
+static void ARebuildTakesTheDefinitionsAsTheyAreNow(TestRun* run)
+{
+    Scene S;
+    if (Scene_Construct(run, &S))
+    {
+        const PathNode Nodes[2] = { MakeNode(0.0, 0.0, 0.0, PathNodeMode_Corner), MakeNode(20.0, 0.0, 0.0, PathNodeMode_Corner) };
+        uint64_t Id = AddFence(run, &S, (Vector3){ 0.0f, 0.0f, 0.0f }, Nodes, 2U, "gateposts", false);
+        WorldPathObjects_Update(S.System);
+        size_t Pieces = WorldPathObjects_GetStats(S.System).PieceCount;
+        TEST_CHECK(run, Pieces > 0U);
+        uint64_t Rebuilds = WorldPathObjects_GetStats(S.System).RebuildCount;
+        // A new gap in the file: nothing happens until asked.
+        TEST_CHECK(run, AddPathObjectAsset(run, &S, "{ \"name\": \"gateposts\", \"models\": [ { \"slot\": \"middle\", \"world_model\": "
+            "\"gatepost\" } ], \"fit\": \"fixed\", \"uses_gap\": true, \"gap\": 1.0, \"slots\": [ { \"slot\": \"middle\", \"length\": 0 } ] }"));
+        WorldPathObjects_Update(S.System);
+        TEST_CHECK(run, WorldPathObjects_GetStats(S.System).RebuildCount == Rebuilds);
+        WorldPathObjects_Rebuild(S.System);
+        WorldPathObjects_Update(S.System);
+        TEST_CHECK(run, WorldPathObjects_GetStats(S.System).RebuildCount == (Rebuilds + 1U));
+        TEST_CHECK(run, WorldPathObjects_GetStats(S.System).PieceCount > Pieces);
+        // The models were let go of too, and their measures with them: a model that comes back measures again, and it all still stands.
+        TEST_CHECK(run, CountChildren(&S, Id) > 0U);
+        WorldPathObjects_Rebuild(S.System);
+        WorldPathObjects_Update(S.System);
+        TEST_CHECK(run, WorldPathObjects_GetStats(S.System).RebuildCount == (Rebuilds + 2U));
+    }
+    Scene_Deconstruct(run, &S);
+}
+
 static void WhatItMadeFollowsItsComponentAndItsObject(TestRun* run)
 {
     Scene S;
@@ -710,6 +740,21 @@ static void WhatItMadeFollowsItsComponentAndItsObject(TestRun* run)
         TEST_CHECK_SUCCESS(run, WorldPathComponent_SetNode(GetPath(&S, Id), 1U, &Moved));
         WorldPathObjects_Update(S.System);
         TEST_CHECK(run, FindCopiesChild(&S, Id, "tbp:panel") != NULL);
+        // Fences coming and going around this one: a walk along both lists finds each its own, with nothing built again.
+        uint64_t Before = AddFence(run, &S, (Vector3){ 0.0f, 0.0f, 20.0f }, Nodes, 2U, "fence", false);
+        uint64_t Between = AddFence(run, &S, (Vector3){ 0.0f, 0.0f, 40.0f }, Nodes, 2U, "fence", false);
+        WorldPathObjects_Update(S.System);
+        uint64_t RebuildsBefore = WorldPathObjects_GetStats(S.System).RebuildCount;
+        TEST_CHECK_SUCCESS(run, World_RemoveComponent(&S.World, Before, WorldComponentType_PathObject));
+        uint64_t After = AddFence(run, &S, (Vector3){ 0.0f, 0.0f, 60.0f }, Nodes, 2U, "fence", false);
+        WorldPathObjects_Update(S.System);
+        TEST_CHECK(run, WorldPathObjects_GetStats(S.System).RebuildCount == (RebuildsBefore + 1U));
+        TEST_CHECK(run, (CountChildren(&S, Before) == 0U) && (CountChildren(&S, Between) == 4U) && (CountChildren(&S, After) == 4U) && (CountChildren(&S, Id) == 4U));
+        TEST_CHECK_SUCCESS(run, World_RemoveObject(&S.World, Between));
+        TEST_CHECK_SUCCESS(run, World_RemoveObject(&S.World, After));
+        TEST_CHECK_SUCCESS(run, World_RemoveObject(&S.World, Before));
+        WorldPathObjects_Update(S.System);
+        TEST_CHECK(run, WorldPathObjects_GetStats(S.System).RebuildCount == (RebuildsBefore + 1U));
         // The component removed: its children go, and what they held leaves the stats.
         TEST_CHECK_SUCCESS(run, World_RemoveComponent(&S.World, Id, WorldComponentType_PathObject));
         WorldPathObjects_Update(S.System);
@@ -3339,6 +3384,7 @@ void WorldPathObjectTests_Run(TestRun* run)
         { "the_child_count_follows_children_removed_from_outside", TheChildCountFollowsChildrenRemovedFromOutside },
         { "the_system_going_takes_what_it_made", TheSystemGoingTakesWhatItMade },
         { "only_the_component_goes_into_world_files", OnlyTheComponentGoesIntoWorldFiles },
+        { "a_rebuild_takes_the_definitions_as_they_are_now", ARebuildTakesTheDefinitionsAsTheyAreNow },
         { "pieces_stand_on_the_ground", PiecesStandOnTheGround },
         { "the_ground_changing_under_it_moves_it_and_nothing_else_does", TheGroundChangingUnderItMovesItAndNothingElseDoes },
         { "the_collision_world_reports_ground_changes", TheCollisionWorldReportsGroundChanges },

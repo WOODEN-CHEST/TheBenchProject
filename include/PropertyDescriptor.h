@@ -15,6 +15,7 @@
 typedef struct LoggerStruct Logger;
 typedef struct KeyRegistryStruct KeyRegistry;
 typedef struct DataMapStruct DataMap;
+typedef struct DataValueStruct DataValue;
 
 
 /**
@@ -167,6 +168,9 @@ typedef struct DataMapStruct DataMap;
 /** @brief The most records any RecordList may hold, whatever its rules say (2^16). */
 #define PROPERTY_RECORD_LIST_MAX_COUNT ((size_t)65536)
 
+/** @brief A DataValue: the most bytes it may count (DataValue_GetByteSize), and whether it must be a compound. */
+#define PROPERTY_RULES_DATA_VALUE(maxBytes, isCompoundOnly) { .MaxLength = (maxBytes), .IsCompoundOnly = (isCompoundOnly) }
+
 /** @brief The flags of a creator setting: saved, shown in the editor's inspector and reachable from scripts. */
 #define PROPERTY_FLAGS_SETTING ((uint32_t)(PropertyFlags_Persistent | PropertyFlags_Editable | PropertyFlags_Script))
 
@@ -263,7 +267,14 @@ typedef enum PropertyTypeEnum
     /** @brief A list of records: an owned `PropertyRecordList*`, NULL while empty, which is its only default. The
      *  descriptor's RecordTable (required) describes one record, and every record follows that table's rules;
      *  Rules.MaxCount (required, at most PROPERTY_RECORD_LIST_MAX_COUNT) bounds the count. */
-    PropertyType_RecordList
+    PropertyType_RecordList,
+    /** @brief Any plain value: an owned `DataValue*`, NULL for none, which is its only default; none and an empty compound are
+     *  equal, so an empty compound counts as the default. It holds no key, needs no registry and nests within DataValue's limits.
+     *  Rules.MaxLength (required) bounds its bytes (DataValue_GetByteSize); Rules.IsCompoundOnly refuses anything but a
+     *  compound. JSON: any value through DataValue_ReadPlainJSON, null for none. GHDF: a compound (DataValue_WritePlainGHDF),
+     *  absent for none. It may be a record's row: it limits its own depth. The form of what stands for another row's JSON form, as
+     *  a prefab's values do (Properties_SetFromDataValue). */
+    PropertyType_DataValue
 } PropertyType;
 
 /**
@@ -424,6 +435,9 @@ typedef union PropertyDataUnion
     /** @brief PropertyType_RecordList: the list, or NULL for an empty one. Borrowed, as FloatListValue: NULL in a
      *  default, the instance's own from Properties_Get, copied by Properties_Set. */
     const PropertyRecordList* RecordListValue;
+    /** @brief PropertyType_DataValue: the value, or NULL for none. Borrowed, as FloatListValue: NULL in a default, the
+     *  instance's own from Properties_Get, copied by Properties_Set. */
+    const DataValue* DataValueValue;
 } PropertyData;
 
 /**
@@ -478,6 +492,8 @@ typedef struct PropertyRulesStruct
     bool IsNullAllowed;
     /** @brief FloatList only: whether every value must be above the one before it (strictly increasing). */
     bool IsStrictlyIncreasing;
+    /** @brief DataValue only: whether the value must be a compound. */
+    bool IsCompoundOnly;
 } PropertyRules;
 
 /**
@@ -859,12 +875,28 @@ static inline PropertyValue PropertyValue_FromRecordList(const PropertyRecordLis
     return (PropertyValue){ .Type = PropertyType_RecordList, .Data.RecordListValue = list };
 }
 
+/** @brief Makes a DataValue value. @param value The value (borrowed; Properties_Set copies it), or NULL for none.
+ *  @returns The value. */
+static inline PropertyValue PropertyValue_FromDataValue(const DataValue* value)
+{
+    return (PropertyValue){ .Type = PropertyType_DataValue, .Data.DataValueValue = value };
+}
+
 /**
  * @brief Returns a property type's name for messages and tooling, e.g. u8"float" or u8"render_color".
  * @param type The type.
  * @returns A static string; u8"unknown" for a value outside PropertyType.
  */
 const unsigned char* PropertyType_GetName(PropertyType type);
+
+/**
+ * @brief Reports whether two values are of one type and equal, as Properties_Equals compares a row: floats by value, strings by
+ *        bytes, lists by their elements, a RenderColor without its tint's alpha.
+ * @param a The first value; must not be NULL.
+ * @param b The second; must not be NULL.
+ * @returns Whether they are equal; false for two types.
+ */
+bool PropertyValue_Equals(const PropertyValue* a, const PropertyValue* b);
 
 
 // Functions: float lists.
@@ -1112,6 +1144,18 @@ static inline const void* PropertyRecordList_GetRecords(const PropertyRecordList
     return (list != NULL) ? (const void*)list->_records : NULL;
 }
 
+/**
+ * @brief Reads a JSON array of records with no row holding it: for a file's own shape, such as a map of named lists.
+ * @param table The table of one record; must pass PropertyTable_Check and follow a record table's rules. Must not be NULL.
+ * @param array The JSON value; anything but an array is refused. Must not be NULL.
+ * @param maxCount The most records allowed.
+ * @param options How to read: its UnknownKeyMode and Logger apply. NULL: the default, unknown keys refused.
+ * @param outList [out] Receives the list (NULL for none); the caller owns it (PropertyRecordList_Destroy). Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument for NULL arguments; ErrorCode_InvalidJSON naming the record and the problem.
+ */
+Error PropertyRecordList_ReadJSON(const PropertyTable* table, const JSONObjectValue* array, size_t maxCount,
+    const PropertyReadOptions* options, PropertyRecordList** outList);
+
 
 // Functions: tables.
 /**
@@ -1241,6 +1285,27 @@ Error Properties_Get(const PropertyTable* table, const void* instance, const uns
  *          value breaks a rule (see Properties_CheckValue).
  */
 Error Properties_Set(const PropertyTable* table, void* instance, const unsigned char* key, const PropertyValue* value);
+
+/**
+ * @brief Sets one row from a plain value that holds its JSON form, as a file would write it: "#2e4a7a" for a colour, degrees for an
+ *        angle, [0, 35, 0] for a rotation, a name for an enum.
+ *
+ * The row's own JSON reader reads it, then it goes through Properties_Set, so the row's type and rules apply and a ReadOnly row is
+ * refused. For a value whose row is only known later than it is stored, which is why it is not typed itself. On failure the
+ * instance is unchanged.
+ * @param table The table; must not be NULL.
+ * @param instance The instance; must not be NULL.
+ * @param key The row's key; must not be NULL.
+ * @param value The value (holding no key); must not be NULL.
+ * @param pool Lends the JSON the value is read through, and takes it back; must not be NULL. It keeps a copy of every key it
+ *        ever saw, so a long-lived caller makes a new one now and then.
+ * @returns Success; ErrorCode_IllegalArgument for NULL arguments and a key the table does not have; ErrorCode_InvalidOperation for a
+ *          ReadOnly row, a DataMap row (which has two keys) or a value holding a key; ErrorCode_InvalidJSON when the row refuses the
+ *          value (the message names the table and the row); ErrorCode_ArgumentOutOfRange when it breaks the row's rules.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error Properties_SetFromDataValue(const PropertyTable* table, void* instance, const unsigned char* key, const DataValue* value,
+    JSONObjectPool* pool);
 
 
 // Functions: JSON.

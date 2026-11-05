@@ -1,0 +1,92 @@
+{
+    "name": "tbp:test_street_lamp",
+    "format_version": 3,
+    "properties": {
+        "state": {
+            "type": "enum",
+            "default": "on",
+            "display_name": "State",
+            "category": "Lamp",
+            "description": "Whether the lamp burns, and how.",
+            "options": {
+                "on": [],
+                "off": [
+                    {
+                        "object": "light",
+                        "component": "light",
+                        "row": "is_on",
+                        "value": false
+                    }
+                ],
+                "broken": [
+                    {
+                        "object": "light",
+                        "component": "light",
+                        "row": "flicker",
+                        "value": "broken"
+                    },
+                    {
+                        "object": "light",
+                        "component": "light",
+                        "row": "flicker_amount",
+                        "value": 1.0
+                    }
+                ]
+            },
+            "option_display_names": {
+                "on": "Burning",
+                "off": "Out",
+                "broken": "Flickering"
+            }
+        },
+        "light_color": {
+            "type": "color",
+            "default": "#ffd9a0",
+            "display_name": "Light colour",
+            "category": "Lamp",
+            "targets": [
+                {
+                    "object": "light",
+                    "component": "light",
+                    "row": "color"
+                }
+            ]
+        }
+    },
+    "objects": [
+        {
+            "id": 1,
+            "name": "pole",
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_street_lamp"
+                },
+                "collider": {}
+            }
+        },
+        {
+            "id": 2,
+            "parent": 1,
+            "name": "light",
+            "position": [
+                0.0,
+                4.8,
+                -1.2
+            ],
+            "rotation": [
+                90.0,
+                0.0,
+                0.0
+            ],
+            "components": {
+                "light": {
+                    "type": "spot",
+                    "intensity": 3.0,
+                    "range": 12.0,
+                    "inner_angle": 35.0,
+                    "outer_angle": 60.0
+                }
+            }
+        }
+    ]
+}

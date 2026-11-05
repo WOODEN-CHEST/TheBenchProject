@@ -363,19 +363,6 @@ WorldObject* WorldInternal_GetNextChildrenFirst(WorldObject* current, const Worl
     return (current->_nextSibling != NULL) ? GetDeepestFirstChild(current->_nextSibling) : current->_parent;
 }
 
-bool WorldInternal_CollectSubtree(WorldObject* object, GenericBuffer* outObjects)
-{
-    for (WorldObject* Current = WorldInternal_GetFirstChildrenFirst(object); Current != NULL;
-        Current = WorldInternal_GetNextChildrenFirst(Current, object))
-    {
-        if (!GenericBuffer_AddLast(outObjects, &Current))
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
 void WorldInternal_DetachFromParent(WorldObject* object)
 {
     WorldObject* Parent = object->_parent;

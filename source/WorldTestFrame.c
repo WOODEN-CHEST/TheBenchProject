@@ -15,7 +15,9 @@
 #include "WorldTestCharacters.h"
 #include "WorldTestInstances.h"
 #include "WorldPathObjects.h"
+#include "WorldPrefabs.h"
 #include "WorldTestPathObjects.h"
+#include "WorldTestPrefabs.h"
 #include "WorldTestPaths.h"
 #include "WorldTestScreens.h"
 #include "WorldTestShadows.h"
@@ -55,6 +57,8 @@
 #define SAVED_WORLD_FILE_NAME ((const unsigned char*)u8"test.saved")
 /** Base movement speed, in world units per second. */
 #define MOVE_SPEED 6.0f
+/** How many rounds the generators take at load at most: prefabs in path objects in prefabs reach no deeper in anything built by hand. */
+#define GENERATOR_SETTLE_ROUNDS 8
 /** Multiplier applied to movement speed while the sprint key is held. */
 #define SPRINT_MULTIPLIER 3.0f
 /** The mouse wheel steps the flycam's speed: each notch multiplies it by the cube root of two, so this many notches
@@ -216,6 +220,7 @@ typedef struct WorldTestFrameStruct
     WorldCollision* _collision;
     /** The path objects system: what the fences, hedges and lamp rows generate, kept up to date once a tick. */
     WorldPathObjects* _pathObjects;
+    WorldPrefabs* _prefabs;
     /** Whether the F7 key's collider wireframes and the F8 key's contact points are shown. */
     bool _areCollidersShown;
     bool _areContactsShown;
@@ -254,6 +259,7 @@ typedef struct WorldTestFrameStruct
     /** The paths' debug view, a moving node and the camera's region; owned. */
     WorldTestPaths _testPaths;
     WorldTestPathObjects _testPathObjects;
+    WorldTestPrefabs _testPrefabs;
     /** The far terrain's test content: the coast (Shift + keypad *), the picture's curve (Scroll Lock) and the far
      *  shadows' switch (Pause). */
     WorldTestFarTerrain _testFarTerrain;
@@ -1094,6 +1100,7 @@ static void HandleDebugInput(WorldTestFrame* frame, const GameInput* input)
         WorldTestWater_LogStatus(&frame->_testWater);
         WorldTestPaths_LogStatus(&frame->_testPaths);
         WorldTestPathObjects_LogStatus(&frame->_testPathObjects);
+        WorldTestPrefabs_LogStatus(&frame->_testPrefabs);
         WorldTestFarTerrain_LogStatus(&frame->_testFarTerrain);
         WorldTestWeather_LogStatus(&frame->_testWeather);
         LogCameraStatus(frame);
@@ -1847,7 +1854,9 @@ static void HandleControls(WorldTestFrame* frame, GameInput* input, float deltaS
         frame->_camera.Position = Vector3Double_Add(frame->_camera.Position, GameMath_FromVector3(Movement));
     }
 
-    // Debug controls (edge-triggered keys are reliable here: input is polled per update tick).
+    // Debug controls (edge-triggered keys are reliable here: input is polled per update tick). The prefabs' first: with Control
+    // they take keypad keys others read.
+    WorldTestPrefabs_HandleInput(&frame->_testPrefabs, input);
     HandleDebugClockInput(frame, input, deltaSeconds);
     HandleDebugSkyInput(frame, input);
     HandleDebugInput(frame, input);
@@ -1954,6 +1963,7 @@ static Error WorldTestFrame_Update(void* self, ProgramTime time)
     SwingDoor(Frame, Delta);
     MovePusher(Frame, Delta);
     WorldCharacters_Update(Frame->_characters, Delta);
+    WorldPrefabs_Update(Frame->_prefabs);
     WorldPathObjects_Update(Frame->_pathObjects);
     WorldCollision_Step(Frame->_collision, Delta);
     LogTriggerEvents(Frame);
@@ -2101,6 +2111,7 @@ static void WorldTestFrame_Destroy(void* self)
     WorldTestCharacters_Deconstruct(&Frame->_testCharacters);
     WorldCharacters_Destroy(Frame->_characters);
     WorldPathObjects_Destroy(Frame->_pathObjects);
+    WorldPrefabs_Destroy(Frame->_prefabs);
     WorldCollision_Destroy(Frame->_collision);
     WorldTestWeather_Deconstruct(&Frame->_testWeather);
 
@@ -2135,6 +2146,24 @@ static const GameFrameVTable WorldTestFrameVTable =
 
 
 // Public functions.
+/* The generators at load: prefabs make objects that may hold path objects, whose pieces may be prefabs again, each standing on the
+ * colliders the last made, so the first frame shows them whole. Each round reaches one level further, and it stops when a round
+ * makes nothing. */
+static void SettleGenerators(WorldTestFrame* frame)
+{
+    for (int Round = 0; Round < GENERATOR_SETTLE_ROUNDS; Round++)
+    {
+        uint64_t Objects = World_GetObjectSetVersion(&frame->_world);
+        WorldPrefabs_Update(frame->_prefabs);
+        WorldCollision_Sync(frame->_collision);
+        WorldPathObjects_Update(frame->_pathObjects);
+        if ((World_GetObjectSetVersion(&frame->_world) == Objects) && WorldPrefabs_IsSettled(frame->_prefabs))
+        {
+            break;
+        }
+    }
+}
+
 Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
 {
     if ((services == NULL) || (outFrame == NULL))
@@ -2246,8 +2275,23 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         Memory_Free(Frame);
         return PathObjectsResult;
     }
-    WorldCollision_Sync(Frame->_collision);
-    WorldPathObjects_Update(Frame->_pathObjects);
+    Error PrefabsResult = WorldPrefabs_Create(&Frame->_world, services->Assets, services->Logger, &Frame->_prefabs);
+    if (PrefabsResult.Code != ErrorCode_Success)
+    {
+        DeconstructTextSample(Frame);
+        WorldPathObjects_Destroy(Frame->_pathObjects);
+        WorldCharacters_Destroy(Frame->_characters);
+        WorldCollision_Destroy(Frame->_collision);
+        Error Cleanup = WorldRenderer_Deconstruct(Frame->_renderer);
+        Error_Deconstruct(&Cleanup);
+        Cleanup = World_Deconstruct(&Frame->_world);
+        Error_Deconstruct(&Cleanup);
+        GameClock_Deconstruct(&Frame->_clock);
+        GameFrame_Deconstruct(&Frame->Base);
+        Memory_Free(Frame);
+        return PrefabsResult;
+    }
+    SettleGenerators(Frame);
     WorldTestCharacters_Construct(&Frame->_testCharacters, &Frame->_world, Frame->_collision, Frame->_characters,
         services->Input, services->Logger);
     Error AnimationResult = WorldTestAnimation_Construct(&Frame->_testAnimation, &Frame->_world, services->Assets,
@@ -2258,6 +2302,7 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
         WorldCharacters_Destroy(Frame->_characters);
         DeconstructTextSample(Frame);
         WorldPathObjects_Destroy(Frame->_pathObjects);
+        WorldPrefabs_Destroy(Frame->_prefabs);
         WorldCollision_Destroy(Frame->_collision);
         Error Cleanup = WorldRenderer_Deconstruct(Frame->_renderer);
         Error_Deconstruct(&Cleanup);
@@ -2275,6 +2320,7 @@ Error WorldTestFrame_Create(Services* services, GameFrame** outFrame)
     WorldTestWater_Construct(&Frame->_testWater, &Frame->_world, services->Logger);
     WorldTestPaths_Construct(&Frame->_testPaths, &Frame->_world, Frame->_collision, Frame->_renderer, services->Logger);
     WorldTestPathObjects_Construct(&Frame->_testPathObjects, &Frame->_world, Frame->_pathObjects, services->Logger);
+    WorldTestPrefabs_Construct(&Frame->_testPrefabs, &Frame->_world, Frame->_prefabs, Frame->_pathObjects, services->Assets, services->Logger);
     WorldTestFarTerrain_Construct(&Frame->_testFarTerrain, &Frame->_world, Frame->_renderer, services->Assets,
         services->AssetTypes.Terrain, services->Logger);
     WorldTestWeather_Construct(&Frame->_testWeather, &Frame->_world, services->Assets, services->Logger);

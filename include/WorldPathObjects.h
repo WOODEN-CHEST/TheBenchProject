@@ -33,6 +33,9 @@
  * transform of its own lies exactly on its parent's path, and moving it moves everything it made along with it. The ground is
  * looked for along the world's Y, from a point's place in the world.
  *
+ * PREFABS. A slot's model may name a prefab: each of its pieces is then a runtime child holding a copy of it (WorldPrefabs.h), its values and
+ * picks written here and its objects made by that system. It stands as a rigid piece at an even scale, since an object has no shear.
+ *
  * Tick order: after the transform drivers, before WorldCollision_Step (whose sync takes in the new colliders). At load, after a
  * first WorldCollision_Sync, so the first frame stands on the ground; a ground that comes later rebuilds it anyway. Main thread
  * only: the world models load through the asset manager, which needs the GL context outside the tests' code-built models.
@@ -47,6 +50,8 @@
 #define WORLD_PATH_OBJECTS_MAX_TOTAL_VERTICES ((size_t)32000000)
 #define WORLD_PATH_OBJECTS_MAX_TOTAL_SHAPES ((size_t)4000000)
 #define WORLD_PATH_OBJECTS_MAX_TOTAL_CHILDREN ((size_t)65536)
+/** @brief Warnings all of a system's path objects give together: past them it stays quiet, and says so once. */
+#define WORLD_PATH_OBJECTS_MAX_WARNINGS ((size_t)1024)
 /** @brief The most vertices one generated mesh holds. */
 #define WORLD_PATH_OBJECTS_MAX_MESH_VERTICES ((size_t)1048576)
 /** @brief The most vertices every generated mesh of one rebuild holds together. */
@@ -154,6 +159,13 @@ static inline WorldPathObjectsLimits WorldPathObjectsLimits_CreateDefault(void)
  * @param self The system; must not be NULL.
  * @param limits The limits; must not be NULL.
  */
+/**
+ * @brief Lets go of every asset it holds and builds every path object again from the definitions as they are now, at its next update: what a
+ *        changed path object says, and the picks of a changed prefab's pieces. What comes out the same stays.
+ * @param self The system; must not be NULL.
+ */
+void WorldPathObjects_Rebuild(WorldPathObjects* self);
+
 void WorldPathObjects_SetLimits(WorldPathObjects* self, const WorldPathObjectsLimits* limits);
 
 /**

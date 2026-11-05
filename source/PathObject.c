@@ -211,6 +211,26 @@ static const PropertyDescriptor ModelProperties[] =
         .DisplayName = u8"Tint", .Description = u8"A colour multiplied into its copies' own; its alpha is an opacity.",
         .SinceVersion = 1U
     },
+    {
+        .Key = u8"prefab", .WireId = 7U, .Type = PropertyType_AssetName, PROPERTY_MEMBER(PathObjectModelRecord, Prefab),
+        .Rules = PROPERTY_RULES_STRING(PATH_OBJECT_NAME_MAX_LENGTH, true), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_MODEL, .DisplayName = u8"Prefab",
+        .Description = u8"A prefab its pieces are copies of, in place of a world model: a lamp with its light. Always rigid, each piece "
+            u8"an object of its own.",
+        .SinceVersion = 1U
+    },
+    {
+        .Key = u8"values", .WireId = 8U, .Type = PropertyType_DataValue, PROPERTY_MEMBER(PathObjectModelRecord, Values),
+        .Rules = PROPERTY_RULES_DATA_VALUE(PATH_OBJECT_MODEL_VALUES_MAX_BYTES, true), .Flags = PROPERTY_FLAGS_SETTING,
+        .Category = CATEGORY_MODEL, .DisplayName = u8"Prefab values",
+        .Description = u8"The values its prefab's copies take, by property.", .SinceVersion = 1U
+    },
+    {
+        .Key = u8"randomizes_enums", .WireId = 9U, .Type = PropertyType_Bool, PROPERTY_MEMBER(PathObjectModelRecord, RandomizesEnums),
+        .Default.BoolValue = false, .Flags = PROPERTY_FLAGS_SETTING, .Category = CATEGORY_MODEL,
+        .DisplayName = u8"Random variants",
+        .Description = u8"Every enum property its values leave out is picked per copy from the seed.", .SinceVersion = 1U
+    },
 };
 
 const PropertyTable PathObjectInternal_ModelTable =

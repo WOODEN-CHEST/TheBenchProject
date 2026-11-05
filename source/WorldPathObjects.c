@@ -7,6 +7,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include "WorldPathObjectsInternal.h"
+#include "AssetDefinitionCommon.h"
+#include "AssetTypesStandard.h"
 #include "GameModel.h"
 #include "WorldInternal.h"
 #include "wr/WRMemory.h"
@@ -76,9 +78,20 @@ static void BuildSlot(PathObjectRebuild* rebuild, PathObjectSlot slot, const Pat
     for (size_t Index = 0U; Index < Count; Index++)
     {
         WorldModel* Asset = NULL;
-        Error Result = (Records[Index]->WorldModel != NULL)
-            ? AssetManager_LoadWorldModel(System->_assets, Records[Index]->WorldModel, System->_assetUser, &Asset)
-            : Error_Construct2(ErrorCode_InvalidOperation, "a model of its slot names no world model.");
+        Prefab* PrefabAsset = NULL;
+        Error Result = Error_CreateSuccess();
+        if ((Records[Index]->WorldModel == NULL) == (Records[Index]->Prefab == NULL))
+        {
+            Result = Error_Construct2(ErrorCode_InvalidOperation, "a model of its slot names not one of a world model and a prefab.");
+        }
+        else if (Records[Index]->WorldModel != NULL)
+        {
+            Result = AssetManager_LoadWorldModel(System->_assets, Records[Index]->WorldModel, System->_assetUser, &Asset);
+        }
+        else
+        {
+            Result = AssetManager_LoadPrefab(System->_assets, Records[Index]->Prefab, System->_assetUser, &PrefabAsset);
+        }
         if (Result.Code != ErrorCode_Success)
         {
             if (!rebuild->State->HasWarnedModel)
@@ -92,10 +105,11 @@ static void BuildSlot(PathObjectRebuild* rebuild, PathObjectSlot slot, const Pat
         }
         PathObjectSlotModel* Held = &Build->Models[Build->ModelCount];
         Held->Asset = Asset;
+        Held->Prefab = PrefabAsset;
         Held->Record = Records[Index];
         Held->HasParts = false;
         Held->LastPart = 0U;
-        Held->Measure = MeasureWorldModel(System, Asset);
+        Held->Measure = (Asset != NULL) ? MeasureWorldModel(System, Asset) : PathObjectMeasure_CreateEmpty();
         Held->Length = PathObjectMeasure_GetLength(&Held->Measure, &Build->Settings);
         Build->LayoutModels[Build->ModelCount] = (PathObjectLayoutModel){ .Length = Held->Length,
             .Weight = Records[Index]->Weight };
@@ -111,6 +125,7 @@ static void ClearCopyLists(WorldPathObjects* self)
         GenericBuffer_Clear(&self->_copyLists[Index].Copies);
         GenericBuffer_Clear(&self->_copyLists[Index].Shapes);
         GenericBuffer_Clear(&self->_copyLists[Index].Placements);
+        GenericBuffer_Clear(&self->_copyLists[Index].Picks);
     }
 }
 
@@ -275,7 +290,7 @@ static void MakePieces(PathObjectRebuild* build)
         bool IsCut = (Piece->CutStart > 0.0f) || (Piece->CutEnd > 0.0f);
         float Nominal = PathObjectMeasure_GetLength(&ModelBuild->Measure, &Slot->Settings);
         bool IsBent = (((Slot->Settings.Curve == PathObjectCurve_Bent) && (Nominal > 0.0f)) || IsCut)
-            && (Piece->End > Piece->Start);
+            && (Piece->End > Piece->Start) && (ModelBuild->Prefab == NULL);
         for (uint32_t Side = 0U; Side < Sides; Side++)
         {
             if (IsBent)
@@ -292,6 +307,31 @@ static void MakePieces(PathObjectRebuild* build)
     Self->_stats.PieceCount += PieceCount;
 }
 
+/* Lets go of the prefabs a rebuild looked at: their pieces hold them through the prefabs system, and a hold of its own here would keep a
+ * prefab from reloading. */
+static void ReleasePrefabs(PathObjectRebuild* build)
+{
+    WorldPathObjects* Self = build->System;
+    AssetTypeID Type = ASSET_TYPE_ID_INVALID;
+    Error Result = AssetManager_GetAssetTypeByName(Self->_assets, ASSET_TYPE_NAME_PREFAB, &Type);
+    Error_Deconstruct(&Result);
+    for (uint32_t Slot = 0U; Slot < (uint32_t)PathObjectSlot_Count; Slot++)
+    {
+        for (uint32_t ModelIndex = 0U; ModelIndex < Self->_slotBuilds[Slot].ModelCount; ModelIndex++)
+        {
+            PathObjectSlotModel* Held = &Self->_slotBuilds[Slot].Models[ModelIndex];
+            if (Held->Prefab == NULL)
+            {
+                continue;
+            }
+            Held->Prefab = NULL;
+            // Two models of one prefab: the second finds it released already, which is no matter.
+            Result = AssetManager_ReleaseAsset(Self->_assets, Type, Held->Record->Prefab, Self->_assetUser);
+            Error_Deconstruct(&Result);
+        }
+    }
+}
+
 /* Writes what came out on the children. */
 static void WriteChildren(PathObjectRebuild* build)
 {
@@ -301,7 +341,14 @@ static void WriteChildren(PathObjectRebuild* build)
     {
         for (uint32_t ModelIndex = 0U; ModelIndex < Self->_slotBuilds[Slot].ModelCount; ModelIndex++)
         {
-            WorldPathObjectsChildren_WriteCopies(build, (PathObjectSlot)Slot, ModelIndex);
+            if (Self->_slotBuilds[Slot].Models[ModelIndex].Prefab != NULL)
+            {
+                WorldPathObjectsChildren_WritePrefabCopies(build, (PathObjectSlot)Slot, ModelIndex);
+            }
+            else
+            {
+                WorldPathObjectsChildren_WriteCopies(build, (PathObjectSlot)Slot, ModelIndex);
+            }
         }
     }
     const PathObjectBentPart* Parts = (const PathObjectBentPart*)Self->_parts._data;
@@ -345,27 +392,9 @@ static void RunRebuild(WorldPathObjects* self, PathObjectState* state, WorldPath
             MakePieces(&Build);
             WriteChildren(&Build);
         }
+        ReleasePrefabs(&Build);
     }
     WorldPathObjectsChildren_RemoveUnused(self, state);
-}
-
-/* The state of a component's serial, or NULL. A list in the states' order costs one comparison each: the search goes on from the
- * last one found. */
-static PathObjectState* FindState(WorldPathObjects* self, uint64_t serial)
-{
-    PathObjectState* States = (PathObjectState*)self->_states._data;
-    size_t Count = self->_states._count;
-    for (size_t Step = 0U; Step < Count; Step++)
-    {
-        size_t Index = self->_stateCursor + Step;
-        Index = (Index < Count) ? Index : (Index - Count);
-        if (States[Index].Serial == serial)
-        {
-            self->_stateCursor = ((Index + 1U) < Count) ? (Index + 1U) : 0U;
-            return &States[Index];
-        }
-    }
-    return NULL;
 }
 
 /* The children a state holds go, its counts leave the stats and its own memory is freed. */
@@ -378,46 +407,47 @@ static void DropState(WorldPathObjects* self, PathObjectState* state)
     Memory_Free(state->Children._data);
 }
 
-/* Matches the states to the components: a state for each component, in their order, and none for a component that went (its
- * children go, unless its object took them along). */
+static bool IsStateListed(GenericBuffer* buffer, GenericBufferElementData element, const UserData* userData)
+{
+    (void)buffer;
+    (void)userData;
+    return ((const PathObjectState*)element._element)->IsListed;
+}
+
+/* Matches the states to the components: a state for each component and none for a component that went (its children go, unless its
+ * object took them along). The components and the states both stand in the order the components were added, the order of their serials,
+ * so one walk along both matches them, whatever came and went. */
 static void RematchStates(WorldPathObjects* self)
 {
     size_t Count = 0U;
     WorldComponent* const* Components = World_GetComponents(self->_world, WorldComponentType_PathObject, &Count);
     PathObjectState* States = (PathObjectState*)self->_states._data;
+    size_t Next = 0U;
     for (size_t Index = 0U; Index < self->_states._count; Index++)
     {
-        States[Index].IsListed = false;
+        States[Index].IsListed = (Next < Count) && (States[Index].Serial == WorldComponent_GetSerial(Components[Next]));
+        Next += States[Index].IsListed ? 1U : 0U;
     }
-    self->_stateCursor = 0U;
-    for (size_t Component = 0U; Component < Count; Component++)
+    for (; Next < Count; Next++)
     {
-        uint64_t Serial = WorldComponent_GetSerial(Components[Component]);
-        PathObjectState* Found = FindState(self, Serial);
-        if (Found != NULL)
-        {
-            Found->IsListed = true;
-            continue;
-        }
         PathObjectState Fresh;
         Memory_Zero(&Fresh, sizeof(Fresh));
-        Fresh.Serial = Serial;
-        Fresh.ObjectId = WorldObject_GetId(WorldComponent_GetOwner(Components[Component]));
+        Fresh.Serial = WorldComponent_GetSerial(Components[Next]);
+        Fresh.ObjectId = WorldObject_GetId(WorldComponent_GetOwner(Components[Next]));
         Fresh.Watch = WorldPathWatch_Create();
         Fresh.IsListed = true;
         GenericBuffer_AllocateVariable(&Fresh.Children, 0U, sizeof(PathObjectChildRecord));
         GenericBuffer_AddLast(&self->_states, &Fresh);
     }
     States = (PathObjectState*)self->_states._data;
-    for (size_t Index = self->_states._count; Index > 0U; Index--)
+    for (size_t Index = 0U; Index < self->_states._count; Index++)
     {
-        if (!States[Index - 1U].IsListed)
+        if (!States[Index].IsListed)
         {
-            DropState(self, &States[Index - 1U]);
-            GenericBuffer_RemoveAt(&self->_states, Index - 1U);
+            DropState(self, &States[Index]);
         }
     }
-    self->_stateCursor = 0U;
+    GenericBuffer_Filter(&self->_states, IsStateListed, NULL);
     self->_stats.ComponentCount = Count;
 }
 
@@ -461,9 +491,9 @@ static void RefreshComponent(WorldPathObjects* self, PathObjectState* state, Wor
 
 
 // Functions.
-void WorldPathObjectsInternal_Warn(const WorldPathObjects* self, const WorldObject* object, const char* format, ...)
+void WorldPathObjectsInternal_Warn(WorldPathObjects* self, const WorldObject* object, const char* format, ...)
 {
-    if (self->_logger == NULL)
+    if ((self->_logger == NULL) || (self->_warningCount >= WORLD_PATH_OBJECTS_MAX_WARNINGS))
     {
         return;
     }
@@ -476,10 +506,22 @@ void WorldPathObjectsInternal_Warn(const WorldPathObjects* self, const WorldObje
     {
         return;
     }
+    // What a file names reaches the log: as text only.
     const unsigned char* Name = WorldObject_GetName(object);
+    char PrintableName[128];
+    char Printable[sizeof(Text)];
+    AssetJSON_CopyPrintable((Name != NULL) ? Name : (const unsigned char*)u8"", PrintableName, sizeof(PrintableName));
+    AssetJSON_CopyPrintable((const unsigned char*)Text, Printable, sizeof(Printable));
     Error Result = Logger_LogFormatted(self->_logger, LogLevel_Warning, (const unsigned char*)u8"WorldPathObjects: object %"
-        PRIu64 " (\"%s\") %s", WorldObject_GetId(object), (Name != NULL) ? (const char*)Name : "", Text);
+        PRIu64 " (\"%s\") %s", WorldObject_GetId(object), PrintableName, Printable);
     Error_Deconstruct(&Result);
+    self->_warningCount++;
+    if (self->_warningCount == WORLD_PATH_OBJECTS_MAX_WARNINGS)
+    {
+        Result = Logger_LogFormatted(self->_logger, LogLevel_Warning, (const unsigned char*)u8"WorldPathObjects: that is %zu warnings, so it stays quiet "
+            "from here on.", self->_warningCount);
+        Error_Deconstruct(&Result);
+    }
 }
 
 Error WorldPathObjects_Create(World* world, WorldCollision* collision, AssetManager* assets, Logger* logger,
@@ -523,6 +565,7 @@ Error WorldPathObjects_Create(World* world, WorldCollision* collision, AssetMana
         GenericBuffer_AllocateVariable(&Self->_copyLists[Index].Copies, 0U, sizeof(PropertyInstanceEntry));
         GenericBuffer_AllocateVariable(&Self->_copyLists[Index].Shapes, 0U, sizeof(CollisionShape));
         GenericBuffer_AllocateVariable(&Self->_copyLists[Index].Placements, 0U, sizeof(Matrix4Double));
+        GenericBuffer_AllocateVariable(&Self->_copyLists[Index].Picks, 0U, sizeof(uint32_t));
     }
     *outSystem = Self;
     return Error_CreateSuccess();
@@ -534,7 +577,21 @@ void WorldPathObjects_Destroy(WorldPathObjects* self)
     {
         return;
     }
+    // What all of them made goes in one go: state by state it would walk the world's lists once per path object.
+    GenericBuffer Ids;
+    GenericBuffer_AllocateVariable(&Ids, 0U, sizeof(uint64_t));
     PathObjectState* States = (PathObjectState*)self->_states._data;
+    for (size_t Index = 0U; Index < self->_states._count; Index++)
+    {
+        PathObjectChildRecord* Records = (PathObjectChildRecord*)States[Index].Children._data;
+        for (size_t Child = 0U; Child < States[Index].Children._count; Child++)
+        {
+            GenericBuffer_AddLast(&Ids, &Records[Child].ObjectId);
+        }
+    }
+    Error RemoveResult = World_RemoveObjects(self->_world, (const uint64_t*)Ids._data, Ids._count);
+    Error_Deconstruct(&RemoveResult);
+    Memory_Free(Ids._data);
     for (size_t Index = 0U; Index < self->_states._count; Index++)
     {
         DropState(self, &States[Index]);
@@ -559,6 +616,7 @@ void WorldPathObjects_Destroy(WorldPathObjects* self)
         Memory_Free(self->_copyLists[Index].Copies._data);
         Memory_Free(self->_copyLists[Index].Shapes._data);
         Memory_Free(self->_copyLists[Index].Placements._data);
+        Memory_Free(self->_copyLists[Index].Picks._data);
     }
     Memory_Free(self->_copyLists);
     // The collision world lets go of the placed shapes it holds now, for they borrow from the world models that go next.
@@ -595,6 +653,33 @@ void WorldPathObjects_Update(WorldPathObjects* self)
     }
     self->_componentSetVersion = World_GetComponentSetVersion(self->_world);
     self->_hasComponentSetVersion = !IsAnyGone;
+}
+
+void WorldPathObjects_Rebuild(WorldPathObjects* self)
+{
+    PathObjectState* States = (PathObjectState*)self->_states._data;
+    for (size_t Index = 0U; Index < self->_states._count; Index++)
+    {
+        Memory_Free(States[Index].AssetName);
+        States[Index].AssetName = NULL;
+        States[Index].Asset = NULL;
+        States[Index].HasBuilt = false;
+        States[Index].HasWarnedAsset = false;
+        States[Index].HasWarnedLimit = false;
+        States[Index].HasWarnedModel = false;
+        States[Index].HasWarnedZeroMiddle = false;
+        States[Index].HasWarnedBudget = false;
+        States[Index].HasWarnedShapes = false;
+        States[Index].HasWarnedCopies = false;
+        States[Index].HasWarnedChildren = false;
+        States[Index].HasWarnedGround = false;
+        States[Index].HasWarnedPlace = false;
+    }
+    // Measured by the asset's address, which the next load may give another.
+    GenericBuffer_Clear(&self->_measures);
+    self->_warningCount = 0U;
+    Error Result = AssetManager_ReleaseAllAssetsForUser(self->_assets, self->_assetUser);
+    Error_Deconstruct(&Result);
 }
 
 void WorldPathObjects_SetLimits(WorldPathObjects* self, const WorldPathObjectsLimits* limits)

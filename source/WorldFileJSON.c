@@ -645,6 +645,47 @@ Error WorldFile_ReadJSON(const unsigned char* bytes, size_t byteCount, const Wor
     return Result;
 }
 
+Error WorldFile_ReadObjectsJSON(JSONCompound* root, uint64_t formatVersion, JSONObjectPool* pool,
+    const WorldFileReadOptions* options, size_t maxObjectCount, World* outWorld)
+{
+    if ((root == NULL) || (pool == NULL) || (options == NULL) || (outWorld == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "WorldFile_ReadObjectsJSON: root, pool, options and outWorld must not be NULL.");
+    }
+    WorldFileLoad Load;
+    Error Result = WorldFileLoad_Begin(&Load, options, outWorld, ErrorCode_InvalidJSON);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Load.JSONPool = pool;
+    Result = WorldFileLoad_SetFormatVersion(&Load, formatVersion);
+    JSONObjectValue Objects;
+    bool HasObjects = false;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = JSONCompound_GetOptional(root, WORLD_JSON_OBJECTS_KEY, &Objects, &HasObjects);
+    }
+    if ((Result.Code == ErrorCode_Success) && HasObjects && (Objects.Type == JSONValueType_Array)
+        && (JSONArray_GetElementCount(Objects.Value.Array) > maxObjectCount))
+    {
+        Result = Error_Construct4(ErrorCode_InvalidJSON, "\"objects\" holds %" PRIu64 " objects; at most %" PRIu64
+            " are allowed.", (uint64_t)JSONArray_GetElementCount(Objects.Value.Array), (uint64_t)maxObjectCount);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ReadObjects(&Load, root);
+    }
+    if ((Result.Code == ErrorCode_Success) && (Load.UnknownNames._count > 0U))
+    {
+        const WorldFileUnknownName* First = (const WorldFileUnknownName*)Load.UnknownNames._data;
+        Result = Error_Construct4(ErrorCode_InvalidJSON, "object %" PRIu64 " holds an unknown name: \"%s\" (%s).",
+            First->FirstObjectId, (const char*)First->Name, (First->Where != NULL) ? (const char*)First->Where : "a component");
+    }
+    return (Result.Code == ErrorCode_Success) ? WorldFileLoad_Finish(&Load, false, 0U) : WorldFileLoad_Fail(&Load, Result);
+}
+
 Error WorldFile_WriteJSON(const World* world, GenericBuffer* outBytes)
 {
     if ((world == NULL) || (outBytes == NULL))

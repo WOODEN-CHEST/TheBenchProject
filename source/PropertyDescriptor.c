@@ -4,6 +4,7 @@
 #include "PropertyDescriptorInternal.h"
 #include "AssetManager.h"
 #include "DataMap.h"
+#include "DataValue.h"
 #include "GameCalendar.h"
 #include "NamespacedKey.h"
 #include "wr/WRMath.h"
@@ -130,6 +131,8 @@ static size_t GetStorageSize(PropertyType type)
             return sizeof(PropertyInstanceList*);
         case PropertyType_RecordList:
             return sizeof(PropertyRecordList*);
+        case PropertyType_DataValue:
+            return sizeof(DataValue*);
         case PropertyType_Enum:
             return 0U;
     }
@@ -178,7 +181,23 @@ static const void* GetOwnedData(PropertyType type, const PropertyData* data)
     {
         return data->RecordListValue;
     }
+    if (type == PropertyType_DataValue)
+    {
+        return data->DataValueValue;
+    }
     return (type == PropertyType_FloatList) ? (const void*)data->FloatListValue : (const void*)data->StringValue;
+}
+
+/* An owned copy of a DataValue row's value on the heap; NULL for NULL. */
+static DataValue* CloneDataValue(const DataValue* value)
+{
+    if (value == NULL)
+    {
+        return NULL;
+    }
+    DataValue* Copy = Memory_Allocate(sizeof(DataValue));
+    *Copy = DataValue_Clone(value);
+    return Copy;
 }
 
 /* An owned copy of an owned type's value; NULL for NULL (and for an empty map or list). */
@@ -199,6 +218,10 @@ static void* CloneOwned(PropertyType type, const void* value)
     if (type == PropertyType_RecordList)
     {
         return PropertyRecordList_Clone(value);
+    }
+    if (type == PropertyType_DataValue)
+    {
+        return CloneDataValue(value);
     }
     return (type == PropertyType_FloatList) ? (void*)PropertyFloatList_Clone(value) : (void*)CloneString(value);
 }
@@ -592,6 +615,44 @@ static Error CheckRecordList(const PropertyTable* table, const PropertyDescripto
 }
 
 
+/* "be a compound", "hold no key", "be a valid value; speeds[1]: the float must be finite", "take at most 65536 bytes". */
+static Error CheckDataValue(const PropertyTable* table, const PropertyDescriptor* descriptor, const DataValue* value)
+{
+    if (value == NULL)
+    {
+        return Error_CreateSuccess();
+    }
+    if (descriptor->Rules.IsCompoundOnly && (value->Type != DataType_Compound))
+    {
+        return MakeRuleError(table, descriptor, "be a compound");
+    }
+    if (value->Type == DataType_Tag)
+    {
+        return MakeRuleError(table, descriptor, "hold a value");
+    }
+    if (DataValue_HoldsKey(value))
+    {
+        return MakeRuleError(table, descriptor, "hold no key");
+    }
+    Error ValueResult = DataValue_Validate(value, NULL);
+    if (ValueResult.Code != ErrorCode_Success)
+    {
+        char Text[PROPERTY_RULE_TEXT_SIZE + 256U];
+        snprintf(Text, sizeof(Text), "be a valid value; %s", (ValueResult.Message != NULL) ? (const char*)ValueResult.Message
+            : "invalid");
+        Error_Deconstruct(&ValueResult);
+        return MakeRuleError(table, descriptor, Text);
+    }
+    if (DataValue_GetByteSize(value, NULL) > descriptor->Rules.MaxLength)
+    {
+        char Text[PROPERTY_RULE_TEXT_SIZE];
+        snprintf(Text, sizeof(Text), "take at most %" PRIu64 " bytes", (uint64_t)descriptor->Rules.MaxLength);
+        return MakeRuleError(table, descriptor, Text);
+    }
+    return Error_CreateSuccess();
+}
+
+
 // Static functions: the table check.
 static Error TableError(const PropertyTable* table, const PropertyDescriptor* descriptor, const char* problem)
 {
@@ -748,6 +809,19 @@ static Error CheckDescriptorRules(const PropertyTable* table, const PropertyDesc
     bool IsNameList = descriptor->Type == PropertyType_AssetNameList;
     bool IsInstanceList = descriptor->Type == PropertyType_InstanceList;
     bool IsRecordList = descriptor->Type == PropertyType_RecordList;
+    bool IsDataValue = descriptor->Type == PropertyType_DataValue;
+    if (IsDataValue && (Rules->MaxLength == 0U))
+    {
+        return TableError(table, descriptor, "a data value needs a MaxLength (bytes)");
+    }
+    if (IsDataValue && (descriptor->Default.DataValueValue != NULL))
+    {
+        return TableError(table, descriptor, "a data value must default to none (NULL)");
+    }
+    if (!IsDataValue && Rules->IsCompoundOnly)
+    {
+        return TableError(table, descriptor, "only data values take IsCompoundOnly");
+    }
     if (IsString && (Rules->MaxLength == 0U))
     {
         return TableError(table, descriptor, "a string needs a MaxLength");
@@ -779,10 +853,11 @@ static Error CheckDescriptorRules(const PropertyTable* table, const PropertyDesc
     {
         return TableError(table, descriptor, "a record list needs a MaxCount of 1 to PROPERTY_RECORD_LIST_MAX_COUNT");
     }
-    if ((!IsString && !IsMap && !IsNameList && (Rules->MaxLength != 0U)) || (!IsString && Rules->IsNullAllowed))
+    if ((!IsString && !IsMap && !IsNameList && !IsDataValue && (Rules->MaxLength != 0U))
+        || (!IsString && Rules->IsNullAllowed))
     {
-        return TableError(table, descriptor, "only strings take MaxLength and IsNullAllowed (and data maps and asset "
-            "name lists MaxLength)");
+        return TableError(table, descriptor, "only strings take MaxLength and IsNullAllowed (and data maps, asset name "
+            "lists and data values MaxLength)");
     }
     if (!IsMap && !IsList && !IsNameList && !IsInstanceList && !IsRecordList && (Rules->MaxCount != 0U))
     {
@@ -977,7 +1052,7 @@ bool PropertyInternal_IsOwnedType(PropertyType type)
 {
     return PropertyInternal_IsStringType(type) || (type == PropertyType_DataMap) || (type == PropertyType_FloatList)
         || (type == PropertyType_AssetNameList) || (type == PropertyType_InstanceList)
-        || (type == PropertyType_RecordList);
+        || (type == PropertyType_RecordList) || (type == PropertyType_DataValue);
 }
 
 PropertyFloatList* PropertyInternal_AllocateFloatList(size_t count)
@@ -1152,6 +1227,10 @@ void PropertyInternal_AdoptOwned(const PropertyDescriptor* descriptor, void* ins
         PropertyRecordList_Destroy(Previous);
         return;
     }
+    if (descriptor->Type == PropertyType_DataValue)
+    {
+        DataValue_Deconstruct(Previous);
+    }
     Memory_Free(Previous);
 }
 
@@ -1213,6 +1292,13 @@ bool PropertyInternal_AreDataEqual(PropertyType type, const PropertyData* a, con
             return PropertyInstanceList_Equals(a->InstanceListValue, b->InstanceListValue);
         case PropertyType_RecordList:
             return PropertyRecordList_Equals(a->RecordListValue, b->RecordListValue);
+        case PropertyType_DataValue:
+            if ((a->DataValueValue == NULL) || (b->DataValueValue == NULL))
+            {
+                const DataValue* Other = (a->DataValueValue == NULL) ? b->DataValueValue : a->DataValueValue;
+                return (Other == NULL) || ((Other->Type == DataType_Compound) && (DataValue_GetCompoundCount(Other) == 0U));
+            }
+            return DataValue_Equals(a->DataValueValue, b->DataValueValue);
     }
     return false;
 }
@@ -1327,6 +1413,8 @@ Error PropertyInternal_CheckData(const PropertyTable* table, const PropertyDescr
             return CheckInstanceList(table, descriptor, data->InstanceListValue);
         case PropertyType_RecordList:
             return CheckRecordList(table, descriptor, data->RecordListValue);
+        case PropertyType_DataValue:
+            return CheckDataValue(table, descriptor, data->DataValueValue);
     }
     return MakeRuleError(table, descriptor, "have a known property type");
 }
@@ -1482,8 +1570,15 @@ const unsigned char* PropertyType_GetName(PropertyType type)
             return u8"instance_list";
         case PropertyType_RecordList:
             return u8"record_list";
+        case PropertyType_DataValue:
+            return u8"data_value";
     }
     return u8"unknown";
+}
+
+bool PropertyValue_Equals(const PropertyValue* a, const PropertyValue* b)
+{
+    return (a != NULL) && (b != NULL) && (a->Type == b->Type) && PropertyInternal_AreDataEqual(a->Type, &a->Data, &b->Data);
 }
 
 Error PropertyFloatList_Create(const float* values, size_t count, PropertyFloatList** outList)

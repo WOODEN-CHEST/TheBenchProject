@@ -2538,7 +2538,7 @@ not while walking, and the UI takes it first while the pointer is over a widget)
 it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11, the
 digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/`, the backslash, Insert, Home, End, Page Up, Page Down, the
 keypad's digits, its `.`, `+`, `-`, `*`, `/` and Enter, Scroll Lock and Pause are taken already, and with Shift the grave
-key, L, keypad `-`, `/`, Enter, `+` and `*`, and Backspace with and without Shift, and with Control (with or without Shift); the keypad's `=`, Caps Lock, Num Lock, Print
+key, L, keypad `-`, `/`, Enter, `+` and `*`, and Backspace with and without Shift, and with Control (with or without Shift), and with Control the keypad's 1 to 6; the keypad's `=`, Caps Lock, Num Lock, Print
 Screen and Menu are free (with Shift the keypad's digits and `.` turn into other keys on Windows while Num Lock is on). Leave F12 free:
 raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
@@ -2595,6 +2595,9 @@ raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writi
   path's area hatched; those with their samples, frames and the ground under them), Shift with Backspace starts and stops one node
   of the walk moving, so its curve follows live; the camera entering and leaving the park is logged, and the I key's status tells
   how many objects a query finds inside it;
+- **the prefabs ([Prefabs.md](Prefabs.md); `source/WorldTestPrefabs.{h,c}`, test content):** Control with the keypad's 1 steps the plain bus stop's layout (an enum), 2 its
+  roof's colour, 3 moves its bench and 4 removes its bin (overrides, each back on the next press), 5 steps the plain house's wall colour (one value through nested copies to every bay), 6
+  reads the files again and makes every copy and path object anew: edit a prefab and press it; each logged, and the I key's status gives the counts;
 - **the path objects ([PathObjects.md](PathObjects.md); `source/WorldTestPathObjects.{h,c}`, test content):** Control with Backspace steps
   the walk's fence's fit (stretch, its ends resized by scaling, its ends cut, fixed and flush at both ends), Control and Shift with Backspace how its panels
   take a slope (shear, tilt, step); each is logged, and the moving node above carries the fence and the lamps along; the I key's status gives the counts;

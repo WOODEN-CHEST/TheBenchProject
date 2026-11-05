@@ -7,16 +7,16 @@ sets), and one loader per type: `source/SpriteSheetDefinition.c`, `source/Sprite
 `source/ShaderSource.{h,c}`), `source/ModelDefinition.c`, `source/TextureDefinition.c`, `source/WorldModelDefinition.c`,
 and the other types' (`WorldSpriteDefinition.c`, `CharacterDefinition.c`, `AnimationLibraryDefinition.c`,
 `AnimationGraphDefinition.c`, `TerrainDefinition.c`, `TerrainMaterialDefinition.c`, `ClimateDefinition.c`,
-`WaterMaterialDefinition.c`).
+`WaterMaterialDefinition.c`, `PathObjectDefinition.c`, `PrefabDefinition.c`).
 The definition JSON format is specified in `references/asset_structure.md`.
 
 ## Purpose
 
 Loads, shares and unloads game assets. The manager stores **definitions** (named recipes, normally JSON files
 under the asset search roots) and builds an asset from its definition the first time someone loads it. Asset
-types are registered at runtime (`AssetManager_CreateAssetType`); the eighteen standard types (sprite sheet, sprite
+types are registered at runtime (`AssetManager_CreateAssetType`); the nineteen standard types (sprite sheet, sprite
 animation, sound, font, shader, model, texture, world model, world sprite, character, animation library, animation
-graph, terrain, terrain material, climate, input actions, water material, path object) are
+graph, terrain, terrain material, climate, input actions, water material, path object, prefab) are
 registered together by `AssetManager_CreateStandardAssetTypes`. The wrappers it hands out are documented in
 [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md),
 [WorldModels.md](WorldModels.md), [WorldSprites.md](WorldSprites.md), [Characters.md](Characters.md),
@@ -300,10 +300,11 @@ with `TextureProperties_Apply`, the sprite sheet, sprite animation and font load
 | `terrain_material` (`terrain_materials`) | `AssetManager_LoadTerrainMaterial` | `TerrainMaterial` | Its settings (read through a property table) and its maps' pixels in one block, read from the image files of the texture assets it names (`AssetManager_LoadTexturePixels`: no texture asset is loaded, so it has no dependencies and needs no GL); the renderer makes texture arrays from them ([Terrain.md](Terrain.md)). |
 | `water_material` (`water_materials`) | `AssetManager_LoadWaterMaterial` | `WaterMaterial` | Only its own data: its settings (read through a property table that a later per-placement override can share; unknown keys are refused). The texture assets its maps name (two normal maps and a foam pattern, each optional) are held under its dependency user and unload right after it; a map that does not load fails the material, naming it. World models load the water materials their water slots and variants name as their dependencies ([WorldModels.md](WorldModels.md), "Water"). |
 | `path_object` (`path_objects`) | `AssetManager_LoadPathObject` | `PathObject` | Only its own data: its settings (read through a property table whose rows the path object component shares; unknown keys are refused, and writing a setting in a file sets its flag). The world models its slots name are held under its dependency user and unload right after it. Its settings must name a middle model, a model for every slot in use and no slot twice. See [PathObjects.md](PathObjects.md). |
+| `prefab` (`prefabs`) | `AssetManager_LoadPrefab` | `Prefab` | A template of its objects, in a world and a key registry of its own, and its declared properties. The definition keeps the file's bytes, checks them when it is read and reads them again at each load, so the two share nothing. No dependencies: what its objects name is loaded by those objects, and nested prefabs when a copy makes them, since a property may choose one. Unknown keys are refused everywhere. See [Prefabs.md](Prefabs.md). |
 
 Details per type: [SpriteSheet.md](SpriteSheet.md), [SpriteAnimation.md](SpriteAnimation.md), [GameAssets.md](GameAssets.md),
 [WorldModels.md](WorldModels.md) (water materials too: its "Water"), [WorldSprites.md](WorldSprites.md),
-[Terrain.md](Terrain.md), [PathObjects.md](PathObjects.md). The table lacks the
+[Terrain.md](Terrain.md), [PathObjects.md](PathObjects.md), [Prefabs.md](Prefabs.md). The table lacks the
 two animation types; [Animation.md](Animation.md) has them.
 
 ## Bulk operations (stepped loading)

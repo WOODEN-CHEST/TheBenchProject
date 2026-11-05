@@ -15,6 +15,10 @@
 /** The salts of a piece's random choices (PathObjectLayout_GetRandom). */
 #define SALT_FLIP 2U
 #define SALT_JITTER 3U
+/** The jitter channel after a copy's five that a prefab's piece picks its enum options from. */
+#define PREFAB_PICK_CHANNEL 5U
+/** A value in [0, 1) as 32 bits. */
+#define PICK_RANGE 4294967296.0f
 
 
 // Static functions: the ground.
@@ -403,9 +407,12 @@ void WorldPathObjectsRigid_AddCopy(PathObjectRebuild* rebuild, const PathObjectP
         return;
     }
     Input.Measure = ModelBuild->Measure;
-    Input.Slot = &slot->Settings;
+    // An object has no shear, as a copy has: a prefab's piece stands level instead.
+    PathObjectSlotRecord PrefabSettings = slot->Settings;
+    PrefabSettings.Slope = (slot->Settings.Slope == PathObjectSlope_Shear) ? PathObjectSlope_Step : slot->Settings.Slope;
+    Input.Slot = (ModelBuild->Prefab != NULL) ? &PrefabSettings : &slot->Settings;
     Input.IsTurned = WorldPathObjectsRigid_IsPieceFlipped(rebuild, piece, span, &slot->Settings) != (sideSign < 0.0f);
-    Input.KeepsLength = piece->IsJoint || ((slot->Settings.Slope == PathObjectSlope_Step) && !slot->Settings.Stretches
+    Input.KeepsLength = piece->IsJoint || ((Input.Slot->Slope == PathObjectSlope_Step) && !slot->Settings.Stretches
         && !piece->IsResized);
     for (uint32_t Channel = 0U; Channel < 5U; Channel++)
     {
@@ -416,6 +423,11 @@ void WorldPathObjectsRigid_AddCopy(PathObjectRebuild* rebuild, const PathObjectP
     if (!PathObjectPlacement_MakeCopy(&Input, &Copy))
     {
         return;
+    }
+    if (ModelBuild->Prefab != NULL)
+    {
+        // An object's scale stays even: stretched or widened, it would shear whatever is turned inside it.
+        Copy.Scale = (Vector3){ Copy.Scale.y, Copy.Scale.y, Copy.Scale.y };
     }
     // A copy's list holds so many, and its rows refuse a whole list for one copy too far out: such a copy is left out alone.
     PathObjectCopyList* List = WorldPathObjectsInternal_GetCopyList(rebuild->System, piece->Slot, piece->Model);
@@ -430,8 +442,16 @@ void WorldPathObjectsRigid_AddCopy(PathObjectRebuild* rebuild, const PathObjectP
         }
         return;
     }
-    if (GenericBuffer_AddLast(&List->Copies, &Copy))
+    if (!GenericBuffer_AddLast(&List->Copies, &Copy))
     {
-        WorldPathObjectsRigid_AddCopyCollision(rebuild, piece->Slot, piece->Model, &Copy, &slot->Settings);
+        return;
     }
+    if (ModelBuild->Prefab != NULL)
+    {
+        // What it picks its enums from, for this copy: its objects collide for themselves.
+        uint32_t Pick = (uint32_t)(WorldPathObjectsRigid_GetJitter(rebuild, piece, span, sideIndex, PREFAB_PICK_CHANNEL) * PICK_RANGE);
+        GenericBuffer_AddLast(&List->Picks, &Pick);
+        return;
+    }
+    WorldPathObjectsRigid_AddCopyCollision(rebuild, piece->Slot, piece->Model, &Copy, &slot->Settings);
 }

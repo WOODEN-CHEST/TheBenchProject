@@ -114,6 +114,10 @@ static Error ReadKeyText(const JSONRead* read, const JSONObjectValue* json, cons
         snprintf(Problem, sizeof(Problem), "%s must be a namespaced key, as text (\"town:street_lamp\")", what);
         return PathError(read, Problem);
     }
+    if (read->Keys == NULL)
+    {
+        return PathError(read, "a plain value holds no key");
+    }
     uint32_t Key = NAMESPACED_KEY_ID_NONE;
     Error Result = KeyRegistry_InternText(read->Keys, json->Value.String->_data, json->Value.String->_count,
         read->DefaultNamespace, &Key);
@@ -217,9 +221,33 @@ static Error MakeElementTypeError(const JSONRead* read, DataType found, DataType
     return PathError(read, Problem);
 }
 
+/* Whether a plain value's array holds both ints and floats: its ints read as floats, as vectors in files are written. Anything else in it
+ * is refused like any mixed list. */
+static bool IsMixedNumberArray(JSONArray* array, size_t count)
+{
+    bool HasInt = false;
+    bool HasFloat = false;
+    for (size_t Index = 0U; Index < count; Index++)
+    {
+        JSONObjectValue Element = JSONObjectValue_CreateNull();
+        Error Result = JSONArray_Get(array, Index, &Element);
+        Error_Deconstruct(&Result);
+        HasInt = HasInt || (Element.Type == JSONValueType_Integer);
+        HasFloat = HasFloat || (Element.Type == JSONValueType_RealNumber);
+    }
+    return HasInt && HasFloat;
+}
+
 static Error ReadArray(JSONRead* read, JSONArray* array, size_t level, DataValue* outValue)
 {
     size_t Count = JSONArray_GetElementCount(array);
+    bool IsPlain = read->Keys == NULL;
+    if ((Count == 0U) && IsPlain)
+    {
+        // A row's empty list, whatever it lists: nothing depends on the element type of a list with no elements.
+        Error EmptyResult = Charge(read, 1U);
+        return (EmptyResult.Code == ErrorCode_Success) ? DataValue_CreateList(DataType_Int, outValue) : EmptyResult;
+    }
     if (Count == 0U)
     {
         return PathError(read, "an empty list needs its element type: write {\"$list\": \"int\"} (or the type it holds)");
@@ -235,12 +263,17 @@ static Error ReadArray(JSONRead* read, JSONArray* array, size_t level, DataValue
     }
 
     DataValue List = DataValue_CreateTag();
+    bool AreIntsFloats = IsPlain && IsMixedNumberArray(array, Count);
     for (size_t Index = 0U; Index < Count; Index++)
     {
         JSONObjectValue ElementJSON;
         Error Result = JSONArray_Get(array, Index, &ElementJSON);
         DataValue Element = DataValue_CreateTag();
         DataPath_PushIndex(read->Path, Index);
+        if ((Result.Code == ErrorCode_Success) && AreIntsFloats && (ElementJSON.Type == JSONValueType_Integer))
+        {
+            ElementJSON = JSONObjectValue_CreateRealNumber((double)ElementJSON.Value.Integer);
+        }
         if (Result.Code == ErrorCode_Success)
         {
             Result = ReadValue(read, &ElementJSON, level + 1U, &Element);
@@ -457,19 +490,24 @@ static Error CreateTextWrapper(JSONObjectPool* pool, JSONWrapper wrapper, const 
     return (Result.Code == ErrorCode_Success) ? CreateWrapper(pool, wrapper, &Inner, outJSON) : Result;
 }
 
-static Error CreateDateTimeWrapper(JSONObjectPool* pool, int64_t dateTime, JSONObjectValue* outJSON)
+static Error CreateDateTimeWrapper(JSONObjectPool* pool, int64_t dateTime, bool isPlain, JSONObjectValue* outJSON)
 {
     unsigned char Storage[JSON_DATE_TIME_TEXT_CAPACITY];
     GenericBuffer Text;
     GenericBuffer_CreateConstant(&Text, Storage, sizeof(Storage), sizeof(unsigned char), 0U);
     Error Result = GameCalendar_FormatDateTime(dateTime, &Text);
-    return (Result.Code == ErrorCode_Success) ? CreateTextWrapper(pool, JSONWrapper_DateTime, Storage, outJSON) : Result;
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    return isPlain ? GameJSON_CreateStringValue(pool, Storage, outJSON)
+        : CreateTextWrapper(pool, JSONWrapper_DateTime, Storage, outJSON);
 }
 
 static Error CreateList(const DataValue* list, const KeyRegistry* keys, JSONObjectPool* pool, JSONObjectValue* outJSON)
 {
     size_t Count = DataValue_GetListCount(list);
-    if (Count == 0U)
+    if ((Count == 0U) && (keys != NULL))
     {
         return CreateTextWrapper(pool, JSONWrapper_List, DataType_GetName(DataValue_GetListElementType(list)), outJSON);
     }
@@ -550,11 +588,13 @@ Error DataValueInternal_ReadJSON(const JSONObjectValue* json, KeyRegistry* keys,
     return ReadValue(&Read, json, level, outValue);
 }
 
+/* With no registry (@p keys NULL) the plain form: a value that holds no key, written with no wrapper at all. */
 Error DataValueInternal_WriteJSON(const DataValue* value, const KeyRegistry* keys, JSONObjectPool* pool,
     JSONObjectValue* outJSON)
 {
     JSONObjectValue Inner;
     Error Result = Error_CreateSuccess();
+    bool IsPlain = keys == NULL;
     switch (value->Type)
     {
         case DataType_Tag:
@@ -572,18 +612,25 @@ Error DataValueInternal_WriteJSON(const DataValue* value, const KeyRegistry* key
         case DataType_String:
             return GameJSON_CreateStringValue(pool, value->StringValue, outJSON);
         case DataType_Key:
+            if (IsPlain)
+            {
+                return Error_Construct2(ErrorCode_InvalidOperation, "A plain value holds no key.");
+            }
             return CreateTextWrapper(pool, JSONWrapper_Key, KeyRegistry_GetText(keys, value->KeyValue), outJSON);
         case DataType_Object:
-            Result = GameJSON_CreateUInt64Value(pool, value->ObjectValue, &Inner);
-            return (Result.Code == ErrorCode_Success) ? CreateWrapper(pool, JSONWrapper_Object, &Inner, outJSON) : Result;
+            Result = GameJSON_CreateUInt64Value(pool, value->ObjectValue, IsPlain ? outJSON : &Inner);
+            return ((Result.Code == ErrorCode_Success) && !IsPlain) ? CreateWrapper(pool, JSONWrapper_Object, &Inner, outJSON)
+                : Result;
         case DataType_Vector3:
-            Result = GameJSON_CreateVector3DoubleValue(pool, value->Vector3Value, &Inner);
-            return (Result.Code == ErrorCode_Success) ? CreateWrapper(pool, JSONWrapper_Vector3, &Inner, outJSON) : Result;
+            Result = GameJSON_CreateVector3DoubleValue(pool, value->Vector3Value, IsPlain ? outJSON : &Inner);
+            return ((Result.Code == ErrorCode_Success) && !IsPlain) ? CreateWrapper(pool, JSONWrapper_Vector3, &Inner, outJSON)
+                : Result;
         case DataType_Color:
-            Result = GameJSON_CreateColorValue(pool, value->ColorValue, &Inner);
-            return (Result.Code == ErrorCode_Success) ? CreateWrapper(pool, JSONWrapper_Color, &Inner, outJSON) : Result;
+            Result = GameJSON_CreateColorValue(pool, value->ColorValue, IsPlain ? outJSON : &Inner);
+            return ((Result.Code == ErrorCode_Success) && !IsPlain) ? CreateWrapper(pool, JSONWrapper_Color, &Inner, outJSON)
+                : Result;
         case DataType_DateTime:
-            return CreateDateTimeWrapper(pool, value->DateTimeValue, outJSON);
+            return CreateDateTimeWrapper(pool, value->DateTimeValue, IsPlain, outJSON);
         case DataType_List:
             return CreateList(value, keys, pool, outJSON);
         case DataType_Compound:
@@ -635,6 +682,48 @@ Error DataValue_ReadJSON(const JSONObjectValue* json, KeyRegistry* keys, const u
     {
         DataValue_Deconstruct(outValue);
         KeyRegistry_TruncateTo(keys, KeyCheckpoint);
+    }
+    return Result;
+}
+
+Error DataValue_WritePlainJSON(const DataValue* value, JSONObjectPool* pool, JSONObjectValue* outJSON)
+{
+    if ((value == NULL) || (pool == NULL) || (outJSON == NULL) || (value->Type == DataType_Tag))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "DataValue_WritePlainJSON: value (not a tag), pool and outJSON must not be NULL.");
+    }
+    if (DataValue_HoldsKey(value))
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "DataValue_WritePlainJSON: a plain value holds no key.");
+    }
+    Error Result = DataValue_Validate(value, NULL);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    return DataValueInternal_WriteJSON(value, NULL, pool, outJSON);
+}
+
+Error DataValue_ReadPlainJSON(const JSONObjectValue* json, DataValue* outValue)
+{
+    if (outValue != NULL)
+    {
+        *outValue = DataValue_CreateTag();
+    }
+    if ((json == NULL) || (outValue == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "DataValue_ReadPlainJSON: json and outValue must not be NULL.");
+    }
+    DataPath Path = DataPath_Create();
+    Error Result = DataValueInternal_ReadJSON(json, NULL, NULL, 1U, &Path, NULL, outValue);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = DataValueInternal_CheckRead(outValue, NULL, &Path, ErrorCode_InvalidJSON);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        DataValue_Deconstruct(outValue);
     }
     return Result;
 }

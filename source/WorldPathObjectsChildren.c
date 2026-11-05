@@ -1,17 +1,51 @@
 // The path objects system's runtime children (WorldPathObjectsInternal.h): what a rebuild came to, written on them only where it
 // differs.
 
+#include <stdio.h>
 #include "WorldPathObjectsInternal.h"
 #include "CollisionShape.h"
+#include "DataValue.h"
 #include "GameModel.h"
 #include "WorldInternal.h"
 #include "WorldModelComponent.h"
 #include "WorldModelInstancesComponent.h"
+#include "WorldPrefabComponent.h"
+#include "WorldPrefabs.h"
 #include "raylib/raymath.h"
 #include "wr/WRMemory.h"
 
 
+// Macros.
+/** Room for a prefab piece's name. */
+#define PREFAB_PIECE_NAME_CAPACITY ((size_t)64)
+/** How many salts a prefab piece tries for its id. */
+#define PREFAB_PIECE_MAX_SALTS 64U
+/** A multiplier that spreads a copy's pick over its enum properties (the golden ratio's, 32 bits). */
+#define PREFAB_PICK_SPREAD 2654435761U
+/** MurmurHash3's 32-bit finalizer. */
+#define PREFAB_PICK_MIX_FIRST 0x85EBCA6BU
+#define PREFAB_PICK_MIX_SECOND 0xC2B2AE35U
+#define PREFAB_PICK_MIX_SHIFT_FIRST 16U
+#define PREFAB_PICK_MIX_SHIFT_SECOND 13U
+
+
 // Static functions: finding and making.
+/* A prefab's piece: a derived id from the path object's own, its slot, its model and its index, so what a script holds of a lamp in a
+ * row survives a load, as long as the row keeps its pieces. */
+static Error CreatePrefabPiece(World* world, uint64_t ownerId, PathObjectSlot slot, uint32_t model, uint32_t index, WorldObject** outChild)
+{
+    char Name[PREFAB_PIECE_NAME_CAPACITY];
+    snprintf(Name, sizeof(Name), "path_object_piece_%u_%u_%u", (unsigned int)slot, (unsigned int)model, (unsigned int)index);
+    Error Result = Error_Construct2(ErrorCode_InvalidOperation, "no id is free.");
+    for (uint32_t Salt = 0U; (Salt < PREFAB_PIECE_MAX_SALTS) && (Result.Code != ErrorCode_Success); Salt++)
+    {
+        Error_Deconstruct(&Result);
+        Result = World_CreateDerivedObject(world, (const unsigned char*)Name,
+            WorldPrefabs_DeriveObjectId(ownerId, (const unsigned char*)Name, Salt), outChild);
+    }
+    return Result;
+}
+
 /* The child for a slot, a model and a part, made when it does not exist. NULL only when the world refuses it. */
 static WorldObject* FindOrMakeChild(PathObjectRebuild* rebuild, PathObjectChildKind kind, PathObjectSlot slot, uint32_t model,
     uint32_t part)
@@ -19,8 +53,12 @@ static WorldObject* FindOrMakeChild(PathObjectRebuild* rebuild, PathObjectChildK
     World* TheWorld = rebuild->System->_world;
     PathObjectState* State = rebuild->State;
     PathObjectChildRecord* Records = (PathObjectChildRecord*)State->Children._data;
-    for (size_t Index = 0U; Index < State->Children._count; Index++)
+    size_t Count = State->Children._count;
+    // From the last one found: a rebuild writes them in the order they were made, so a run of a thousand lamps costs a thousand looks.
+    for (size_t Step = 0U; Step < Count; Step++)
     {
+        size_t Index = rebuild->ChildCursor + Step;
+        Index = (Index < Count) ? Index : (Index - Count);
         PathObjectChildRecord* Record = &Records[Index];
         if ((Record->Kind == kind) && (Record->Slot == slot) && (Record->Model == model) && (Record->Part == part))
         {
@@ -28,10 +66,12 @@ static WorldObject* FindOrMakeChild(PathObjectRebuild* rebuild, PathObjectChildK
             if (World_TryGetObject(TheWorld, Record->ObjectId, &Found))
             {
                 Record->IsUsed = true;
+                rebuild->ChildCursor = ((Index + 1U) < Count) ? (Index + 1U) : 0U;
                 return Found;
             }
             GenericBuffer_RemoveAt(&State->Children, Index);
             rebuild->System->_stats.ChildCount--;
+            rebuild->ChildCursor = 0U;
             break; // removed from outside: made again below
         }
     }
@@ -46,8 +86,9 @@ static WorldObject* FindOrMakeChild(PathObjectRebuild* rebuild, PathObjectChildK
         return NULL;
     }
     WorldObject* Child = NULL;
-    Error Result = World_CreateObject(TheWorld, (kind == PathObjectChildKind_Part) ? (const unsigned char*)u8"path_object_part"
-        : (const unsigned char*)u8"path_object_copies", &Child);
+    Error Result = (kind == PathObjectChildKind_PrefabCopy) ? CreatePrefabPiece(TheWorld, State->ObjectId, slot, model, part, &Child)
+        : World_CreateObject(TheWorld, (kind == PathObjectChildKind_Part) ? (const unsigned char*)u8"path_object_part"
+            : (const unsigned char*)u8"path_object_copies", &Child);
     if (Result.Code != ErrorCode_Success)
     {
         Error_Deconstruct(&Result);
@@ -393,6 +434,131 @@ void WorldPathObjectsChildren_WriteCopies(PathObjectRebuild* rebuild, PathObject
     }
 }
 
+/* A copy's pick for one enum: every bit of both mixed, so two enums of one copy choose apart. */
+static uint32_t GetEnumPick(uint32_t pick, uint32_t property)
+{
+    uint32_t Mixed = pick ^ ((property + 1U) * PREFAB_PICK_SPREAD);
+    Mixed ^= Mixed >> PREFAB_PICK_MIX_SHIFT_FIRST;
+    Mixed *= PREFAB_PICK_MIX_FIRST;
+    Mixed ^= Mixed >> PREFAB_PICK_MIX_SHIFT_SECOND;
+    Mixed *= PREFAB_PICK_MIX_SECOND;
+    Mixed ^= Mixed >> PREFAB_PICK_MIX_SHIFT_FIRST;
+    return Mixed;
+}
+
+/* A copy's values: the model's, then a pick for every enum its values leave out, while it asks for that. */
+static DataValue MakePieceValues(const PathObjectSlotModel* model, uint32_t pick)
+{
+    DataValue Values = DataValue_CreateTag();
+    if (model->Record->Values != NULL)
+    {
+        Values = DataValue_Clone(model->Record->Values);
+    }
+    else
+    {
+        Error Result = DataValue_CreateCompound(&Values);
+        Error_Deconstruct(&Result);
+    }
+    size_t Count = model->Record->RandomizesEnums ? Prefab_GetPropertyCount(model->Prefab) : 0U;
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        const PrefabProperty* Property = Prefab_GetProperty(model->Prefab, Index);
+        if ((Property->Type != PrefabPropertyType_Enum) || (DataValue_FindCompoundEntry(&Values, Property->Name) != NULL))
+        {
+            continue;
+        }
+        const PrefabOption* Option = &Property->Options[GetEnumPick(pick, (uint32_t)Index) % Property->OptionCount];
+        DataValue Name = DataValue_CreateTag();
+        Error Result = DataValue_CreateString(Option->Name, &Name);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = DataValue_CompoundSet(&Values, Property->Name, &Name);
+        }
+        Error_Deconstruct(&Result);
+        DataValue_Deconstruct(&Name);
+    }
+    return Values;
+}
+
+/* Writes a row of a child's prefab component when it differs. */
+static bool SetPieceRow(WorldPrefabComponent* component, const unsigned char* key, const PropertyValue* value)
+{
+    const PropertyTable* Table = WorldPrefabComponent_GetPropertyTable();
+    PropertyValue Current;
+    Error Result = Properties_Get(Table, component, key, &Current);
+    if ((Result.Code == ErrorCode_Success) && PropertyValue_Equals(&Current, value))
+    {
+        return false;
+    }
+    Error_Deconstruct(&Result);
+    Result = Properties_Set(Table, component, key, value);
+    Error_Deconstruct(&Result);
+    return true;
+}
+
+/* Places a child, writing only what differs. */
+static bool PlaceChild(WorldObject* child, const PropertyInstanceEntry* copy)
+{
+    bool HasChanged = false;
+    if (!Vector3Double_EqualsClose(WorldObject_GetPosition(child), copy->Position, 0.0))
+    {
+        Error Result = WorldObject_SetPosition(child, copy->Position);
+        Error_Deconstruct(&Result);
+        HasChanged = true;
+    }
+    Vector3 Rotation = WorldObject_GetRotation(child);
+    if ((Rotation.x != copy->Rotation.x) || (Rotation.y != copy->Rotation.y) || (Rotation.z != copy->Rotation.z))
+    {
+        Error Result = WorldObject_SetRotation(child, copy->Rotation);
+        Error_Deconstruct(&Result);
+        HasChanged = true;
+    }
+    Vector3 Scale = WorldObject_GetScale(child);
+    if ((Scale.x != copy->Scale.x) || (Scale.y != copy->Scale.y) || (Scale.z != copy->Scale.z))
+    {
+        Error Result = WorldObject_SetScale(child, copy->Scale);
+        Error_Deconstruct(&Result);
+        HasChanged = true;
+    }
+    return HasChanged;
+}
+
+void WorldPathObjectsChildren_WritePrefabCopies(PathObjectRebuild* rebuild, PathObjectSlot slot, uint32_t modelIndex)
+{
+    WorldPathObjects* System = rebuild->System;
+    PathObjectCopyList* List = WorldPathObjectsInternal_GetCopyList(System, slot, modelIndex);
+    const PathObjectSlotModel* ModelBuild = &rebuild->Slots[slot].Models[modelIndex];
+    const PropertyInstanceEntry* Copies = (const PropertyInstanceEntry*)List->Copies._data;
+    const uint32_t* Picks = (const uint32_t*)List->Picks._data;
+    rebuild->State->CopyCount += List->Copies._count;
+    for (size_t Index = 0U; Index < List->Copies._count; Index++)
+    {
+        WorldObject* Child = FindOrMakeChild(rebuild, PathObjectChildKind_PrefabCopy, slot, modelIndex, (uint32_t)Index);
+        if (Child == NULL)
+        {
+            return;
+        }
+        WorldPrefabComponent* Component = WorldPrefabComponent_FromComponent(FindOrAddComponent(System->_world, Child,
+            WorldComponentType_Prefab));
+        if (Component == NULL)
+        {
+            continue;
+        }
+        bool HasChanged = PlaceChild(Child, &Copies[Index]);
+        PropertyValue Name = PropertyValue_FromAssetName(ModelBuild->Record->Prefab);
+        HasChanged = SetPieceRow(Component, (const unsigned char*)u8"prefab", &Name) || HasChanged;
+        DataValue Values = MakePieceValues(ModelBuild, Picks[Index]);
+        PropertyValue Row = PropertyValue_FromDataValue(&Values);
+        HasChanged = SetPieceRow(Component, (const unsigned char*)u8"values", &Row) || HasChanged;
+        DataValue_Deconstruct(&Values);
+        if (HasChanged)
+        {
+            rebuild->HasAnyChange = true;
+            System->_stats.WriteCount++;
+        }
+    }
+}
+
 /* The child of a part: its place, its rows and its generated model, written only when they differ. */
 void WorldPathObjectsChildren_WritePart(PathObjectRebuild* rebuild, const PathObjectBentPart* part)
 {
@@ -491,23 +657,29 @@ void WorldPathObjectsChildren_MarkUnused(PathObjectState* state)
     }
 }
 
-/* Removes the children no rebuild uses. */
+static bool IsChildUsed(GenericBuffer* buffer, GenericBufferElementData element, const UserData* userData)
+{
+    (void)buffer;
+    (void)userData;
+    return ((const PathObjectChildRecord*)element._element)->IsUsed;
+}
+
+/* Removes the children no rebuild uses, all in one go: one by one they would walk the world's lists once each. */
 void WorldPathObjectsChildren_RemoveUnused(WorldPathObjects* self, PathObjectState* state)
 {
+    GenericBuffer Ids;
+    GenericBuffer_AllocateVariable(&Ids, 0U, sizeof(uint64_t));
     PathObjectChildRecord* Records = (PathObjectChildRecord*)state->Children._data;
-    for (size_t Index = state->Children._count; Index > 0U; Index--)
+    for (size_t Index = 0U; Index < state->Children._count; Index++)
     {
-        if (Records[Index - 1U].IsUsed)
+        if (!Records[Index].IsUsed)
         {
-            continue;
+            GenericBuffer_AddLast(&Ids, &Records[Index].ObjectId);
         }
-        WorldObject* Child = NULL;
-        if (World_TryGetObject(self->_world, Records[Index - 1U].ObjectId, &Child))
-        {
-            Error Result = World_RemoveObject(self->_world, Records[Index - 1U].ObjectId);
-            Error_Deconstruct(&Result);
-        }
-        GenericBuffer_RemoveAt(&state->Children, Index - 1U);
-        self->_stats.ChildCount--;
     }
+    Error Result = World_RemoveObjects(self->_world, (const uint64_t*)Ids._data, Ids._count);
+    Error_Deconstruct(&Result);
+    self->_stats.ChildCount -= Ids._count;
+    Memory_Free(Ids._data);
+    GenericBuffer_Filter(&state->Children, IsChildUsed, NULL);
 }

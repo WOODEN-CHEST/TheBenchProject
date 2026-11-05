@@ -1843,6 +1843,7 @@ Error AssetManager_CreateStandardAssetTypes(AssetManager* self, StandardAssetTyp
             &outTypes->WaterMaterial },
         { ASSET_TYPE_NAME_PATH_OBJECT, ASSET_TYPE_DIRECTORY_PATH_OBJECT, PathObjectDefinition_Construct,
             &outTypes->PathObject },
+        { ASSET_TYPE_NAME_PREFAB, ASSET_TYPE_DIRECTORY_PREFAB, PrefabDefinition_Construct, &outTypes->Prefab },
     };
 
     for (size_t i = 0; i < (sizeof(Standard) / sizeof(Standard[0])); i++)
@@ -2794,6 +2795,12 @@ Error AssetManager_LoadWaterMaterial(AssetManager* self, const unsigned char* na
 Error AssetManager_LoadPathObject(AssetManager* self, const unsigned char* name, AssetUserID user, PathObject** outAsset)
 {
     return LoadStandard(self, (self != NULL) ? self->_standardTypes.PathObject : ASSET_TYPE_ID_INVALID, name, user,
+        (void**)outAsset);
+}
+
+Error AssetManager_LoadPrefab(AssetManager* self, const unsigned char* name, AssetUserID user, Prefab** outAsset)
+{
+    return LoadStandard(self, (self != NULL) ? self->_standardTypes.Prefab : ASSET_TYPE_ID_INVALID, name, user,
         (void**)outAsset);
 }
 

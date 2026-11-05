@@ -70,6 +70,10 @@ fibers on top. Keep it free of anything that could not be saved.
   finite, keys known to the registry, date_times inside the calendar, every element and entry. Messages say where:
   `speeds[1]: the float must be finite.`
 
+**Plain values.** `DataValue_ReadPlainJSON`, `_WritePlainJSON`, `_ReadPlainGHDF` and `_WritePlainGHDF` take no registry: a value that holds no key, standing
+for what a property table's row reads from JSON (`Properties_SetFromDataValue`), whose type only that row knows. Reading, a key is refused, a list that
+mixes ints and floats reads as floats (vectors in files are written so), and `[]` is an empty list. Writing, there are no wrappers: a vector3 is `[x, y, z]`, a color `"#rrggbb"`, an object an integer, a date_time its text. So a value need not read back as the same type: a color reads back as a string, which a colour row reads the same. `DataValue_HoldsKey` says whether a value holds a key anywhere.
+
 ## DataMap
 
 A map of key ids to values, sorted by id (binary search), with the bytes it counts (`DataMap_GetByteSize`: per entry the

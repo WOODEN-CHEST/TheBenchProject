@@ -31,6 +31,7 @@ This one doc covers the whole cohesive layer; every symbol has full Doxygen in i
 | World | `include/World.h`, `source/World.c`, `source/WorldData.c` (tags and data, the tag index), `source/WorldHierarchy.c` (parents, world matrices, effective flags, subtrees; also the `WorldObject_` functions about them) | Owns the objects and their components, mints ids, keeps the id map, the hierarchy and the per-type component arrays, borrows the key registry, keeps the tag index and the data byte count, holds the environment and its own asset user. |
 | WorldTransform (private) | `source/WorldTransform.h`, `source/WorldTransform.c` | The pure maths of transforms, in double: compose (DrawModelEx's order), the one decomposition back to position / Euler XYZ / scale, a local matrix under a parent, a bound on a matrix's stretch. Used by the hierarchy, the renderer's cache, collision and the characters. |
 | WorldQuery | `include/WorldQuery.h`, `source/WorldQuery.c` | Searches over the objects by tags, data, components, flags and place ([ObjectData.md](ObjectData.md)). |
+| WorldPrefabComponent | `include/WorldPrefabComponent.h`, `source/WorldPrefabComponent.c` | A copy of a prefab: its name, its values and its overrides ([Prefabs.md](Prefabs.md)). |
 
 `source/WorldInternal.h` is the layer's private header: the object's construction (objects are made by the world only),
 the object lookup (`WorldInternal_FindObject`), `WorldInternal_ComponentAfterSet` (the hook every component table calls
@@ -136,7 +137,9 @@ The world keeps the links (`source/WorldHierarchy.c`); the persisted value is th
   descendants) while the hierarchy is still in place, so a hook sees its object where it is; then the subtree is
   unlinked, the per-type arrays and the object list drop it in one pass each (the others keep their order), and the
   objects are destroyed. One call costs one pass over the object list and over each array the subtree used, whatever
-  its size. `World_Deconstruct` likewise runs every hook (each root's subtree children first) before destroying
+  its size. So objects that go by the hundred go through **`World_RemoveObjects(world, ids, count)`**: the same for any
+  number of them, for the work of one, however their subtrees overlap (ids nothing holds are skipped); one by one, a
+  thousand kit houses would take ten seconds to leave. `World_Deconstruct` likewise runs every hook (each root's subtree children first) before destroying
   anything. Hooks must not change the hierarchy (`WorldComponent.h`).
 - **Sockets.** An object may hang on a named **socket** of its parent's world model (a hand, a hook, a seat;
   [WorldModels.md](WorldModels.md)): **`World_SetParentSocket(world, childId, parentId, socket, keepWorldTransform)`**
@@ -204,10 +207,11 @@ carries **at most one component of each type**; a street lamp is one object with
 | `WorldComponentType_Screen` | 9 | `screen` | `WorldScreenComponent` (below, "Screen component") |
 | `WorldComponentType_Path` | 10 | `path` | `WorldPathComponent` ([Paths.md](Paths.md)) |
 | `WorldComponentType_PathObject` | 11 | `path_object` | `WorldPathObjectComponent` ([PathObjects.md](PathObjects.md)) |
+| `WorldComponentType_Prefab` | 12 | `prefab` | `WorldPrefabComponent` ([Prefabs.md](Prefabs.md)) |
 
 The values are explicit and never renumbered (world files save them). `WorldComponentType_Count` is the number
 of standard types; `WORLD_MAX_COMPONENT_TYPES` (32) is how many a world can hold, room for the types still to come
-(12 onward: scatter, prefabs, roads, an interactable, vehicles, rigid bodies) and for test-only types. Every
+(13 onward: scatter, roads, an interactable, vehicles, rigid bodies) and for test-only types. Every
 object holds one pointer per type.
 
 **The registry.** Each type has one `WorldComponentTypeInfo` (a static constant of its module, handed out by
@@ -510,7 +514,11 @@ the id counter (`_nextId`, starts at 1; 0 once every id was handed out: ids run 
 - **Objects:** `World_CreateObject(world, name, &object)` (the next id) and `World_CreateObjectWithId(world, name, id,
   &object)` (the loader's version: refuses 0, ids above `WORLD_OBJECT_ID_MAX` and used ids, and advances the counter past
   the id). `UINT64_MAX` is never an id, so a world file always has a next id to record; an object with the last id
-  uses the counter up, as does `World_EnsureNextObjectIdAtLeast` past it. `World_RemoveObject
+  uses the counter up, as does `World_EnsureNextObjectIdAtLeast` past it. `World_CreateDerivedObject(world, name, id, &object)`
+  makes a **runtime object whose id is derived** rather than handed out, the same each time from what makes the object
+  ([Prefabs.md](Prefabs.md), "Ids"): from `WORLD_OBJECT_DERIVED_ID_FIRST` (the upper half) to `WORLD_OBJECT_ID_MAX`, and it leaves the counter alone, so a
+  saved world's next id does not grow with what is made while it runs. The counter reaches that range only through a file that names such an id, and then
+  skips what is taken. `World_RemoveObject
   (world, id)` (its components first, then the object; ordered removal, so the other objects keep their order);
   `World_TryGetObject(world, id, &object)` (a hash lookup); `World_GetObjectCount` / `World_GetObjectByIndex` (a const
   world) for iteration in creation order. A new object is a root at the default transform. Removal takes the whole subtree (see
@@ -527,6 +535,8 @@ the id counter (`_nextId`, starts at 1; 0 once every id was handed out: ids run 
 - **Change tracking:** `World_GetObjectSetVersion` changes on every object creation and removal,
   `World_GetComponentSetVersion` on every component addition and removal (also with its object); property changes
   advance the object's and the component's own revisions instead, and data changes the object's data revision.
+  `World_GetComponentTypeRevision(world, type)` advances on any property change of any component of a type, so a system over
+  many components can tell a quiet tick with one comparison.
 - **Tags and data:** `World_SetData`, `World_TryGetData`, `World_RemoveData`, `World_AddTag`, `World_RemoveTag`,
   `World_HasTag`, `World_GetDataByteSize`, with the limits `WORLD_OBJECT_DATA_MAX_ENTRIES` (256),
   `WORLD_OBJECT_DATA_MAX_BYTES` (64 KiB) and `WORLD_DATA_MAX_BYTES` (16 MiB). **Queries:** `World_Query`,
@@ -569,7 +579,8 @@ The model is ready for them:
   2. scripts (later);
   3. transform drivers: scripted movers (the test frame's desk, door and pushing wall), then **the characters**
      (`WorldCharacters_Update`) last among them, so a platform moved this tick carries the characters on it
-     exactly; vehicles and physics later;
+     exactly; vehicles and physics later; then what generates objects: prefabs (`WorldPrefabs_Update`, which may make a fence), path
+     objects (`WorldPathObjects_Update`, whose pieces may be prefabs: they are made a tick later);
   4. the collision step: `WorldCollision_Step`, which syncs (the world matrices first), sweeps every
      collider that moved, pushes apart what overlaps and writes the pushes back;
   5. queued events: trigger enter and exit (`WorldCollision_GetTriggerEvents`, then `_ClearTriggerEvents`), contacts
@@ -718,6 +729,8 @@ The path component's table (`path_component`, next free wire id 5): `nodes` 1 (a
 `is_closed` 2, `up_mode` 3, `sample_spacing` 4. Its nodes' table (`path_node`, next free wire id 12): `position` 1, `mode` 2,
 `in_handle` 3, `out_handle` 4, `roll` 5, `width` 6, `scale` 7, `starts_section` 8, `skips_section` 9,
 `overrides_snaps_to_terrain` 10, `snaps_to_terrain` 11 ([Paths.md](Paths.md)).
+
+The prefab component's table (`prefab_component`): `prefab` 1, `values` 2, `object_overrides` 3; the next free id is 4 ([Prefabs.md](Prefabs.md)).
 
 The path object component's table (`path_object_component`): `path_object` 64, and the settings' rows it shares with the asset's table
 (`path_object`), 1 to 55, next free 56 (`source/PathObjectInternal.h`). Its slots' records (`path_object_slot`, next free wire id 83) and

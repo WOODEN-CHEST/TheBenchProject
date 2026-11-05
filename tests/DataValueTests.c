@@ -1099,11 +1099,192 @@ static void RefusedReadsForgetTheirKeys(TestRun* run)
 
 
 // Public functions.
+/* Parses @p text and reads it as a plain value. */
+static Error ReadPlainText(TestRun* run, JSONObjectPool* pool, const char* text, DataValue* outValue)
+{
+    *outValue = DataValue_CreateTag();
+    JSONObjectValue JSON;
+    if (!TestText_ParseJSON(run, pool, text, &JSON))
+    {
+        return Error_Construct2(ErrorCode_InvalidJSON, "the test's JSON did not parse");
+    }
+    Error Result = DataValue_ReadPlainJSON(&JSON, outValue);
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(pool, &JSON));
+    return Result;
+}
+
+static void APlainValueReadsWhatRowsWrite(TestRun* run)
+{
+    JSONObjectPool* Pool = NULL;
+    if (!TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)))
+    {
+        return;
+    }
+    DataValue Value;
+    // A list mixing ints and floats reads as floats, whichever comes first.
+    if (TEST_CHECK_SUCCESS(run, ReadPlainText(run, Pool, "[0, 35.5, 2]", &Value)))
+    {
+        TEST_CHECK(run, DataValue_GetListElementType(&Value) == DataType_Float);
+        TEST_CHECK(run, (DataValue_GetListCount(&Value) == 3U) && (DataValue_GetListElement(&Value, 0U)->FloatValue == 0.0)
+            && (DataValue_GetListElement(&Value, 1U)->FloatValue == 35.5) && (DataValue_GetListElement(&Value, 2U)->FloatValue == 2.0));
+    }
+    DataValue_Deconstruct(&Value);
+    if (TEST_CHECK_SUCCESS(run, ReadPlainText(run, Pool, "[1.5, 2]", &Value)))
+    {
+        TEST_CHECK(run, DataValue_GetListElementType(&Value) == DataType_Float);
+    }
+    DataValue_Deconstruct(&Value);
+    // Ints alone stay ints; nothing else mixes.
+    if (TEST_CHECK_SUCCESS(run, ReadPlainText(run, Pool, "[1, 2]", &Value)))
+    {
+        TEST_CHECK(run, DataValue_GetListElementType(&Value) == DataType_Int);
+    }
+    DataValue_Deconstruct(&Value);
+    TEST_CHECK_ERROR(run, ReadPlainText(run, Pool, "[1, \"x\"]", &Value), ErrorCode_InvalidJSON);
+    DataValue_Deconstruct(&Value);
+    TEST_CHECK_ERROR(run, ReadPlainText(run, Pool, "[1.5, true]", &Value), ErrorCode_InvalidJSON);
+    DataValue_Deconstruct(&Value);
+    // A row's empty list, whatever it lists.
+    if (TEST_CHECK_SUCCESS(run, ReadPlainText(run, Pool, "[]", &Value)))
+    {
+        TEST_CHECK(run, (Value.Type == DataType_List) && (DataValue_GetListCount(&Value) == 0U));
+    }
+    DataValue_Deconstruct(&Value);
+    // No key: there is no registry.
+    const char* const HoldsNoKey[] = { "holds no key", NULL };
+    TestText_CheckErrorMessage(run, ReadPlainText(run, Pool, "{ \"$key\": \"town:x\" }", &Value), ErrorCode_InvalidJSON, HoldsNoKey);
+    DataValue_Deconstruct(&Value);
+    TEST_CHECK_ERROR(run, ReadPlainText(run, Pool, "{ \"a\": [ { \"$key\": \"town:x\" } ] }", &Value), ErrorCode_InvalidJSON);
+    DataValue_Deconstruct(&Value);
+    TEST_CHECK_ERROR(run, ReadPlainText(run, Pool, "{ \"$type\": \"town:x\", \"a\": 1 }", &Value), ErrorCode_InvalidJSON);
+    DataValue_Deconstruct(&Value);
+    // Still every other rule: no null, no name past its rule, no deeper than the limit.
+    TEST_CHECK_ERROR(run, ReadPlainText(run, Pool, "[null]", &Value), ErrorCode_InvalidJSON);
+    DataValue_Deconstruct(&Value);
+    TEST_CHECK_ERROR(run, ReadPlainText(run, Pool, "[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]", &Value), ErrorCode_InvalidJSON);
+    DataValue_Deconstruct(&Value);
+    TEST_CHECK_ERROR(run, DataValue_ReadPlainJSON(NULL, &Value), ErrorCode_IllegalArgument);
+    DataValue_Deconstruct(&Value);
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+}
+
+static void APlainValueWritesNoWrappers(TestRun* run)
+{
+    JSONObjectPool* Pool = NULL;
+    if (!TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)))
+    {
+        return;
+    }
+    DataValue Compound = DataValue_CreateTag();
+    TEST_CHECK_SUCCESS(run, DataValue_CreateCompound(&Compound));
+    DataValue Tint = DataValue_FromColor((Color){ 0x2E, 0x4A, 0x7A, 255 });
+    DataValue Vector = DataValue_FromVector3(Vector3Double_Create(1.5, 2.0, -3.0));
+    DataValue Object = DataValue_FromObject(12U);
+    DataValue Empty = DataValue_CreateTag();
+    TEST_CHECK_SUCCESS(run, DataValue_CreateList(DataType_Float, &Empty));
+    TEST_CHECK_SUCCESS(run, DataValue_CompoundSet(&Compound, (const unsigned char*)u8"color", &Tint));
+    TEST_CHECK_SUCCESS(run, DataValue_CompoundSet(&Compound, (const unsigned char*)u8"empty", &Empty));
+    TEST_CHECK_SUCCESS(run, DataValue_CompoundSet(&Compound, (const unsigned char*)u8"object", &Object));
+    TEST_CHECK_SUCCESS(run, DataValue_CompoundSet(&Compound, (const unsigned char*)u8"vector", &Vector));
+    JSONObjectValue JSON;
+    if (TEST_CHECK_SUCCESS(run, DataValue_WritePlainJSON(&Compound, Pool, &JSON)))
+    {
+        GenericBuffer Text;
+        GenericBuffer_AllocateVariable(&Text, 0U, sizeof(unsigned char));
+        TEST_CHECK_SUCCESS(run, JSON_Serialize(&JSON, &Text, JSONSerializeFlags_None));
+        GenericBuffer_AppendByte(&Text, 0U);
+        const char* Written = (const char*)Text._data;
+        TEST_CHECK(run, strstr(Written, "$") == NULL);
+        TEST_CHECK(run, strstr(Written, "\"#2e4a7a\"") != NULL);
+        TEST_CHECK(run, strstr(Written, "[1.5") != NULL);
+        TEST_CHECK(run, strstr(Written, "\"empty\":[]") != NULL);
+        TEST_CHECK(run, strstr(Written, "\"object\":12") != NULL);
+        Memory_Free(Text._data);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &JSON));
+    }
+    DataValue_Deconstruct(&Compound);
+    // A key has no plain form, however deep.
+    DataValue Key = DataValue_FromKey(1U);
+    TEST_CHECK(run, DataValue_HoldsKey(&Key));
+    TEST_CHECK_ERROR(run, DataValue_WritePlainJSON(&Key, Pool, &JSON), ErrorCode_InvalidOperation);
+    DataValue Outer = DataValue_CreateTag();
+    DataValue List = DataValue_CreateTag();
+    TEST_CHECK_SUCCESS(run, DataValue_CreateCompound(&Outer));
+    TEST_CHECK_SUCCESS(run, DataValue_CreateList(DataType_Key, &List));
+    TEST_CHECK_SUCCESS(run, DataValue_ListAdd(&List, &Key));
+    TEST_CHECK(run, DataValue_HoldsKey(&List));
+    TEST_CHECK_SUCCESS(run, DataValue_CompoundSet(&Outer, (const unsigned char*)u8"keys", &List));
+    TEST_CHECK(run, DataValue_HoldsKey(&Outer));
+    TEST_CHECK_ERROR(run, DataValue_WritePlainJSON(&Outer, Pool, &JSON), ErrorCode_InvalidOperation);
+    DataValue_Deconstruct(&Outer);
+    // A typed compound holds one too, and it is that which is refused, with no complaint about a missing registry.
+    DataValue Typed = DataValue_CreateTag();
+    TEST_CHECK_SUCCESS(run, DataValue_CreateCompound(&Typed));
+    DataValue TypeKey = DataValue_FromKey(1U);
+    TEST_CHECK_SUCCESS(run, DataValue_CompoundSet(&Typed, (const unsigned char*)u8"$type", &TypeKey));
+    TEST_CHECK_ERROR(run, DataValue_WritePlainJSON(&Typed, Pool, &JSON), ErrorCode_InvalidOperation);
+    DataValue_Deconstruct(&Typed);
+    DataValue Number = DataValue_FromInt(1);
+    TEST_CHECK(run, !DataValue_HoldsKey(&Number));
+    TEST_CHECK(run, !DataValue_HoldsKey(NULL));
+    DataValue Tag = DataValue_CreateTag();
+    TEST_CHECK_ERROR(run, DataValue_WritePlainJSON(&Tag, Pool, &JSON), ErrorCode_IllegalArgument);
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+}
+
+static void APlainValueGoesThroughGHDFAsItIs(TestRun* run)
+{
+    JSONObjectPool* Pool = NULL;
+    GHDFObjectPool* Binary = NULL;
+    if (!TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)) || !TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&Binary)))
+    {
+        return;
+    }
+    DataValue Value;
+    if (TEST_CHECK_SUCCESS(run, ReadPlainText(run, Pool, "{ \"rotation\": [0, 35.5, 0], \"name\": \"#abcdef\", \"on\": true, \"n\": 3, \"f\": 2.5, \"e\": [] }", &Value)))
+    {
+        GHDFCompound* Compound = NULL;
+        DataValue Back = DataValue_CreateTag();
+        TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Binary, &Compound));
+        if (TEST_CHECK_SUCCESS(run, DataValue_WritePlainGHDF(&Value, Binary, Compound)) && TEST_CHECK_SUCCESS(run, DataValue_ReadPlainGHDF(Compound, &Back)))
+        {
+            TEST_CHECK(run, DataValue_Equals(&Value, &Back));
+        }
+        DataValue_Deconstruct(&Back);
+    }
+    DataValue_Deconstruct(&Value);
+    // A key is refused going in and coming out.
+    DataValue Key = DataValue_FromKey(1U);
+    GHDFCompound* Target = NULL;
+    TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Binary, &Target));
+    TEST_CHECK_ERROR(run, DataValue_WritePlainGHDF(&Key, Binary, Target), ErrorCode_InvalidOperation);
+    KeyRegistry Keys;
+    uint32_t Id = 0U;
+    TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys));
+    TEST_CHECK_SUCCESS(run, KeyRegistry_Intern(&Keys, (const unsigned char*)u8"town:x", &Id));
+    DataValue Real = DataValue_FromKey(Id);
+    GHDFCompound* Holding = NULL;
+    TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Binary, &Holding));
+    if (TEST_CHECK_SUCCESS(run, DataValue_WriteGHDF(&Real, &Keys, Binary, Holding)))
+    {
+        DataValue Read = DataValue_CreateTag();
+        const char* const HoldsNoKey[] = { "holds no key", NULL };
+        TestText_CheckErrorMessage(run, DataValue_ReadPlainGHDF(Holding, &Read), ErrorCode_Deserialize, HoldsNoKey);
+    }
+    KeyRegistry_Deconstruct(&Keys);
+    TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(Binary));
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+}
+
+
 void DataValueTests_Run(TestRun* run)
 {
     static const TestCase Cases[] =
     {
         { "equality_holds_across_every_type", EqualityHoldsAcrossEveryType },
+        { "a_plain_value_reads_what_rows_write", APlainValueReadsWhatRowsWrite },
+        { "a_plain_value_writes_no_wrappers", APlainValueWritesNoWrappers },
+        { "a_plain_value_goes_through_ghdf_as_it_is", APlainValueGoesThroughGHDFAsItIs },
         { "deep_copies_are_independent", DeepCopiesAreIndependent },
         { "lists_hold_one_element_type", ListsHoldOneElementType },
         { "depth_seventeen_is_refused", DepthSeventeenIsRefused },

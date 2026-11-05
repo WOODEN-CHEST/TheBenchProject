@@ -1,0 +1,24 @@
+{
+    "name": "tbp:test_prefab_lamp_row",
+    "models": [
+        {
+            "slot": "middle",
+            "prefab": "tbp:test_street_lamp",
+            "randomizes_enums": true
+        }
+    ],
+    "fit": "fixed",
+    "align": "between",
+    "uses_gap": true,
+    "gap": 11.0,
+    "seed": 5,
+    "slots": [
+        {
+            "slot": "middle",
+            "length": 0.0,
+            "side": "right",
+            "side_offset": 1.5,
+            "collision": "none"
+        }
+    ]
+}

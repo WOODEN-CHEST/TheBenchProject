@@ -1579,6 +1579,9 @@ start_cap  middle  separator  middle  separator  middle  end_cap
             "variant": "green",
             "tint": "#ffffff"                   // [OPTIONAL] each of its copies' tint
         }
+        // Or a prefab in place of a world model: each piece an object of its own (agents/PathObjects.md), a shear taken as a step, at an even scale, its
+        // length the slot's "length" or 0:
+        // { "slot": "middle", "prefab": "tbp:test_street_lamp", "values": { "light_color": "#ffd9a0" }, "randomizes_enums": true }
     ],
     "slots": [                                  // [OPTIONAL] the slots' settings, one record per slot that has any (below)
         { "slot": "separator", "length": 0.0 }
@@ -1657,3 +1660,85 @@ rails end inside the post, at corners too.
 
 `path_objects/`: `test_fence` (posts in three slots, one panel in the middle, the posts colliding), `test_hedge` (bent along the path, colliding as its mesh, flipped at random),
 `test_railing` (a plain rail bent along the path, posts every third metre, boxes), `test_lamp_row` (a lamp every 12 m, on both sides of the path).
+
+## Prefabs.
+
+A group of objects built once and placed many times (`agents/Prefabs.md`): a JSON file in `prefabs/`. A world's `prefab` block places a copy (`world_structure.md`, "The prefab block"). Unknown keys are refused everywhere.
+```
+{
+    "name": "tbp:test_bus_stop",
+    "format_version": 3,                        // the world file format its objects are in (world_structure.md)
+    "properties": {                             // [OPTIONAL] what a copy sets, by a local name; at most 256, shown in this order
+        "roof_color": {
+            "type": "color",                    // bool, int, float, color, vector, vector2, angle, enum, asset or string
+            "default": "#7a3b2e",               // required: the value where a copy sets none, as "targets" write it
+            "display_name": "Roof colour",      // [OPTIONAL] what the options panel calls it
+            "category": "Looks",                // [OPTIONAL] its group there
+            "description": "The roof's colour.",// [OPTIONAL] its tooltip
+            "targets": [                        // [OPTIONAL] what it writes; at most 1024
+                { "tag": "tbp:stop_roof", "row": "tint" }
+            ]
+        },
+        "bench_angle": {
+            "type": "angle",                    // degrees
+            "default": 0.0,
+            "minimum": -45.0,                   // [OPTIONAL] numbers and vectors: what a value may be, each axis of a vector
+            "maximum": 45.0,                    // [OPTIONAL]
+            "targets": [ { "object": "bench", "row": "rotation", "axis": "y" } ]
+        },
+        "layout": {
+            "type": "enum",                     // a dropdown: a value names an option
+            "default": "open",
+            "options": {                        // at least one, at most 256, by a local name: each a list of targets with their values
+                "open": [ { "object": "left_side", "row": "is_enabled", "value": false } ],
+                "closed": []
+            },
+            "option_display_names": { "open": "Open sides" }  // [OPTIONAL] enums only, for options it has
+        },
+        "sign_model": {
+            "type": "asset",                    // an asset's name
+            "default": "tbp:test_stop_sign",
+            "asset_type": "world_model",        // [OPTIONAL] the type the panel offers; none: any
+            "targets": [ { "object": "sign", "component": "model", "row": "world_model" } ]
+        },
+        "lamp_color": {
+            "type": "color",
+            "default": "#ffd9a0",
+            "targets": [ { "object": "lamp", "property": "light_color" } ]  // a property of the prefab that object holds
+        }
+    },
+    "objects": [                                // as a world file's: one root; at most 16384
+        { "id": 1, "name": "root" },            // "name" is required: a local name of its own inside the prefab
+        { "id": 2, "parent": 1, "name": "bench", "position": [0.0, 0.0, 0.55],
+            "components": { "model": { "world_model": "tbp:test_stop_bench" }, "collider": {} } },
+        { "id": 9, "parent": 1, "name": "lamp", "components": { "prefab": { "prefab": "tbp:test_street_lamp" } } }
+    ]
+}
+```
+
+A **target** names exactly one of `object` and `tag` (every object with it), and exactly one of `row` and `property`:
+
+| Key | |
+|---|---|
+| `object`, `tag` | What it reaches. A tag reaches the objects that also hold what it writes, at least one. |
+| `row` | A row of the object's table or, with `component`, of that component's (by its name in world files). Any row but `name`, `parent` and the tags and data. A property's value, or an option's `value`, must be what that row reads: `#rrggbb` for a colour, degrees for an angle, an enum's name. |
+| `component` | The component whose row it is; the object must have it. |
+| `axis` | `x`, `y`, `z` or `all`: a number written into that axis of a vector row, the others left as they are. |
+| `property` | A property of the prefab the object holds: a value passed on. |
+| `value` | An enum option's target only, and required there: what it sets. A property's targets write the property's value. |
+
+The file's own names, rows and values are checked when it is read: a default and an option's value through each row they reach. A `property` and its value are the nested prefab's, which a target may choose: that copy checks them, and warns. All of a prefab's targets reach at most 65 536 objects together, and its tag targets look through at most 4 194 304. In an object's `data`, a `$object` names an object of this file by its `id`: in a copy it names that object of the copy. A copy's objects are made in the order of the file, parents first; each property then writes in the order declared, then the copy's overrides.
+
+## Building kits.
+
+Buildings are assembled from a kit of pieces and saved as prefabs (`agents/Prefabs.md`). Pieces meet only if they share one set of rules. **Open question for the owner: the grid and the storey height.** The rules below use 1 m and 3 m, which the placeholder kit (`asset_source/scripts/placeholder_prefabs.py`) follows.
+
+- **One grid,** 1 m, and **one storey height,** 3 m, chosen before modelling. Every piece's size is a whole number of grid steps.
+- **Lengths** of 1, 2 and 4 m for walls, and 4 m for floors and roofs.
+- **Pivot** on the piece's floor corner: a wall's outer face lies on its grid line, the wall runs along +X from the pivot, its inside toward +Z. Placed by turning it in steps of 90 degrees, a wall's outer face stays on the grid line. In Blender, Y up in the game is Z up: model in Front view with the outside facing you.
+- **A floor's top** on the storey's floor, Y = 0, its thickness below. A floor a hair short of the grid never shows its edge through a wall's outer face.
+- **What fills a corner** is its own piece: a post a wall's thickness on a side, outside the grid line.
+- **LODs** for pieces seen from afar, as any world model's. **Collision:** a simple box, or `"collision": "bounds"`: a house is many pieces, and each piece's collider is walked through by everything near it.
+- **Colours** from material variants or a tint: model walls and roofs pale, so a tint shows. Dirt and signs from decals.
+- **A piece is an ordinary world model.** A bay of a wall that may be a wall, a window or a door is a small prefab with an enum; a house is a prefab of those.
+

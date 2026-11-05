@@ -5,6 +5,7 @@
 #include <inttypes.h>
 #include "PropertyDescriptorInternal.h"
 #include "DataMap.h"
+#include "DataValue.h"
 #include "GameGHDF.h"
 #include "NamespacedKey.h"
 #include "wr/WRMemory.h"
@@ -413,6 +414,33 @@ static Error PutRecordList(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEnt
     return Result;
 }
 
+/* A data value row as a compound (DataValue_WritePlainGHDF); none leaves the entry out, which reads back as none. */
+static Error PutDataValue(GHDFObjectPool* pool, GHDFCompound* compound, GHDFEntryID id, const DataValue* value)
+{
+    if (value == NULL)
+    {
+        return Error_CreateSuccess();
+    }
+    GHDFCompound* ValueCompound = NULL;
+    Error Result = GHDFObjectPool_BorrowCompound(pool, &ValueCompound);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = DataValue_WritePlainGHDF(value, pool, ValueCompound);
+    if (Result.Code == ErrorCode_Success)
+    {
+        GHDFObjectValue Entry = GHDFObjectValue_CreateCompound(ValueCompound);
+        Result = GHDFCompound_SetValue(compound, id, GHDF_CreateRegularType(GHDFValueType_Compound), &Entry);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error ReturnResult = GHDFObjectPool_ReturnCompound(pool, ValueCompound, true);
+        Error_Deconstruct(&ReturnResult);
+    }
+    return Result;
+}
+
 static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const PropertyDescriptor* descriptor,
     const PropertyData* data)
 {
@@ -477,6 +505,8 @@ static Error PutValue(GHDFObjectPool* pool, GHDFCompound* compound, const Proper
             return PutInstanceList(pool, compound, Id, data->InstanceListValue);
         case PropertyType_RecordList:
             return Error_Construct2(ErrorCode_InvalidState, "Record lists are written separately.");
+        case PropertyType_DataValue:
+            return PutDataValue(pool, compound, Id, data->DataValueValue);
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -1040,6 +1070,8 @@ static Error ParseEntry(GHDFCompound* compound, const PropertyDescriptor* descri
             return Error_Construct2(ErrorCode_InvalidState, "Instance lists are read separately.");
         case PropertyType_RecordList:
             return Error_Construct2(ErrorCode_InvalidState, "Record lists are read separately.");
+        case PropertyType_DataValue:
+            return Error_Construct2(ErrorCode_InvalidState, "Data values are read separately.");
         case PropertyType_EnumSet:
         {
             // Bits outside the enum are refused when the read commits, like every rule.
@@ -1050,6 +1082,29 @@ static Error ParseEntry(GHDFCompound* compound, const PropertyDescriptor* descri
         }
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
+}
+
+/* A data value row from its compound; an absent entry keeps the default (none). Its rules are checked when the read commits. */
+static Error ReadDataValueRow(GHDFCompound* compound, const PropertyDescriptor* descriptor, void* target)
+{
+    GHDFObjectValue Entry;
+    bool IsFound = false;
+    Error Result = GHDFCompound_GetOptionalVerified(compound, (GHDFEntryID)descriptor->WireId,
+        GHDF_CreateRegularType(GHDFValueType_Compound), &Entry, &IsFound);
+    if ((Result.Code != ErrorCode_Success) || !IsFound)
+    {
+        return Result;
+    }
+    DataValue Read = DataValue_CreateTag();
+    Result = DataValue_ReadPlainGHDF(Entry.Value.Compound, &Read);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    DataValue* Held = Memory_Allocate(sizeof(DataValue));
+    *Held = Read; // moved: it owns what the read built
+    PropertyInternal_AdoptOwned(descriptor, target, Held);
+    return Error_CreateSuccess();
 }
 
 static Error ReadEntry(const PropertyTable* table, GHDFCompound* compound, const PropertyDescriptor* descriptor,
@@ -1075,6 +1130,10 @@ static Error ReadEntry(const PropertyTable* table, GHDFCompound* compound, const
     else if (descriptor->Type == PropertyType_RecordList)
     {
         Result = ReadRecordList(compound, descriptor, target);
+    }
+    else if (descriptor->Type == PropertyType_DataValue)
+    {
+        Result = ReadDataValueRow(compound, descriptor, target);
     }
     else if (PropertyInternal_IsStringType(descriptor->Type))
     {

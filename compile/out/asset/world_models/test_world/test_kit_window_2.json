@@ -1,0 +1,8 @@
+{
+    "name": "tbp:test_kit_window_2",
+    "lods": [
+        { "model": "tbp:test_kit_window_2", "max_distance": 400 }
+    ],
+    "draw_distance": 400,
+    "collision": "bounds"
+}

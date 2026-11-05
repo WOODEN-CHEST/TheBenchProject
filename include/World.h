@@ -80,10 +80,11 @@
  *
  * THE TICK. Systems that change a world run in this order each game tick, so each knows its slot:
  * 1. input; 2. scripts (later); 3. transform drivers: scripted movers, then characters (vehicles and physics later);
- * 4. the collision step (WorldCollision_Step: it syncs, sweeps and pushes); 5. queued events: trigger enter and exit,
- * contacts and motion; 6. animation: the skeletons' playback and its events, then sprite playback;
- * 7. World_UpdateTransforms: the world matrices of everything that moved this tick; 8. once per shown frame, the pose
- * step (WorldAnimation_Pose) and World_UpdateTransforms again; 9. the renderer, which only reads.
+ * 4. the generators: prefabs (WorldPrefabs_Update), then path objects (WorldPathObjects_Update), since a prefab may hold a
+ * fence; 5. the collision step (WorldCollision_Step: it syncs, sweeps and pushes); 6. queued events: trigger enter and
+ * exit, contacts and motion; 7. animation: the skeletons' playback and its events, then sprite playback;
+ * 8. World_UpdateTransforms: the world matrices of everything that moved this tick; 9. once per shown frame, the pose
+ * step (WorldAnimation_Pose) and World_UpdateTransforms again; 10. the renderer, which only reads.
  */
 
 
@@ -97,6 +98,11 @@
  *        counter stops below it), so every object can be saved and loaded: a world file has no next id past it.
  */
 #define WORLD_OBJECT_ID_MAX (UINT64_MAX - 1U)
+/**
+ * @brief The first id of the range kept for derived ids (World_CreateDerivedObject): the upper half. The counter starts at 1, so it
+ *        reaches this range only through a file that names such an id, and then skips what is taken.
+ */
+#define WORLD_OBJECT_DERIVED_ID_FIRST (((uint64_t)1U) << 63)
 
 
 // Types.
@@ -126,6 +132,9 @@ typedef struct WorldStruct
     uint64_t _objectSetVersion;
     /** @brief Changes on every component addition and removal; see World_GetComponentSetVersion. */
     uint64_t _componentSetVersion;
+    /** @brief Per component type: advances on every property change of a component of it; see
+     *  World_GetComponentTypeRevision. */
+    uint64_t _componentTypeRevisions[WORLD_MAX_COMPONENT_TYPES];
     /** @brief The serial the last added component got (WorldComponent_GetSerial); 0 before the first. */
     uint64_t _lastComponentSerial;
     /** @brief Owned, NUL-terminated UTF-8 world name; may be NULL. */
@@ -150,7 +159,7 @@ typedef struct WorldStruct
     uint64_t _refusedParentCount;
     /** @brief Whether a refused parent was logged (the first one is, once per world). */
     bool _hasLoggedRefusedParent;
-    /** @brief Scratch World_RemoveObject reuses: the subtree being removed (WorldObject*), children first. */
+    /** @brief Scratch the removals reuse: what is being removed (WorldObject*), children before parents. */
     GenericBuffer _removalScratch;
     /** @brief The asset manager components load from; borrowed. NULL for a world without assets. */
     AssetManager* _assets;
@@ -238,6 +247,23 @@ Error World_CreateObject(World* self, const unsigned char* name, WorldObject** o
 Error World_CreateObjectWithId(World* self, const unsigned char* name, uint64_t id, WorldObject** outObject);
 
 /**
+ * @brief Creates a runtime object whose id is derived rather than handed out: the same each time, from what makes the object, so a
+ *        reference to it stays good across loads. Saved worlds never hold it (WorldObject_SetPersistent false, set here).
+ *
+ * The id counter is left alone, so a saved world's next id does not grow with what is made while it runs. Such an id may come back
+ * once its object was removed; a reference to it then sees the new object.
+ * @param self The world; must not be NULL.
+ * @param name Borrowed NUL-terminated UTF-8 name to clone, or NULL.
+ * @param id The id; from WORLD_OBJECT_DERIVED_ID_FIRST to WORLD_OBJECT_ID_MAX and unused in this world.
+ * @param outObject [out] Receives the new object (world-owned). Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p outObject is NULL; ErrorCode_ArgumentOutOfRange if @p id is out of
+ *          the range or for a name that breaks its rules; ErrorCode_InvalidOperation if @p id is in use or the object could not be
+ *          stored.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error World_CreateDerivedObject(World* self, const unsigned char* name, uint64_t id, WorldObject** outObject);
+
+/**
  * @brief Removes an object with its whole subtree (its children, theirs, ...): children first, each object's
  *        components are detached (their OnDetach hooks run while the hierarchy is still in place), then the subtree is
  *        unlinked and its components and objects destroyed.
@@ -250,6 +276,20 @@ Error World_CreateObjectWithId(World* self, const unsigned char* name, uint64_t 
  *          object has that id or the subtree could not be listed (nothing is removed then).
  */
 Error World_RemoveObject(World* self, uint64_t id);
+
+/**
+ * @brief Removes many objects, each with its whole subtree, for the work of removing one: use it whenever objects go by the hundred, since
+ *        each World_RemoveObject walks the world's lists.
+ *
+ * Detaching and order are as World_RemoveObject's. Subtrees may overlap, in any order, and an object goes once.
+ * @param self The world; must not be NULL.
+ * @param ids The objects to remove. An id that no object holds, 0 among them, is skipped. May be NULL when @p count is 0.
+ * @param count How many ids.
+ * @returns Success, also when nothing was there to remove (and then nothing changed, the set versions neither);
+ *          ErrorCode_IllegalArgument if @p self or @p ids is NULL; ErrorCode_InvalidOperation if the subtrees could not be listed (nothing is
+ *          removed then).
+ */
+Error World_RemoveObjects(World* self, const uint64_t* ids, size_t count);
 
 /**
  * @brief Looks up an object by id (a hash lookup).
@@ -641,6 +681,19 @@ static inline uint64_t World_GetObjectSetVersion(const World* self)
 static inline uint64_t World_GetComponentSetVersion(const World* self)
 {
     return self->_componentSetVersion;
+}
+
+/**
+ * @brief The revision of all the components of a type: it advances whenever a property of any of them changes, however it was
+ *        written, so a system over many components can tell a quiet tick with one comparison. Adding and removing them does not
+ *        count (World_GetComponentSetVersion).
+ * @param self The world; must not be NULL.
+ * @param type The type; one of the world's types.
+ * @returns The revision; equal values from the same world mean no property of a component of the type changed in between.
+ */
+static inline uint64_t World_GetComponentTypeRevision(const World* self, WorldComponentType type)
+{
+    return self->_componentTypeRevisions[type];
 }
 
 /**

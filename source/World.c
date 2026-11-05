@@ -158,6 +158,88 @@ static bool IsComponentKept(GenericBuffer* buffer, GenericBufferElementData elem
     return !Component->_owner->_isBeingRemoved;
 }
 
+/* Lists an object's subtree for removal before anything changes, children first and each object once, however the subtrees of a list
+ * overlap. False when the list cannot grow. */
+static bool ListForRemoval(World* self, WorldObject* object)
+{
+    for (WorldObject* Current = WorldInternal_GetFirstChildrenFirst(object); Current != NULL;
+        Current = WorldInternal_GetNextChildrenFirst(Current, object))
+    {
+        if (!Current->_isBeingRemoved)
+        {
+            if (!GenericBuffer_AddLast(&self->_removalScratch, &Current))
+            {
+                return false;
+            }
+            Current->_isBeingRemoved = true;
+        }
+    }
+    return true;
+}
+
+/* A list that will not be removed: everything on it stays as it was. */
+static void ForgetRemovalList(World* self)
+{
+    WorldObject* const* Objects = (WorldObject* const*)self->_removalScratch._data;
+    for (size_t Index = 0U; Index < self->_removalScratch._count; Index++)
+    {
+        Objects[Index]->_isBeingRemoved = false;
+    }
+    GenericBuffer_Clear(&self->_removalScratch);
+}
+
+/* Removes what the list holds. Children first, every component is detached while the whole hierarchy is still in place (its hooks see the
+ * object where it is). Then the tops of the subtrees are unlinked, and the component arrays and the object list drop them in one pass each
+ * (keeping the others' order). */
+static void RemoveListedObjects(World* self)
+{
+    WorldObject* const* Objects = (WorldObject* const*)self->_removalScratch._data;
+    size_t RemovedCount = self->_removalScratch._count;
+    uint32_t Types = 0U;
+    for (size_t Index = 0U; Index < RemovedCount; Index++)
+    {
+        DetachComponents(self, Objects[Index], &Types);
+    }
+    for (size_t Index = 0U; Index < RemovedCount; Index++)
+    {
+        if ((Objects[Index]->_parent != NULL) && !Objects[Index]->_parent->_isBeingRemoved)
+        {
+            WorldInternal_DetachFromParent(Objects[Index]);
+        }
+    }
+    for (size_t Type = 0U; Type < self->_componentTypeCount; Type++)
+    {
+        if ((Types & ((uint32_t)1U << Type)) != 0U)
+        {
+            GenericBuffer_Filter(&self->_components[Type], IsComponentKept, NULL);
+        }
+    }
+    if (Types != 0U)
+    {
+        self->_componentSetVersion++;
+    }
+    GenericBuffer_Filter(&self->_objects, IsObjectKept, NULL);
+
+    for (size_t Index = 0U; Index < RemovedCount; Index++)
+    {
+        WorldObject* Doomed = Objects[Index];
+        DestroyDetachedComponents(self, Doomed);
+        WorldInternal_ForgetObjectData(self, Doomed);
+        uint64_t DoomedId = Doomed->_id;
+        bool WasRemoved = false;
+        Error MapResult = IMap_Remove(HashMap_AsMap(&self->_objectsById), &DoomedId, &WasRemoved);
+        Error_Deconstruct(&MapResult);
+        if (Doomed->_isWorldMatrixDirty)
+        {
+            self->_dirtyTransformCount--;
+        }
+        WorldObject_Deconstruct(Doomed);
+        Memory_Free(Doomed);
+    }
+    GenericBuffer_Clear(&self->_removalScratch);
+    self->_objectSetVersion++;
+}
+
 
 // Static functions: objects.
 /* Constructs an object with @p id and stores it in the list and the id map. The caller checked the id is free. */
@@ -241,6 +323,7 @@ static Error Construct(World* self, KeyRegistry* keys, AssetManager* assets, Log
     self->_nextId = 1;
     self->_objectSetVersion = 0;
     self->_componentSetVersion = 0;
+    Memory_Zero(self->_componentTypeRevisions, sizeof(self->_componentTypeRevisions));
     self->_lastComponentSerial = 0U;
     self->_dirtyTransformCount = 0U;
     self->_worldMatrixRecomputeCount = 0U;
@@ -274,6 +357,7 @@ void WorldInternal_ComponentAfterSet(void* instance, const PropertyDescriptor* d
         return;
     }
     World* OwnerWorld = Owner->_world;
+    OwnerWorld->_componentTypeRevisions[Component->_type]++;
     const WorldComponentTypeInfo* Info = World_GetComponentTypeInfo(OwnerWorld, Component->_type);
     if ((Info != NULL) && (Info->OnPropertySet != NULL))
     {
@@ -395,8 +479,14 @@ Error World_CreateObject(World* self, const unsigned char* name, WorldObject** o
     }
     *outObject = NULL;
     uint64_t Id = self->_nextId;
-    if ((Id == 0) || (FindObject(self, Id) != NULL))
+    // Past a file's id into the derived range, the counter may meet a derived object's id: it never moves the counter.
+    while ((Id != 0U) && (FindObject(self, Id) != NULL))
     {
+        Id = (Id == WORLD_OBJECT_ID_MAX) ? 0U : (Id + 1U);
+    }
+    if (Id == 0U)
+    {
+        self->_nextId = 0U;
         return Error_Construct2(ErrorCode_InvalidOperation, "World_CreateObject: no free object id is left.");
     }
 
@@ -438,6 +528,31 @@ Error World_CreateObjectWithId(World* self, const unsigned char* name, uint64_t 
     return Result;
 }
 
+Error World_CreateDerivedObject(World* self, const unsigned char* name, uint64_t id, WorldObject** outObject)
+{
+    if ((self == NULL) || (outObject == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "World_CreateDerivedObject: self and outObject must not be NULL.");
+    }
+    *outObject = NULL;
+    if ((id < WORLD_OBJECT_DERIVED_ID_FIRST) || (id > WORLD_OBJECT_ID_MAX))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
+            "World_CreateDerivedObject: id must be in the derived range (WORLD_OBJECT_DERIVED_ID_FIRST to WORLD_OBJECT_ID_MAX).");
+    }
+    if (FindObject(self, id) != NULL)
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "World_CreateDerivedObject: id is already in use.");
+    }
+    Error Result = StoreNewObject(self, name, id, outObject);
+    if (Result.Code == ErrorCode_Success)
+    {
+        WorldObject_SetPersistent(*outObject, false);
+    }
+    return Result;
+}
+
 Error World_RemoveObject(World* self, uint64_t id)
 {
     if (self == NULL)
@@ -453,62 +568,36 @@ Error World_RemoveObject(World* self, uint64_t id)
     {
         return Error_Construct2(ErrorCode_InvalidOperation, "World_RemoveObject: no object with that id.");
     }
-
-    // The whole subtree, children first, is listed before anything changes.
-    GenericBuffer* Removed = &self->_removalScratch;
-    GenericBuffer_Clear(Removed);
-    if (!WorldInternal_CollectSubtree(Object, Removed))
+    GenericBuffer_Clear(&self->_removalScratch);
+    if (!ListForRemoval(self, Object))
     {
-        GenericBuffer_Clear(Removed);
+        ForgetRemovalList(self);
         return Error_Construct2(ErrorCode_InvalidOperation, "World_RemoveObject: the subtree could not be listed.");
     }
+    RemoveListedObjects(self);
+    return Error_CreateSuccess();
+}
 
-    // Children first, every component is detached while the whole hierarchy is still in place (its hooks see the
-    // object where it is). Then the subtree is unlinked, and the component arrays and the object list drop it in one
-    // pass each (keeping the others' order).
-    WorldObject* const* Objects = (WorldObject* const*)Removed->_data;
-    size_t RemovedCount = Removed->_count;
-    uint32_t Types = 0U;
-    for (size_t Index = 0U; Index < RemovedCount; Index++)
+Error World_RemoveObjects(World* self, const uint64_t* ids, size_t count)
+{
+    if ((self == NULL) || ((ids == NULL) && (count > 0U)))
     {
-        DetachComponents(self, Objects[Index], &Types);
+        return Error_Construct2(ErrorCode_IllegalArgument, "World_RemoveObjects: self and ids must not be NULL.");
     }
-    WorldInternal_DetachFromParent(Object);
-    for (size_t Index = 0U; Index < RemovedCount; Index++)
+    GenericBuffer_Clear(&self->_removalScratch);
+    for (size_t Index = 0U; Index < count; Index++)
     {
-        Objects[Index]->_isBeingRemoved = true;
-    }
-    for (size_t Type = 0U; Type < self->_componentTypeCount; Type++)
-    {
-        if ((Types & ((uint32_t)1U << Type)) != 0U)
+        WorldObject* Object = FindObject(self, ids[Index]);
+        if ((Object != NULL) && !Object->_isBeingRemoved && !ListForRemoval(self, Object))
         {
-            GenericBuffer_Filter(&self->_components[Type], IsComponentKept, NULL);
+            ForgetRemovalList(self);
+            return Error_Construct2(ErrorCode_InvalidOperation, "World_RemoveObjects: the subtrees could not be listed.");
         }
     }
-    if (Types != 0U)
+    if (self->_removalScratch._count > 0U)
     {
-        self->_componentSetVersion++;
+        RemoveListedObjects(self);
     }
-    GenericBuffer_Filter(&self->_objects, IsObjectKept, NULL);
-
-    for (size_t Index = 0U; Index < RemovedCount; Index++)
-    {
-        WorldObject* Doomed = Objects[Index];
-        DestroyDetachedComponents(self, Doomed);
-        WorldInternal_ForgetObjectData(self, Doomed);
-        uint64_t DoomedId = Doomed->_id;
-        bool WasRemoved = false;
-        Error MapResult = IMap_Remove(HashMap_AsMap(&self->_objectsById), &DoomedId, &WasRemoved);
-        Error_Deconstruct(&MapResult);
-        if (Doomed->_isWorldMatrixDirty)
-        {
-            self->_dirtyTransformCount--;
-        }
-        WorldObject_Deconstruct(Doomed);
-        Memory_Free(Doomed);
-    }
-    GenericBuffer_Clear(Removed);
-    self->_objectSetVersion++;
     return Error_CreateSuccess();
 }
 

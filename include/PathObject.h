@@ -50,6 +50,8 @@
 #define PATH_OBJECT_MAX_SLOT_RECORDS ((size_t)64)
 /** @brief The longest asset name of a path object or a model record, in bytes. */
 #define PATH_OBJECT_NAME_MAX_LENGTH ((size_t)128)
+/** @brief The most bytes a model record's prefab values may count. */
+#define PATH_OBJECT_MODEL_VALUES_MAX_BYTES ((size_t)16384)
 /** @brief The longest variant or collision set name of a record, in bytes. */
 #define PATH_OBJECT_LOCAL_NAME_MAX_LENGTH ((size_t)128)
 /** @brief The largest count a placement or an asset may ask for. */
@@ -273,6 +275,14 @@ typedef struct PathObjectModelRecordStruct
     unsigned char* Variant;
     /** @brief A colour multiplied into its copies' own. */
     Color Tint;
+    /** @brief A prefab its pieces are copies of, in place of a world model (an asset name, kept in full). A record names one of
+     *  the two. Such a piece is always rigid, a shear taken as a step, its length the slot's length setting or 0, and it collides as
+     *  its prefab's objects do: each is an object of its own, not an instance. */
+    unsigned char* Prefab;
+    /** @brief The values its prefab copies take (a compound, as a prefab component's values); NULL for none. */
+    DataValue* Values;
+    /** @brief Whether every enum property its values leave out is picked per copy from the seed. */
+    bool RandomizesEnums;
 } PathObjectModelRecord;
 
 /**

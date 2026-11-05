@@ -114,12 +114,6 @@ WorldObject* WorldInternal_GetFirstChildrenFirst(WorldObject* root);
 /** The object after @p current in a children-first walk of @p root's subtree, or NULL after @p root. */
 WorldObject* WorldInternal_GetNextChildrenFirst(WorldObject* current, const WorldObject* root);
 
-/**
- * Appends @p object's subtree to @p outObjects (a buffer of WorldObject*) children first: every object after all of
- * its descendants, @p object last. Nothing is changed. Returns false if the buffer could not grow.
- */
-bool WorldInternal_CollectSubtree(WorldObject* object, GenericBuffer* outObjects);
-
 /** Takes @p object out of its parent's children: it becomes a root (its own children stay with it). Its local transform
  *  and its dirty flags are left alone (the caller marks what changed). */
 void WorldInternal_DetachFromParent(WorldObject* object);

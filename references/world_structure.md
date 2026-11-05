@@ -540,6 +540,52 @@ A floating fence, from the shared asset:
 }
 ```
 
+### The prefab block
+
+The `prefab` component makes the object the root of a copy of a prefab (`agents/Prefabs.md`): the prefab's objects are made under it as runtime children, which are
+never saved, so a world holds only this block, and editing the prefab updates every copy. What a copy adds of its own is an ordinary child of this object.
+
+| Key | Value (default) | |
+|---|---|---|
+| `prefab` | an asset name (none) | The prefab. Without one, or with one that does not load, it makes nothing (logged once). |
+| `values` | an object (`{}`) | Its properties' values, by name, as what they target writes them: `"#2e4a7a"`, degrees for an angle, `[0, 35, 0]`, an option's name. What it leaves out takes the prefab's default; a bad value or a name it does not declare is warned about once and ignored. At most 64 KiB. |
+| `object_overrides` | an object (`{}`) | What this copy changes in the prefab's objects, by a path of their names (below). At most 1 MiB. |
+
+A key of `object_overrides` is an object's name in the prefab, or a path of names through nested copies (`lamp/bulb`); its value is a block of:
+
+| Key | Value | |
+|---|---|---|
+| `is_removed` | boolean | The object and what lies under it are not made. `false` is what leaving it out says, but through a nested copy (`lamp/bulb`), where it brings back what that copy's own overrides remove. |
+| any row of the object (`position`, `rotation`, `scale`, `tint`, `is_enabled`, ...) | as written in a world file | All but `name`, `parent` and the tags and data. |
+| `components` | `{ "<component>": { "<row>": value } }` | Rows of its components, as written in a world file. |
+
+A name the prefab no longer has is warned about once and ignored. Each is applied over the prefab's and the properties' values. `values` and `object_overrides` are kept by name, in the order of their names, whatever order a file gives; a number keeps its form (`2` and `2.0`). `null` is no value here: leave the entry out.
+```
+"prefab": {
+    "prefab": "tbp:test_bus_stop",
+    "values": {
+        "layout": "closed",
+        "roof_color": "#2e4a7a"
+    },
+    "object_overrides": {
+        "bench": {
+            "position": [0.6, 0.0, 0.7],
+            "rotation": [0.0, 20.0, 0.0]
+        },
+        "bin": {
+            "is_removed": true
+        },
+        "lamp/light": {
+            "components": {
+                "light": {
+                    "intensity": 6.0
+                }
+            }
+        }
+    }
+}
+```
+
 ### Values
 
 - Numbers: integers or decimals; a float keeps its fraction when written (`2.0`). Angles are degrees.

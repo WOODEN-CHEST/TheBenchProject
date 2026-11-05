@@ -1,0 +1,8 @@
+{
+    "name": "tbp:test_kit_chimney",
+    "lods": [
+        { "model": "tbp:test_kit_chimney", "max_distance": 400 }
+    ],
+    "draw_distance": 400,
+    "collision": "bounds"
+}

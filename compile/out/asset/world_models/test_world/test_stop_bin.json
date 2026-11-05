@@ -1,0 +1,8 @@
+{
+    "name": "tbp:test_stop_bin",
+    "lods": [
+        { "model": "tbp:test_stop_bin", "max_distance": 400 }
+    ],
+    "draw_distance": 400,
+    "collision": "bounds"
+}

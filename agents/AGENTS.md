@@ -57,7 +57,7 @@ Current module list:
 * Logger (Logger.md) - Writes timestamped, level-tagged messages to <base>/logs/latest.log and stdout, and rotates the previous log into <base>/logs/archived/ (keeping the newest 30).
 * AssetManager (AssetManager.md) - Loads, shares and unloads assets built from JSON definitions in prioritized search
   roots; hands out borrowed pointers held per AssetUserID (presence-based, unloaded at once on the last release),
-  caches failed loads, registers the eighteen standard types, and reads a texture asset's image file as CPU pixels
+  caches failed loads, registers the nineteen standard types, and reads a texture asset's image file as CPU pixels
   without loading it (AssetManager_LoadTexturePixels). Asset names are namespaced keys (`tbp:desk`; written without a
   namespace, `tbp`'s), accepted as written and kept, logged and listed in full (AssetManager_GetDefinitionNames by
   prefix). Read its lifetime rules before touching assets.
@@ -279,6 +279,17 @@ Current module list:
   * WorldGeneratedModel - Meshes a generator made while the game runs (include/WorldGeneratedModel.h,
     source/WorldGeneratedModel.c), which a model component draws in place of its world model's, its materials, LOD distances and
     render settings still the world model's, in every pass (the GPU's copies: source/WorldRendererGenerated.c).
+* Prefabs (Prefabs.md) - A group of objects built once and placed many times, with the world keeping only a copy's root, its values and
+  its overrides. Covers:
+  * Prefab - The prefab asset type (a standard type, JSON in prefabs/; include/Prefab.h, source/Prefab.c, source/PrefabDefinition.c): objects
+    in the world file's own format in a template world, one root, each with a name of its own, and the properties a copy sets: typed, each
+    writing to rows of objects by name or tag, or to a nested copy's property; an enum's options are lists of values to set. Everything
+    checked when a file is read.
+  * WorldPrefabComponent - Component type 12 (`prefab`): the prefab's name, the copy's values and its overrides of the prefab's objects,
+    by paths of names. Holds settings only.
+  * WorldPrefabs - The system (include/WorldPrefabs.h, source/WorldPrefabs.c, source/WorldPrefabsApply.c): once a tick it keeps every copy's objects
+    up to date as runtime children of its root, with ids derived from the root's id and their names, writing only rows that come out different and
+    undoing what it no longer writes; nesting, budgets, the lookups selection needs.
 * World sprites (WorldSprites.md) - The world_sprite asset type (a standard type, JSON in world_sprites/): how a sprite
   animation stands, is lit and is seen in the world, kept apart from its placements. WorldSprite (include/WorldSprite.h,
   source/WorldSprite.c) holds the animation it plays (loaded as its dependency) and the defaults of its placements
@@ -382,6 +393,7 @@ Current module list:
   * WorldTerrainComponent - Where a terrain lies and how it draws and collides (Terrain, Terrain.md).
   * WorldPathComponent - A line through nodes that generators read; a closed one is also a region (Paths, Paths.md).
   * WorldPathObjectComponent - A fence, hedge, railing or row of lamps along a path (Path objects, PathObjects.md).
+  * WorldPrefabComponent - A copy of a prefab (Prefabs, Prefabs.md).
   * WorldEnvironment - Per-world sky/sun/moon/night-sky/haze/effect settings, described by its property table
     (defaults, validation, copy, JSON and GHDF all come from it; see PropertyDescriptors.md; it owns its sky texture
     names). Its date and time of day are what the sky shows: the game clock writes them every tick, the environment
@@ -389,7 +401,8 @@ Current module list:
     moon (phase from the calendar, position, lit fraction, moonlight above the air), the stars' daily turn and yearly
     drift, the two lights above the air (WorldEnvironment_GetSkyLights) and which of them casts the shadows from the
     light each gives through the air (WorldEnvironment_ChooseShadowLight).
-  * World - Owns the objects and their components, mints the uint64 ids (an id map for lookups), keeps a dense array
+  * World - Owns the objects and their components, mints the uint64 ids (an id map for lookups; derived ids of runtime objects in a range
+    of their own leave the counter alone), keeps a dense array
     of components per type for systems to iterate, holds the environment, borrows the key registry (the keys of its
     objects' tags and data) and keeps their tag index; with an asset manager (World_Construct2) it owns an asset user
     its components load under; object-set and component-set versions. The hierarchy (source/WorldHierarchy.c):
@@ -623,7 +636,8 @@ Current module list:
     setting, a closed park and two helices (the private source/WorldTestPaths.{h,c}); Backspace steps their debug view, Shift
     with Backspace moves one of the walk's nodes while the game runs. Its world has path objects along them and on their own
     (objects 99 to 110; the private source/WorldTestPathObjects.{h,c}): Control with Backspace steps the walk's fence's fit, and
-    with Shift too how its panels take a slope.
+    with Shift too how its panels take a slope. Its world has a street of prefabs (objects 111 to 118; the private
+    source/WorldTestPrefabs.{h,c}): Control with the keypad's 1 to 6 change copies while the game runs and read the prefabs' and path objects' files again.
 * PropertyDescriptor (PropertyDescriptors.md) - Property tables: one static table per data type describes each field
   once (key, GHDF wire id, type, default, rules, flags, editor text), and generic functions driven by it do defaults,
   validation (errors name the table, key and rule), deep copy, equality, JSON and GHDF read (all or nothing, unknown
@@ -639,7 +653,8 @@ Current module list:
   (PropertyInstanceList: an owned list of copies, each a double position, a rotation, a scale and a tint; JSON an array
   of objects with the defaults left out, GHDF parallel arrays) carries a model instances component's copies; a RecordList type
   (PropertyRecordList: an owned list of small structs a table of their own describes, so their keys, rules, codecs and the
-  inspector come from it, one level deep) carries a path's nodes. A setting a placement overrides
+  inspector come from it, one level deep) carries a path's nodes; a DataValue type (any plain value, with its own byte limit) carries what stands for
+  another row's JSON form, such as a prefab's values, which Properties_SetFromDataValue reads through that row's own reader. A setting a placement overrides
   is two rows, a Bool
   `overrides_<key>` and the value `<key>` (the table check enforces the pairing). A DataMap property (tags and typed
   data) is written as two JSON keys.

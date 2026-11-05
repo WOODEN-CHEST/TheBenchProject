@@ -1,7 +1,7 @@
 {
     "format_version": 3,
     "name": "test",
-    "next_object_id": 111,
+    "next_object_id": 119,
     "environment": {
         "cloud_high_coverage": 0.05
     },
@@ -4150,6 +4150,141 @@
                     ],
                     "overrides_has_corner": true,
                     "has_corner": true
+                }
+            }
+        },
+        {
+            "id": 111,
+            "name": "bus_stop_plain",
+            "position": [-50.5, -2.17, 18.0],
+            "rotation": [0.0, -90.0, 0.0],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_bus_stop"
+                }
+            }
+        },
+        {
+            "id": 112,
+            "name": "bus_stop_changed",
+            "position": [-50.5, -1.241, -2.0],
+            "rotation": [0.0, -90.0, 0.0],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_bus_stop",
+                    "values": {
+                        "lamp_color": "#a0c8ff",
+                        "layout": "closed",
+                        "roof_color": "#2e4a7a"
+                    },
+                    "object_overrides": {
+                        "bench": {
+                            "position": [0.6, 0.0, 0.7],
+                            "rotation": [0.0, 20.0, 0.0]
+                        },
+                        "bin": {
+                            "is_removed": true
+                        },
+                        "lamp/light": {
+                            "components": {
+                                "light": {
+                                    "intensity": 6.0
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "id": 113,
+            "name": "bus_stop_added_crate",
+            "parent": 112,
+            "position": [-2.6, 0.25, 0.3],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test"
+                }
+            }
+        },
+        {
+            "id": 114,
+            "name": "bus_stop_faulty",
+            "position": [-50.5, 0.57, -22.0],
+            "rotation": [0.0, -90.0, 0.0],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_bus_stop",
+                    "values": {
+                        "bench_angle": 30.0,
+                        "lamp_state": "faulty",
+                        "layout": "windy"
+                    }
+                }
+            }
+        },
+        {
+            "id": 115,
+            "name": "house_plain",
+            "position": [-49.0, -2.253, 14.0],
+            "rotation": [0.0, 90.0, 0.0],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_house"
+                }
+            }
+        },
+        {
+            "id": 116,
+            "name": "house_shop",
+            "position": [-49.0, -0.969, -8.0],
+            "rotation": [0.0, 90.0, 0.0],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_house",
+                    "values": {
+                        "chimney_height": 2.5,
+                        "front": "shop",
+                        "is_porch_lit": false,
+                        "roof_color": "#3a5a48",
+                        "wall_color": "#b8c8e0"
+                    }
+                }
+            }
+        },
+        {
+            "id": 117,
+            "name": "house_no_chimney",
+            "position": [-49.0, 0.605, -24.0],
+            "rotation": [0.0, 90.0, 0.0],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_house",
+                    "values": {
+                        "has_chimney": false,
+                        "wall_color": "#d8b8a0"
+                    }
+                }
+            }
+        },
+        {
+            "id": 118,
+            "name": "street_lamps",
+            "components": {
+                "path": {
+                    "nodes": [
+                        {
+                            "position": [-55.0, -1.0, -36.0],
+                            "mode": "corner"
+                        },
+                        {
+                            "position": [-55.0, -1.0, 26.0],
+                            "mode": "corner"
+                        }
+                    ]
+                },
+                "path_object": {
+                    "path_object": "tbp:test_prefab_lamp_row"
                 }
             }
         }

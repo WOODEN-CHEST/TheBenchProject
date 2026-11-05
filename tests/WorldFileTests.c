@@ -180,7 +180,8 @@ static PropertyValue MakeCandidate(const PropertyDescriptor* row, size_t attempt
         case PropertyType_AssetNameList:
         case PropertyType_InstanceList:
         case PropertyType_RecordList:
-            break; // FillData, FillFloatList, FillAssetNameList, FillInstanceList and FillRecordList build these
+        case PropertyType_DataValue:
+            break; // FillData, FillFloatList, FillAssetNameList, FillInstanceList, FillRecordList and FillDataValue build these
     }
     return Value;
 }
@@ -243,6 +244,31 @@ static void FillInstanceList(TestRun* run, const PropertyTable* table, void* ins
     }
 }
 
+/* Sets a data value row to a compound of every plain kind, nested, so a file must carry them as they are. */
+static void FillDataValue(TestRun* run, const PropertyTable* table, void* instance, const PropertyDescriptor* row)
+{
+    DataValue Compound = DataValue_CreateTag();
+    DataValue Inner = DataValue_CreateTag();
+    DataValue List = DataValue_CreateTag();
+    DataValue Text = DataValue_CreateTag();
+    DataValue Number = DataValue_FromInt(7);
+    DataValue Fraction = DataValue_FromFloat(2.0 / 3.0);
+    DataValue Flag = DataValue_FromBool(true);
+    TEST_CHECK_SUCCESS(run, DataValue_CreateCompound(&Compound));
+    TEST_CHECK_SUCCESS(run, DataValue_CreateCompound(&Inner));
+    TEST_CHECK_SUCCESS(run, DataValue_CreateList(DataType_Float, &List));
+    TEST_CHECK_SUCCESS(run, DataValue_CreateString((const unsigned char*)u8"#2e4a7a", &Text));
+    TEST_CHECK_SUCCESS(run, DataValue_ListAdd(&List, &Fraction));
+    TEST_CHECK_SUCCESS(run, DataValue_CompoundSet(&Inner, (const unsigned char*)u8"flag", &Flag));
+    TEST_CHECK_SUCCESS(run, DataValue_CompoundSet(&Inner, (const unsigned char*)u8"text", &Text));
+    TEST_CHECK_SUCCESS(run, DataValue_CompoundSet(&Compound, (const unsigned char*)u8"inner", &Inner));
+    TEST_CHECK_SUCCESS(run, DataValue_CompoundSet(&Compound, (const unsigned char*)u8"list", &List));
+    TEST_CHECK_SUCCESS(run, DataValue_CompoundSet(&Compound, (const unsigned char*)u8"number", &Number));
+    PropertyValue Value = PropertyValue_FromDataValue(&Compound);
+    TEST_CHECK_SUCCESS(run, Properties_Set(table, instance, row->Key, &Value));
+    DataValue_Deconstruct(&Compound);
+}
+
 static void FillTable(TestRun* run, const PropertyTable* table, void* instance);
 
 /* Sets a record list row to three records, each with every row of its own table away from its default, so a file must carry
@@ -282,6 +308,11 @@ static void FillTable(TestRun* run, const PropertyTable* table, void* instance)
         // Runtime rows (the lightning's) are never written to files, so they could not come back.
         if (((Descriptor->Flags & PropertyFlags_ReadOnly) != 0U) || ((Descriptor->Flags & PropertyFlags_Persistent) == 0U))
         {
+            continue;
+        }
+        if (Descriptor->Type == PropertyType_DataValue)
+        {
+            FillDataValue(run, table, instance, Descriptor);
             continue;
         }
         if (Descriptor->Type == PropertyType_FloatList)
@@ -1677,7 +1708,7 @@ static void TheShippedTestWorldLoadsAndIsWrittenTheSame(TestRun* run)
         WorldFileReadOptions Options = WorldFileReadOptions_Create(&Keys, NULL, NULL);
         if (TEST_CHECK_SUCCESS(run, WorldFile_LoadJSON(Path._data, &Options, &Loaded)))
         {
-            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 110U);
+            TEST_CHECK(run, World_GetObjectCount(&Loaded) == 118U);
             // The terrain: one object placing the placeholder terrain around the ground slab.
             WorldComponent* Ground = NULL;
             TEST_CHECK(run, World_TryGetComponent(&Loaded, 51U, WorldComponentType_Terrain, &Ground)
@@ -2624,8 +2655,69 @@ static void AWorldAtTheObjectLimitSavesAndLoads(TestRun* run)
 
 
 // Fields: the suite.
+/* Parses @p text and reads its objects alone. */
+static Error ReadObjectsText(TestRun* run, JSONObjectPool* pool, KeyRegistry* keys, const char* text, uint64_t version, size_t maxObjects, World* outWorld)
+{
+    JSONObjectValue Root;
+    if (!TestText_ParseJSON(run, pool, text, &Root))
+    {
+        return Error_Construct2(ErrorCode_InvalidJSON, "the test's JSON did not parse");
+    }
+    WorldFileReadOptions Options = WorldFileReadOptions_Create(keys, NULL, NULL);
+    Error Result = WorldFile_ReadObjectsJSON(Root.Value.Compound, version, pool, &Options, maxObjects, outWorld);
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(pool, &Root));
+    return Result;
+}
+
+static void ObjectsAloneAreReadStrictly(TestRun* run)
+{
+    JSONObjectPool* Pool = NULL;
+    KeyRegistry Keys;
+    if (!TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool)) || !TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys)))
+    {
+        return;
+    }
+    World Loaded;
+    if (TEST_CHECK_SUCCESS(run, ReadObjectsText(run, Pool, &Keys, "{ \"other\": 1, \"objects\": [ { \"id\": 7, \"name\": \"a\", \"tags\": [\"town:x\"] }, "
+        "{ \"id\": 3, \"parent\": 7, \"name\": \"b\", \"components\": { \"light\": { \"range\": 4 } } } ] }", WORLD_FILE_FORMAT_VERSION, 8U, &Loaded)))
+    {
+        TEST_CHECK(run, World_GetObjectCount(&Loaded) == 2U);
+        WorldObject* Child = NULL;
+        TEST_CHECK(run, World_TryGetObject(&Loaded, 3U, &Child) && (WorldObject_GetParent(Child) != NULL));
+        TEST_CHECK(run, (Child != NULL) && (WorldObject_GetComponent(Child, WorldComponentType_Light) != NULL));
+        TEST_CHECK_SUCCESS(run, World_Deconstruct(&Loaded));
+    }
+    size_t KeysBefore = KeyRegistry_GetCount(&Keys);
+    const struct { const char* Text; const char* Fragment; size_t Max; uint64_t Version; } Refused[] =
+    {
+        { "{ \"objects\": [ { \"id\": 1, \"naem\": \"a\", \"tags\": [\"town:y\"] } ] }", "naem", 8U, WORLD_FILE_FORMAT_VERSION },
+        { "{ \"objects\": [ { \"id\": 1, \"components\": { \"gizmo\": { } } } ] }", "gizmo", 8U, WORLD_FILE_FORMAT_VERSION },
+        { "{ \"objects\": [ { \"id\": 1, \"components\": { \"light\": { \"rang\": 1 } } } ] }", "rang", 8U, WORLD_FILE_FORMAT_VERSION },
+        { "{ \"objects\": [ { \"id\": 1 }, { \"id\": 2 } ] }", "at most 1", 1U, WORLD_FILE_FORMAT_VERSION },
+        { "{ \"objects\": [ { \"id\": 1 } ] }", "newer", 8U, (uint64_t)WORLD_FILE_FORMAT_VERSION + 1U },
+        { "{ \"objects\": 3 }", "must be an array", 8U, WORLD_FILE_FORMAT_VERSION },
+    };
+    for (size_t Index = 0U; Index < (sizeof(Refused) / sizeof(Refused[0])); Index++)
+    {
+        const char* Fragments[] = { Refused[Index].Fragment, NULL };
+        TestText_CheckErrorMessage(run, ReadObjectsText(run, Pool, &Keys, Refused[Index].Text, Refused[Index].Version, Refused[Index].Max, &Loaded),
+            ErrorCode_InvalidJSON, Fragments);
+    }
+    TEST_CHECK(run, KeyRegistry_GetCount(&Keys) == KeysBefore); // nothing a refused read interned stays
+    // No list makes no objects.
+    if (TEST_CHECK_SUCCESS(run, ReadObjectsText(run, Pool, &Keys, "{ }", 2U, 8U, &Loaded)))
+    {
+        TEST_CHECK(run, World_GetObjectCount(&Loaded) == 0U);
+        TEST_CHECK_SUCCESS(run, World_Deconstruct(&Loaded));
+    }
+    KeyRegistry_Deconstruct(&Keys);
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+}
+
+
 static const TestCase WorldFileTestCases[] =
 {
+    { "objects_alone_are_read_strictly", ObjectsAloneAreReadStrictly },
     { "a_full_world_round_trips_through_json", AFullWorldRoundTripsThroughJSON },
     { "runtime_objects_are_left_out_of_files", RuntimeObjectsAreLeftOutOfFiles },
     { "a_full_world_round_trips_through_ghdf", AFullWorldRoundTripsThroughGHDF },

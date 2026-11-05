@@ -1,0 +1,249 @@
+{
+    "name": "tbp:test_bus_stop",
+    "format_version": 3,
+    "properties": {
+        "roof_color": {
+            "type": "color",
+            "default": "#7a3b2e",
+            "display_name": "Roof colour",
+            "category": "Looks",
+            "description": "The colour of the shelter's roof.",
+            "targets": [
+                {
+                    "tag": "tbp:stop_roof",
+                    "row": "tint"
+                }
+            ]
+        },
+        "layout": {
+            "type": "enum",
+            "default": "open",
+            "display_name": "Layout",
+            "category": "Layout",
+            "description": "Which sides the shelter has.",
+            "options": {
+                "open": [
+                    {
+                        "object": "left_side",
+                        "row": "is_enabled",
+                        "value": false
+                    },
+                    {
+                        "object": "right_side",
+                        "row": "is_enabled",
+                        "value": false
+                    }
+                ],
+                "windy": [
+                    {
+                        "object": "right_side",
+                        "row": "is_enabled",
+                        "value": false
+                    }
+                ],
+                "closed": []
+            }
+        },
+        "bench_angle": {
+            "type": "angle",
+            "default": 0.0,
+            "minimum": -45.0,
+            "maximum": 45.0,
+            "display_name": "Bench angle",
+            "category": "Layout",
+            "targets": [
+                {
+                    "object": "bench",
+                    "row": "rotation",
+                    "axis": "y"
+                }
+            ]
+        },
+        "lamp_state": {
+            "type": "enum",
+            "default": "lit",
+            "display_name": "Lamp",
+            "category": "Lamp",
+            "options": {
+                "lit": [
+                    {
+                        "object": "lamp",
+                        "property": "state",
+                        "value": "on"
+                    }
+                ],
+                "dark": [
+                    {
+                        "object": "lamp",
+                        "property": "state",
+                        "value": "off"
+                    }
+                ],
+                "faulty": [
+                    {
+                        "object": "lamp",
+                        "property": "state",
+                        "value": "broken"
+                    }
+                ]
+            }
+        },
+        "lamp_color": {
+            "type": "color",
+            "default": "#ffd9a0",
+            "display_name": "Lamp colour",
+            "category": "Lamp",
+            "targets": [
+                {
+                    "object": "lamp",
+                    "property": "light_color"
+                }
+            ]
+        },
+        "sign_model": {
+            "type": "asset",
+            "default": "tbp:test_stop_sign",
+            "asset_type": "world_model",
+            "display_name": "Sign",
+            "category": "Looks",
+            "targets": [
+                {
+                    "object": "sign",
+                    "component": "model",
+                    "row": "world_model"
+                }
+            ]
+        }
+    },
+    "objects": [
+        {
+            "id": 1,
+            "name": "root"
+        },
+        {
+            "id": 2,
+            "parent": 1,
+            "name": "back",
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_shelter_back"
+                },
+                "collider": {}
+            }
+        },
+        {
+            "id": 3,
+            "parent": 1,
+            "name": "left_side",
+            "position": [
+                -2.0,
+                0.0,
+                0.0
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_shelter_side"
+                },
+                "collider": {}
+            }
+        },
+        {
+            "id": 4,
+            "parent": 1,
+            "name": "right_side",
+            "position": [
+                2.0,
+                0.0,
+                0.0
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_shelter_side"
+                },
+                "collider": {}
+            }
+        },
+        {
+            "id": 5,
+            "parent": 1,
+            "name": "roof",
+            "position": [
+                0.0,
+                2.4,
+                0.0
+            ],
+            "tags": [
+                "tbp:stop_roof"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_shelter_roof"
+                },
+                "collider": {}
+            }
+        },
+        {
+            "id": 6,
+            "parent": 1,
+            "name": "bench",
+            "position": [
+                0.0,
+                0.0,
+                0.55
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_stop_bench"
+                },
+                "collider": {}
+            }
+        },
+        {
+            "id": 7,
+            "parent": 1,
+            "name": "bin",
+            "position": [
+                -2.6,
+                0.0,
+                0.3
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_stop_bin"
+                },
+                "collider": {}
+            }
+        },
+        {
+            "id": 8,
+            "parent": 1,
+            "name": "sign",
+            "position": [
+                2.8,
+                0.0,
+                0.8
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_stop_sign"
+                },
+                "collider": {}
+            }
+        },
+        {
+            "id": 9,
+            "parent": 1,
+            "name": "lamp",
+            "position": [
+                -3.4,
+                0.0,
+                1.8
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_street_lamp"
+                }
+            }
+        }
+    ]
+}

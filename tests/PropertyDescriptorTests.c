@@ -3,6 +3,7 @@
 #include "TestText.h"
 #include "PropertyDescriptor.h"
 #include "DataMap.h"
+#include "DataValue.h"
 #include "GameGHDF.h"
 #include "GameJSON.h"
 #include "GameClock.h"
@@ -12,6 +13,8 @@
 #include "WorldObject.h"
 #include "PathObject.h"
 #include "WorldPathObjectComponent.h"
+#include "WorldPrefabComponent.h"
+#include "Prefab.h"
 #include "WorldModelComponent.h"
 #include "WorldSpriteComponent.h"
 #include "WorldLightComponent.h"
@@ -700,6 +703,9 @@ static void TablesPassTheirCheck(TestRun* run)
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldLightComponent_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldColliderComponent_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldPathObjectComponent_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldPrefabComponent_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(Prefab_GetTargetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(Prefab_GetPropertyPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(PathObject_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldTerrainComponent_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldModelInstancesComponent_GetPropertyTable()));
@@ -3829,11 +3835,342 @@ static void RecordListRowsAreChecked(TestRun* run)
 }
 
 
+// Data value rows, and a row set from its JSON form.
+typedef struct ValueHolderStruct
+{
+    DataValue* Any;
+    DataValue* Compound;
+    RenderColor Tint;
+    Vector3 Rotation;
+    float Angle;
+    unsigned char* Asset;
+    uint64_t ReadOnlyId;
+    PropertyFloatList* Distances;
+    int AfterSetCount;
+} ValueHolder;
+
+static void ValueHolderAfterSet(void* instance, const PropertyDescriptor* descriptor)
+{
+    (void)descriptor;
+    ((ValueHolder*)instance)->AfterSetCount++;
+}
+
+static const PropertyDescriptor ValueHolderProperties[] =
+{
+    { .Key = u8"any", .WireId = 1U, .Type = PropertyType_DataValue, PROPERTY_MEMBER(ValueHolder, Any),
+        .Rules = PROPERTY_RULES_DATA_VALUE(64U, false), .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+    { .Key = u8"compound", .WireId = 2U, .Type = PropertyType_DataValue, PROPERTY_MEMBER(ValueHolder, Compound),
+        .Rules = PROPERTY_RULES_DATA_VALUE(1024U, true), .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+    { .Key = u8"tint", .WireId = 3U, .Type = PropertyType_RenderColor, PROPERTY_MEMBER(ValueHolder, Tint),
+        .Default.RenderColorValue = { { 255, 255, 255, 255 }, 1.0f, 1.0f }, .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+    { .Key = u8"rotation", .WireId = 4U, .Type = PropertyType_AngleVector3, PROPERTY_MEMBER(ValueHolder, Rotation),
+        .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+    { .Key = u8"angle", .WireId = 5U, .Type = PropertyType_Angle, PROPERTY_MEMBER(ValueHolder, Angle),
+        .Rules = PROPERTY_RULES_BETWEEN(0.0, 1.0), .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+    { .Key = u8"asset", .WireId = 6U, .Type = PropertyType_AssetName, PROPERTY_MEMBER(ValueHolder, Asset),
+        .Rules = PROPERTY_RULES_STRING(64U, true), .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+    { .Key = u8"read_only_id", .WireId = 7U, .Type = PropertyType_ObjectId, PROPERTY_MEMBER(ValueHolder, ReadOnlyId),
+        .Flags = PropertyFlags_Persistent | PropertyFlags_ReadOnly, .SinceVersion = 1U },
+    { .Key = u8"distances", .WireId = 8U, .Type = PropertyType_FloatList, PROPERTY_MEMBER(ValueHolder, Distances),
+        .Rules = PROPERTY_RULES_FLOAT_LIST(3U), .Flags = PROPERTY_FLAGS_SETTING, .SinceVersion = 1U },
+};
+
+static const PropertyTable ValueHolderTable =
+{
+    .Name = u8"test_value_holder", .Version = 1U, .StructSize = sizeof(ValueHolder), .Descriptors = ValueHolderProperties,
+    .DescriptorCount = sizeof(ValueHolderProperties) / sizeof(ValueHolderProperties[0]), .AfterSet = ValueHolderAfterSet
+};
+
+static void ValueRowsGoThroughBothFormats(TestRun* run)
+{
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(&ValueHolderTable));
+    JSONObjectPool* Pool = NULL;
+    GHDFObjectPool* Binary = NULL;
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool));
+    TEST_CHECK_SUCCESS(run, GHDFObjectPool_Create(&Binary));
+    ValueHolder Holder;
+    ValueHolder Back;
+    ValueHolder Third;
+    TEST_CHECK_SUCCESS(run, Properties_Construct(&ValueHolderTable, &Holder));
+    TEST_CHECK_SUCCESS(run, Properties_Construct(&ValueHolderTable, &Back));
+    TEST_CHECK_SUCCESS(run, Properties_Construct(&ValueHolderTable, &Third));
+    TEST_CHECK(run, (Holder.Any == NULL) && (Holder.Compound == NULL)); // none is the default
+    JSONObjectValue Root;
+    if (TestText_ParseJSON(run, Pool, "{ \"any\": [0, 1.5], \"compound\": { \"b\": \"#2e4a7a\", \"a\": { \"on\": true } } }", &Root))
+    {
+        TEST_CHECK_SUCCESS(run, Properties_ReadJSON(&ValueHolderTable, Root.Value.Compound, &Holder, NULL));
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Root));
+    }
+    TEST_CHECK(run, (Holder.Any != NULL) && (DataValue_GetListElementType(Holder.Any) == DataType_Float));
+    TEST_CHECK(run, DataValue_GetCompoundCount(Holder.Compound) == 2U);
+
+    JSONCompound* Written = NULL;
+    if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Written)))
+    {
+        TEST_CHECK_SUCCESS(run, Properties_WriteJSON(&ValueHolderTable, &Holder, Pool, Written, NULL));
+        TEST_CHECK(run, JSONCompound_GetEntryCount(Written) == 2U); // the two: the defaults are left out
+        TEST_CHECK_SUCCESS(run, Properties_ReadJSON(&ValueHolderTable, Written, &Back, NULL));
+        TEST_CHECK(run, Properties_Equals(&ValueHolderTable, &Holder, &Back));
+        JSONObjectValue Value = JSONObjectValue_CreateCompound(Written);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+    }
+    GHDFCompound* Saved = NULL;
+    if (TEST_CHECK_SUCCESS(run, GHDFObjectPool_BorrowCompound(Binary, &Saved)))
+    {
+        TEST_CHECK_SUCCESS(run, Properties_WriteGHDF(&ValueHolderTable, &Holder, Binary, Saved, NULL));
+        TEST_CHECK_SUCCESS(run, Properties_ReadGHDF(&ValueHolderTable, Saved, &Third, NULL));
+        TEST_CHECK(run, Properties_Equals(&ValueHolderTable, &Holder, &Third));
+    }
+    // A deep copy, and a change of it leaves the source.
+    TEST_CHECK_SUCCESS(run, Properties_CopyTo(&ValueHolderTable, &Holder, &Back));
+    TEST_CHECK(run, Back.Any != Holder.Any);
+    TEST_CHECK(run, Properties_Equals(&ValueHolderTable, &Holder, &Back));
+    PropertyValue Gone = PropertyValue_FromDataValue(NULL);
+    TEST_CHECK_SUCCESS(run, Properties_Set(&ValueHolderTable, &Back, (const unsigned char*)u8"any", &Gone));
+    TEST_CHECK(run, (Back.Any == NULL) && (Holder.Any != NULL));
+    TEST_CHECK(run, !Properties_Equals(&ValueHolderTable, &Holder, &Back));
+    // null is none.
+    if (TestText_ParseJSON(run, Pool, "{ \"any\": null }", &Root))
+    {
+        TEST_CHECK_SUCCESS(run, Properties_ReadJSON(&ValueHolderTable, Root.Value.Compound, &Third, NULL));
+        TEST_CHECK(run, Third.Any == NULL);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Root));
+    }
+    // An empty compound counts as none, so it is not written.
+    DataValue Empty = DataValue_CreateTag();
+    TEST_CHECK_SUCCESS(run, DataValue_CreateCompound(&Empty));
+    PropertyValue EmptyRow = PropertyValue_FromDataValue(&Empty);
+    TEST_CHECK_SUCCESS(run, Properties_Set(&ValueHolderTable, &Third, (const unsigned char*)u8"compound", &EmptyRow));
+    if (TEST_CHECK_SUCCESS(run, JSONObjectPool_BorrowCompound(Pool, &Written)))
+    {
+        TEST_CHECK_SUCCESS(run, Properties_WriteJSON(&ValueHolderTable, &Third, Pool, Written, NULL));
+        JSONObjectValue Unused;
+        bool IsThere = true;
+        TEST_CHECK_SUCCESS(run, JSONCompound_GetOptional(Written, (const unsigned char*)u8"compound", &Unused, &IsThere));
+        TEST_CHECK(run, !IsThere);
+        JSONObjectValue Value = JSONObjectValue_CreateCompound(Written);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &Value));
+    }
+    DataValue_Deconstruct(&Empty);
+    Properties_Deconstruct(&ValueHolderTable, &Holder);
+    Properties_Deconstruct(&ValueHolderTable, &Back);
+    Properties_Deconstruct(&ValueHolderTable, &Third);
+    TEST_CHECK_SUCCESS(run, GHDFObjectPool_Deconstruct(Binary));
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+}
+
+static void ValueRowsKeepTheirRules(TestRun* run)
+{
+    ValueHolder Holder;
+    TEST_CHECK_SUCCESS(run, Properties_Construct(&ValueHolderTable, &Holder));
+    const char* const NotCompound[] = { "compound", "be a compound", NULL };
+    DataValue Number = DataValue_FromInt(3);
+    PropertyValue Row = PropertyValue_FromDataValue(&Number);
+    TestText_CheckErrorMessage(run, Properties_Set(&ValueHolderTable, &Holder, (const unsigned char*)u8"compound", &Row), ErrorCode_ArgumentOutOfRange, NotCompound);
+    TEST_CHECK_SUCCESS(run, Properties_Set(&ValueHolderTable, &Holder, (const unsigned char*)u8"any", &Row));
+    const char* const NoKey[] = { "hold no key", NULL };
+    DataValue Key = DataValue_FromKey(1U);
+    Row = PropertyValue_FromDataValue(&Key);
+    TestText_CheckErrorMessage(run, Properties_Set(&ValueHolderTable, &Holder, (const unsigned char*)u8"any", &Row), ErrorCode_ArgumentOutOfRange, NoKey);
+    const char* const NoTag[] = { "hold a value", NULL };
+    DataValue Tag = DataValue_CreateTag();
+    Row = PropertyValue_FromDataValue(&Tag);
+    TestText_CheckErrorMessage(run, Properties_Set(&ValueHolderTable, &Holder, (const unsigned char*)u8"any", &Row), ErrorCode_ArgumentOutOfRange, NoTag);
+    const char* const NotFinite[] = { "valid value", NULL };
+    DataValue Bad = DataValue_FromFloat(NAN);
+    Row = PropertyValue_FromDataValue(&Bad);
+    TestText_CheckErrorMessage(run, Properties_Set(&ValueHolderTable, &Holder, (const unsigned char*)u8"any", &Row), ErrorCode_ArgumentOutOfRange, NotFinite);
+    const char* const TooLong[] = { "at most 64 bytes", NULL };
+    DataValue Long = DataValue_CreateTag();
+    unsigned char Text[80];
+    memset(Text, 'x', sizeof(Text) - 1U);
+    Text[sizeof(Text) - 1U] = 0U;
+    TEST_CHECK_SUCCESS(run, DataValue_CreateString(Text, &Long));
+    Row = PropertyValue_FromDataValue(&Long);
+    TestText_CheckErrorMessage(run, Properties_Set(&ValueHolderTable, &Holder, (const unsigned char*)u8"any", &Row), ErrorCode_ArgumentOutOfRange, TooLong);
+    DataValue_Deconstruct(&Long);
+    TEST_CHECK(run, Holder.Any->IntValue == 3); // each left it as it was
+    Properties_Deconstruct(&ValueHolderTable, &Holder);
+
+    // The table's own rules for such a row.
+    PropertyDescriptor Broken = ValueHolderProperties[0];
+    PropertyTable BrokenTable = ValueHolderTable;
+    BrokenTable.Descriptors = &Broken;
+    BrokenTable.DescriptorCount = 1U;
+    Broken.Rules.MaxLength = 0U;
+    TEST_CHECK_ERROR(run, PropertyTable_Check(&BrokenTable), ErrorCode_IllegalArgument);
+    Broken = ValueHolderProperties[0];
+    DataValue Static = DataValue_FromInt(1);
+    Broken.Default.DataValueValue = &Static;
+    TEST_CHECK_ERROR(run, PropertyTable_Check(&BrokenTable), ErrorCode_IllegalArgument);
+    Broken = ValueHolderProperties[2];
+    Broken.Rules.IsCompoundOnly = true;
+    TEST_CHECK_ERROR(run, PropertyTable_Check(&BrokenTable), ErrorCode_IllegalArgument);
+}
+
+/* Parses @p text, makes a plain value of it and sets a row from it. */
+static Error SetRowFromText(TestRun* run, JSONObjectPool* pool, ValueHolder* holder, const char* key, const char* text)
+{
+    JSONObjectValue JSON;
+    if (!TestText_ParseJSON(run, pool, text, &JSON))
+    {
+        return Error_Construct2(ErrorCode_InvalidState, "the test's JSON did not parse");
+    }
+    DataValue Value = DataValue_CreateTag();
+    Error Result = DataValue_ReadPlainJSON(&JSON, &Value);
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(pool, &JSON));
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = Properties_SetFromDataValue(&ValueHolderTable, holder, (const unsigned char*)key, &Value, pool);
+    }
+    DataValue_Deconstruct(&Value);
+    return Result;
+}
+
+static void ARowIsSetFromItsJSONForm(TestRun* run)
+{
+    JSONObjectPool* Pool = NULL;
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool));
+    ValueHolder Holder;
+    TEST_CHECK_SUCCESS(run, Properties_Construct(&ValueHolderTable, &Holder));
+    int AfterSets = Holder.AfterSetCount;
+    // Each by its own reader: a colour, degrees, mixed numbers, a name in full, a list.
+    TEST_CHECK_SUCCESS(run, SetRowFromText(run, Pool, &Holder, "tint", "\"#2e4a7a\""));
+    TEST_CHECK(run, (Holder.Tint.Tint.r == 0x2E) && (Holder.Tint.Tint.b == 0x7A) && (Holder.Tint.Tint.a == 255));
+    TEST_CHECK(run, Holder.AfterSetCount == (AfterSets + 1));
+    TEST_CHECK_SUCCESS(run, SetRowFromText(run, Pool, &Holder, "tint", "{ \"tint\": [1, 2, 3], \"brightness\": 0.5 }"));
+    TEST_CHECK(run, (Holder.Tint.Tint.g == 2) && (Holder.Tint.Brightness == 0.5f));
+    TEST_CHECK_SUCCESS(run, SetRowFromText(run, Pool, &Holder, "rotation", "[0, 90.0, 0]"));
+    TEST_CHECK(run, fabsf(Holder.Rotation.y - 1.5707964f) < 1.0e-5f);
+    TEST_CHECK_SUCCESS(run, SetRowFromText(run, Pool, &Holder, "angle", "45"));
+    TEST_CHECK(run, fabsf(Holder.Angle - 0.7853982f) < 1.0e-5f);
+    TEST_CHECK_SUCCESS(run, SetRowFromText(run, Pool, &Holder, "asset", "\"desk\""));
+    TEST_CHECK(run, strcmp((const char*)Holder.Asset, "tbp:desk") == 0);
+    TEST_CHECK_SUCCESS(run, SetRowFromText(run, Pool, &Holder, "distances", "[1, 2.5]"));
+    TEST_CHECK(run, PropertyFloatList_GetCount(Holder.Distances) == 2U);
+    TEST_CHECK_SUCCESS(run, SetRowFromText(run, Pool, &Holder, "any", "{ \"nested\": [1, 2] }"));
+    TEST_CHECK(run, DataValue_GetCompoundCount(Holder.Any) == 1U);
+    // Typed values come through in their plain form.
+    DataValue Typed = DataValue_FromColor((Color){ 9, 8, 7, 255 });
+    TEST_CHECK_SUCCESS(run, Properties_SetFromDataValue(&ValueHolderTable, &Holder, (const unsigned char*)u8"tint", &Typed, Pool));
+    TEST_CHECK(run, Holder.Tint.Tint.r == 9);
+    // What a row refuses leaves it as it was.
+    RenderColor TintBefore = Holder.Tint;
+    float AngleBefore = Holder.Angle;
+    AfterSets = Holder.AfterSetCount;
+    const char* const NotAColour[] = { "test_value_holder.tint", NULL };
+    DataValue Flag = DataValue_FromBool(true);
+    TestText_CheckErrorMessage(run, Properties_SetFromDataValue(&ValueHolderTable, &Holder, (const unsigned char*)u8"tint", &Flag, Pool), ErrorCode_InvalidJSON, NotAColour);
+    TEST_CHECK(run, memcmp(&TintBefore, &Holder.Tint, sizeof(TintBefore)) == 0);
+    TEST_CHECK_ERROR(run, SetRowFromText(run, Pool, &Holder, "angle", "180"), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK(run, Holder.Angle == AngleBefore);
+    TEST_CHECK_ERROR(run, SetRowFromText(run, Pool, &Holder, "asset", "\"Not An Asset\""), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK(run, strcmp((const char*)Holder.Asset, "tbp:desk") == 0);
+    TEST_CHECK(run, Holder.AfterSetCount == AfterSets);
+    // Rows no value may write.
+    DataValue Number = DataValue_FromInt(5);
+    TEST_CHECK_ERROR(run, Properties_SetFromDataValue(&ValueHolderTable, &Holder, (const unsigned char*)u8"read_only_id", &Number, Pool), ErrorCode_InvalidOperation);
+    // Whatever the value is: a row that takes none reads none.
+    DataValue Word = DataValue_CreateTag();
+    TEST_CHECK_SUCCESS(run, DataValue_CreateString((const unsigned char*)u8"not a number", &Word));
+    TEST_CHECK_ERROR(run, Properties_SetFromDataValue(&ValueHolderTable, &Holder, (const unsigned char*)u8"read_only_id", &Word, Pool), ErrorCode_InvalidOperation);
+    DataValue_Deconstruct(&Word);
+    TEST_CHECK_ERROR(run, Properties_SetFromDataValue(&ValueHolderTable, &Holder, (const unsigned char*)u8"no_such_row", &Number, Pool), ErrorCode_IllegalArgument);
+    TEST_CHECK_ERROR(run, Properties_SetFromDataValue(NULL, &Holder, (const unsigned char*)u8"any", &Number, Pool), ErrorCode_IllegalArgument);
+    TEST_CHECK_ERROR(run, Properties_SetFromDataValue(&ValueHolderTable, &Holder, (const unsigned char*)u8"any", &Number, NULL), ErrorCode_IllegalArgument);
+    DataValue Key = DataValue_FromKey(1U);
+    TEST_CHECK_ERROR(run, Properties_SetFromDataValue(&ValueHolderTable, &Holder, (const unsigned char*)u8"any", &Key, Pool), ErrorCode_InvalidOperation);
+    Properties_Deconstruct(&ValueHolderTable, &Holder);
+
+    // A table larger than a scratch on the stack goes the same way.
+    TestBigRecord* Big = Memory_Allocate(sizeof(TestBigRecord));
+    TEST_CHECK_SUCCESS(run, Properties_Construct(&BigRecordTable, Big));
+    DataValue Whole = DataValue_FromFloat(1.5);
+    TEST_CHECK_SUCCESS(run, Properties_SetFromDataValue(&BigRecordTable, Big, (const unsigned char*)u8"value", &Whole, Pool));
+    TEST_CHECK(run, Big->Value == 1.5f);
+    Properties_Deconstruct(&BigRecordTable, Big);
+    Memory_Free(Big);
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+}
+
+static void ValuesCompareAsRowsDo(TestRun* run)
+{
+    PropertyValue A = PropertyValue_FromFloat(1.0f);
+    PropertyValue B = PropertyValue_FromFloat(1.0f);
+    PropertyValue C = PropertyValue_FromFloat(2.0f);
+    PropertyValue D = PropertyValue_FromAngle(1.0f);
+    TEST_CHECK(run, PropertyValue_Equals(&A, &B));
+    TEST_CHECK(run, !PropertyValue_Equals(&A, &C));
+    TEST_CHECK(run, !PropertyValue_Equals(&A, &D)); // another type
+    TEST_CHECK(run, !PropertyValue_Equals(NULL, &B));
+    PropertyValue Text = PropertyValue_FromString((const unsigned char*)u8"a");
+    PropertyValue Same = PropertyValue_FromString((const unsigned char*)u8"a");
+    PropertyValue None = PropertyValue_FromString(NULL);
+    TEST_CHECK(run, PropertyValue_Equals(&Text, &Same));
+    TEST_CHECK(run, !PropertyValue_Equals(&Text, &None));
+    DataValue Empty = DataValue_CreateTag();
+    DataValue Other = DataValue_CreateTag();
+    DataValue One = DataValue_FromInt(1);
+    TEST_CHECK_SUCCESS(run, DataValue_CreateCompound(&Empty));
+    TEST_CHECK_SUCCESS(run, DataValue_CreateCompound(&Other));
+    TEST_CHECK_SUCCESS(run, DataValue_CompoundSet(&Other, (const unsigned char*)u8"a", &One));
+    PropertyValue NoValue = PropertyValue_FromDataValue(NULL);
+    PropertyValue EmptyValue = PropertyValue_FromDataValue(&Empty);
+    PropertyValue OtherValue = PropertyValue_FromDataValue(&Other);
+    TEST_CHECK(run, PropertyValue_Equals(&NoValue, &EmptyValue));
+    TEST_CHECK(run, PropertyValue_Equals(&EmptyValue, &NoValue));
+    TEST_CHECK(run, !PropertyValue_Equals(&NoValue, &OtherValue));
+    TEST_CHECK(run, !PropertyValue_Equals(&EmptyValue, &OtherValue));
+    DataValue_Deconstruct(&Empty);
+    DataValue_Deconstruct(&Other);
+}
+
+static void ARecordListReadsWithNoRowHoldingIt(TestRun* run)
+{
+    JSONObjectPool* Pool = NULL;
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Create(&Pool));
+    JSONObjectValue JSON;
+    PropertyRecordList* List = NULL;
+    if (TestText_ParseJSON(run, Pool, "[ { \"weight\": 1.5 }, { } ]", &JSON))
+    {
+        TEST_CHECK_SUCCESS(run, PropertyRecordList_ReadJSON(&TestItemTable, &JSON, 4U, NULL, &List));
+        TEST_CHECK(run, PropertyRecordList_GetCount(List) == 2U);
+        PropertyRecordList_Destroy(List);
+        TEST_CHECK_ERROR(run, PropertyRecordList_ReadJSON(&TestItemTable, &JSON, 1U, NULL, &List), ErrorCode_InvalidJSON);
+        TEST_CHECK(run, List == NULL);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &JSON));
+    }
+    if (TestText_ParseJSON(run, Pool, "[ { \"wieght\": 1.5 } ]", &JSON))
+    {
+        TEST_CHECK_ERROR(run, PropertyRecordList_ReadJSON(&TestItemTable, &JSON, 4U, NULL, &List), ErrorCode_InvalidJSON);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &JSON));
+    }
+    if (TestText_ParseJSON(run, Pool, "3", &JSON))
+    {
+        TEST_CHECK_ERROR(run, PropertyRecordList_ReadJSON(&TestItemTable, &JSON, 4U, NULL, &List), ErrorCode_InvalidJSON);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &JSON));
+    }
+    if (TestText_ParseJSON(run, Pool, "[]", &JSON))
+    {
+        TEST_CHECK_SUCCESS(run, PropertyRecordList_ReadJSON(&TestItemTable, &JSON, 4U, NULL, &List));
+        TEST_CHECK(run, List == NULL);
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Pool, &JSON));
+    }
+    TEST_CHECK_ERROR(run, PropertyRecordList_ReadJSON(NULL, &JSON, 4U, NULL, &List), ErrorCode_IllegalArgument);
+    TEST_CHECK_SUCCESS(run, JSONObjectPool_Deconstruct(Pool));
+}
+
+
 void PropertyDescriptorTests_Run(TestRun* run)
 {
     static const TestCase Cases[] =
     {
         { "tables_pass_their_check", TablesPassTheirCheck },
+        { "value_rows_go_through_both_formats", ValueRowsGoThroughBothFormats },
+        { "value_rows_keep_their_rules", ValueRowsKeepTheirRules },
+        { "a_row_is_set_from_its_json_form", ARowIsSetFromItsJSONForm },
+        { "values_compare_as_rows_do", ValuesCompareAsRowsDo },
+        { "a_record_list_reads_with_no_row_holding_it", ARecordListReadsWithNoRowHoldingIt },
         { "broken_tables_fail_their_check", BrokenTablesFailTheirCheck },
         { "data_map_rows_are_checked", DataMapRowsAreChecked },
         { "data_maps_go_through_the_tables", DataMapsGoThroughTheTables },

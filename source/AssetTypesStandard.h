@@ -78,6 +78,10 @@
  *  weighted world models, loaded as dependencies, and how they fill a path). */
 #define ASSET_TYPE_NAME_PATH_OBJECT      ((const unsigned char*)u8"path_object")
 #define ASSET_TYPE_DIRECTORY_PATH_OBJECT ((const unsigned char*)u8"path_objects")
+/** @brief Standard prefab type name / directory (Prefab.h: a group of objects in the world file's format and the properties a copy
+ *  sets; no dependencies: what its objects name is loaded by those objects). */
+#define ASSET_TYPE_NAME_PREFAB      ((const unsigned char*)u8"prefab")
+#define ASSET_TYPE_DIRECTORY_PREFAB ((const unsigned char*)u8"prefabs")
 
 /** @brief Definition-file extension (without the dot) for every standard type: their definitions are JSON.
  *  AssetManager_ReadDefinitions uses it to skip non-definition resource files sharing the type directory. */
@@ -153,6 +157,10 @@ Error WaterMaterialDefinition_Construct(AssetManager* manager, const UserData* u
 
 /** @brief Builds a path object definition from a JSON blob. See AssetDefinitionConstructor. */
 Error PathObjectDefinition_Construct(AssetManager* manager, const UserData* userData, const GenericBuffer* rawData,
+    const unsigned char* sourceDescription, AssetDefinition** outDefinition);
+
+/** @brief Builds a prefab definition from a JSON blob. See AssetDefinitionConstructor. */
+Error PrefabDefinition_Construct(AssetManager* manager, const UserData* userData, const GenericBuffer* rawData,
     const unsigned char* sourceDescription, AssetDefinition** outDefinition);
 
 /**

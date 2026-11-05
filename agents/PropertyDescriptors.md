@@ -117,6 +117,7 @@ no `inherit` states: a flag cannot collide with a real value, and the editor sho
 | `EnumSet` | `uint32_t` mask: bit N is the enum entry of value N | array of the entries' names in the table's order, `["world", "prop"]` (`[]` when empty) | the smallest unsigned integer type that holds the mask |
 | `AssetNameList` | owned `PropertyAssetNameList*`, NULL while empty (its only default), each name kept in full | array of strings, `["tbp:human_motions", "tbp:gestures"]` (`[]` when empty), read as written | String array (empty when empty) |
 | `RecordList` | owned `PropertyRecordList*`, NULL while empty (its only default): small structs a table of their own describes, the row's `RecordTable` | array of objects, each through its table (`[]` when empty): its keys, defaults left out, its rules | Compound array, each through its table (an empty array when empty) |
+| `DataValue` | owned `DataValue*` ([ObjectData.md](ObjectData.md)), NULL for none (its only default; none and an empty compound are equal) | any plain value, through `DataValue_ReadPlainJSON`: an object, an array, a string, a number, a bool; `null` for none | Compound (`DataValue_WritePlainGHDF`), absent for none |
 | `InstanceList` | owned `PropertyInstanceList*` of `PropertyInstanceEntry` (a `Vector3Double` position, a radians `Vector3` rotation, a `Vector3` scale, a shear, a `Color` tint), NULL while empty (its only default) | array of instances, each `{"position": [x, y, z], "rotation": [x, y, z], "scale": s or [x, y, z], "shear": s, "tint": "#rrggbb"}` with the defaults left out (rotation 0, scale 1, shear 0, white; the position always written; rotations in degrees, a scale one number when even, the tint as a `Color`); any other key is refused; `[]` when empty | Compound {1: Double array of the positions (3 per instance), 2: Float array of the rotations in radians, 3: Float array of the scales, 4: UInt8 array of the tints (4 each), 5: Float array of the shears (1 each)}; 2 to 5 only when an instance differs from its default, each of exactly its length |
 
 The integer types are written in the smallest GHDF integer type that holds the value (a `parent` of 12 is one
@@ -157,7 +158,7 @@ three numbers.`). The model instances component's `instances` is the first. A `R
 `PROPERTY_RULES_RECORD_LIST(maxCount)` (1 to `PROPERTY_RECORD_LIST_MAX_COUNT`, 65 536) and a `RecordTable`; each record
 follows that table's rules; its default must be NULL. A refusal names the record (`"...; record 12: path_node.width (Width)
 must be ..."`), and a read's error its place (`path_component.nodes: [12]: path_node.width: Expected ...`). A path's `nodes`
-is the first.
+is the first. A `DataValue` takes `PROPERTY_RULES_DATA_VALUE(maxBytes, isCompoundOnly)`: `Rules.MaxLength` bytes (`DataValue_GetByteSize`, required) and whether it must be a compound; it holds no key and needs no registry; its default must be NULL. A prefab component's `values` and `object_overrides` are the first.
 
 Flags: `Persistent` (written and read by JSON and GHDF), `Editable` (inspector), `ReadOnly` (visible, refused by
 `Properties_Set`; reads from files still fill it), `Script`. `PROPERTY_FLAGS_SETTING` = Persistent | Editable | Script.
@@ -184,7 +185,12 @@ A property without `Persistent` is runtime state the table still copies, compare
 - **By key.** `Properties_Get(table, instance, key, &value)` (a string points into the instance) and
   `Properties_Set(table, instance, key, &value)`: the value must have the property's exact type, passes
   `Properties_CheckValue` before anything is written, a string is cloned; `ReadOnly` properties are refused
-  (`InvalidOperation`). Build values with `PropertyValue_From*`.
+  (`InvalidOperation`). Build values with `PropertyValue_From*`; `PropertyValue_Equals` compares two as `Properties_Equals`
+  compares a row.
+- **From a row's JSON form.** `Properties_SetFromDataValue(table, instance, key, value, pool)`: the value (a plain `DataValue`) holds what a
+  file would write for that row (`"#2e4a7a"`, degrees for an angle, `[0, 35, 0]`, an enum's name), the row's own JSON reader reads it, and it goes
+  through `Properties_Set`, so the row's type and rules apply and `ReadOnly` is refused; a data map's row is refused too. For a value stored apart
+  from the row it reaches, whose type only that row knows. On failure the instance is unchanged.
 - **JSON.** `Properties_WriteJSON(table, instance, pool, compound, options)` validates first, then sets one key per
   persistent property; by default values equal to their default are left out (`PropertyWriteOptions.
   AreDefaultsWritten` writes them all). WRJSON compounds keep insertion order, so the keys are serialized in
@@ -242,7 +248,7 @@ and here, and test it in `tests/PropertyDescriptorTests.c` (the test record has 
 `AngleVector3` (an object's rotation), `DataMap` (tags and typed data), `FloatList` (a placement's LOD
 distances), `EnumSet` (a collider's layer mask), `Vector3Double` (an object's position, named
 `vector3_double`), `AssetNameList` (an animator's own animation libraries, named `asset_name_list`) and
-`InstanceList` (a model instances component's copies, named `instance_list`). Before adding a list type of small structs,
+`InstanceList` (a model instances component's copies, named `instance_list`) and `DataValue` (a prefab's values, named `data_value`). Before adding a list type of small structs,
 see whether a `RecordList` does it: one table, no codec of its own.
 
 ### Float lists
@@ -294,7 +300,10 @@ new list over, and the readers check the count before they allocate. A list of a
 **A record table** passes `PropertyTable_Check` itself, which the holding table's check runs. It has no `AfterSet` and no
 migrations (a change that needs old records converted is the holding table's migration, before the read), and it holds no
 `DataMap` and no `RecordList`: so a value nests one level, and no walk over one needs a depth limit (AGENTS.md rule 5). It may hold
-owned rows (a name): each record's are its own.
+owned rows (a name, a `DataValue`, which limits its own depth): each record's are its own.
+
+**Without a holding row:** `PropertyRecordList_ReadJSON(table, array, maxCount, options, &list)` reads a JSON array of records, for a file's own
+shape, such as a map of named lists.
 
 **Unknown keys in a record** follow the read's mode: `Error` fails naming the record, `Ignore` skips them, and `Warn` warns once
 per list, at the first record that holds any, not once per record. World files read with `Ignore` and note each name themselves
@@ -305,6 +314,6 @@ Reads are all or nothing with the holding row: a record refused leaves the insta
 ## Known limits
 
 - No cross-field rules (each property is checked on its own) and no bounds on `UInt64`.
-- A table nests one level at the most: a `RecordList`'s table holds no `RecordList`. The one deeper value, a `DataMap`, limits
-  its own depth (16 levels, its codec; [ObjectData.md](ObjectData.md)); any later nested type needs a limit too (AGENTS.md rule 5).
+- A table nests one level at the most: a `RecordList`'s table holds no `RecordList`. The deeper values, a `DataMap` and a `DataValue`, limit
+  their own depth (16 levels, their codec; [ObjectData.md](ObjectData.md)); any later nested type needs a limit too (AGENTS.md rule 5).
 - Not thread-safe (tables are immutable, instances are plain structs).

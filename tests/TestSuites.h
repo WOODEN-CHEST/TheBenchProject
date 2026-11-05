@@ -438,3 +438,9 @@ void PathObjectTests_Run(TestRun* run);
  *  write only what changed, placements' overrides, world files, the ground and its changes, the slots' collision, the render
  *  cache's entries; run again 173 km out (WorldPathObjectTests.c). */
 void WorldPathObjectTests_Run(TestRun* run);
+/** @brief A prefab file's rules, each refused clearly, what it declares, values by their property's type, its lists' limits, any byte of
+ *  a file changed (PrefabTests.c). */
+void PrefabTests_Run(TestRun* run);
+/** @brief A prefab's copies: objects under the root, ids from the root and the name, values, enums undoing each other, overrides, stale
+ *  names, nesting, pass-through, cycles, budgets, world files, rebuilds, selection; run again 173 km out (WorldPrefabTests.c). */
+void WorldPrefabTests_Run(TestRun* run);

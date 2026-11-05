@@ -7,6 +7,7 @@
 #include "PathObject.h"
 #include "PathObjectLayout.h"
 #include "PathObjectPlacement.h"
+#include "Prefab.h"
 #include "WorldColliderComponent.h"
 #include "WorldGeneratedModel.h"
 #include "WorldModel.h"
@@ -41,7 +42,9 @@ typedef enum PathObjectChildKindEnum
     /* A slot's and model's rigid copies and its placed collision shapes. */
     PathObjectChildKind_Copies,
     /* One stretch of a slot's and model's bent pieces. */
-    PathObjectChildKind_Part
+    PathObjectChildKind_Part,
+    /* One piece of a slot's and model's prefab: Part is its index among the model's. */
+    PathObjectChildKind_PrefabCopy
 } PathObjectChildKind;
 
 /* A runtime child of a path object's object. */
@@ -100,10 +103,13 @@ typedef struct PathObjectStateStruct
     bool HasWarnedPlace;
 } PathObjectState;
 
-/* A world model a slot can pick, resolved for this rebuild. */
+/* A world model or a prefab a slot can pick, resolved for this rebuild. */
 typedef struct PathObjectSlotModelStruct
 {
+    /* The world model; NULL for a prefab's pieces. */
     const WorldModel* Asset;
+    /* The prefab; NULL for a world model's pieces. */
+    const Prefab* Prefab;
     const PathObjectModelRecord* Record;
     PathObjectMeasure Measure;
     float Length;
@@ -196,6 +202,8 @@ typedef struct PathObjectRebuildStruct
     bool HasInverse;
     PathGroundSettings Ground;
     bool HasAnyChange;
+    /* Where the next search for a child starts: they are written in the order they were made. */
+    size_t ChildCursor;
     /* What it may still make, and how much more it may look at. */
     size_t VertexBudget;
     size_t ShapeBudget;
@@ -235,6 +243,8 @@ typedef struct PathObjectCopyListStruct
     /* Placed shapes: CollisionShape and Matrix4Double, in step. */
     GenericBuffer Shapes;
     GenericBuffer Placements;
+    /* A prefab's copies only, in step with Copies: uint32_t, what each picks its random enum options from. */
+    GenericBuffer Picks;
 } PathObjectCopyList;
 
 struct WorldPathObjectsStruct
@@ -244,9 +254,10 @@ struct WorldPathObjectsStruct
     AssetManager* _assets;
     AssetUserID _assetUser;
     Logger* _logger;
-    /* PathObjectState, in the world's component order, and where the next search for one starts. */
+    /* PathObjectState, in the components' order, which is the order of their serials. */
     GenericBuffer _states;
-    size_t _stateCursor;
+    /* How many warnings all the path objects gave. */
+    size_t _warningCount;
     uint64_t _componentSetVersion;
     bool _hasComponentSetVersion;
     /* PathObjectMeasuredModel. */
@@ -278,7 +289,7 @@ struct WorldPathObjectsStruct
 
 // Functions: shared small things.
 /** One warning about a path object's object. */
-void WorldPathObjectsInternal_Warn(const WorldPathObjects* self, const WorldObject* object, const char* format, ...);
+void WorldPathObjectsInternal_Warn(WorldPathObjects* self, const WorldObject* object, const char* format, ...);
 
 /** The list of a slot's and model's copies. */
 static inline PathObjectCopyList* WorldPathObjectsInternal_GetCopyList(WorldPathObjects* self, PathObjectSlot slot,
@@ -354,6 +365,9 @@ void WorldPathObjectsBent_FreeParts(WorldPathObjects* self);
 // Functions: the runtime children (WorldPathObjectsChildren.c).
 /** The child of a slot's and model's copies: its copies and placed shapes, written only when they differ. */
 void WorldPathObjectsChildren_WriteCopies(PathObjectRebuild* rebuild, PathObjectSlot slot, uint32_t modelIndex);
+
+/** The children of a slot's and model's prefab pieces, one a piece: its place and its prefab's rows, written only when they differ. */
+void WorldPathObjectsChildren_WritePrefabCopies(PathObjectRebuild* rebuild, PathObjectSlot slot, uint32_t modelIndex);
 
 /** The child of a part: its place, its rows and its generated model, written only when they differ. */
 void WorldPathObjectsChildren_WritePart(PathObjectRebuild* rebuild, const PathObjectBentPart* part);

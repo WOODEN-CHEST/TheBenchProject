@@ -1,0 +1,1674 @@
+{
+    "name": "tbp:test_house",
+    "format_version": 3,
+    "properties": {
+        "wall_color": {
+            "type": "color",
+            "default": "#f0e6d2",
+            "display_name": "Walls",
+            "category": "Looks",
+            "description": "The plaster's colour, on every bay.",
+            "targets": [
+                {
+                    "tag": "tbp:bay",
+                    "property": "wall_color"
+                },
+                {
+                    "tag": "tbp:bay_corner",
+                    "row": "tint"
+                }
+            ]
+        },
+        "roof_color": {
+            "type": "color",
+            "default": "#5a4a48",
+            "display_name": "Roof",
+            "category": "Looks",
+            "targets": [
+                {
+                    "tag": "tbp:house_roof",
+                    "row": "tint"
+                }
+            ]
+        },
+        "has_chimney": {
+            "type": "bool",
+            "default": true,
+            "display_name": "Chimney",
+            "category": "Parts",
+            "targets": [
+                {
+                    "object": "chimney",
+                    "row": "is_enabled"
+                }
+            ]
+        },
+        "chimney_height": {
+            "type": "float",
+            "default": 1.0,
+            "minimum": 0.5,
+            "maximum": 3.0,
+            "display_name": "Chimney height",
+            "category": "Parts",
+            "targets": [
+                {
+                    "object": "chimney",
+                    "row": "scale",
+                    "axis": "y"
+                }
+            ]
+        },
+        "is_porch_lit": {
+            "type": "bool",
+            "default": true,
+            "display_name": "Porch light",
+            "category": "Parts",
+            "targets": [
+                {
+                    "object": "porch_light",
+                    "component": "light",
+                    "row": "is_on"
+                }
+            ]
+        },
+        "front": {
+            "type": "enum",
+            "default": "door",
+            "display_name": "Front",
+            "category": "Parts",
+            "options": {
+                "door": [],
+                "shop": [
+                    {
+                        "object": "bay_0_0_1",
+                        "property": "kind",
+                        "value": "door"
+                    },
+                    {
+                        "object": "bay_0_0_3",
+                        "property": "kind",
+                        "value": "door"
+                    }
+                ]
+            }
+        }
+    },
+    "objects": [
+        {
+            "id": 1,
+            "name": "root"
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_0_0",
+            "position": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 2
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_2_0",
+            "position": [
+                12.0,
+                0.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                180.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 3
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_0_1",
+            "position": [
+                2.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 4
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_2_1",
+            "position": [
+                10.0,
+                0.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                180.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 5
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_0_2",
+            "position": [
+                4.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "door"
+                    }
+                }
+            },
+            "id": 6
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_2_2",
+            "position": [
+                8.0,
+                0.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                180.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 7
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_0_3",
+            "position": [
+                6.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 8
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_2_3",
+            "position": [
+                6.0,
+                0.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                180.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 9
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_0_4",
+            "position": [
+                8.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 10
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_2_4",
+            "position": [
+                4.0,
+                0.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                180.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 11
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_0_5",
+            "position": [
+                10.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 12
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_2_5",
+            "position": [
+                2.0,
+                0.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                180.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 13
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_1_0",
+            "position": [
+                12.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                -90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 14
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_3_0",
+            "position": [
+                0.0,
+                0.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 15
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_1_1",
+            "position": [
+                12.0,
+                0.0,
+                2.0
+            ],
+            "rotation": [
+                0.0,
+                -90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 16
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_3_1",
+            "position": [
+                0.0,
+                0.0,
+                6.0
+            ],
+            "rotation": [
+                0.0,
+                90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 17
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_1_2",
+            "position": [
+                12.0,
+                0.0,
+                4.0
+            ],
+            "rotation": [
+                0.0,
+                -90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 18
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_3_2",
+            "position": [
+                0.0,
+                0.0,
+                4.0
+            ],
+            "rotation": [
+                0.0,
+                90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 19
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_1_3",
+            "position": [
+                12.0,
+                0.0,
+                6.0
+            ],
+            "rotation": [
+                0.0,
+                -90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 20
+        },
+        {
+            "parent": 1,
+            "name": "bay_0_3_3",
+            "position": [
+                0.0,
+                0.0,
+                2.0
+            ],
+            "rotation": [
+                0.0,
+                90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 21
+        },
+        {
+            "parent": 1,
+            "name": "corner_0_0",
+            "position": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay_corner"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_corner"
+                },
+                "collider": {}
+            },
+            "id": 22
+        },
+        {
+            "parent": 1,
+            "name": "corner_0_1",
+            "position": [
+                12.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                -90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay_corner"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_corner"
+                },
+                "collider": {}
+            },
+            "id": 23
+        },
+        {
+            "parent": 1,
+            "name": "corner_0_2",
+            "position": [
+                12.0,
+                0.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                180.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay_corner"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_corner"
+                },
+                "collider": {}
+            },
+            "id": 24
+        },
+        {
+            "parent": 1,
+            "name": "corner_0_3",
+            "position": [
+                0.0,
+                0.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay_corner"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_corner"
+                },
+                "collider": {}
+            },
+            "id": 25
+        },
+        {
+            "parent": 1,
+            "name": "floor_0_0_0",
+            "position": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_floor_4"
+                },
+                "collider": {}
+            },
+            "id": 26
+        },
+        {
+            "parent": 1,
+            "name": "floor_0_0_4",
+            "position": [
+                0.0,
+                0.0,
+                4.0
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_floor_4"
+                },
+                "collider": {}
+            },
+            "id": 27
+        },
+        {
+            "parent": 1,
+            "name": "floor_0_4_0",
+            "position": [
+                4.0,
+                0.0,
+                0.0
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_floor_4"
+                },
+                "collider": {}
+            },
+            "id": 28
+        },
+        {
+            "parent": 1,
+            "name": "floor_0_4_4",
+            "position": [
+                4.0,
+                0.0,
+                4.0
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_floor_4"
+                },
+                "collider": {}
+            },
+            "id": 29
+        },
+        {
+            "parent": 1,
+            "name": "floor_0_8_0",
+            "position": [
+                8.0,
+                0.0,
+                0.0
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_floor_4"
+                },
+                "collider": {}
+            },
+            "id": 30
+        },
+        {
+            "parent": 1,
+            "name": "floor_0_8_4",
+            "position": [
+                8.0,
+                0.0,
+                4.0
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_floor_4"
+                },
+                "collider": {}
+            },
+            "id": 31
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_0_0",
+            "position": [
+                0.0,
+                3.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 32
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_2_0",
+            "position": [
+                12.0,
+                3.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                180.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 33
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_0_1",
+            "position": [
+                2.0,
+                3.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 34
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_2_1",
+            "position": [
+                10.0,
+                3.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                180.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 35
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_0_2",
+            "position": [
+                4.0,
+                3.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 36
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_2_2",
+            "position": [
+                8.0,
+                3.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                180.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 37
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_0_3",
+            "position": [
+                6.0,
+                3.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 38
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_2_3",
+            "position": [
+                6.0,
+                3.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                180.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 39
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_0_4",
+            "position": [
+                8.0,
+                3.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 40
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_2_4",
+            "position": [
+                4.0,
+                3.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                180.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 41
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_0_5",
+            "position": [
+                10.0,
+                3.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 42
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_2_5",
+            "position": [
+                2.0,
+                3.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                180.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 43
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_1_0",
+            "position": [
+                12.0,
+                3.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                -90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 44
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_3_0",
+            "position": [
+                0.0,
+                3.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 45
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_1_1",
+            "position": [
+                12.0,
+                3.0,
+                2.0
+            ],
+            "rotation": [
+                0.0,
+                -90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 46
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_3_1",
+            "position": [
+                0.0,
+                3.0,
+                6.0
+            ],
+            "rotation": [
+                0.0,
+                90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 47
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_1_2",
+            "position": [
+                12.0,
+                3.0,
+                4.0
+            ],
+            "rotation": [
+                0.0,
+                -90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 48
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_3_2",
+            "position": [
+                0.0,
+                3.0,
+                4.0
+            ],
+            "rotation": [
+                0.0,
+                90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 49
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_1_3",
+            "position": [
+                12.0,
+                3.0,
+                6.0
+            ],
+            "rotation": [
+                0.0,
+                -90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "wall"
+                    }
+                }
+            },
+            "id": 50
+        },
+        {
+            "parent": 1,
+            "name": "bay_1_3_3",
+            "position": [
+                0.0,
+                3.0,
+                2.0
+            ],
+            "rotation": [
+                0.0,
+                90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay"
+            ],
+            "components": {
+                "prefab": {
+                    "prefab": "tbp:test_wall_bay",
+                    "values": {
+                        "kind": "window"
+                    }
+                }
+            },
+            "id": 51
+        },
+        {
+            "parent": 1,
+            "name": "corner_1_0",
+            "position": [
+                0.0,
+                3.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay_corner"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_corner"
+                },
+                "collider": {}
+            },
+            "id": 52
+        },
+        {
+            "parent": 1,
+            "name": "corner_1_1",
+            "position": [
+                12.0,
+                3.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                -90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay_corner"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_corner"
+                },
+                "collider": {}
+            },
+            "id": 53
+        },
+        {
+            "parent": 1,
+            "name": "corner_1_2",
+            "position": [
+                12.0,
+                3.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                180.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay_corner"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_corner"
+                },
+                "collider": {}
+            },
+            "id": 54
+        },
+        {
+            "parent": 1,
+            "name": "corner_1_3",
+            "position": [
+                0.0,
+                3.0,
+                8.0
+            ],
+            "rotation": [
+                0.0,
+                90.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:bay_corner"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_corner"
+                },
+                "collider": {}
+            },
+            "id": 55
+        },
+        {
+            "parent": 1,
+            "name": "floor_1_0_0",
+            "position": [
+                0.0,
+                3.0,
+                0.0
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_floor_4"
+                },
+                "collider": {}
+            },
+            "id": 56
+        },
+        {
+            "parent": 1,
+            "name": "floor_1_0_4",
+            "position": [
+                0.0,
+                3.0,
+                4.0
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_floor_4"
+                },
+                "collider": {}
+            },
+            "id": 57
+        },
+        {
+            "parent": 1,
+            "name": "floor_1_4_0",
+            "position": [
+                4.0,
+                3.0,
+                0.0
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_floor_4"
+                },
+                "collider": {}
+            },
+            "id": 58
+        },
+        {
+            "parent": 1,
+            "name": "floor_1_4_4",
+            "position": [
+                4.0,
+                3.0,
+                4.0
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_floor_4"
+                },
+                "collider": {}
+            },
+            "id": 59
+        },
+        {
+            "parent": 1,
+            "name": "floor_1_8_0",
+            "position": [
+                8.0,
+                3.0,
+                0.0
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_floor_4"
+                },
+                "collider": {}
+            },
+            "id": 60
+        },
+        {
+            "parent": 1,
+            "name": "floor_1_8_4",
+            "position": [
+                8.0,
+                3.0,
+                4.0
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_floor_4"
+                },
+                "collider": {}
+            },
+            "id": 61
+        },
+        {
+            "parent": 1,
+            "name": "roof_0_0",
+            "position": [
+                0.0,
+                6.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:house_roof"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_roof_4"
+                },
+                "collider": {}
+            },
+            "id": 62
+        },
+        {
+            "parent": 1,
+            "name": "roof_0_4",
+            "position": [
+                0.0,
+                6.0,
+                4.0
+            ],
+            "tags": [
+                "tbp:house_roof"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_roof_4"
+                },
+                "collider": {}
+            },
+            "id": 63
+        },
+        {
+            "parent": 1,
+            "name": "roof_4_0",
+            "position": [
+                4.0,
+                6.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:house_roof"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_roof_4"
+                },
+                "collider": {}
+            },
+            "id": 64
+        },
+        {
+            "parent": 1,
+            "name": "roof_4_4",
+            "position": [
+                4.0,
+                6.0,
+                4.0
+            ],
+            "tags": [
+                "tbp:house_roof"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_roof_4"
+                },
+                "collider": {}
+            },
+            "id": 65
+        },
+        {
+            "parent": 1,
+            "name": "roof_8_0",
+            "position": [
+                8.0,
+                6.0,
+                0.0
+            ],
+            "tags": [
+                "tbp:house_roof"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_roof_4"
+                },
+                "collider": {}
+            },
+            "id": 66
+        },
+        {
+            "parent": 1,
+            "name": "roof_8_4",
+            "position": [
+                8.0,
+                6.0,
+                4.0
+            ],
+            "tags": [
+                "tbp:house_roof"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_roof_4"
+                },
+                "collider": {}
+            },
+            "id": 67
+        },
+        {
+            "parent": 1,
+            "name": "chimney",
+            "position": [
+                9.0,
+                6.25,
+                2.0
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_chimney"
+                },
+                "collider": {}
+            },
+            "id": 68
+        },
+        {
+            "parent": 1,
+            "name": "porch_light",
+            "position": [
+                5.0,
+                2.6,
+                -0.5
+            ],
+            "components": {
+                "light": {
+                    "type": "point",
+                    "intensity": 1.5,
+                    "range": 6.0,
+                    "color": "#ffcf90"
+                }
+            },
+            "id": 69
+        }
+    ]
+}

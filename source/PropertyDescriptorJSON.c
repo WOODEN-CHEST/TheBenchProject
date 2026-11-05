@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include "PropertyDescriptorInternal.h"
 #include "DataMap.h"
+#include "DataValue.h"
 #include "NamespacedKey.h"
 #include "GameCalendar.h"
 #include "GameJSON.h"
@@ -452,6 +453,13 @@ static Error CreateValue(JSONObjectPool* pool, const PropertyDescriptor* descrip
             return CreateInstanceListValue(pool, data->InstanceListValue, outValue);
         case PropertyType_RecordList:
             return Error_Construct2(ErrorCode_InvalidState, "Record lists are written separately.");
+        case PropertyType_DataValue:
+            if (data->DataValueValue == NULL)
+            {
+                *outValue = JSONObjectValue_CreateNull();
+                return Error_CreateSuccess();
+            }
+            return DataValue_WritePlainJSON(data->DataValueValue, pool, outValue);
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -669,6 +677,8 @@ static Error ParseValue(const PropertyDescriptor* descriptor, const JSONObjectVa
             return Error_Construct2(ErrorCode_InvalidState, "Instance lists are read separately.");
         case PropertyType_RecordList:
             return Error_Construct2(ErrorCode_InvalidState, "Record lists are read separately.");
+        case PropertyType_DataValue:
+            return Error_Construct2(ErrorCode_InvalidState, "Data values are read separately.");
     }
     return Error_Construct2(ErrorCode_InvalidState, "The property has an unknown type.");
 }
@@ -1098,6 +1108,26 @@ static Error ReadRecordList(const PropertyDescriptor* descriptor, const JSONObje
     return Error_CreateSuccess();
 }
 
+/* A data value row: null for none, anything else as a plain value. Its rules are checked when the read commits. */
+static Error ReadDataValueRow(const PropertyDescriptor* descriptor, const JSONObjectValue* value, void* target)
+{
+    if (value->Type == JSONValueType_Null)
+    {
+        PropertyInternal_AdoptOwned(descriptor, target, NULL);
+        return Error_CreateSuccess();
+    }
+    DataValue Read = DataValue_CreateTag();
+    Error Result = DataValue_ReadPlainJSON(value, &Read);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    DataValue* Held = Memory_Allocate(sizeof(DataValue));
+    *Held = Read; // moved: it owns what the read built
+    PropertyInternal_AdoptOwned(descriptor, target, Held);
+    return Error_CreateSuccess();
+}
+
 static Error ReadValue(const PropertyTable* table, const PropertyDescriptor* descriptor, const JSONObjectValue* value,
     const PropertyReadOptions* options, void* target)
 {
@@ -1105,6 +1135,10 @@ static Error ReadValue(const PropertyTable* table, const PropertyDescriptor* des
     if (PropertyInternal_IsStringType(descriptor->Type))
     {
         Result = ReadString(descriptor, value, target);
+    }
+    else if (descriptor->Type == PropertyType_DataValue)
+    {
+        Result = ReadDataValueRow(descriptor, value, target);
     }
     else if (descriptor->Type == PropertyType_RecordList)
     {
@@ -1451,5 +1485,80 @@ Error Properties_ReadJSON(const PropertyTable* table, JSONCompound* compound, vo
     {
         KeyRegistry_TruncateTo(Options.Keys, KeyCheckpoint);
     }
+    return Result;
+}
+
+Error Properties_SetFromDataValue(const PropertyTable* table, void* instance, const unsigned char* key, const DataValue* value,
+    JSONObjectPool* pool)
+{
+    if ((table == NULL) || (instance == NULL) || (key == NULL) || (value == NULL) || (pool == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "Properties_SetFromDataValue: table, instance, key, value and pool must not be NULL.");
+    }
+    const PropertyDescriptor* Descriptor = PropertyTable_FindByKey(table, key);
+    if (Descriptor == NULL)
+    {
+        return Error_Construct4(ErrorCode_IllegalArgument, "%s has no property \"%s\".", (const char*)table->Name,
+            (const char*)key);
+    }
+    if (PropertyInternal_HasFlags(Descriptor, PropertyFlags_ReadOnly) || (Descriptor->Type == PropertyType_DataMap))
+    {
+        return Error_Construct4(ErrorCode_InvalidOperation, "%s.%s cannot be set from a value.", (const char*)table->Name,
+            (const char*)Descriptor->Key);
+    }
+    JSONObjectValue Json = JSONObjectValue_CreateNull();
+    Error Result = DataValue_WritePlainJSON(value, pool, &Json);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    // Only the row's field of a zeroed block is ever touched, so no other row of it needs a value.
+    union
+    {
+        max_align_t Alignment;
+        unsigned char Bytes[PROPERTY_SCRATCH_INLINE_SIZE];
+    } Inline;
+    void* Scratch = (table->StructSize <= sizeof(Inline.Bytes)) ? (void*)Inline.Bytes : Memory_Allocate(table->StructSize);
+    Memory_Zero(Scratch, table->StructSize);
+    PropertyReadOptions Options = PropertyReadOptions_CreateDefault();
+    Options.Pool = pool;
+    Result = ReadValue(table, Descriptor, &Json, &Options, Scratch);
+    if (Result.Code == ErrorCode_Success)
+    {
+        PropertyValue Read = { .Type = Descriptor->Type, .Data = PropertyInternal_ReadField(Descriptor, Scratch) };
+        Result = Properties_Set(table, instance, key, &Read);
+    }
+    if (PropertyInternal_IsOwnedType(Descriptor->Type))
+    {
+        PropertyInternal_AdoptOwned(Descriptor, Scratch, NULL);
+    }
+    if (Scratch != (void*)Inline.Bytes)
+    {
+        Memory_Free(Scratch);
+    }
+    Error ReturnResult = JSONObjectPool_ReturnValue(pool, &Json);
+    Error_Deconstruct(&ReturnResult);
+    return Result;
+}
+
+Error PropertyRecordList_ReadJSON(const PropertyTable* table, const JSONObjectValue* array, size_t maxCount,
+    const PropertyReadOptions* options, PropertyRecordList** outList)
+{
+    if ((table == NULL) || (array == NULL) || (outList == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "PropertyRecordList_ReadJSON: table, array and outList must not be NULL.");
+    }
+    PropertyDescriptor Row;
+    Memory_Zero(&Row, sizeof(Row));
+    Row.Type = PropertyType_RecordList;
+    Row.RecordTable = table;
+    Row.Rules.MaxCount = maxCount;
+    Row.Size = sizeof(PropertyRecordList*);
+    PropertyReadOptions Options = (options != NULL) ? *options : PropertyReadOptions_CreateDefault();
+    PropertyRecordList* List = NULL;
+    Error Result = ReadRecordList(&Row, array, &Options, &List);
+    *outList = (Result.Code == ErrorCode_Success) ? List : NULL;
     return Result;
 }

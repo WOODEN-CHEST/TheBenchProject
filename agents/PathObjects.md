@@ -137,6 +137,10 @@ no one place to turn about.
 **A cut end** makes a generated mesh even in a rigid slot: only a mesh can be cut, and the cut plane hides in the cap. A cut lies at the piece's own end
 along the path, so on a turned piece it takes the other end of the mesh. A model's `tint` reaches a part through its child's tint.
 
+**A prefab in a slot.** A model record names a `prefab` in place of a `world_model`, with its `values` and `randomizes_enums`: a lamp with its light. Each such piece is a runtime child with a prefab component ([Prefabs.md](Prefabs.md)), an object rather than an instance copy, its id derived from the path object's, its slot, its model and its index. It takes a rigid piece's place, a shear taken as a step since an object has no shear, at an even scale however the slot stretches or the node widens; its length is the slot's `length` setting or 0, it never bends or is cut, and a slot's collision and a record's `tint` do not reach it: it collides and looks as its prefab says. The prefabs system makes its objects at its next update.
+
+**A changed definition.** A loaded asset never changes by itself, so `WorldPathObjects_Rebuild` lets go of what the system holds and builds every path object again, at its next update, from the definitions as they are now: what a changed path object says, and the picks of a changed prefab's pieces. It writes only what came out different, like any rebuild.
+
 ## Snapping
 
 `snaps_to_terrain`, `ground_offset`, `ground_search_height`, `ground_search_depth`, `ground_target` (`terrain` alone, or anything solid on
@@ -171,6 +175,7 @@ do use up object ids):
 - `path_object_copies`, one per slot and model: a `model_instances` component with the rigid copies and a collider with their placed shapes.
 - `path_object_part`, one per slot, model and about 32 m of path (`WORLD_PATH_OBJECTS_PART_LENGTH`): a model component with a generated model, which has
   its own lights and culling, and a collider when its slot collides as `mesh`.
+- `path_object_piece_<slot>_<model>_<index>`, one per piece of a model that names a prefab: a prefab component and the piece's place.
 
 The children take the settings in effect as ordinary rows (the render and LOD rows a slot shares by key with `model_instances`) and the object's tint,
 so the renderer, the collision world and the status know nothing of path objects.
@@ -198,7 +203,7 @@ own colliders: they change the ground under it, one rebuild follows, it writes n
 user. It goes before the collision world and the world. A child removed from outside comes back at the next rebuild. A path object under another's runtime
 child goes with that child.
 
-**Warnings**, once per path object: a missing asset (not retried until its name changes), a missing model, each limit reached, a middle of no length.
+**Warnings**, once per path object: a missing asset (not retried until its name changes), a missing model, each limit reached, a middle of no length. All of a system's path objects give at most `WORLD_PATH_OBJECTS_MAX_WARNINGS` (1024) together: past them it stays quiet, and says so once.
 
 ## Limits
 
@@ -222,7 +227,7 @@ target, or masks that leave the other out.
 
 ## Not built
 
-Removing or swapping one piece by hand, kept by its distance along the path. Prefabs in a slot's models. Bending in the vertex shader: it would save memory, but
+Removing or swapping one piece by hand, kept by its distance along the path. Bending in the vertex shader: it would save memory, but
 needs new shader variants in every pass.
 
 ## Test content

@@ -89,8 +89,11 @@ typedef enum WorldComponentTypeEnum
     /** @brief A path object: a fence, hedge, railing or row of lamps along the nearest path at or above it
      *  (WorldPathObjectComponent.h). */
     WorldComponentType_PathObject = 11,
+    /** @brief A copy of a prefab: the prefab's name, its property values and overrides, the objects it makes under its object
+     *  (WorldPrefabComponent.h). */
+    WorldComponentType_Prefab = 12,
     /** @brief The number of standard types (not a type). */
-    WorldComponentType_Count = 12
+    WorldComponentType_Count = 13
 } WorldComponentType;
 
 /**

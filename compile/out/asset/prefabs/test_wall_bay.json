@@ -1,0 +1,110 @@
+{
+    "name": "tbp:test_wall_bay",
+    "format_version": 3,
+    "properties": {
+        "kind": {
+            "type": "enum",
+            "default": "wall",
+            "display_name": "Kind",
+            "category": "Bay",
+            "options": {
+                "wall": [
+                    {
+                        "object": "with_window",
+                        "row": "is_enabled",
+                        "value": false
+                    },
+                    {
+                        "object": "with_door",
+                        "row": "is_enabled",
+                        "value": false
+                    }
+                ],
+                "window": [
+                    {
+                        "object": "plain",
+                        "row": "is_enabled",
+                        "value": false
+                    },
+                    {
+                        "object": "with_door",
+                        "row": "is_enabled",
+                        "value": false
+                    }
+                ],
+                "door": [
+                    {
+                        "object": "plain",
+                        "row": "is_enabled",
+                        "value": false
+                    },
+                    {
+                        "object": "with_window",
+                        "row": "is_enabled",
+                        "value": false
+                    }
+                ]
+            }
+        },
+        "wall_color": {
+            "type": "color",
+            "default": "#ffffff",
+            "display_name": "Wall colour",
+            "category": "Looks",
+            "targets": [
+                {
+                    "tag": "tbp:bay_wall",
+                    "row": "tint"
+                }
+            ]
+        }
+    },
+    "objects": [
+        {
+            "id": 1,
+            "name": "root"
+        },
+        {
+            "id": 2,
+            "parent": 1,
+            "name": "plain",
+            "tags": [
+                "tbp:bay_wall"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_wall_2"
+                },
+                "collider": {}
+            }
+        },
+        {
+            "id": 3,
+            "parent": 1,
+            "name": "with_window",
+            "tags": [
+                "tbp:bay_wall"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_window_2"
+                },
+                "collider": {}
+            }
+        },
+        {
+            "id": 4,
+            "parent": 1,
+            "name": "with_door",
+            "tags": [
+                "tbp:bay_wall"
+            ],
+            "components": {
+                "model": {
+                    "world_model": "tbp:test_kit_door_2"
+                },
+                "collider": {}
+            }
+        }
+    ]
+}

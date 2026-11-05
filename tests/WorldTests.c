@@ -219,6 +219,7 @@ static bool ConstructDriverWorld(TestRun* run, World* world, KeyRegistry* keys)
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Screen),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Path),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_PathObject),
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Prefab),
         &TestDriverA,
         &TestDriverB,
     };
@@ -618,7 +619,7 @@ static void ComponentTypesAreFoundByName(TestRun* run)
 
     TEST_CHECK(run, World_GetComponentTypeCount(&TestWorld) == (size_t)WorldComponentType_Count);
     const char* const Names[WorldComponentType_Count] = { "model", "sprite", "light", "collider", "character", "animator",
-        "terrain", "model_instances", "ambient_zone", "screen", "path", "path_object" };
+        "terrain", "model_instances", "ambient_zone", "screen", "path", "path_object", "prefab" };
     for (size_t Type = 0; Type < (size_t)WorldComponentType_Count; Type++)
     {
         const WorldComponentTypeInfo* Info = World_GetComponentTypeInfo(&TestWorld, (WorldComponentType)Type);
@@ -1193,6 +1194,7 @@ static void CustomComponentTypesAreChecked(TestRun* run)
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Screen),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_Path),
         WorldComponent_GetStandardTypeInfo(WorldComponentType_PathObject),
+        WorldComponent_GetStandardTypeInfo(WorldComponentType_Prefab),
         &TestUnhooked,
     };
     const char* const Fragments[] = { "test_unhooked", "AfterSet", NULL };
@@ -1206,11 +1208,73 @@ static void CustomComponentTypesAreChecked(TestRun* run)
 
 
 // Public functions.
+static void DerivedObjectsLeaveTheCounterAlone(TestRun* run)
+{
+    World TestWorld;
+    KeyRegistry TestKeys;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
+    {
+        return;
+    }
+    uint64_t Next = World_GetNextObjectId(&TestWorld);
+    WorldObject* Object = NULL;
+    uint64_t Id = WORLD_OBJECT_DERIVED_ID_FIRST + 5U;
+    TEST_CHECK_SUCCESS(run, World_CreateDerivedObject(&TestWorld, (const unsigned char*)u8"part", Id, &Object));
+    TEST_CHECK(run, (Object != NULL) && (WorldObject_GetId(Object) == Id));
+    TEST_CHECK(run, !WorldObject_IsPersistent(Object)); // what a saved world keeps does not hold it
+    TEST_CHECK(run, World_GetNextObjectId(&TestWorld) == Next);
+    WorldObject* Found = NULL;
+    TEST_CHECK(run, World_TryGetObject(&TestWorld, Id, &Found) && (Found == Object));
+    TEST_CHECK_ERROR(run, World_CreateDerivedObject(&TestWorld, NULL, Id, &Object), ErrorCode_InvalidOperation);
+    TEST_CHECK_ERROR(run, World_CreateDerivedObject(&TestWorld, NULL, WORLD_OBJECT_DERIVED_ID_FIRST - 1U, &Object), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, World_CreateDerivedObject(&TestWorld, NULL, 7U, &Object), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, World_CreateDerivedObject(&TestWorld, NULL, UINT64_MAX, &Object), ErrorCode_ArgumentOutOfRange);
+    TEST_CHECK_ERROR(run, World_CreateDerivedObject(NULL, NULL, Id, &Object), ErrorCode_IllegalArgument);
+    TEST_CHECK_ERROR(run, World_CreateDerivedObject(&TestWorld, NULL, Id, NULL), ErrorCode_IllegalArgument);
+    TEST_CHECK_SUCCESS(run, World_CreateDerivedObject(&TestWorld, NULL, WORLD_OBJECT_ID_MAX, &Object));
+    TEST_CHECK(run, World_GetNextObjectId(&TestWorld) == Next); // the last id too does not use the counter up
+    // Removed, it may come back.
+    TEST_CHECK_SUCCESS(run, World_RemoveObject(&TestWorld, Id));
+    TEST_CHECK_SUCCESS(run, World_CreateDerivedObject(&TestWorld, NULL, Id, &Object));
+    // A counter a file sent into the range goes past what is taken instead of giving up.
+    World_EnsureNextObjectIdAtLeast(&TestWorld, Id);
+    WorldObject* Minted = NULL;
+    TEST_CHECK_SUCCESS(run, World_CreateObject(&TestWorld, NULL, &Minted));
+    TEST_CHECK(run, (Minted != NULL) && (WorldObject_GetId(Minted) == (Id + 1U)));
+    TEST_CHECK(run, World_GetNextObjectId(&TestWorld) == (Id + 2U));
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
+}
+
+static void TheTypeRevisionCountsAnyRowOfAType(TestRun* run)
+{
+    World TestWorld;
+    KeyRegistry TestKeys;
+    if (!TestWorld_Construct(run, &TestWorld, &TestKeys, NULL, NULL))
+    {
+        return;
+    }
+    WorldObject* Object = NULL;
+    WorldComponent* Light = NULL;
+    TEST_CHECK_SUCCESS(run, World_CreateObject(&TestWorld, NULL, &Object));
+    uint64_t Lights = World_GetComponentTypeRevision(&TestWorld, WorldComponentType_Light);
+    uint64_t Models = World_GetComponentTypeRevision(&TestWorld, WorldComponentType_Model);
+    TEST_CHECK_SUCCESS(run, World_AddComponent(&TestWorld, WorldObject_GetId(Object), WorldComponentType_Light, &Light));
+    TEST_CHECK(run, World_GetComponentTypeRevision(&TestWorld, WorldComponentType_Light) == Lights); // adding is the set's
+    PropertyValue Range = PropertyValue_FromFloat(3.0f);
+    TEST_CHECK_SUCCESS(run, Properties_Set(WorldLightComponent_GetPropertyTable(), Light, (const unsigned char*)u8"range", &Range));
+    TEST_CHECK(run, World_GetComponentTypeRevision(&TestWorld, WorldComponentType_Light) == (Lights + 1U));
+    TEST_CHECK(run, World_GetComponentTypeRevision(&TestWorld, WorldComponentType_Model) == Models);
+    TestWorld_Deconstruct(run, &TestWorld, &TestKeys);
+}
+
+
 void WorldTests_Run(TestRun* run)
 {
     static const TestCase Cases[] =
     {
         { "objects_get_unique_ids_that_are_never_zero", ObjectsGetUniqueIdsThatAreNeverZero },
+        { "derived_objects_leave_the_counter_alone", DerivedObjectsLeaveTheCounterAlone },
+        { "the_type_revision_counts_any_row_of_a_type", TheTypeRevisionCountsAnyRowOfAType },
         { "loader_ids_advance_the_counter", LoaderIdsAdvanceTheCounter },
         { "object_set_version_changes_on_create_and_remove", ObjectSetVersionChangesOnCreateAndRemove },
         { "object_properties_validate_and_advance_the_revision", ObjectPropertiesValidateAndAdvanceTheRevision },

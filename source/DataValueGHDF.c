@@ -464,6 +464,10 @@ static Error ReadKey(const GHDFRead* read, const GHDFObjectValue* value, DataVal
     {
         return PathError(read, "a key must be a string");
     }
+    if (read->Keys == NULL)
+    {
+        return PathError(read, "a plain value holds no key");
+    }
     Error Result = NamespacedKey_Validate(Bytes);
     uint32_t Key = NAMESPACED_KEY_ID_NONE;
     if (Result.Code == ErrorCode_Success)
@@ -991,6 +995,48 @@ Error DataValue_ReadGHDF(GHDFCompound* compound, KeyRegistry* keys, DataValue* o
     {
         DataValue_Deconstruct(outValue);
         KeyRegistry_TruncateTo(keys, KeyCheckpoint);
+    }
+    return Result;
+}
+
+Error DataValue_WritePlainGHDF(const DataValue* value, GHDFObjectPool* pool, GHDFCompound* compound)
+{
+    if ((value == NULL) || (pool == NULL) || (compound == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "DataValue_WritePlainGHDF: value, pool and compound must not be NULL.");
+    }
+    if (DataValue_HoldsKey(value))
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "DataValue_WritePlainGHDF: a plain value holds no key.");
+    }
+    Error Result = DataValue_Validate(value, NULL);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    return DataValueInternal_WriteGHDF(value, NULL, pool, compound);
+}
+
+Error DataValue_ReadPlainGHDF(GHDFCompound* compound, DataValue* outValue)
+{
+    if (outValue != NULL)
+    {
+        *outValue = DataValue_CreateTag();
+    }
+    if ((compound == NULL) || (outValue == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "DataValue_ReadPlainGHDF: compound and outValue must not be NULL.");
+    }
+    DataPath Path = DataPath_Create();
+    Error Result = DataValueInternal_ReadGHDF(compound, NULL, 1U, &Path, NULL, outValue);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = DataValueInternal_CheckRead(outValue, NULL, &Path, ErrorCode_Deserialize);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        DataValue_Deconstruct(outValue);
     }
     return Result;
 }

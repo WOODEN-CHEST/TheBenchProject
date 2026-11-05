@@ -119,6 +119,8 @@ typedef struct TerrainMaterialStruct TerrainMaterial;
 typedef struct WaterMaterialStruct WaterMaterial;
 /** @brief A path object asset (PathObject.h). */
 typedef struct PathObjectStruct PathObject;
+/** @brief A prefab asset (Prefab.h). */
+typedef struct PrefabStruct Prefab;
 /** @brief A climate asset (Climate.h). */
 typedef struct ClimateStruct Climate;
 /** @brief An input actions asset (InputActions.h). */
@@ -406,6 +408,8 @@ typedef struct StandardAssetTypesStruct
     /** @brief Path object type id: a fence, hedge, railing or row of lamps as slots of weighted world models, loaded as
      *  dependencies, and how they fill a path (PathObject.h). */
     AssetTypeID PathObject;
+    /** @brief Prefab type id: a group of objects in the world file's format and the properties a copy sets (Prefab.h). */
+    AssetTypeID Prefab;
 } StandardAssetTypes;
 
 
@@ -1146,6 +1150,12 @@ Error AssetManager_LoadWaterMaterial(AssetManager* self, const unsigned char* na
  *        dependencies. Thin wrapper over AssetManager_LoadAssetSingle with the standard path object type.
  */
 Error AssetManager_LoadPathObject(AssetManager* self, const unsigned char* name, AssetUserID user, PathObject** outAsset);
+
+/**
+ * @brief Loads a prefab by name (Prefab.h): its template objects and its declared properties. No dependencies: what its objects name
+ *        is loaded by those objects. Thin wrapper over AssetManager_LoadAssetSingle with the standard prefab type.
+ */
+Error AssetManager_LoadPrefab(AssetManager* self, const unsigned char* name, AssetUserID user, Prefab** outAsset);
 
 /**
  * @brief Decodes the image file a texture asset's definition names into 8-bit RGBA pixels on the CPU, for a loader that

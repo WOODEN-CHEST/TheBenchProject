@@ -206,6 +206,26 @@ Error WorldFile_ReadGHDF(const unsigned char* bytes, size_t byteCount, const Wor
     World* outWorld);
 
 /**
+ * @brief Reads only the "objects" list of a JSON compound into a new world, by a world file's rules, except that a key, a component
+ *        or anything else it does not know is refused rather than skipped: what a prefab's file holds.
+ *
+ * All or nothing, as the other readers: on failure nothing is left in @p outWorld and the registry forgets the keys it interned. No
+ * "objects" key makes a world with no objects.
+ * @param root The compound; its other keys are not looked at. Must not be NULL.
+ * @param formatVersion The format the objects are written in (1 to WORLD_FILE_FORMAT_VERSION), which decides their migrations.
+ * @param pool The pool holding @p root's tree, for those migrations; must not be NULL.
+ * @param options The registry the objects' tags and data intern their keys in, the asset manager (NULL: their sprites stay empty)
+ *        and the logger. Must not be NULL.
+ * @param maxObjectCount The most objects allowed, checked before any is made.
+ * @param outWorld [out] Caller memory, not constructed: on success a constructed world, released with World_Deconstruct. Must not
+ *        be NULL.
+ * @returns Success; ErrorCode_IllegalArgument for NULL arguments; ErrorCode_InvalidJSON naming the object and the problem.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error WorldFile_ReadObjectsJSON(JSONCompound* root, uint64_t formatVersion, JSONObjectPool* pool,
+    const WorldFileReadOptions* options, size_t maxObjectCount, World* outWorld);
+
+/**
  * @brief Writes a world as JSON text, appended to a byte buffer (not terminated; it ends with a newline).
  *
  * Nothing is appended on failure.

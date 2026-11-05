@@ -499,3 +499,57 @@ Error DataValue_WriteGHDF(const DataValue* value, const KeyRegistry* keys, GHDFO
  *       full set.
  */
 Error DataValue_ReadGHDF(GHDFCompound* compound, KeyRegistry* keys, DataValue* outValue);
+
+/**
+ * @brief Whether a value is a key or holds one anywhere inside.
+ * @param value The value; NULL holds none.
+ * @returns true if it holds a key, which a plain value may not.
+ */
+bool DataValue_HoldsKey(const DataValue* value);
+
+/**
+ * @brief Writes a plain value as plain JSON: with no registry and no wrappers. A vector3 is [x, y, z], a color "#rrggbb", an object
+ *        an integer, a date_time its text, an empty list [].
+ *
+ * The form of a value that stands for what a property table's row reads from JSON (DataValue_ReadPlainJSON), whose type only that
+ * row knows. It need not read back as the same type: a color reads back as a string, which a color row reads the same.
+ * @param value The value (not a tag); must not be NULL, and must hold no key.
+ * @param pool The pool the JSON value's strings, arrays and compounds are borrowed from; must not be NULL.
+ * @param outJSON [out] Receives the JSON value, owned by the caller. Must not be NULL. Nothing stays borrowed on failure.
+ * @returns Success; ErrorCode_IllegalArgument if an argument is NULL or @p value is a tag; ErrorCode_InvalidOperation if it holds a
+ *          key; the validation error.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error DataValue_WritePlainJSON(const DataValue* value, JSONObjectPool* pool, JSONObjectValue* outJSON);
+
+/**
+ * @brief Reads a plain value from JSON: with no registry. As DataValue_ReadJSON, except that a key is refused, a list that mixes ints
+ *        and floats reads as floats (vectors in files are written so), and [] is an empty list.
+ *
+ * Every rule is checked while reading, so hostile data is refused before anything big is built.
+ * @param json The JSON value; must not be NULL.
+ * @param outValue [out] Receives the value (release it with DataValue_Deconstruct). Must not be NULL. A tag on failure.
+ * @returns Success; ErrorCode_IllegalArgument if an argument is NULL; ErrorCode_InvalidJSON naming the problem and where it is.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error DataValue_ReadPlainJSON(const JSONObjectValue* json, DataValue* outValue);
+
+/**
+ * @brief Writes a plain value into a GHDF compound, as DataValue_WriteGHDF does, with no registry.
+ * @param value The value; must not be NULL, and must hold no key.
+ * @param pool The pool every written string, array and compound is borrowed from; must not be NULL.
+ * @param compound The compound to write into; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if an argument is NULL; ErrorCode_InvalidOperation if it holds a key; the validation
+ *          error. On a failure after validation the compound may hold some entries: discard it.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error DataValue_WritePlainGHDF(const DataValue* value, GHDFObjectPool* pool, GHDFCompound* compound);
+
+/**
+ * @brief Reads a plain value from a GHDF compound, as DataValue_ReadGHDF does, with no registry: a key is refused.
+ * @param compound The compound; must not be NULL.
+ * @param outValue [out] Receives the value (release it with DataValue_Deconstruct). Must not be NULL. A tag on failure.
+ * @returns Success; ErrorCode_IllegalArgument if an argument is NULL; ErrorCode_Deserialize naming the problem and where it is.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error DataValue_ReadPlainGHDF(GHDFCompound* compound, DataValue* outValue);

@@ -141,10 +141,10 @@ static Error CheckSettings(const char* name, const PathObjectSettings* settings)
     const PathObjectModelRecord* Models = PropertyRecordList_GetRecords(settings->Models);
     for (size_t Index = 0U; Index < PropertyRecordList_GetCount(settings->Models); Index++)
     {
-        if (Models[Index].WorldModel == NULL)
+        if ((Models[Index].WorldModel == NULL) == (Models[Index].Prefab == NULL))
         {
-            return Error_Construct4(ErrorCode_InvalidAssetDefinition, "Path object \"%s\": models[%u] names no world model.",
-                name, (unsigned int)Index);
+            return Error_Construct4(ErrorCode_InvalidAssetDefinition,
+                "Path object \"%s\": models[%u] names exactly one of a world model and a prefab.", name, (unsigned int)Index);
         }
     }
     return Error_CreateSuccess();
@@ -225,6 +225,10 @@ static Error PathObjectDefinition_LoadAsset(void* self, AssetManager* manager, A
     size_t ModelCount = PropertyRecordList_GetCount(Definition->Data._settings.Models);
     for (size_t Index = 0U; (Index < ModelCount) && (Result.Code == ErrorCode_Success); Index++)
     {
+        if (Models[Index].WorldModel == NULL)
+        {
+            continue; // a prefab: it may hold this very path object, so it is loaded when a piece is made, never as a dependency
+        }
         void* Asset = NULL;
         Result = AssetManager_LoadAssetSingle(manager, WorldModelType, Models[Index].WorldModel, dependencyUser, &Asset);
         if (Result.Code != ErrorCode_Success)
