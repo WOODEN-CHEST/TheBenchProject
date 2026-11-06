@@ -7,6 +7,7 @@
 #include "GameGHDF.h"
 #include "GameJSON.h"
 #include "GameClock.h"
+#include "GameWindowState.h"
 #include "WeatherSystem.h"
 #include "NamespacedKey.h"
 #include "WorldEnvironment.h"
@@ -694,6 +695,7 @@ static void TablesPassTheirCheck(TestRun* run)
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(&MapRecordTable));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldEnvironment_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(GameClock_GetPropertyTable()));
+    TEST_CHECK_SUCCESS(run, PropertyTable_Check(GameWindowState_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WeatherSystem_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldObject_GetPropertyTable()));
     TEST_CHECK_SUCCESS(run, PropertyTable_Check(WorldModelComponent_GetPropertyTable()));

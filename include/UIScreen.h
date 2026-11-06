@@ -58,8 +58,8 @@
  * dropped when its widget is destroyed before delivery. A widget's own event is delivered even then (it carries
  * everything by value). A widget's own vtable hooks are still called immediately.
  *
- * SCALE. A UI pixel is a surface pixel times the screen's scale (UIScreen_SetScale): the player's ui_scale for a UI in the
- * window, a screen's own for one in the world. It sizes placements (UIPlacement.h), stacks and every element of the kit;
+ * SCALE. A UI pixel is a surface pixel times the screen's scale (UIScreen_SetScale): what its host's policy answers for a UI in
+ * the window (UIWindowHost.h, UIScalePolicy.h), a screen's own for one in the world. It sizes placements (UIPlacement.h), stacks and every element of the kit;
  * widgets placed in normalized units do not change with it.
  *
  * THEME. A screen may have a theme (UIScreen_SetTheme, UITheme.h): the look of the elements on it, as data. It is held
@@ -422,7 +422,7 @@ static inline UIViewport UIScreen_GetViewport(const UIScreen* self)
 }
 
 /**
- * @brief Sets the screen's scale: how many surface pixels one UI pixel takes (the player's ui_scale; a screen in the world
+ * @brief Sets the screen's scale: how many surface pixels one UI pixel takes (a host's scale policy sets it; a screen in the world
  *        has its own). Takes effect at the next layout pass.
  * @param self The screen; must not be NULL.
  * @param scale The scale; finite and within [UI_SCREEN_MIN_SCALE, UI_SCREEN_MAX_SCALE].

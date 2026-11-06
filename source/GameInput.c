@@ -31,6 +31,10 @@
 #define PRINTABLE_KEY_CAPACITY ((size_t)160)
 /** Initial capacity (elements) of the per-action and per-category arrays and of the key index. */
 #define INITIAL_ACTION_CAPACITY ((size_t)32)
+/** Ticks between two looks at the monitor's size: soon after the window moved or changed size (a quarter of a second at 480 ticks a
+ *  second, so a drag does not ask every tick), and every so often when it did not (a monitor's mode can change under it). */
+#define MONITOR_ASK_TICKS_AFTER_A_CHANGE ((uint32_t)120)
+#define MONITOR_ASK_TICKS_AT_REST ((uint32_t)960)
 /* Default-binding table entry builder. */
 #define BINDING(key, modifiers) { .Key = (key), .Modifiers = (modifiers) }
 
@@ -217,6 +221,10 @@ static const BuiltInAction BuiltInActions[GameAction_Count] =
     [GameAction_Pause] = { .Key = u8"tbp:pause", .DisplayName = u8"Pause",
         .Description = u8"Opens the game menu.", .Category = GameActionCategory_General,
         .Defaults = { BINDING(GameKey_Escape, GAME_KEY_MODIFIER_NONE) }, .DefaultCount = 1, .KeepsABinding = true },
+    [GameAction_ToggleFullscreen] = { .Key = u8"tbp:toggle_fullscreen", .DisplayName = u8"Toggle Fullscreen",
+        .Description = u8"Switches between the window and the whole screen.", .Category = GameActionCategory_General,
+        .Defaults = { BINDING(GameKey_Enter, GAME_KEY_MODIFIER_ALT), BINDING(GameKey_F11, GAME_KEY_MODIFIER_NONE) },
+        .DefaultCount = 2 },
 };
 
 /* The modifiers in the order a binding's text form lists them. */
@@ -1363,10 +1371,54 @@ void GameInput_BeginTick(GameInput* self, const GameInputSample* sample)
     self->_isPointerConsumed = false;
 }
 
+bool GameInputInternal_TickMonitorWatch(GameInput* self, Vector2 windowPosition, Vector2 windowSize)
+{
+    if (self->_ticksSinceMonitorAsked < UINT32_MAX)
+    {
+        self->_ticksSinceMonitorAsked++;
+    }
+    if (!self->_hasAskedMonitor)
+    {
+        return true;
+    }
+    bool HasWindowChanged = (windowPosition.x != self->_windowPositionWhenAsked.x)
+        || (windowPosition.y != self->_windowPositionWhenAsked.y) || (windowSize.x != self->_windowSizeWhenAsked.x)
+        || (windowSize.y != self->_windowSizeWhenAsked.y);
+    return self->_ticksSinceMonitorAsked >= (HasWindowChanged ? MONITOR_ASK_TICKS_AFTER_A_CHANGE : MONITOR_ASK_TICKS_AT_REST);
+}
+
+void GameInputInternal_StoreMonitorSize(GameInput* self, Vector2 monitorSize, Vector2 windowPosition, Vector2 windowSize)
+{
+    self->_monitorSize = monitorSize;
+    self->_hasAskedMonitor = true;
+    self->_ticksSinceMonitorAsked = 0U;
+    self->_windowPositionWhenAsked = windowPosition;
+    self->_windowSizeWhenAsked = windowSize;
+}
+
+/* Keeps the monitor's size current without asking every tick: GetCurrentMonitor walks the monitors, and each of them is a trip to
+ * the display server. */
+static void RefreshMonitorSize(GameInput* self, Vector2 windowSize)
+{
+    if (!IsWindowReady())
+    {
+        return;
+    }
+    Vector2 WindowPosition = GetWindowPosition();
+    if (GameInputInternal_TickMonitorWatch(self, WindowPosition, windowSize))
+    {
+        int Monitor = GetCurrentMonitor();
+        GameInputInternal_StoreMonitorSize(self, (Vector2){ .x = (float)GetMonitorWidth(Monitor), .y = (float)GetMonitorHeight(Monitor) },
+            WindowPosition, windowSize);
+    }
+}
+
 void GameInput_Poll(GameInput* self)
 {
     GameInputSample Sample;
     GameInput_SampleDevices(&Sample);
+    RefreshMonitorSize(self, Sample.WindowSize);
+    Sample.MonitorSize = self->_monitorSize;
     GameInput_BeginTick(self, &Sample);
 }
 
@@ -1447,6 +1499,11 @@ Vector2 GameInput_GetMouseDelta(const GameInput* self)
 Vector2 GameInput_GetWindowSize(const GameInput* self)
 {
     return self->_sample.WindowSize;
+}
+
+Vector2 GameInput_GetMonitorSize(const GameInput* self)
+{
+    return self->_sample.MonitorSize;
 }
 
 bool GameInput_IsCursorCaptured(const GameInput* self)

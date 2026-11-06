@@ -151,6 +151,9 @@ typedef enum GameActionEnum
     /** @brief Pause / open the game menu ("tbp:pause"; default Escape; always keeps a binding). Read it after the UI
      *  had first refusal. */
     GameAction_Pause,
+    /** @brief Switch between the window and the whole screen ("tbp:toggle_fullscreen"; default Alt+Enter, F11). The game window
+     *  handles it before any frame updates, and consumes it. */
+    GameAction_ToggleFullscreen,
 
     /** @brief One past the last engine action; equals the number of engine actions. Not an action. */
     GameAction_Count
@@ -302,6 +305,9 @@ typedef struct GameInputSampleStruct
     Vector2 WheelDelta;
     /** @brief The window's size in pixels; the mouse position is relative to it. */
     Vector2 WindowSize;
+    /** @brief The size in pixels of the monitor the window is on; (0, 0) when it is not known. GameInput_SampleDevices leaves it
+     *  so, and GameInput_Poll fills it in, asking only now and then (it walks the monitors and goes to the display server). */
+    Vector2 MonitorSize;
     /** @brief Whether the cursor is hidden (raylib's IsCursorHidden: captured for mouse look, or hidden with HideCursor):
      *  there is no pointer for the UI then. */
     bool IsCursorCaptured;
@@ -328,6 +334,13 @@ typedef struct GameInputStruct
     bool _isTextConsumed;
     /** @brief Whether the pointer was claimed this tick (it is over some UI). */
     bool _isPointerConsumed;
+    /** @brief The monitor's size as last asked (GameInput_Poll), whether it was asked yet, the ticks since, and the window's place
+     *  and size then. */
+    Vector2 _monitorSize;
+    bool _hasAskedMonitor;
+    uint32_t _ticksSinceMonitorAsked;
+    Vector2 _windowPositionWhenAsked;
+    Vector2 _windowSizeWhenAsked;
     /** @brief The borrowed key registry every key and source is an id of. */
     KeyRegistry* _keys;
     /** @brief The borrowed root registry the two registries are added to, or NULL. */
@@ -489,6 +502,15 @@ uint8_t GameInput_GetHeldModifiers(const GameInput* self);
  * @returns The position.
  */
 Vector2 GameInput_GetMousePosition(const GameInput* self);
+
+/**
+ * @brief Returns the size in pixels of the monitor the window is on.
+ *
+ * It is refreshed only every so often, and soon after the window moved or changed size (GameInput_Poll).
+ * @param self The input; must not be NULL.
+ * @returns The size; (0, 0) when it is not known.
+ */
+Vector2 GameInput_GetMonitorSize(const GameInput* self);
 
 /**
  * @brief Returns the mouse movement in pixels since the previous tick (also while the cursor is captured).

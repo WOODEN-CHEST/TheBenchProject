@@ -46,14 +46,15 @@ and adds its two registries to the root registry (`Services.Registries`); tests 
 NULL for the root and the logger.
 
 `GameInput_SampleDevices` reads every key's state (down / pressed / released / auto-repeated), the mouse position and
-movement, the wheel, the window size, whether the cursor is hidden (`IsCursorHidden`: captured for mouse look, or hidden
+movement, the wheel, the window's size, whether the cursor is hidden (`IsCursorHidden`: captured for mouse look, or hidden
 with `HideCursor`; either way there is no pointer for the UI), and drains raylib's typed-text queue once (so no
-reader can starve another). Tests build a `GameInputSample` themselves (`GameInputSample_Clear`, then set fields) and
+reader can starve another). `GameInput_Poll` adds the size of the monitor the window is on, which it asks for only every so often and soon after the window moved or
+changed size (`GetCurrentMonitor` walks the monitors, each a trip to the display server); it is (0, 0) with no window. Tests build a `GameInputSample` themselves (`GameInputSample_Clear`, then set fields) and
 call `GameInput_BeginTick` directly: everything but the sampling runs headless.
 
 Reading keys: `GameInput_IsKeyDown` / `IsKeyPressed` / `IsKeyReleased` / `IsKeyPressedOrRepeated`, or the raw flags
 (`GameInput_GetKeyState`, `GAME_INPUT_KEY_STATE_*`). Held modifiers: `GameInput_GetHeldModifiers` (ignores
-consumption). Mouse: `GameInput_GetMousePosition` (window pixels), `GetMouseDelta`, `GetWindowSize`,
+consumption). Mouse: `GameInput_GetMousePosition` (window pixels), `GetMouseDelta`, `GetWindowSize`, `GetMonitorSize`,
 `IsCursorCaptured`. Wheel: `GameInput_GetWheelDelta`. Text: `GameInput_GetTextCodepointCount` /
 `GameInput_GetTextCodepoint`.
 
@@ -100,6 +101,7 @@ the `GameActionCategory` enum, the same way:
 | Character (200) | Jump, Crouch | `tbp:jump`, `tbp:crouch` | Space, Left Control (shared with `move_up` and `move_down`: walking reads these, the flycam and flight those) |
 | | Use | `tbp:use` | E (use what the character looks at) |
 | General (300) | Pause | `tbp:pause` | Escape; always keeps a binding |
+| | Toggle Fullscreen | `tbp:toggle_fullscreen` | Alt+Enter, F11; the game window handles it before any frame updates, and consumes it ([GameWindow.md](GameWindow.md)) |
 | Interface (400) | Menu Up / Down / Left / Right | `tbp:ui_up`, `tbp:ui_down`, `tbp:ui_left`, `tbp:ui_right` | arrow keys |
 | | Next, Previous | `tbp:ui_next`, `tbp:ui_previous` | Tab, Shift+Tab |
 | | Accept | `tbp:ui_accept` | Enter, Keypad Enter |
@@ -147,7 +149,7 @@ Escape reaches the game as `pause`.
 
 **The key index.** For each key, the bindings of the active actions on it, rebuilt whenever bindings change (a set, a
 reset, a file, a registration, an override, a withdrawal). The most-specific check looks only at the bindings on its
-own key, so a query costs the same with 19 actions as with 4096 (`GAME_INPUT_MAX_ACTIONS`; categories at most 256).
+own key, so a query costs the same with 20 actions as with 4096 (`GAME_INPUT_MAX_ACTIONS`; categories at most 256).
 `GameInput_GetKeyBindingCount` / `TryGetKeyBinding` read it (the controls menu's conflicts). A default on a key another
 action uses (same key, same modifiers) is allowed and logged once, naming both, when an action of a source other than
 the engine registers or an override changes defaults; the engine's own shared defaults are not logged.

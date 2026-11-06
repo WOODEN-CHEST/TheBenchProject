@@ -310,7 +310,7 @@ Current module list:
 * Input (GameInput.md) - How the game reads input. Covers two modules:
   * GameKey - The game-wide key identity (keyboard keys and mouse buttons, room for gamepad buttons) with stable id
     strings for binding files and display names; the raylib codes stay private to the input layer.
-  * GameInput - The per-tick input snapshot (keys, mouse, wheel, typed text drained once), polled by the frame manager
+  * GameInput - The per-tick input snapshot (keys, mouse, wheel, typed text drained once, the window's and the monitor's sizes), polled by the frame manager
     right after PollInputEvents, with consumption (a consumed key reads as not pressed while held) and the action layer:
     actions and their categories in two registries (`tbp:input_action`, `tbp:input_category`; the engine's are the
     GameAction enum, each value its id), registered by the engine, by packs' `input_actions` assets (InputActions:
@@ -318,6 +318,13 @@ Current module list:
     and later by scripts; bindings with modifiers (the most specific wins, a key index keeps queries cheap), actions
     that always keep a binding, and a JSON controls file holding only what the player set (kept entries for actions
     not loaded).
+* Game window (GameWindow.md) - The game's one window, the one module that calls raylib's window functions after start: a resizable window, borderless or fullscreen,
+  switched while the game runs by the `tbp:toggle_fullscreen` action (handled before any frame updates, and consumed). Covers:
+  * GameWindowState - What is remembered as pure data (window_state.json next to the executable: the mode, the windowed size and position, maximized or not), read as hostile
+    through a property table: sizes clamped, a position off every monitor dropped, a bad file ignored with one log line; saved atomically. GameWindowWatch follows a window
+    and takes in a size and a position only once they have held, so a maximize is never remembered as the size to come back to.
+  * GameWindow - Opens the window where it belongs, keeps a request to close (raylib's answer lasts only until its next poll), switches modes and saves. Unopened, it does all
+    of that but the raylib calls, so it runs headless. A key held across a switch switches once: the toggle's keys are held back until they have stayed up for a second.
 * GameFrame (GameFrame.md) - Abstract base for a game "scene"/section (menu, level, loading screen), with stepped load/unload, logic lifecycle, per-target rendering and an optional PrepareRender slot: the update side's last step before a render (posing skeletons once per shown frame).
 * GameFrameManager (GameFrameManager.md) - Owns a z-stack of game frames, drives their lifecycle and update loop (polls the input, then updates frames top-down so the top frame gets input first), runs their PrepareRender before each render, and composites them to the screen; crashes gracefully on frame errors.
 * NamespacedKey (NamespacedKey.md) - Namespaced keys (`namespace:path`, Minecraft's character set, at most 128 bytes,
@@ -599,7 +606,7 @@ Current module list:
     shaders/common/interior.glsl (WorldRuntime.md, "Interior lighting").
   * WorldTestFrame - Concrete GameFrame: WASD + mouse-look flycam over a test world whose sky follows the frame's game
     clock and whose colliders it steps every tick (trigger, contact and motion events logged; F7 shows the colliders,
-    F8 the contact points, F6 swings the door, F9 sends a wall through a row of crates, F10 moves the door's crate),
+    F8 the contact points, F6 swings the door, F9 sends a wall through a row of crates, F10 moves the door's crate, Shift with F10 steps the far shift),
     with debug keys and a text sample (T toggles it) drawn with TextDocument + TextLayout over the world. Its
     characters move every tick: F1 walk mode (the player as a character), F2 test NPCs (a human, a dog, a pigeon), F3
     flight, F4 the player's kind (the private source/WorldTestCharacters.{h,c}). It ticks the animation system: 5 steps
@@ -704,6 +711,10 @@ Current module list:
     notifications (subscriptions; queued, delivered at the end of UIScreen_Update), layout pass and rendering.
   * UIPlacement - Where a widget sits in UI pixels: placements (anchors and offsets), insets and a stack's hints, with their pure arithmetic, each edge a whole
     surface pixel. Placements are applied in the layout pass; a widget's preferred size is its Measure hook, cached (UIFramework.md, "UI pixels").
+  * UIScalePolicy - How a screen's scale follows the window and the monitor, pure: a fixed value; constant pixels (from the monitor's height in quarters, times the player's
+    scale: resizing gives more room); following the window's height against 1080, times the player's scale (resizing scales the UI).
+  * UIWindowHost - The host of a UI that fills the game window: each tick the viewport and the scale from its policy, the pointer and the keyboard from GameInput, then
+    UIScreen_Update (UIFramework.md, "Hosts").
   * UITestFrame - A debug game frame over the world test that exercises the UI and the input sharing.
   * WorldScreenHost - The host of a UI shown on a screen in the world: its pointer where the player points (the aim or
     the free cursor, through WorldScreens), the keyboard while the player uses the screen (the use action or a click
@@ -727,7 +738,7 @@ Current module list:
   * UIButton - A click, Enter or Space; an enabled flag (a disabled button swallows the click); an optional toggled look.
   * UIToggle - A checkbox: on, off or mixed.
   * UISlider - A value in a range, by a drag, the arrows or the wheel (only while focused), with an optional step; changed, committed, cancelled.
-  * UIGalleryFrame - A game frame showing every element in every state, started with --ui-gallery: T the theme, + and - the scale, L the event log.
+  * UIGalleryFrame - A game frame showing every element in every state, started with --ui-gallery: T the theme, + and - the scale, P the scale policy, L the event log.
 * Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text as a STRICT TREE: a parent owns
   its children, a tree has at most 64 levels, components own copies of their strings, and fonts and sprite animations
   are named, never held. Every change gives the component and its ancestors a new revision. Covers three modules (plus

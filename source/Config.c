@@ -12,8 +12,10 @@
 #define CONFIG_KEY_IS_FPS_UNLOCKED ((const unsigned char*)u8"is_fps_unlocked")
 /** JSON key for the vertical-sync flag. */
 #define CONFIG_KEY_IS_VSYNC_ENABLED ((const unsigned char*)u8"is_vsync_enabled")
-/** JSON key for the fullscreen flag. */
-#define CONFIG_KEY_IS_FULLSCREEN ((const unsigned char*)u8"is_fullscreen")
+/** JSON key for the window's mode on a first run. */
+#define CONFIG_KEY_WINDOW_MODE ((const unsigned char*)u8"window_mode")
+/** JSON key for the mode the fullscreen toggle switches to. */
+#define CONFIG_KEY_FULLSCREEN_TOGGLE_MODE ((const unsigned char*)u8"fullscreen_toggle_mode")
 /** JSON key for the [width, height] resolution array. */
 #define CONFIG_KEY_RESOLUTION ((const unsigned char*)u8"resolution")
 /** JSON key for the target render frame rate. */
@@ -59,8 +61,10 @@
 #define CONFIG_DEFAULT_IS_FPS_UNLOCKED false
 /** Default value for the vertical-sync flag (off: the buffer swap never blocks the loop). */
 #define CONFIG_DEFAULT_IS_VSYNC_ENABLED false
-/** Default value for the fullscreen flag. */
-#define CONFIG_DEFAULT_IS_FULLSCREEN false
+/** Default window mode. */
+#define CONFIG_DEFAULT_WINDOW_MODE GameWindowMode_Windowed
+/** Default mode of the fullscreen toggle: borderless needs no video mode change. */
+#define CONFIG_DEFAULT_FULLSCREEN_TOGGLE_MODE GameWindowMode_Borderless
 /** Default window width in pixels. */
 #define CONFIG_DEFAULT_RESOLUTION_WIDTH ((int32_t)1280)
 /** Default window height in pixels. */
@@ -130,6 +134,25 @@ static void ReadBool(JSONCompound* root, const unsigned char* key, bool* outValu
     {
         *outValue = Value.Value.Boolean;
         return;
+    }
+    Error_Deconstruct(&Result);
+}
+
+/* Reads a window mode by its name; a missing, wrong-typed or unknown value leaves the default untouched. */
+static void ReadWindowMode(JSONCompound* root, const unsigned char* key, GameWindowMode* outMode)
+{
+    JSONObjectValue Value;
+    bool WasFound = false;
+    Error Result = JSONCompound_GetOptionalVerified(root, key, JSONValueType_String, &Value, &WasFound);
+    if ((Result.Code == ErrorCode_Success) && WasFound)
+    {
+        unsigned char* Text = NULL;
+        Result = GameJSON_ValueToOwnedString(&Value, &Text);
+        if (Result.Code == ErrorCode_Success)
+        {
+            (void)GameWindowMode_TryParse(Text, outMode);
+            Memory_Free(Text);
+        }
     }
     Error_Deconstruct(&Result);
 }
@@ -294,7 +317,8 @@ static void ReadConfigValues(JSONCompound* root, GameConfig* config)
 {
     ReadBool(root, CONFIG_KEY_IS_FPS_UNLOCKED, &config->IsFPSUnlocked);
     ReadBool(root, CONFIG_KEY_IS_VSYNC_ENABLED, &config->IsVSyncEnabled);
-    ReadBool(root, CONFIG_KEY_IS_FULLSCREEN, &config->IsFullscreen);
+    ReadWindowMode(root, CONFIG_KEY_WINDOW_MODE, &config->WindowMode);
+    ReadWindowMode(root, CONFIG_KEY_FULLSCREEN_TOGGLE_MODE, &config->FullscreenToggleMode);
     ReadInt32(root, CONFIG_KEY_TARGET_FPS, &config->TargetFPS);
     ReadResolution(root, config);
     ReadFloat(root, CONFIG_KEY_SHADOW_STRENGTH, &config->ShadowStrength);
@@ -363,7 +387,8 @@ void GameConfig_SetDefaults(GameConfig* self)
 
     self->IsFPSUnlocked = CONFIG_DEFAULT_IS_FPS_UNLOCKED;
     self->IsVSyncEnabled = CONFIG_DEFAULT_IS_VSYNC_ENABLED;
-    self->IsFullscreen = CONFIG_DEFAULT_IS_FULLSCREEN;
+    self->WindowMode = CONFIG_DEFAULT_WINDOW_MODE;
+    self->FullscreenToggleMode = CONFIG_DEFAULT_FULLSCREEN_TOGGLE_MODE;
     self->TargetFPS = CONFIG_DEFAULT_TARGET_FPS;
     self->ResolutionWidth = CONFIG_DEFAULT_RESOLUTION_WIDTH;
     self->ResolutionHeight = CONFIG_DEFAULT_RESOLUTION_HEIGHT;
@@ -417,6 +442,10 @@ Error GameConfig_LoadFromFile(const unsigned char* path, GameConfig* outConfig)
 
     // Guard against invalid values regardless of whether parsing fully succeeded.
     ClampResolution(outConfig);
+    if (outConfig->FullscreenToggleMode == GameWindowMode_Windowed)
+    {
+        outConfig->FullscreenToggleMode = CONFIG_DEFAULT_FULLSCREEN_TOGGLE_MODE; // A toggle from a window to a window does nothing.
+    }
     if ((outConfig->TargetFPS < CONFIG_MIN_TARGET_FPS) || (outConfig->TargetFPS > CONFIG_MAX_TARGET_FPS))
     {
         outConfig->TargetFPS = CONFIG_DEFAULT_TARGET_FPS;

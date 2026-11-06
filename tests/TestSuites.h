@@ -367,6 +367,22 @@ void UIAnimationTests_Run(TestRun* run);
  *  notifications (UIScreenTests.c). */
 void UIScreenTests_Run(TestRun* run);
 
+/** @brief What each scale policy answers: the monitor's quarters, the window's height, the player's scale on top, the limits and
+ *  broken numbers (UIScalePolicyTests.c). */
+void UIScalePolicyTests_Run(TestRun* run);
+
+/** @brief What is remembered about the window: the state file's text and file, hostile values, the fit to the monitors, the watch
+ *  that follows a window (GameWindowStateTests.c). */
+void GameWindowStateTests_Run(TestRun* run);
+
+/** @brief The game window with no real window: its mode and size at start, the toggle's keys and their consumption, saving
+ *  (GameWindowTests.c). */
+void GameWindowTests_Run(TestRun* run);
+
+/** @brief The full-window UI's host: the viewport and the scale following a sample that changes the window and the monitor
+ *  (UIWindowHostTests.c). */
+void UIWindowHostTests_Run(TestRun* run);
+
 /** @brief UI pixels: placements, the scale, preferred sizes and their cache, stacks and their children's hints, labels in UI
  *  pixels (UILayoutTests.c). */
 void UILayoutTests_Run(TestRun* run);

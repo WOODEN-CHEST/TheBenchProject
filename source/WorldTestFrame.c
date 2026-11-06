@@ -132,7 +132,7 @@
 /** The vertical field of view the Z key zooms to, in degrees: about 4.4 times closer than the default 60, so models'
  *  draw distances reach 4.4 times as far. */
 #define ZOOMED_FOV_Y 15.0f
-/** How many places the F11 key's far shift steps through (FarShifts). */
+/** How many places the far shift's key (Shift with F10) steps through (FarShifts). */
 #define FAR_SHIFT_COUNT 3U
 /** Metres in a kilometre, for the far shift's log lines. */
 #define METRES_PER_KILOMETRE 1000.0
@@ -271,7 +271,7 @@ typedef struct WorldTestFrameStruct
     WorldScreens* _screens;
     /** The test monitor and the UI it shows: pointed at by the aim, used with E or a click, let go with Escape. */
     WorldTestScreens _testScreens;
-    /** Where the F11 key's far shift has moved the test world, its characters and the camera: an index into FarShifts
+    /** Where the far shift's key has moved the test world, its characters and the camera: an index into FarShifts
      *  (0: not moved). */
     size_t _farShiftIndex;
     /** The last tick's update time, in milliseconds, for the I key's frame line (the frame time and the render's
@@ -299,7 +299,7 @@ static const char* const VariantSteps[VARIANT_STEP_COUNT][VARIANT_TEST_OBJECT_CO
 {
     { "red", "blue" }, { "blue", "red" }, { NULL, NULL }
 };
-/* The far shift's offsets (FAR_SHIFT_COUNT), in the order the F11 key steps through them and back to the first: none,
+/* The far shift's offsets (FAR_SHIFT_COUNT), in the order its key steps through them and back to the first: none,
  * 28 km from the world's origin (20 km along X and Z), and 141 km (100 km along X and -Z: the far-away tests' offset
  * along the ground). Out there nothing may shake or sink: the renderer draws relative to the camera, and positions are
  * doubles. */
@@ -510,7 +510,7 @@ static void LogCameraStatus(WorldTestFrame* frame)
     Vector3Double Shift = FarShifts[frame->_farShiftIndex];
     Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger,
         (const unsigned char*)u8"WorldTest: the camera is at (%.3f, %.3f, %.3f), %.3f km from the world's origin; far "
-        u8"shift (%.0f, %.0f, %.0f) m (F11); flycam speed %.2f m/s (the mouse wheel).", Position.X, Position.Y,
+        u8"shift (%.0f, %.0f, %.0f) m (Shift+F10); flycam speed %.2f m/s (the mouse wheel).", Position.X, Position.Y,
         Position.Z, Vector3Double_Length(Position) / METRES_PER_KILOMETRE, Shift.X, Shift.Y, Shift.Z,
         (double)FlySpeed(frame));
     Error_Deconstruct(&LogResult);
@@ -1546,7 +1546,8 @@ static void HandleDebugCollisionInput(WorldTestFrame* frame, const GameInput* in
         LogLine(frame, frame->_isPusherOut ? "the pushing wall goes out along +X: it pushes the row of crates against "
             "the stop." : "the pushing wall goes back home.");
     }
-    if (GameInput_IsKeyPressed(input, GameKey_F10) && (frame->_doorCrateId != 0U))
+    bool IsShiftDown = GameInput_IsKeyDown(input, GameKey_LeftShift) || GameInput_IsKeyDown(input, GameKey_RightShift);
+    if (!IsShiftDown && GameInput_IsKeyPressed(input, GameKey_F10) && (frame->_doorCrateId != 0U))
     {
         frame->_isDoorCrateAside = !frame->_isDoorCrateAside;
         Vector3Double Position = frame->_doorCrateHome;
@@ -1600,7 +1601,7 @@ static void ShiftHomes(WorldTestFrame* frame, Vector3Double offset)
     frame->_doorCrateHome = Vector3Double_Add(frame->_doorCrateHome, offset);
 }
 
-/* F11: moves every root object (the characters among them) and the camera to the far shift's next place (FarShifts),
+/* Moves every root object (the characters among them) and the camera to the far shift's next place (FarShifts),
  * so the picture and the play can be compared out there. The objects move as teleports; then the collision world is
  * synced and every character is placed again where it now stands, through the character system, so its motion starts
  * afresh on its moved ground. Positions are doubles: a trip out and back returns everything to within a double's
@@ -1623,15 +1624,16 @@ static void StepFarShift(WorldTestFrame* frame)
             u8"again on their ground; the camera is %.2f km from the world's origin%s",
             (uint64_t)Next, (uint64_t)(FAR_SHIFT_COUNT - 1U), (uint64_t)ObjectCount, Offset.X, Offset.Y, Offset.Z,
             (uint64_t)CharacterCount, Vector3Double_Length(frame->_camera.Position) / METRES_PER_KILOMETRE,
-            (Next == 0U) ? " (back at the start)." : " (F11 goes on; after the last place, back to the start).");
+            (Next == 0U) ? " (back at the start)." : " (Shift+F10 goes on; after the last place, back to the start).");
         Error_Deconstruct(&LogResult);
     }
 }
 
-/* The far shift's key: F11 moves everything 28 km out, then 141 km, then back. */
+/* The far shift's key: Shift with F10 moves everything 28 km out, then 141 km, then back. */
 static void HandleDebugFarShiftInput(WorldTestFrame* frame, const GameInput* input)
 {
-    if (GameInput_IsKeyPressed(input, GameKey_F11))
+    bool IsShiftDown = GameInput_IsKeyDown(input, GameKey_LeftShift) || GameInput_IsKeyDown(input, GameKey_RightShift);
+    if (IsShiftDown && GameInput_IsKeyPressed(input, GameKey_F10))
     {
         StepFarShift(frame);
     }
@@ -1893,7 +1895,7 @@ static Error WorldTestFrame_Start(void* self, ProgramTime time)
             u8"C crisp overlay, V night vision, K sprite lighting, L light gizmos, Shift+L every light off and on, N "
             u8"light pollution, X opacity of the centre cube and the tree, U frustum culling, J slide the desk (through a trigger zone), H hide the "
             u8"desk, E variants, Z zoom, Q LOD tinting, F7 collider wireframes, F8 contact points, F6 swing the door, "
-            u8"F9 the pushing wall, F10 move the door's crate, F11 far shift (everything 28 km out, then 141 km, then "
+            u8"F9 the pushing wall, F10 move the door's crate, Shift+F10 far shift (everything 28 km out, then 141 km, then "
             u8"back), - the terrain's chunk key, = the terrain's views (shaded, painted weights, rule weights, the "
             u8"dominant material); F1 walk (the player as a character: WASD, SHIFT run, SPACE jump, "
             u8"CTRL crouch, E use: sit on the "

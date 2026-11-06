@@ -29,7 +29,8 @@ TextComponentFactory_Construct(&Text);
 UIKit_Construct(&Kit, &Factory, &Text, Services->Assets, Services->Logger);
 UIScreen_Construct(&Screen, &Factory, Services->Logger);
 UIScreen_SetTheme(&Screen, Services->Assets, u8"tbp:test_flat");
-UIScreen_SetScale(&Screen, Services->Config->UIScale);
+UIWindowHost Host;  // a UI that fills the window: each tick UIWindowHost_Update sets its viewport and scale and updates it
+UIWindowHost_Construct(&Host, UIScalePolicy_ConstantPixels(), Services->Config->UIScale, Aspect, AreaPosition);
 
 UIStackOptions Page = UIStackOptions_Create(UIStackDirection_Column);
 Page.Layout.Padding = UIInsets_All(12.0f);
@@ -164,8 +165,9 @@ UI is scaled, and at 28 both go away while 14 pixels stays sharp enough to read 
 ## The gallery
 
 `sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test: every element in every state it can be put in,
-in stacks that show content, fixed and filling sizes, over a plain background. T switches the theme (`tbp:test_flat`, `tbp:test_nine_slice`, whose art
-`asset_source/scripts/placeholder_ui.py` generates), + and - the scale, L the event log, Escape quits. Each event shows in its status line and
+in stacks that show content, fixed and filling sizes, over a plain background. It keeps its pixels (`UIScalePolicy_ConstantPixels`): drag the window's edges, and the controls keep their size with more room around them. P switches to following the
+window's height and back, to compare them. T switches the theme (`tbp:test_flat`, `tbp:test_nine_slice`, whose art
+`asset_source/scripts/placeholder_ui.py` generates), + and - the player's scale, L the event log, Escape quits. Each event shows in its status line and
 in the log (a drag's `Changed` events a few times a second).
 
 ## Rules for a new element

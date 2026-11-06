@@ -18,6 +18,7 @@
 #include "Registry.h"
 #include "ProgramTime.h"
 #include "GameFrameManager.h"
+#include "GameWindow.h"
 #include "Renderer.h"
 #include "AssetManager.h"
 #include "Services.h"
@@ -85,30 +86,6 @@ static Error BuildAbsolutePath(const unsigned char* base, const unsigned char* r
     return Path_Append(base, relative, outBuffer);
 }
 
-/* Creates the game window from the (already validated) config values. */
-static void InitializeWindow(const GameConfig* config)
-{
-    unsigned int Flags = 0;
-    if (config->IsFullscreen)
-    {
-        Flags |= FLAG_FULLSCREEN_MODE;
-    }
-    if (config->IsVSyncEnabled)
-    {
-        Flags |= FLAG_VSYNC_HINT;
-    }
-    if (Flags != 0)
-    {
-        SetConfigFlags(Flags);
-    }
-
-    InitWindow((int)config->ResolutionWidth, (int)config->ResolutionHeight, WINDOW_TITLE);
-
-    // Deliberately no SetTargetFPS: RunGameLoop paces rendering itself. This project's raylib is built with
-    // SUPPORT_CUSTOM_FRAME_CONTROL (see BUILDING.md), so EndDrawing neither swaps buffers nor polls input:
-    // GameFrameManager_Update polls input once per update tick, and GameFrameManager_Render swaps buffers.
-}
-
 static double GetClockSeconds(void)
 {
     return (double)Stopwatch_GetTimestampNanoseconds() / 1e9;
@@ -151,7 +128,7 @@ static void SleepIfIdle(bool isRenderPaced, double secondsUntilUpdate, double se
  * When neither an update tick nor a paced render is due soon, the loop sleeps briefly instead of spinning, so
  * it does not hold a CPU core at 100%. Returns when the window is closed or the manager reports a fatal
  * error. */
-static void RunGameLoop(GameFrameManager* frameManager, double targetRenderSeconds)
+static void RunGameLoop(GameFrameManager* frameManager, const GameWindow* window, double targetRenderSeconds)
 {
     const double UpdateDelta = 1.0 / UPDATE_RATE_HZ;
     const bool IsRenderPaced = (targetRenderSeconds > 0.0);
@@ -164,7 +141,7 @@ static void RunGameLoop(GameFrameManager* frameManager, double targetRenderSecon
     double LastRenderSimulationTime = 0.0;
     bool HasFatalError = false;
 
-    while (!WindowShouldClose() && !GameFrameManager_ShouldStop(frameManager) && !HasFatalError)
+    while (!GameWindow_ShouldClose(window) && !GameFrameManager_ShouldStop(frameManager) && !HasFatalError)
     {
         // Real time since the loop started; drives the accumulator, the render deadline and idle sleeping.
         double CurrentTime = GetClockSeconds() - LoopStartTime;
@@ -510,14 +487,17 @@ int main(int argc, char** argv)
     Error UnicodeLogResult = Logger_LogInfo(&Log, u8"Loaded unicode data.");
     Error_Deconstruct(&UnicodeLogResult);
 
-    InitializeWindow(&Config);
-    if (!IsWindowReady())
+    GameWindow Window;
+    GameWindow_Construct(&Window, &Config, BaseDirectory._data, &Log);
+    GameWindow_Open(&Window, WINDOW_TITLE);
+    if (!GameWindow_IsOpen(&Window))
     {
         // Everything after this point needs a window and its GL context. raylib has printed the cause (e.g. no
         // display, or no usable OpenGL 3.3 driver) to stdout.
         Error FailLogResult = Logger_LogCritical(&Log,
             (const unsigned char*)u8"Could not create the game window or its OpenGL context; see raylib's output above.");
         Error_Deconstruct(&FailLogResult);
+        GameWindow_Deconstruct(&Window);
         UnicodeData_Deconstruct(&Unicode);
         GameConfig_Deconstruct(&Config);
         Memory_Free(BaseDirectory._data);
@@ -574,7 +554,8 @@ int main(int argc, char** argv)
         if (Assets != NULL) { Error e = AssetManager_Deconstruct(Assets); Error_Deconstruct(&e); }
         if (JsonPool != NULL) { Error e = JSONObjectPool_Deconstruct(JsonPool); Error_Deconstruct(&e); }
         if (GhdfPool != NULL) { Error e = GHDFObjectPool_Deconstruct(GhdfPool); Error_Deconstruct(&e); }
-        CloseWindow();
+        GameWindow_Close(&Window);
+        GameWindow_Deconstruct(&Window);
         RegistryRoot_Deconstruct(&Registries);
         KeyRegistry_Deconstruct(&Keys);
         UnicodeData_Deconstruct(&Unicode);
@@ -611,7 +592,8 @@ int main(int argc, char** argv)
         if (Assets != NULL) { Error e = AssetManager_Deconstruct(Assets); Error_Deconstruct(&e); }
         if (JsonPool != NULL) { Error e = JSONObjectPool_Deconstruct(JsonPool); Error_Deconstruct(&e); }
         if (GhdfPool != NULL) { Error e = GHDFObjectPool_Deconstruct(GhdfPool); Error_Deconstruct(&e); }
-        CloseWindow();
+        GameWindow_Close(&Window);
+        GameWindow_Deconstruct(&Window);
         Error InputCloseResult = GameInput_Deconstruct(&Input);
         Error_Deconstruct(&InputCloseResult);
         RegistryRoot_Deconstruct(&Registries);
@@ -623,6 +605,8 @@ int main(int argc, char** argv)
         Error_Deconstruct(&CloseLog);
         return 1;
     }
+
+    GameFrameManager_SetWindow(&FrameManager, &Window);
 
     // Bundle the shared services and hand them to the initial frame(s).
     Services GameServices;
@@ -661,7 +645,7 @@ int main(int argc, char** argv)
     // Render pacing target (seconds/frame); 0 = unlocked (render every loop iteration). The update loop
     // runs at its own fixed rate regardless.
     double TargetRenderSeconds = Config.IsFPSUnlocked ? 0.0 : (1.0 / (double)Config.TargetFPS);
-    RunGameLoop(&FrameManager, TargetRenderSeconds);
+    RunGameLoop(&FrameManager, &Window, TargetRenderSeconds);
 
     // Tear down in the reverse of construction: frames first (they release assets and GPU render targets
     // and need both the asset manager and the GL context alive), then the asset manager and pools, then
@@ -692,7 +676,8 @@ int main(int argc, char** argv)
         Error_Deconstruct(&e);
     }
 
-    CloseWindow();
+    GameWindow_Close(&Window);
+    GameWindow_Deconstruct(&Window);
 
     Services_Deconstruct(&GameServices);
     Error InputCloseResult = GameInput_Deconstruct(&Input);

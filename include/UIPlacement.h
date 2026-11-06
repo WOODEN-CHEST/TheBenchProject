@@ -8,7 +8,7 @@
  * @file UIPlacement.h
  * @brief Where a widget sits, in UI pixels: placements, insets and a stack's hints, with their pure arithmetic.
  *
- * A UI PIXEL is a surface pixel times the screen's scale (UIScreen_SetScale; the player's ui_scale, a screen in the world
+ * A UI PIXEL is a surface pixel times the screen's scale (UIScreen_SetScale; from its host's scale policy, a screen in the world
  * its own). A widget's geometry is normalized to its parent, which a dense panel, a row of a fixed height and a nine-slice
  * corner cannot use: they need sizes that do not change with the window. A PLACEMENT says where the widget's box sits in
  * its parent's: two anchors in [0;1] of the parent's box and two offsets from them in UI pixels. One structure covers a

@@ -3,6 +3,7 @@
 #include "GameFrameManager.h"
 #include "GameInput.h"
 #include "LabelWidget.h"
+#include "Config.h"
 #include "Logger.h"
 #include "Renderer.h"
 #include "Services.h"
@@ -11,6 +12,7 @@
 #include "TextDocument.h"
 #include "UIScreen.h"
 #include "UIWidget.h"
+#include "UIWindowHost.h"
 #include "UIWidgetFactory.h"
 #include "raylib/raylib.h"
 #include "wr/WRCompile.h"
@@ -57,6 +59,8 @@ typedef struct UITestFrameStruct
     UIWidgetFactory _widgetFactory;
     /** The UI; owned. */
     UIScreen _screen;
+    /** The UI's host: it fills the window and scales with its height. */
+    UIWindowHost _host;
     /** Which of the three above are constructed (for teardown after a failed creation). */
     bool _isTextFactoryConstructed;
     bool _isWidgetFactoryConstructed;
@@ -297,24 +301,7 @@ static Error UITestFrame_Update(void* self, ProgramTime time)
     GameInput* Input = Frame->_services->Input;
 
     // The screen fills the window (the frame's render target has the window's size).
-    if (Input != NULL)
-    {
-        Vector2 WindowSize = GameInput_GetWindowSize(Input);
-        if ((WindowSize.x > 0.0f) && (WindowSize.y > 0.0f))
-        {
-            UIViewport Viewport = UIViewport_Create(WindowSize,
-                GameFrameManager_GetTargetAspectRatio(Frame->_services->FrameManager),
-                GameFrameManager_GetTargetAreaPosition(Frame->_services->FrameManager));
-            Error ViewportResult = UIScreen_SetViewport(&Frame->_screen, &Viewport);
-            if (ViewportResult.Code != ErrorCode_Success)
-            {
-                return ViewportResult;
-            }
-        }
-    }
-
-    UIScreenInput ScreenInput = UIScreenInput_CreateFromWindow(Input);
-    Error Result = UIScreen_Update(&Frame->_screen, time, &ScreenInput);
+    Error Result = UIWindowHost_Update(&Frame->_host, &Frame->_screen, time, Input);
     if ((Result.Code != ErrorCode_Success) || (Input == NULL))
     {
         return Result;
@@ -375,6 +362,7 @@ static Error UITestFrame_Render(void* self, const FrameRenderContext* context, R
  * factory and their storage to the widget factory), then the factories. */
 static void DestroyFrameContents(UITestFrame* frame)
 {
+    UIWindowHost_Deconstruct(&frame->_host);
     if (frame->_isScreenConstructed)
     {
         Error ScreenResult = UIScreen_Deconstruct(&frame->_screen);
@@ -424,6 +412,9 @@ static const GameFrameVTable UITestFrameVTable =
 // Static functions: construction.
 static Error BuildFrameContents(UITestFrame* frame)
 {
+    Services* Shared = frame->_services;
+    UIWindowHost_Construct(&frame->_host, UIScalePolicy_FollowHeight(), (Shared->Config != NULL) ? Shared->Config->UIScale : 1.0f,
+        GameFrameManager_GetTargetAspectRatio(Shared->FrameManager), GameFrameManager_GetTargetAreaPosition(Shared->FrameManager));
     Error Result = TextComponentFactory_Construct(&frame->_textFactory);
     frame->_isTextFactoryConstructed = (Result.Code == ErrorCode_Success);
     if (Result.Code == ErrorCode_Success)

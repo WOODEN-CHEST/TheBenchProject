@@ -1,4 +1,5 @@
 #pragma once
+#include "GameWindowState.h"
 #include "wr/WRError.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -74,11 +75,15 @@ typedef struct GameConfigStruct
      *  is still polled every update tick but in a burst. Usually paired with IsFPSUnlocked so the display,
      *  not TargetFPS, paces rendering. Default false. */
     bool IsVSyncEnabled;
-    /** @brief true to create the window in fullscreen mode; false for a regular windowed mode. */
-    bool IsFullscreen;
-    /** @brief Window width in pixels; always strictly positive and within a sane range after loading. */
+    /** @brief How the window takes the screen on a first run: GameWindowMode_Windowed (the default), _Borderless or _Fullscreen.
+     *  After that the window state file holds what the player last had (GameWindow.h). */
+    GameWindowMode WindowMode;
+    /** @brief The mode the fullscreen toggle (the tbp:toggle_fullscreen action) switches to from a window:
+     *  GameWindowMode_Borderless (the default: the monitor's video mode stays as it is) or _Fullscreen. */
+    GameWindowMode FullscreenToggleMode;
+    /** @brief The windowed width in pixels for a first run; always strictly positive and within a sane range after loading. */
     int32_t ResolutionWidth;
-    /** @brief Window height in pixels; always strictly positive and within a sane range after loading. */
+    /** @brief The windowed height in pixels for a first run; always strictly positive and within a sane range after loading. */
     int32_t ResolutionHeight;
 
     // ---- Post-effect config-side multipliers ----
@@ -147,8 +152,8 @@ typedef struct GameConfigStruct
      *  at all: they mirror the sky alone), _LOW (half the scene's resolution, fewer steps: cheaper, coarser) or _HIGH
      *  (the scene's resolution). Default high; another value takes the default. */
     int32_t ReflectionQuality;
-    /** @brief How many surface pixels one UI pixel of the player's UI takes (UIScreen_SetScale): 1 draws the UI's pixel sizes
-     *  as they are, 2 at twice the size. In [CONFIG_MIN_UI_SCALE, CONFIG_MAX_UI_SCALE], otherwise the default of 1. */
+    /** @brief The player's scale of the UI: it multiplies what a screen's scale policy answers (UIScalePolicy.h), 1 leaving it as
+     *  it is and 2 making it twice the size. In [CONFIG_MIN_UI_SCALE, CONFIG_MAX_UI_SCALE], otherwise the default of 1. */
     float UIScale;
 } GameConfig;
 

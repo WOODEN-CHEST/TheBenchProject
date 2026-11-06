@@ -48,6 +48,8 @@
 // Forward declarations.
 /** @brief The logger the manager writes crash diagnostics to; full type in Logger.h. Borrowed. */
 typedef struct LoggerStruct Logger;
+/** @brief The game window, which handles the fullscreen toggle before the frames update; full type in GameWindow.h. Borrowed. */
+typedef struct GameWindowStruct GameWindow;
 
 
 // Types.
@@ -97,6 +99,8 @@ typedef struct GameFrameManagerStruct
     Logger* _logger;
     /** @brief Borrowed input polled at the start of every update tick; NULL for none. */
     GameInput* _input;
+    /** @brief Borrowed game window, updated after the poll and before the frames; NULL for none. */
+    GameWindow* _window;
     /** @brief Owned buffer of internal frame records (one heap record pointer per resident frame), kept in ascending
      *  z order (bottom first). */
     GenericBuffer _records;
@@ -255,6 +259,14 @@ Error GameFrameManager_Render(GameFrameManager* self, ProgramTime time);
  * @returns true if the manager wants the loop to stop and shut down, false to keep running.
  */
 bool GameFrameManager_ShouldStop(GameFrameManager* self);
+
+/**
+ * @brief Gives the manager the game window: each update tick it runs after the input's poll and before any frame, so the fullscreen
+ *        toggle is handled in one place and no frame sees its keys.
+ * @param self The manager; must not be NULL.
+ * @param window The window; borrowed, it must outlive the manager's updates. NULL for none.
+ */
+void GameFrameManager_SetWindow(GameFrameManager* self, GameWindow* window);
 
 /**
  * @brief Asks the loop to stop and shut the game down normally (e.g. the player chose to quit). Not an error.

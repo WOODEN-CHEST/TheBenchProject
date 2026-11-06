@@ -86,5 +86,5 @@ The header documents every function; the essentials:
   in double.
 - **Characters (Characters.md):** the feet, ground points and eyes are doubles; moves (floats) are added with
   `GameMath_FromVector3`, and differences of positions come back as floats with `GameMath_ToVector3Relative`.
-- **The test frame:** the flycam moves the double camera; F11's far shift moves objects, the camera and the frame's
+- **The test frame:** the flycam moves the double camera; Shift with F10, the far shift, moves objects, the camera and the frame's
   own places in double.

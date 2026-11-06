@@ -2535,11 +2535,11 @@ default SHIFT), mouse-look (`GameInput_GetMouseDelta`, this tick's movement, onl
 mouse wheel (the flycam's speed, up faster and down slower, three notches to a doubling from 0.375 to 6144 m/s,
 6 m/s at start; the sprint key still multiplies it by 3; each change is logged and the I key's camera line shows it;
 not while walking, and the UI takes it first while the pointer is over a widget) and the debug keys as raw keys. A key the UI test frame takes never arrives here: R (it rebuilds the menu), Delete, and while
-it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F11, the
+it navigates Tab, the arrows, Enter and Escape. Give the world test none of them (every letter key, F1 to F10, the
 digits, minus, equals, `'`, `;`, `[`, `]`, `,`, `.`, `/`, the backslash, Insert, Home, End, Page Up, Page Down, the
 keypad's digits, its `.`, `+`, `-`, `*`, `/` and Enter, Scroll Lock and Pause are taken already, and with Shift the grave
-key, L, keypad `-`, `/`, Enter, `+` and `*`, and Backspace with and without Shift, and with Control (with or without Shift), and with Control the keypad's 1 to 6; the keypad's `=`, Caps Lock, Num Lock, Print
-Screen and Menu are free (with Shift the keypad's digits and `.` turn into other keys on Windows while Num Lock is on). Leave F12 free:
+key, L, F10, keypad `-`, `/`, Enter, `+` and `*`, and Backspace with and without Shift, and with Control (with or without Shift), and with Control the keypad's 1 to 6; the keypad's `=`, Caps Lock, Num Lock, Print
+Screen and Menu are free (with Shift the keypad's digits and `.` turn into other keys on Windows while Num Lock is on). Leave F11 free: the game window takes it for the fullscreen toggle before any frame updates ([GameWindow.md](GameWindow.md)). Leave F12 free:
 raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writing `screenshotNNN.png` into the working directory):
 
 - **the clock** (each change is logged with the date and time, e.g. `WorldTest: dawn (paused): Sun 2026-10-18
@@ -2649,7 +2649,7 @@ raylib's `EndDrawing` takes a screenshot on it (`SUPPORT_SCREEN_CAPTURE`), writi
   home again, the crates are teleported back where they were. F10 teleports the door's crate 1.2 m aside, out of the
   door's way, and back into its corner (pushed out of the door if they overlap). Each logged, with the contact and
   motion events;
-- **render space and double positions:** F11 steps the test world through the far shift's places
+- **render space and double positions:** Shift with F10 steps the test world through the far shift's places
   (`FarShifts`): out to (20 000, 0, 20 000) m, 28 km from the world's origin, then to (100 000, 0, -100 000) m, 141 km
   out, then back to the start. Every root object, the player and the test NPCs (through the character system's
   teleport) and the camera move along (logged: `WorldTest: far shift 1 of 2: 38 root objects and the camera moved by
@@ -2745,8 +2745,7 @@ codepoints the file lacks). A sample that fails to load is logged once and leave
 ## UITestFrame
 
 A debug `GameFrame` added on top of `WorldTestFrame` (`include/UITestFrame.h`, `source/UITestFrame.c`), so it gets the
-input first. It owns a widget factory, a `UIScreen` (the window's size as its viewport, `UIScreenInput_CreateFromWindow`
-as its input) and a few labels in `noto_sans`: a hint at the bottom left (input-disabled) and a focusable "menu" label at
+input first. It owns a widget factory, a `UIScreen` under a `UIWindowHost` (following the window's height, in [UIFramework.md](UIFramework.md), "Scale policies") and a few labels in `noto_sans`: a hint at the bottom left (input-disabled) and a focusable "menu" label at
 the top right with three focusable item labels inside it. Hover and focus notifications tint the labels (yellow /
 blue) and gaining focus plays a short size animation; Delete destroys the focused item, R rebuilds the menu. Tab or the
 arrows start keyboard navigation, Enter opens the menu, Escape closes it and then lets go of the UI, after which Escape
@@ -2760,16 +2759,16 @@ means premultiplied compositing in the frame manager).
 Order: base directory (`FileSystem_GetExecutableDirectory`) → Logger (`<base>/logs`) → if the executable's
 directory was unavailable, warn and fall back to a copy of `GetWorkingDirectory()` → load config
 (`<base>/config.json`) → load unicode DB (`<base>/asset/text/unicode_data.txt`, empty-DB fallback) →
-`InitWindow` (fullscreen/vsync flags from the config) + `SetExitKey(KEY_NULL)` (Escape is the UI's `ui_back` and the
+the game window ([GameWindow.md](GameWindow.md): the config's or the state file's mode and size, the config's vsync) + `SetExitKey(KEY_NULL)` (Escape is the UI's `ui_back` and the
 game's `pause` action, never raylib's quit key) → AssetManager (`Construct1` with the logger, `CreateStandardAssetTypes`,
 cache directory `<base>/.wr_asset_cache`, absolute `<base>/asset` search root, `ReadDefinitions`) → GHDF pool → the
 key registry (`KeyRegistry`, [NamespacedKey.md](NamespacedKey.md)) → the root registry (`RegistryRoot`,
 [Registry.md](Registry.md)) → `GameInput` (the engine's actions and categories; its two registries join the root) →
 the packs' input actions (`InputActions_RegisterDefinitions`, [GameInput.md](GameInput.md)) → `<base>/controls.json` if
-present → one log line listing the root's registries → GameFrameManager (polls the input) → build `Services` (`Services.BaseDirectory`, `Services.Input`,
+present → one log line listing the root's registries → GameFrameManager (polls the input, then updates the game window) → build `Services` (`Services.BaseDirectory`, `Services.Input`,
 `Services.Keys`, `Services.Registries`) → create + add `WorldTestFrame`, then `UITestFrame` on top → run loop.
 Teardown (reverse, ordering matters): frame manager (releases assets + GPU targets, needs asset manager + GL alive;
-its worlds borrow the key registry) → asset manager → JSON pool → GHDF pool → `CloseWindow` → input → root registry
+its worlds borrow the key registry) → asset manager → JSON pool → GHDF pool → `GameWindow_Close` (saves the window's state) → input → root registry
 (after every system withdrew its registries) → key registry (the root borrows it) → unicode → config → base-directory
 buffer → logger.
 

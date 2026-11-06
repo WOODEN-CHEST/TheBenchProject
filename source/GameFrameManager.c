@@ -1,4 +1,5 @@
 #include "GameFrameManager.h"
+#include "GameWindow.h"
 #include "Logger.h"
 #include "wr/WRCompile.h"
 #include "raylib/raylib.h"
@@ -306,6 +307,7 @@ Error GameFrameManager_Construct(GameFrameManager* self, Logger* logger, GameInp
 
     self->_logger = logger;
     self->_input = input;
+    self->_window = NULL;
     GenericBuffer_AllocateVariable(&self->_records, INITIAL_RECORD_CAPACITY, sizeof(GameFrameRecord*));
     GenericBuffer_AllocateVariable(&self->_updateOrder, INITIAL_RECORD_CAPACITY, sizeof(GameFrameRecord*));
     self->_targetAspectRatio = targetAspectRatio;
@@ -461,6 +463,10 @@ Error GameFrameManager_Update(GameFrameManager* self, ProgramTime time)
     {
         GameInput_Poll(self->_input);
     }
+    if (self->_window != NULL)
+    {
+        GameWindow_Update(self->_window, self->_input, time.TotalTime);
+    }
 
     // Top-down (the list is in ascending z), so the frame on top gets first refusal on input. The order is fixed for
     // the tick: a frame added during it waits for the next tick, and only this loop destroys records.
@@ -591,6 +597,11 @@ Error GameFrameManager_Render(GameFrameManager* self, ProgramTime time)
 bool GameFrameManager_ShouldStop(GameFrameManager* self)
 {
     return (self == NULL) ? true : self->_shouldStop;
+}
+
+void GameFrameManager_SetWindow(GameFrameManager* self, GameWindow* window)
+{
+    self->_window = window;
 }
 
 void GameFrameManager_RequestStop(GameFrameManager* self)

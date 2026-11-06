@@ -34,6 +34,8 @@ The elements calling code builds a UI from (the kit, panels, buttons, stacks, th
   [WorldRuntime.md](WorldRuntime.md)).
 - **WorldScreenHost** (`WorldScreenHost.h/.c`): the host of a screen shown on a screen in the world (below, "World
   screens").
+- **UIWindowHost** (`UIWindowHost.h/.c`): the host of a screen that fills the game window (below, "Hosts").
+- **UIScalePolicy** (`UIScalePolicy.h/.c`): how a screen's scale follows the window and the monitor, pure (below, "Scale policies").
 - **UIPlacement** (`UIPlacement.h/.c`): placements, insets and a stack's hints, with their pure arithmetic (below, "UI pixels").
 
 ## Setting up a screen
@@ -47,11 +49,12 @@ LabelWidget_RegisterType(&Factory, &LabelType);  // every widget type, once
 UIScreen Screen;
 UIScreen_Construct(&Screen, &Factory, logger);   // logger: may be NULL (tests)
 
+// a UI that fills the window has a host, which sets the viewport and the scale, and runs the update:
+UIWindowHost Host;
+UIWindowHost_Construct(&Host, UIScalePolicy_ConstantPixels(), playerScale, aspect, placement);
+
 // each update tick (in the hosting frame's Update, before its game logic):
-UIViewport Viewport = UIViewport_Create(GameInput_GetWindowSize(input), aspect, placement); // when it changes
-UIScreen_SetViewport(&Screen, &Viewport);
-UIScreenInput In = UIScreenInput_CreateFromWindow(input);   // full-window UI
-UIScreen_Update(&Screen, time, &In);
+UIWindowHost_Update(&Host, &Screen, time, input);
 
 // each render (into the surface's render context):
 UIScreen_Render(&Screen, &renderContext);
@@ -70,9 +73,30 @@ keyboard to the surface in use. The host also keeps the `UIViewport` (the surfac
 settings) current; the Layout pass converts units with it. A screen in the world has a host of its own:
 `WorldScreenHost` (below, "World screens").
 
+## Hosts
+
+A screen never reads the window, so something outside it passes it the pointer, the keyboard, its size and its scale each tick. Two hosts do:
+- **`UIWindowHost`**, for a UI that fills the game window: the viewport is the window's, the scale comes from its policy with the window's height and the monitor's, the
+  pointer and the keyboard from `UIScreenInput_CreateFromWindow`, then `UIScreen_Update`. It reads everything from `GameInput`, so a test drives it with a sample.
+  `UIWindowHost_SetPolicy` and `UIWindowHost_SetPlayerScale` change what it does from the next update on.
+- **`WorldScreenHost`**, for a UI on a screen in the world (below, "World screens"). Its screen keeps a fixed scale of its own, set once with `UIScreen_SetScale`.
+
+## Scale policies
+
+Each screen in the window has a policy (`UIScalePolicy.h`, pure), so a screen can keep its controls' size or grow with the window:
+
+| Policy | Scale | For |
+|---|---|---|
+| `UIScalePolicy_Fixed(value)` | the given value | what must not follow the window |
+| `UIScalePolicy_ConstantPixels()` | `max(1, round(monitorHeight / 1080 * 4) / 4)`, times the player's `ui_scale` | the editor: 1080p is 1, 1440p is 1.25, 4K is 2. Resizing gives more room, not bigger controls |
+| `UIScalePolicy_FollowHeight()` | `windowHeight / 1080`, times the player's `ui_scale` | menus and game screens. Resizing scales the UI |
+
+Every answer lies within `CONFIG_MIN_UI_SCALE` and `UI_SCALE_POLICY_MAX_SCALE`. A height that is not a finite number above 0 (an unknown monitor) gives the player's scale
+alone. The monitor's height is what counts, so a portrait monitor counts as its tall side.
+
 ## UI pixels, placements and preferred sizes
 
-A **UI pixel** is a surface pixel times the screen's scale (`UIScreen_SetScale`: the player's `ui_scale` for a UI in the window; a
+A **UI pixel** is a surface pixel times the screen's scale (`UIScreen_SetScale`, which a host sets from its policy; a
 screen in the world has its own, and its pixels are its render target's). Results round to whole surface pixels, so edges stay crisp.
 
 A widget may have a **placement** (`Widget_SetPlacement`, `UIPlacement.h`): two anchors in `[0;1]` of its parent's box and two offsets from

@@ -49,7 +49,8 @@ static bool HasDefaultWindowSettings(const GameConfig* config)
         && (config->ResolutionHeight == Defaults.ResolutionHeight)
         && (config->IsFPSUnlocked == Defaults.IsFPSUnlocked)
         && (config->IsVSyncEnabled == Defaults.IsVSyncEnabled)
-        && (config->IsFullscreen == Defaults.IsFullscreen);
+        && (config->WindowMode == Defaults.WindowMode)
+        && (config->FullscreenToggleMode == Defaults.FullscreenToggleMode);
 }
 
 static void MissingFileKeepsDefaults(TestRun* run)
@@ -67,19 +68,76 @@ static void ReadsEveryKey(TestRun* run)
 {
     GameConfig Config;
     TEST_CHECK_SUCCESS(run, LoadConfigText(run, "reads_every_key",
-        "{ \"is_fps_unlocked\": true, \"target_fps\": 120, \"is_vsync_enabled\": true, \"is_fullscreen\": true,"
+        "{ \"is_fps_unlocked\": true, \"target_fps\": 120, \"is_vsync_enabled\": true, \"window_mode\": \"fullscreen\","
         "  \"resolution\": [ 800, 600 ], \"shadow_strength\": 2.5, \"fog_strength\": 0, \"draw_distance_scale\": 0.25,"
         "  \"lod_distance_scale\": 1.5 }",
         &Config));
     TEST_CHECK(run, Config.IsFPSUnlocked);
     TEST_CHECK(run, Config.TargetFPS == 120);
     TEST_CHECK(run, Config.IsVSyncEnabled);
-    TEST_CHECK(run, Config.IsFullscreen);
+    TEST_CHECK(run, Config.WindowMode == GameWindowMode_Fullscreen);
     TEST_CHECK(run, (Config.ResolutionWidth == 800) && (Config.ResolutionHeight == 600));
     TEST_CHECK(run, Config.ShadowStrength == 2.5f);
     TEST_CHECK(run, Config.FogStrength == 0.0f);
     TEST_CHECK(run, Config.DrawDistanceScale == 0.25f);
     TEST_CHECK(run, Config.LodDistanceScale == 1.5f);
+}
+
+// The window's mode by its name; anything else keeps the default, a plain window.
+static void ReadsTheWindowMode(TestRun* run)
+{
+    GameConfig Defaults;
+    GameConfig_SetDefaults(&Defaults);
+    TEST_CHECK(run, (Defaults.WindowMode == GameWindowMode_Windowed) && (Defaults.FullscreenToggleMode == GameWindowMode_Borderless));
+
+    static const struct
+    {
+        const char* Name;
+        const char* Text;
+        GameWindowMode Expected;
+    } Cases[] =
+    {
+        { "window_mode_windowed", "{ \"window_mode\": \"windowed\" }", GameWindowMode_Windowed },
+        { "window_mode_borderless", "{ \"window_mode\": \"borderless\" }", GameWindowMode_Borderless },
+        { "window_mode_fullscreen", "{ \"window_mode\": \"fullscreen\" }", GameWindowMode_Fullscreen },
+        { "window_mode_broken_name", "{ \"window_mode\": \"maximized\" }", GameWindowMode_Windowed },
+        { "window_mode_broken_case", "{ \"window_mode\": \"Fullscreen\" }", GameWindowMode_Windowed },
+        { "window_mode_broken_type", "{ \"window_mode\": 2 }", GameWindowMode_Windowed },
+        { "window_mode_broken_bool", "{ \"window_mode\": true }", GameWindowMode_Windowed },
+        { "window_mode_unknown_key", "{ \"is_fullscreen\": true }", GameWindowMode_Windowed },
+        { "window_mode_absent", "{ }", GameWindowMode_Windowed },
+    };
+    for (size_t Index = 0U; Index < (sizeof(Cases) / sizeof(Cases[0])); Index++)
+    {
+        GameConfig Config;
+        TEST_CHECK_SUCCESS(run, LoadConfigText(run, Cases[Index].Name, Cases[Index].Text, &Config));
+        TEST_CHECK(run, Config.WindowMode == Cases[Index].Expected);
+    }
+}
+
+// The toggle's mode: borderless or fullscreen. A toggle to a window would do nothing, so that keeps the default too.
+static void ReadsTheFullscreenToggleMode(TestRun* run)
+{
+    static const struct
+    {
+        const char* Name;
+        const char* Text;
+        GameWindowMode Expected;
+    } Cases[] =
+    {
+        { "toggle_borderless", "{ \"fullscreen_toggle_mode\": \"borderless\" }", GameWindowMode_Borderless },
+        { "toggle_fullscreen", "{ \"fullscreen_toggle_mode\": \"fullscreen\" }", GameWindowMode_Fullscreen },
+        { "toggle_windowed", "{ \"fullscreen_toggle_mode\": \"windowed\" }", GameWindowMode_Borderless },
+        { "toggle_broken_name", "{ \"fullscreen_toggle_mode\": \"exclusive\" }", GameWindowMode_Borderless },
+        { "toggle_broken_type", "{ \"fullscreen_toggle_mode\": [] }", GameWindowMode_Borderless },
+        { "toggle_absent", "{ }", GameWindowMode_Borderless },
+    };
+    for (size_t Index = 0U; Index < (sizeof(Cases) / sizeof(Cases[0])); Index++)
+    {
+        GameConfig Config;
+        TEST_CHECK_SUCCESS(run, LoadConfigText(run, Cases[Index].Name, Cases[Index].Text, &Config));
+        TEST_CHECK(run, Config.FullscreenToggleMode == Cases[Index].Expected);
+    }
 }
 
 static void WholeRealIntegersAreAccepted(TestRun* run)
@@ -263,6 +321,8 @@ void ConfigTests_Run(TestRun* run)
     {
         { "missing_file_keeps_defaults", MissingFileKeepsDefaults },
         { "reads_every_key", ReadsEveryKey },
+        { "reads_the_window_mode", ReadsTheWindowMode },
+        { "reads_the_fullscreen_toggle_mode", ReadsTheFullscreenToggleMode },
         { "whole_real_integers_are_accepted", WholeRealIntegersAreAccepted },
         { "fractional_integers_keep_the_default", FractionalIntegersKeepTheDefault },
         { "out_of_range_values_fall_back_to_defaults", OutOfRangeValuesFallBackToDefaults },

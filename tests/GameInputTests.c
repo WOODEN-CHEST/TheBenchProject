@@ -467,6 +467,7 @@ static void TheEngineActionsGetTheirEnumValues(TestRun* run)
         { GameAction_Crouch, "tbp:crouch", GameActionCategory_Character },
         { GameAction_Use, "tbp:use", GameActionCategory_Character },
         { GameAction_Pause, "tbp:pause", GameActionCategory_General },
+        { GameAction_ToggleFullscreen, "tbp:toggle_fullscreen", GameActionCategory_General },
     };
     static const struct
     {
@@ -1062,7 +1063,7 @@ static void TheListingShowsEveryAction(TestRun* run)
         GameInput_WithdrawSource(Input, Pack);
         GameInput_LogActions(Input);
         Fixture_CloseLog(run, &Fixture);
-        TEST_CHECK(run, CountInLog(run, &Fixture, "21 actions in 5 categories:") == 1U);
+        TEST_CHECK(run, CountInLog(run, &Fixture, "22 actions in 5 categories:") == 1U);
         TEST_CHECK(run, CountInLog(run, &Fixture, "Movement (tbp:movement, order 100):") == 2U);
         TEST_CHECK(run, CountInLog(run, &Fixture, "Tools (mymod:tools, order 500, from mymod:pack):") == 1U);
         TEST_CHECK(run, CountInLog(run, &Fixture, "tbp:move_forward \"Move Forward\": up, control+w (set by the player)") == 2U);
@@ -1070,7 +1071,7 @@ static void TheListingShowsEveryAction(TestRun* run)
         TEST_CHECK(run, CountInLog(run, &Fixture, "mymod:hammer \"Hammer\": f, from mymod:pack") == 1U);
         TEST_CHECK(run, CountInLog(run, &Fixture, "other:chisel \"Hammer\": unbound, from other:pack") == 2U);
         TEST_CHECK(run, CountInLog(run, &Fixture, "Without a category:") == 1U);
-        TEST_CHECK(run, CountInLog(run, &Fixture, "20 actions in 4 categories:") == 1U);
+        TEST_CHECK(run, CountInLog(run, &Fixture, "21 actions in 4 categories:") == 1U);
     }
     Fixture_Deconstruct(run, &Fixture);
 }
@@ -1259,11 +1260,118 @@ static void BadControlsFilesChangeNothing(TestRun* run)
 }
 
 
+// The monitor's size comes with the sample, as the other sizes do, so tests and the windowless harness can drive it.
+static void TheMonitorsSizeComesWithTheSample(TestRun* run)
+{
+    InputFixture Fixture;
+    if (Fixture_Construct(run, &Fixture, NULL))
+    {
+        GameInputSample Sample;
+        GameInputSample_Clear(&Sample);
+        GameInput_BeginTick(&Fixture.Input, &Sample);
+        TEST_CHECK(run, (GameInput_GetMonitorSize(&Fixture.Input).x == 0.0f) && (GameInput_GetMonitorSize(&Fixture.Input).y == 0.0f));
+        Sample.MonitorSize = (Vector2){ .x = 3840.0f, .y = 2160.0f };
+        GameInput_BeginTick(&Fixture.Input, &Sample);
+        TEST_CHECK(run, (GameInput_GetMonitorSize(&Fixture.Input).x == 3840.0f) && (GameInput_GetMonitorSize(&Fixture.Input).y == 2160.0f));
+    }
+    Fixture_Deconstruct(run, &Fixture);
+}
+
+// Asking for the monitor goes to the display server, so not every tick: at once the first time, soon after the window changed, every
+// so often otherwise, and a drag does not ask any more often than that.
+static void TheMonitorIsNotAskedEveryTick(TestRun* run)
+{
+    InputFixture Fixture;
+    if (Fixture_Construct(run, &Fixture, NULL))
+    {
+        GameInput* Input = &Fixture.Input;
+        const Vector2 Place = { .x = 100.0f, .y = 200.0f };
+        const Vector2 Size = { .x = 1280.0f, .y = 720.0f };
+        const Vector2 Monitor = { .x = 3840.0f, .y = 2160.0f };
+        TEST_CHECK(run, GameInputInternal_TickMonitorWatch(Input, Place, Size)); // The first time, at once.
+        TEST_CHECK(run, GameInputInternal_TickMonitorWatch(Input, Place, Size)); // Until it is asked.
+        GameInputInternal_StoreMonitorSize(Input, Monitor, Place, Size);
+
+        // At rest: every so often.
+        for (int Tick = 1; Tick < 960; Tick++)
+        {
+            TEST_CHECK(run, !GameInputInternal_TickMonitorWatch(Input, Place, Size));
+        }
+        TEST_CHECK(run, GameInputInternal_TickMonitorWatch(Input, Place, Size));
+        GameInputInternal_StoreMonitorSize(Input, Monitor, Place, Size);
+
+        // Moved, or resized, along either axis: soon, and no sooner, however it goes on moving.
+        const Vector2 Places[] = { { 101.0f, 200.0f }, { 100.0f, 201.0f }, Place, Place };
+        const Vector2 Sizes[] = { Size, Size, { 1281.0f, 720.0f }, { 1280.0f, 721.0f } };
+        for (size_t Change = 0U; Change < (sizeof(Places) / sizeof(Places[0])); Change++)
+        {
+            for (int Tick = 1; Tick < 120; Tick++)
+            {
+                TEST_CHECK(run, !GameInputInternal_TickMonitorWatch(Input, Places[Change], Sizes[Change]));
+            }
+            TEST_CHECK(run, GameInputInternal_TickMonitorWatch(Input, Places[Change], Sizes[Change]));
+            GameInputInternal_StoreMonitorSize(Input, Monitor, Place, Size); // Compared with where it was when asked.
+        }
+
+        // Past the longest count, it stays due and does not wrap.
+        Input->_ticksSinceMonitorAsked = UINT32_MAX;
+        TEST_CHECK(run, GameInputInternal_TickMonitorWatch(Input, Place, Size));
+        TEST_CHECK(run, Input->_ticksSinceMonitorAsked == UINT32_MAX);
+    }
+    Fixture_Deconstruct(run, &Fixture);
+}
+
+// The toggle's defaults: Alt+Enter, not plain Enter, and F11 with anything held. It never keeps a binding by force.
+static void TheFullscreenToggleHasItsKeys(TestRun* run)
+{
+    InputFixture Fixture;
+    if (Fixture_Construct(run, &Fixture, NULL))
+    {
+        GameInput* Input = &Fixture.Input;
+        TEST_CHECK(run, GameInput_GetBindingCount(Input, GameAction_ToggleFullscreen) == 2U);
+        TEST_CHECK(run, HasBinding(Input, GameAction_ToggleFullscreen, 0U, GameKey_Enter, GAME_KEY_MODIFIER_ALT));
+        TEST_CHECK(run, HasBinding(Input, GameAction_ToggleFullscreen, 1U, GameKey_F11, GAME_KEY_MODIFIER_NONE));
+
+        GameInputSample Sample;
+        GameInputSample_Clear(&Sample);
+        Sample.KeyStates[GameKey_Enter] = GAME_INPUT_KEY_STATE_DOWN | GAME_INPUT_KEY_STATE_PRESSED;
+        GameInput_BeginTick(Input, &Sample);
+        TEST_CHECK(run, !GameInput_IsActionPressed(Input, GameAction_ToggleFullscreen) && GameInput_IsActionPressed(Input, GameAction_UIAccept));
+
+        // With Alt held the most specific binding wins, so Enter is the toggle's alone; either Alt will do.
+        const GameKey Alts[] = { GameKey_LeftAlt, GameKey_RightAlt };
+        for (size_t Index = 0U; Index < (sizeof(Alts) / sizeof(Alts[0])); Index++)
+        {
+            GameInputSample_Clear(&Sample);
+            Sample.KeyStates[Alts[Index]] = GAME_INPUT_KEY_STATE_DOWN;
+            Sample.KeyStates[GameKey_Enter] = GAME_INPUT_KEY_STATE_DOWN | GAME_INPUT_KEY_STATE_PRESSED;
+            GameInput_BeginTick(Input, &Sample);
+            TEST_CHECK(run, GameInput_IsActionPressed(Input, GameAction_ToggleFullscreen));
+            TEST_CHECK(run, !GameInput_IsActionPressed(Input, GameAction_UIAccept));
+        }
+
+        // Keypad Enter stays the UI's, Alt or not: the toggle does not ask for it.
+        GameInputSample_Clear(&Sample);
+        Sample.KeyStates[GameKey_LeftAlt] = GAME_INPUT_KEY_STATE_DOWN;
+        Sample.KeyStates[GameKey_KeypadEnter] = GAME_INPUT_KEY_STATE_DOWN | GAME_INPUT_KEY_STATE_PRESSED;
+        GameInput_BeginTick(Input, &Sample);
+        TEST_CHECK(run, !GameInput_IsActionPressed(Input, GameAction_ToggleFullscreen) && GameInput_IsActionPressed(Input, GameAction_UIAccept));
+
+        GameActionInfo Info;
+        TEST_CHECK(run, GameInput_TryGetActionInfo(Input, GameAction_ToggleFullscreen, &Info) && !Info.KeepsABinding);
+    }
+    Fixture_Deconstruct(run, &Fixture);
+}
+
+
 // Public functions.
 void GameInputTests_Run(TestRun* run)
 {
     static const TestCase Cases[] =
     {
+        { "the_monitors_size_comes_with_the_sample", TheMonitorsSizeComesWithTheSample },
+        { "the_monitor_is_not_asked_every_tick", TheMonitorIsNotAskedEveryTick },
+        { "the_fullscreen_toggle_has_its_keys", TheFullscreenToggleHasItsKeys },
         { "key_ids_are_unique_and_parse_back", KeyIdsAreUniqueAndParseBack },
         { "consumed_keys_stay_consumed_while_held", ConsumedKeysStayConsumedWhileHeld },
         { "wheel_text_and_pointer_are_consumed_for_one_tick", WheelTextAndPointerAreConsumedForOneTick },

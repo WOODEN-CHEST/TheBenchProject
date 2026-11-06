@@ -320,7 +320,7 @@ below the flycam), F2 the test NPCs (a human, a dog and a pigeon with placeholde
 human wears the animated humanoid, as the player does when it is a human), F3 flight, F4 the player's kind; E uses
 what the player looks at (starting the action it offers), 8 sends the NPC human to sit on the bench, 9 puts down,
 0 waves; the log names what the player looks at when it changes, every character event and every action; I adds the
-player's state (and its action and what it holds). F11 (the far shift) places every character again 28 km, then 141 km out, where they
+player's state (and its action and what it holds). Shift with F10 (the far shift) places every character again 28 km, then 141 km out, where they
 walk, jump and crouch as at the origin.
 
 ## Known limits

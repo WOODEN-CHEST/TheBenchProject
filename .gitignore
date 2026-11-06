@@ -59,6 +59,7 @@ compile/out/TheBenchProject*
 compile/out/unicode_data.txt
 local/
 compile/out/logs/
+compile/out/window_state.json*
 tests/out/
 
 # Worlds the test frame's F5 key saves for round-trip checks (worlds/test.saved.world.json and .ghdf), and a save's

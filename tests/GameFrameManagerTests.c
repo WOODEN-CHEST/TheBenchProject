@@ -2,6 +2,7 @@
 #include "GameFrame.h"
 #include "GameFrameManager.h"
 #include "GameInput.h"
+#include "GameWindow.h"
 #include "Logger.h"
 #include "ProgramTime.h"
 #include "wr/WRMemory.h"
@@ -34,6 +35,9 @@ typedef struct RecordingFrameStruct
     char Name;
     CallLog* Log;
     bool FailsPrepare;
+    /* The window the frame looks at when it updates, and the time the window had then. */
+    const GameWindow* Window;
+    double WindowTimeSeen;
 } RecordingFrame;
 
 
@@ -102,6 +106,24 @@ static const GameFrameVTable RecordingVTable =
 static const GameFrameVTable SilentVTable =
 {
     .Start = RecordingFrame_Succeed, .End = RecordingFrame_Succeed, .Update = RecordingFrame_Succeed,
+    .BeginLoad = RecordingFrame_Step, .LoadStep = RecordingFrame_Step, .IsLoaded = RecordingFrame_IsDone,
+    .BeginUnload = RecordingFrame_Step, .UnloadStep = RecordingFrame_Step, .IsUnloaded = RecordingFrame_IsDone,
+    .PrepareRender = NULL, .Render = RecordingFrame_Render, .GetLoadProgress = NULL, .OnResize = NULL,
+    .Destroy = RecordingFrame_Destroy
+};
+
+static Error RecordingFrame_NoteWindow(void* self, ProgramTime time)
+{
+    (void)time;
+    RecordingFrame* Frame = self;
+    Frame->WindowTimeSeen = Frame->Window->_time;
+    return Error_CreateSuccess();
+}
+
+/* The same frame, looking at the game window as it updates. */
+static const GameFrameVTable WindowWatchingVTable =
+{
+    .Start = RecordingFrame_Succeed, .End = RecordingFrame_Succeed, .Update = RecordingFrame_NoteWindow,
     .BeginLoad = RecordingFrame_Step, .LoadStep = RecordingFrame_Step, .IsLoaded = RecordingFrame_IsDone,
     .BeginUnload = RecordingFrame_Step, .UnloadStep = RecordingFrame_Step, .IsUnloaded = RecordingFrame_IsDone,
     .PrepareRender = NULL, .Render = RecordingFrame_Render, .GetLoadProgress = NULL, .OnResize = NULL,
@@ -204,12 +226,69 @@ static void PrepareRenderRunsTopDownOverTheActiveFrames(TestRun* run)
 }
 
 
+/* The game window runs in every tick before any frame, so the fullscreen toggle is handled and its keys are consumed before a frame can read them. */
+static void TheWindowRunsBeforeTheFrames(TestRun* run)
+{
+    Logger Log;
+    KeyRegistry Keys;
+    GameInput Input;
+    GameFrameManager Manager;
+    GameConfig Config;
+    GameConfig_SetDefaults(&Config);
+    GameWindow Window;
+    GameWindow_Construct(&Window, &Config, NULL, NULL);
+    GenericBuffer Base;
+    GenericBuffer_AllocateVariable(&Base, MANAGER_TEST_PATH_CAPACITY, sizeof(unsigned char));
+    bool IsLoggerConstructed = TEST_CHECK_SUCCESS(run, TestRun_CreateWorkDirectory(run, "frame_manager_window", &Base))
+        && TEST_CHECK_SUCCESS(run, Logger_Construct(&Log, Base._data));
+    Memory_Free(Base._data);
+    TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys));
+    TEST_CHECK_SUCCESS(run, GameInput_Construct(&Input, &Keys, NULL, NULL));
+    bool IsManagerConstructed = IsLoggerConstructed && TEST_CHECK_SUCCESS(run, GameFrameManager_Construct(&Manager, &Log,
+        &Input, 16.0f / 9.0f, RenderTargetPosition_Centered()));
+    CallLog Calls = { .Names = { 0 }, .Count = 0U };
+    RecordingFrame* Frame = IsManagerConstructed ? AddFrame(run, &Manager, &WindowWatchingVTable, 'W', &Calls, true) : NULL;
+    if (Frame != NULL)
+    {
+        Frame->Window = &Window;
+        GameFrameManager_SetWindow(&Manager, &Window);
+        double Time = 0.0;
+        for (int Tick = 0; Tick < MANAGER_TEST_START_TICKS; Tick++)
+        {
+            Time += MANAGER_TEST_TICK_SECONDS;
+            TEST_CHECK_SUCCESS(run, GameFrameManager_Update(&Manager, ProgramTime_Create(Time, MANAGER_TEST_TICK_SECONDS)));
+            TEST_CHECK(run, Window._time == Time);
+        }
+        TEST_CHECK(run, Frame->WindowTimeSeen == Time); // This tick's: the window had run already.
+
+        // With no window the manager runs on, and what it had is left alone.
+        GameFrameManager_SetWindow(&Manager, NULL);
+        double TimeBefore = Time;
+        Time += MANAGER_TEST_TICK_SECONDS;
+        TEST_CHECK_SUCCESS(run, GameFrameManager_Update(&Manager, ProgramTime_Create(Time, MANAGER_TEST_TICK_SECONDS)));
+        TEST_CHECK(run, Window._time == TimeBefore);
+    }
+    if (IsManagerConstructed)
+    {
+        TEST_CHECK_SUCCESS(run, GameFrameManager_Deconstruct(&Manager));
+    }
+    TEST_CHECK_SUCCESS(run, GameInput_Deconstruct(&Input));
+    KeyRegistry_Deconstruct(&Keys);
+    if (IsLoggerConstructed)
+    {
+        TEST_CHECK_SUCCESS(run, Logger_Deconstruct(&Log));
+    }
+    GameWindow_Deconstruct(&Window);
+}
+
+
 // Public functions.
 void GameFrameManagerTests_Run(TestRun* run)
 {
     static const TestCase Cases[] =
     {
         { "prepare_render_runs_top_down_over_the_active_frames", PrepareRenderRunsTopDownOverTheActiveFrames },
+        { "the_window_runs_before_the_frames", TheWindowRunsBeforeTheFrames },
     };
     TestRun_RunSuite(run, "GameFrameManager", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

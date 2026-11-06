@@ -11,6 +11,7 @@
 #include "UIKit.h"
 #include "UIScreen.h"
 #include "UIWidgetFactory.h"
+#include "UIWindowHost.h"
 #include "raylib/raylib.h"
 #include "wr/WRCompile.h"
 #include "wr/WRMemory.h"
@@ -52,6 +53,10 @@ typedef struct UIGalleryFrameStruct
     UIWidgetFactory _widgetFactory;
     UIKit _kit;
     UIScreen _screen;
+    /** The UI's host: the window's size, the scale policy and the player's scale. */
+    UIWindowHost _host;
+    /** Whether the UI follows the window's height (the P key's comparison) instead of keeping its pixels. */
+    bool _isFollowingHeight;
     /** Which of the four above are constructed (for teardown after a failed creation). */
     bool _isTextFactoryConstructed;
     bool _isWidgetFactoryConstructed;
@@ -279,7 +284,7 @@ static Error BuildPage(UIGalleryFrame* frame)
     Build.Result = UIKit_CreateStack(&frame->_kit, &frame->_screen, WIDGET_ID_INVALID, &PageOptions, &Page);
 
     AddLabel(&Build, Page, u8"UI gallery", u8"heading");
-    AddLabel(&Build, Page, u8"T the theme, + and - the scale, L the event log, Escape quits.", u8"hint");
+    AddLabel(&Build, Page, u8"T the theme, + and - the scale, P the scale policy, L the event log, Escape quits.", u8"hint");
     uint64_t Panels = AddRow(&Build, Page, 8.0f);
     if (!HasFailed(&Build))
     {
@@ -369,7 +374,15 @@ static Error HandleKeys(UIGalleryFrame* frame, GameInput* input)
     if ((IsScaleUp && ((frame->_scaleIndex + 1U) < SCALE_COUNT)) || (IsScaleDown && (frame->_scaleIndex > 0U)))
     {
         frame->_scaleIndex = IsScaleUp ? (frame->_scaleIndex + 1U) : (frame->_scaleIndex - 1U);
-        Error Result = UIScreen_SetScale(&frame->_screen, Scales[frame->_scaleIndex]);
+        UIWindowHost_SetPlayerScale(&frame->_host, Scales[frame->_scaleIndex]);
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_P))
+    {
+        frame->_isFollowingHeight = !frame->_isFollowingHeight;
+        UIWindowHost_SetPolicy(&frame->_host, frame->_isFollowingHeight ? UIScalePolicy_FollowHeight() : UIScalePolicy_ConstantPixels());
+        const char* Name = frame->_isFollowingHeight ? "the UI follows the window's height." : "the UI keeps its pixels: the window gives room.";
+        LogLine(frame, "%s", Name);
+        Error Result = UILabel_SetText(&frame->_screen, frame->_statusId, (const unsigned char*)Name);
         if (Result.Code != ErrorCode_Success)
         {
             return Result;
@@ -392,7 +405,7 @@ static Error HandleKeys(UIGalleryFrame* frame, GameInput* input)
 static Error UIGalleryFrame_Start(void* self, ProgramTime time)
 {
     UNUSED(time);
-    LogLine(self, "%s", "every element in every state. T the theme, + and - the scale, L the event log, Escape quits.");
+    LogLine(self, "%s", "every element in every state. T the theme, + and - the scale, P the scale policy, L the event log, Escape quits.");
     return Error_CreateSuccess();
 }
 
@@ -408,22 +421,7 @@ static Error UIGalleryFrame_Update(void* self, ProgramTime time)
     UIGalleryFrame* Frame = self;
     GameInput* Input = Frame->_services->Input;
     Frame->_time = time.TotalTime;
-    if (Input != NULL)
-    {
-        Vector2 WindowSize = GameInput_GetWindowSize(Input);
-        if ((WindowSize.x > 0.0f) && (WindowSize.y > 0.0f))
-        {
-            UIViewport Viewport = UIViewport_Create(WindowSize, GameFrameManager_GetTargetAspectRatio(Frame->_services->FrameManager),
-                GameFrameManager_GetTargetAreaPosition(Frame->_services->FrameManager));
-            Error ViewportResult = UIScreen_SetViewport(&Frame->_screen, &Viewport);
-            if (ViewportResult.Code != ErrorCode_Success)
-            {
-                return ViewportResult;
-            }
-        }
-    }
-    UIScreenInput ScreenInput = UIScreenInput_CreateFromWindow(Input);
-    Error Result = UIScreen_Update(&Frame->_screen, time, &ScreenInput);
+    Error Result = UIWindowHost_Update(&Frame->_host, &Frame->_screen, time, Input);
     if ((Result.Code != ErrorCode_Success) || (Input == NULL))
     {
         return Result;
@@ -459,6 +457,7 @@ static Error UIGalleryFrame_Render(void* self, const FrameRenderContext* context
 /* Tears down what is constructed: the screen (it destroys the elements), the kit, then the factories. */
 static void DestroyFrameContents(UIGalleryFrame* frame)
 {
+    UIWindowHost_Deconstruct(&frame->_host);
     if (frame->_isScreenConstructed)
     {
         Error Result = UIScreen_Deconstruct(&frame->_screen);
@@ -530,6 +529,10 @@ static size_t FindScaleIndex(float scale)
 static Error BuildFrameContents(UIGalleryFrame* frame)
 {
     Services* Shared = frame->_services;
+    float PlayerScale = (Shared->Config != NULL) ? Shared->Config->UIScale : 1.0f;
+    frame->_scaleIndex = FindScaleIndex(PlayerScale);
+    UIWindowHost_Construct(&frame->_host, UIScalePolicy_ConstantPixels(), PlayerScale, GameFrameManager_GetTargetAspectRatio(Shared->FrameManager),
+        GameFrameManager_GetTargetAreaPosition(Shared->FrameManager));
     Error Result = TextComponentFactory_Construct(&frame->_textFactory);
     frame->_isTextFactoryConstructed = (Result.Code == ErrorCode_Success);
     if (Result.Code == ErrorCode_Success)
@@ -546,12 +549,6 @@ static Error BuildFrameContents(UIGalleryFrame* frame)
     {
         Result = UIScreen_Construct(&frame->_screen, &frame->_widgetFactory, Shared->Logger);
         frame->_isScreenConstructed = (Result.Code == ErrorCode_Success);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        float Scale = (Shared->Config != NULL) ? Shared->Config->UIScale : 1.0f;
-        frame->_scaleIndex = FindScaleIndex(Scale);
-        Result = UIScreen_SetScale(&frame->_screen, Scale);
     }
     if ((Result.Code == ErrorCode_Success) && (Shared->Assets != NULL))
     {

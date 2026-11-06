@@ -619,7 +619,7 @@ static void CascadeGridTurnsAboutTheCamera(TestRun* run)
 
 /* The renderer's step (WorldRenderSpace_StepCascade): a zeroed grid starts at its first frame's origin; then each frame
  * is WorldRenderSpace_GetCascade from the centre the grid kept, bit for bit, while the camera moves 3 mm a frame (the
- * centre stepping now and then); after a 28 km jump (as F11 makes) the kept centre is within half a texel of the camera
+ * centre stepping now and then); after a 28 km jump (as the far shift makes) the kept centre is within half a texel of the camera
  * along the light's right and up and at its depth along the light, so the grid turns about the camera from there. */
 static void CascadeGridFollowsTheCamera(TestRun* run)
 {

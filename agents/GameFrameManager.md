@@ -36,7 +36,8 @@ Loading → Loaded → Active → Unloading → Unloaded
 
 Each `GameFrameManager_Update` first polls input: raylib's `PollInputEvents` (the program's only poll), then
 `GameInput_Poll` on the manager's borrowed `GameInput` (passed to `GameFrameManager_Construct`, may be NULL; frames
-read it through `Services.Input`, see [GameInput.md](GameInput.md)). Frames are then handled **top-down** (highest z
+read it through `Services.Input`, see [GameInput.md](GameInput.md)), then the game window, when one was given with `GameFrameManager_SetWindow`
+([GameWindow.md](GameWindow.md): the fullscreen toggle, consumed, so no frame sees its keys). Frames are then handled **top-down** (highest z
 first), so the frame on top (a menu, a UI overlay) gets first refusal on input and consumes what it handles; frames below
 read what is left (consumed input reads as not pressed). The order is fixed at the start of the tick: a frame added
 during it is first handled on the next tick. The record list is kept in ascending z (a new top frame goes last, a new
@@ -100,7 +101,9 @@ GameFrameManager_Construct(&Manager, &Log, &Input, 16.0f / 9.0f, RenderTargetPos
 const double UpdateDelta = 1.0 / 480.0;                 // UPDATE_RATE_HZ is a code constant
 double PreviousTime = GetTime(), Accumulator = 0.0, TotalUpdateTime = 0.0;
 
-while (!WindowShouldClose() && !GameFrameManager_ShouldStop(&Manager))
+GameFrameManager_SetWindow(&Manager, &Window);          // updated every tick, after the poll and before the frames
+
+while (!GameWindow_ShouldClose(&Window) && !GameFrameManager_ShouldStop(&Manager))
 {
     double Now = GetTime();
     double FrameTime = Now - PreviousTime;
@@ -123,8 +126,8 @@ while (!WindowShouldClose() && !GameFrameManager_ShouldStop(&Manager))
     if (r.Code != ErrorCode_Success) { Error_Deconstruct(&r); /* stop */ break; }
 }
 
-GameFrameManager_Deconstruct(&Manager);   // BEFORE CloseWindow — it frees GPU render targets
-CloseWindow();
+GameFrameManager_Deconstruct(&Manager);   // BEFORE GameWindow_Close — it frees GPU render targets
+GameWindow_Close(&Window);
 ```
 
 (See `source/main.c` for the shipped version.)

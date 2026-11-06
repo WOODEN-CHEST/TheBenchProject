@@ -184,7 +184,7 @@ offsets stay floats**: they mean the same anywhere.
 - **Files** write positions as doubles: JSON with the shortest text that reads back the same double (a position written
   as a float's shortest text prints the same), GHDF as Double arrays; Float arrays from older saves still read
   ([WorldFile.md](WorldFile.md)). `vector3` data values are doubles too ([ObjectData.md](ObjectData.md)).
-- **Far from the origin** a world plays as it does at it: the test frame's F11 moves everything 28 km and 141 km out,
+- **Far from the origin** a world plays as it does at it: the test frame's Shift with F10 moves everything 28 km and 141 km out,
   and the headless suites of the hierarchy, world files, collision, motion and characters run a second time shifted
   about 100 km along each axis (see "Tests").
 

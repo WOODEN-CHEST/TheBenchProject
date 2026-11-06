@@ -148,7 +148,7 @@ void WorldTestCharacters_PlaceCamera(const WorldTestCharacters* self, GameCamera
 void WorldTestCharacters_LogStatus(WorldTestCharacters* self);
 
 /**
- * The F11 key's far shift, after the world moved by @p offset (every root object, the characters among them) and
+ * The far shift's key, after the world moved by @p offset (every root object, the characters among them) and
  * the collision world was synced: places every character of the world again where it now stands, through the character
  * system's teleport, so its motion starts afresh on its moved ground (the player keeps where it looks, the others where
  * they face), and moves the test NPCs' patterns by @p offset. Returns how many characters it placed.
