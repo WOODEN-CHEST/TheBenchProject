@@ -582,7 +582,7 @@ mip levels:
 ```
 {
     "name": "tbp:sky_moon",
-    "location": "sky/placeholder_moon",
+    "location": "sky/moon",
     "texture_properties": { "filtering": "point", "wrap": "clamp", "mipmaps": false },
     "color_space": "srgb"
 }

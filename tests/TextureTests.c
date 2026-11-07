@@ -437,7 +437,7 @@ static void ShippedMilkyWayDefinitionResolves(TestRun* run)
 }
 
 
-/* The moon's definition ships, and its placeholder image resolves to exactly one file the texture loader can read. */
+/* The moon's definition ships, and its image resolves to exactly one file the texture loader can read. */
 static void ShippedMoonDefinitionResolves(TestRun* run)
 {
     TestAssetFixture Fixture;
@@ -453,7 +453,7 @@ static void ShippedMoonDefinitionResolves(TestRun* run)
             (const unsigned char*)u8"sky_moon", &HasMoon));
         TEST_CHECK(run, HasMoon);
 
-        AssetLocation Location = { AssetLocationType_File, (const unsigned char*)u8"sky/placeholder_moon" };
+        AssetLocation Location = { AssetLocationType_File, (const unsigned char*)u8"sky/moon" };
         IOStream* Stream = NULL;
         if (TEST_CHECK_SUCCESS(run, AssetManager_OpenResource(Fixture.Manager, Fixture.Types.Texture, &Location,
             &ASSET_EXTENSIONS_TEXTURE, &Stream)))
