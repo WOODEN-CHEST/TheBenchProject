@@ -933,9 +933,12 @@ static Error ReadPart(ThemeRead* read, const UIThemePartDescriptor* descriptor, 
             {
                 return WrapError(where, &Result);
             }
-            if (!(Vector.x >= 0.0f) || !(Vector.x <= UI_THEME_MAX_METRIC) || !(Vector.y >= 0.0f) || !(Vector.y <= UI_THEME_MAX_METRIC))
+            float Minimum = descriptor->Minimum;
+            float Maximum = descriptor->Maximum;
+            if (!(Vector.x >= Minimum) || !(Vector.x <= Maximum) || !(Vector.y >= Minimum) || !(Vector.y <= Maximum))
             {
-                return Refuse(where, "each component must be within [0, 4096].");
+                return Error_Construct4(ErrorCode_InvalidAssetDefinition, "%s: each component must be within [%g, %g].", where,
+                    (double)Minimum, (double)Maximum);
             }
             outValue->Data.Vector = Vector;
             outValue->IsSet = true;
@@ -943,7 +946,7 @@ static Error ReadPart(ThemeRead* read, const UIThemePartDescriptor* descriptor, 
         }
         case UIThemePartKind_Number:
         {
-            Error Result = ReadNumber(value, 0.0f, UI_THEME_MAX_METRIC, where, &outValue->Data.Number);
+            Error Result = ReadNumber(value, descriptor->Minimum, descriptor->Maximum, where, &outValue->Data.Number);
             outValue->IsSet = (Result.Code == ErrorCode_Success);
             return Result;
         }

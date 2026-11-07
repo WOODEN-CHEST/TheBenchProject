@@ -406,7 +406,8 @@ pointer rests there, on the update side, writing into a buffer the screen owns),
 
 Each update, right after the input, the screen works out where the pointer rests: the hovered widget, or the nearest ancestor with a hover text (a
 compound's parts show the compound's). The rest time grows while it stays there; once it passes the delay the text shows. Resting on something with
-another hover text, or the pointer leaving the screen, hides it and starts again; a mouse press hides it until the pointer rests on something else.
+another hover text, or the pointer leaving the screen, hides it and starts again; a mouse press hides it until the pointer rests on something else. A
+widget destroyed, or its text cleared, takes what shows with it at once.
 `UITooltip_GetCurrent` tells where it rests, the text and whether it shows, before the delay too, for a status bar.
 
 It shows as a widget of the type the factory names (`UIWidgetFactory_SetTooltipType`; the kit registers the theme-driven one, [UIElements.md](UIElements.md)),

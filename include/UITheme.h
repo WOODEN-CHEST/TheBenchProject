@@ -179,7 +179,8 @@ typedef enum UITooltipPartEnum
 {
     /** @brief "padding": horizontal and vertical around its text, UI pixels. */
     UITooltipPart_Padding,
-    /** @brief "offset": where its top-left sits from the pointer, UI pixels. */
+    /** @brief "offset": where its top-left sits from the pointer, UI pixels; negative components put it left of or above the
+     *  pointer. */
     UITooltipPart_Offset,
     /** @brief "max_width": UI pixels; its text wraps past it. */
     UITooltipPart_MaxWidth,
@@ -200,15 +201,15 @@ typedef enum UIThemePartKindEnum
     UIThemePartKind_Box,
     /** @brief A colour per state. */
     UIThemePartKind_Colors,
-    /** @brief Two numbers (an array or a compound), each within the metric's bounds. */
+    /** @brief Two numbers (an array or a compound), each within the part's bounds. */
     UIThemePartKind_Vector,
-    /** @brief One number within the metric's bounds. */
+    /** @brief One number within the part's bounds. */
     UIThemePartKind_Number
 } UIThemePartKind;
 
 /**
- * @brief One value an element kind has in a theme: its key, what it is and, for a metric, the value a theme that leaves it
- *        out gets. Static data.
+ * @brief One value an element kind has in a theme: its key, what it is and, for a metric, its bounds and the value a theme that
+ *        leaves it out gets. Static data.
  */
 typedef struct UIThemePartDescriptorStruct
 {
@@ -220,6 +221,11 @@ typedef struct UIThemePartDescriptorStruct
     Vector2 DefaultVector;
     /** @brief The default of a UIThemePartKind_Number. */
     float DefaultNumber;
+    /** @brief The smallest a UIThemePartKind_Number, or each component of a UIThemePartKind_Vector, may be: 0 for a size, a
+     *  padding or a spacing, -UI_THEME_MAX_METRIC for a value that may point either way (the tooltip's offset). */
+    float Minimum;
+    /** @brief The largest such a value may be: UI_THEME_MAX_METRIC. */
+    float Maximum;
 } UIThemePartDescriptor;
 
 

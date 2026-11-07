@@ -548,8 +548,9 @@ static Error TooltipBox_SetBox(TooltipBox* box, Vector2 position, Vector2 size)
     return ((OldSize.x != size.x) || (OldSize.y != size.y)) ? Widget_SetSize(&box->Base, size) : Error_CreateSuccess();
 }
 
-/* Beside the pointer, by the theme's offset, and kept on the surface: past its right edge it moves left, past its bottom it goes
- * above the pointer. */
+/* Beside the pointer, by the theme's offset (negative: left of or above it), and kept on the surface: past its left or right edge it
+ * slides in; past its top or bottom it goes to the other side of the pointer (the offset mirrored), and is kept on the surface
+ * even then. */
 static Error TooltipBox_Layout(void* self, const UILayoutContext* context)
 {
     TooltipBox* Box = self;
@@ -578,12 +579,12 @@ static Error TooltipBox_Layout(void* self, const UILayoutContext* context)
     {
         X = Surface.x - Width;
     }
-    if ((Y + Height) > Surface.y)
+    if (((Y + Height) > Surface.y) || (Y < 0.0f))
     {
         Y = RoundToPixel(PointerY - (Offset.y * Scale)) - Height;
     }
     X = Math_MaxFloat(0.0f, X);
-    Y = Math_MaxFloat(0.0f, Y);
+    Y = Math_MaxFloat(0.0f, Math_MinFloat(Y, Surface.y - Height));
     return TooltipBox_SetBox(Box, (Vector2){ .x = X / Surface.x, .y = Y / Surface.y },
         (Vector2){ .x = Width / Surface.x, .y = Height / Surface.y });
 }

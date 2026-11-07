@@ -4,12 +4,19 @@
 
 
 // Macros.
-/** A metric row of a part table: a vector with its default, or a number with its default. */
-#define VECTOR_PART(key, x, y) { .Key = u8##key, .Kind = UIThemePartKind_Vector, .DefaultVector = { (x), (y) }, .DefaultNumber = 0.0f }
-#define NUMBER_PART(key, value) { .Key = u8##key, .Kind = UIThemePartKind_Number, .DefaultVector = { 0.0f, 0.0f }, .DefaultNumber = (value) }
-/** A part's row: a box or a colour per state. */
-#define BOX_PART(key) { .Key = u8##key, .Kind = UIThemePartKind_Box, .DefaultVector = { 0.0f, 0.0f }, .DefaultNumber = 0.0f }
-#define COLORS_PART(key) { .Key = u8##key, .Kind = UIThemePartKind_Colors, .DefaultVector = { 0.0f, 0.0f }, .DefaultNumber = 0.0f }
+/** A metric row of a part table: a vector with its default, or a number with its default, each within [0, UI_THEME_MAX_METRIC]; or a
+ *  vector whose components may also be negative, within [-UI_THEME_MAX_METRIC, UI_THEME_MAX_METRIC]: an offset that points either way. */
+#define VECTOR_PART(key, x, y) { .Key = u8##key, .Kind = UIThemePartKind_Vector, .DefaultVector = { (x), (y) }, .DefaultNumber = 0.0f, \
+    .Minimum = 0.0f, .Maximum = UI_THEME_MAX_METRIC }
+#define NUMBER_PART(key, value) { .Key = u8##key, .Kind = UIThemePartKind_Number, .DefaultVector = { 0.0f, 0.0f }, .DefaultNumber = (value), \
+    .Minimum = 0.0f, .Maximum = UI_THEME_MAX_METRIC }
+#define SIGNED_VECTOR_PART(key, x, y) { .Key = u8##key, .Kind = UIThemePartKind_Vector, .DefaultVector = { (x), (y) }, .DefaultNumber = 0.0f, \
+    .Minimum = -UI_THEME_MAX_METRIC, .Maximum = UI_THEME_MAX_METRIC }
+/** A part's row: a box or a colour per state (no bounds: they are no metric). */
+#define BOX_PART(key) { .Key = u8##key, .Kind = UIThemePartKind_Box, .DefaultVector = { 0.0f, 0.0f }, .DefaultNumber = 0.0f, .Minimum = 0.0f, \
+    .Maximum = 0.0f }
+#define COLORS_PART(key) { .Key = u8##key, .Kind = UIThemePartKind_Colors, .DefaultVector = { 0.0f, 0.0f }, .DefaultNumber = 0.0f, \
+    .Minimum = 0.0f, .Maximum = 0.0f }
 
 
 // Fields.
@@ -53,7 +60,7 @@ static const UIThemePartDescriptor SliderParts[UISliderPart_Count] =
 static const UIThemePartDescriptor TooltipParts[UITooltipPart_Count] =
 {
     [UITooltipPart_Padding] = VECTOR_PART("padding", 6.0f, 3.0f),
-    [UITooltipPart_Offset] = VECTOR_PART("offset", 12.0f, 18.0f),
+    [UITooltipPart_Offset] = SIGNED_VECTOR_PART("offset", 12.0f, 18.0f),
     [UITooltipPart_MaxWidth] = NUMBER_PART("max_width", 320.0f),
     [UITooltipPart_Background] = BOX_PART("background"),
     [UITooltipPart_Text] = COLORS_PART("text"),

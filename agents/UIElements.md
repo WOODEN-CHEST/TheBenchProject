@@ -222,7 +222,10 @@ override themes by namespaced names. The whole UI changes at once, with no eleme
   `..Box` (NULL then). The standard button's `icon_spacing` is one. A variant starts with its kind's custom values and replaces or adds keys.
 - **Hover text:** the `tooltip` kind is the box hover text shows in (its padding, its offset from the pointer, its wrap width, a background
   and a text colour), and `"tooltip_delay"` is how long the pointer rests before it shows (`UITheme_GetTooltipDelaySeconds`; a widget may
-  have its own, `UITooltip_SetDelay`).
+  have its own, `UITooltip_SetDelay`). The offset is where the box's top-left sits from the pointer, and may be negative: left of or above
+  it. Kept on the surface, the box slides in past a side edge and goes to the other side of the pointer past the top or the bottom.
+- **Bounds per part:** each metric part's row in `Kinds` (`source/UITheme.c`) carries its bounds (`UIThemePartDescriptor.Minimum`,
+  `.Maximum`): sizes, paddings and spacings count from 0, an offset may point either way.
 - **States:** normal, hovered, pressed, focused, disabled, selected, invalid, entered (an edit element being edited, so its keys are its
   own). A state a theme leaves out falls back to normal; entered falls back to focused first. `UIElementState_Choose` picks the one that
   shows: disabled, pressed, invalid, entered, selected, hovered, focused, normal. Both test themes give the slider's thumb an entered colour

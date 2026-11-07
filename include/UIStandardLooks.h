@@ -31,9 +31,10 @@ typedef struct UIWidgetFactoryStruct UIWidgetFactory;
 Error UIStandardLooks_Register(UIKit* kit);
 
 /**
- * @brief Registers the widget type that shows hover text (UITooltip.h): a box beside the pointer with the text in it, wrapped at the
- *        theme's width, from the theme's tooltip kind. A plain widget type made with no arguments; the kit names it to the factory
- *        (UIWidgetFactory_SetTooltipType).
+ * @brief Registers the widget type that shows hover text (UITooltip.h): a box at the theme's offset from the pointer (either way)
+ *        with the text in it, wrapped at the theme's width, from the theme's tooltip kind, kept on the surface: past a side edge it
+ *        slides in, past the top or the bottom it goes to the other side of the pointer. A plain widget type made with no arguments;
+ *        the kit names it to the factory (UIWidgetFactory_SetTooltipType).
  * @param kit The kit, whose capabilities exist already; must not be NULL.
  * @param factory The kit's factory; must not be NULL.
  * @param outTypeId [out] Receives the type's id. Must not be NULL.

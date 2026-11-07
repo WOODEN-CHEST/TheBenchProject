@@ -1763,7 +1763,7 @@ The look of the UI's elements as data (`agents/UIElements.md`): a JSON file in `
     "elements": {                        // [OPTIONAL] a block per kind, each [OPTIONAL]: panel, label, button, toggle, slider, tooltip
         "button": {
             "look": namespaced key,      // [OPTIONAL] the code that draws the kind's elements; see below
-            "padding": [8, 4],           // metrics: UI pixels, each number in [0;4096]; the table below has each kind's and its default
+            "padding": [8, 4],           // metrics: UI pixels, each number in [0;4096] (the tooltip's offset in [-4096;4096]); the table below has each kind's and its default
             "background": box,           // parts: a box or a colour per state; see below
             "text": colors,
             "custom": { ... },           // [OPTIONAL] values for the look, by key; see below
@@ -1784,7 +1784,7 @@ The look of the UI's elements as data (`agents/UIElements.md`): a JSON file in `
 | `button` | `padding` [8, 4], `min_size` [24, 24] | `background`: a box; `text`: colors |
 | `toggle` | `box_size` [16, 16], `spacing` 6, `min_size` [16, 24] | `box`: a box; `check`: a box, inside it while on, as a bar while mixed; `text`: colors |
 | `slider` | `min_size` [64, 24], `thumb_size` [12, 20], `track_thickness` 4 | `track`, `fill` (the track up to the thumb), `thumb`: boxes |
-| `tooltip` | `padding` [6, 3], `offset` [12, 18] (where its top-left sits from the pointer), `max_width` 320 (its text wraps past it) | `background`: a box; `text`: colors |
+| `tooltip` | `padding` [6, 3], `offset` [12, 18] (where its top-left sits from the pointer; negative components put it left of or above the pointer), `max_width` 320 (its text wraps past it) | `background`: a box; `text`: colors |
 
 A part a theme leaves out draws a plain box and is logged once; `"kind": "none"` leaves a box empty on purpose.
 

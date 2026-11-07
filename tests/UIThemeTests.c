@@ -482,7 +482,10 @@ static void EveryRuleIsRefusedWithItsMessage(TestRun* run)
         { "{\"name\": \"t\", \"tooltip_delay\": \"soon\"}", "tooltip_delay" },
         { "{\"name\": \"t\", \"elements\": {\"tooltip\": {\"thumb\": {}}}}", "thumb" },
         { "{\"name\": \"t\", \"elements\": {\"tooltip\": {\"max_width\": 5000}}}", "elements.tooltip.max_width: 5000 is outside" },
-        { "{\"name\": \"t\", \"elements\": {\"tooltip\": {\"offset\": [-1, 0]}}}", "elements.tooltip.offset: each component" },
+        { "{\"name\": \"t\", \"elements\": {\"tooltip\": {\"max_width\": -1}}}", "elements.tooltip.max_width: -1 is outside [0, 4096]" },
+        { "{\"name\": \"t\", \"elements\": {\"tooltip\": {\"offset\": [-5000, 0]}}}", "elements.tooltip.offset: each component must be within [-4096, 4096]" },
+        { "{\"name\": \"t\", \"elements\": {\"tooltip\": {\"padding\": [-1, 0]}}}", "elements.tooltip.padding: each component must be within [0, 4096]" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"min_size\": [0, -1]}}}", "elements.button.min_size: each component must be within [0, 4096]" },
         { "{\"name\": \"t\", \"elements\": {\"tooltip\": {\"background\": {}}}}", "elements.tooltip.background: it needs a \"kind\"" },
     };
     CheckRefusals(run, Refusals, sizeof(Refusals) / sizeof(Refusals[0]));
@@ -993,6 +996,18 @@ static void TheTooltipKindHasItsParts(TestRun* run)
         TEST_CHECK(run, (Descriptor != NULL) && (strcmp((const char*)Descriptor->Key, Parts[Index].Key) == 0)
             && (Descriptor->Kind == Parts[Index].Kind));
     }
+    // The offset points either way; every other metric of every kind counts from 0.
+    for (int32_t Kind = 0; Kind < (int32_t)UIElementKind_Count; Kind++)
+    {
+        for (size_t Part = 0U; Part < UIElementKind_GetPartCount((UIElementKind)Kind); Part++)
+        {
+            const UIThemePartDescriptor* Descriptor = UIElementKind_GetPart((UIElementKind)Kind, (int32_t)Part);
+            bool IsMetric = (Descriptor->Kind == UIThemePartKind_Vector) || (Descriptor->Kind == UIThemePartKind_Number);
+            bool IsOffset = (Kind == (int32_t)UIElementKind_Tooltip) && (Part == (size_t)UITooltipPart_Offset);
+            TEST_CHECK(run, !IsMetric || (Descriptor->Maximum == UI_THEME_MAX_METRIC));
+            TEST_CHECK(run, !IsMetric || (Descriptor->Minimum == (IsOffset ? -UI_THEME_MAX_METRIC : 0.0f)));
+        }
+    }
     Vector2 Padding = UIThemeStyle_GetVector(NULL, UIElementKind_Tooltip, UITooltipPart_Padding);
     Vector2 Offset = UIThemeStyle_GetVector(NULL, UIElementKind_Tooltip, UITooltipPart_Offset);
     TEST_CHECK(run, (Padding.x == 6.0f) && (Padding.y == 3.0f) && (Offset.x == 12.0f) && (Offset.y == 18.0f));
@@ -1024,6 +1039,17 @@ static void TheTooltipKindHasItsParts(TestRun* run)
         TEST_CHECK(run, UIThemeStyle_GetVector(Warning, UIElementKind_Tooltip, UITooltipPart_Offset).y == 24.0f);
         TEST_CHECK(run, UIThemeStyle_GetNumber(Warning, UIElementKind_Tooltip, UITooltipPart_MaxWidth) == 200.0f);
         TEST_CHECK(run, UIThemeStyle_FindCustomNumber(Warning, u8"tail", 0.0f) == 6.0f);
+    }
+    // An offset left of and above the pointer, as far as a metric goes.
+    AssetUserID AboveUser = ASSET_USER_ID_INVALID;
+    const UITheme* Above = LoadTheme(run, &Fixture, "{\"name\": \"above\", \"elements\": {\"tooltip\": {\"offset\": [-4096, -30.5],"
+        "\"variants\": {\"right\": {\"offset\": [4096, 0]}}}}}", "above", &AboveUser);
+    if (TEST_CHECK(run, Above != NULL))
+    {
+        Vector2 Read = UIThemeStyle_GetVector(UITheme_FindStyle(Above, UIElementKind_Tooltip, NULL), UIElementKind_Tooltip, UITooltipPart_Offset);
+        TEST_CHECK(run, (Read.x == -4096.0f) && (Read.y == -30.5f));
+        Read = UIThemeStyle_GetVector(UITheme_FindStyle(Above, UIElementKind_Tooltip, u8"right"), UIElementKind_Tooltip, UITooltipPart_Offset);
+        TEST_CHECK(run, (Read.x == 4096.0f) && (Read.y == 0.0f));
     }
     TestAssetFixture_Deconstruct(run, &Fixture);
 }

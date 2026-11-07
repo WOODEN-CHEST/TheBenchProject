@@ -13,6 +13,10 @@
 #define TOOLTIP_THEME \
     "{\"name\": \"hovering\", \"font\": \"mono\", \"text_size\": 10, \"tooltip_delay\": 0.1, \"elements\": {" \
     "\"tooltip\": {\"padding\": [4, 2], \"offset\": [10, 10], \"max_width\": 100, \"background\": {\"kind\": \"flat\"}}}}"
+/** The same, with the box's top-left 20 left of and 30 above the pointer. */
+#define UPWARD_THEME \
+    "{\"name\": \"upward\", \"font\": \"mono\", \"text_size\": 10, \"tooltip_delay\": 0.1, \"elements\": {" \
+    "\"tooltip\": {\"padding\": [4, 2], \"offset\": [-20, -30], \"max_width\": 100, \"background\": {\"kind\": \"flat\"}}}}"
 /** Ticks of the fixture (1/480 s) in the theme's delay and a little past it. */
 #define DELAY_TICKS ((size_t)48)
 #define PAST_DELAY_TICKS ((size_t)52)
@@ -496,6 +500,53 @@ static void ItCountsInTheScreensScale(TestRun* run)
 }
 
 
+/* A negative offset puts it left of and above the pointer; past the surface's top it goes below the pointer, the offset mirrored, and
+ * past its left edge it slides in. */
+static void ANegativeOffsetPutsItLeftAndAbove(TestRun* run)
+{
+    TestUIFixture Fixture;
+    if (TestUI_Construct(run, &Fixture) && TestUI_SetTheme(run, &Fixture, UPWARD_THEME))
+    {
+        uint64_t Ids[4] =
+        {
+            AddButton(run, &Fixture, WIDGET_ID_INVALID, 450.0f, 230.0f),
+            AddButton(run, &Fixture, WIDGET_ID_INVALID, 450.0f, 0.0f),
+            AddButton(run, &Fixture, WIDGET_ID_INVALID, 0.0f, 230.0f),
+            AddButton(run, &Fixture, WIDGET_ID_INVALID, 450.0f, 460.0f)
+        };
+        for (size_t Index = 0U; Index < 3U; Index++)
+        {
+            TEST_CHECK_SUCCESS(run, UITooltip_Set(&Fixture.Screen, Ids[Index], u8"up and left"));
+        }
+        TEST_CHECK_SUCCESS(run, UITooltip_Set(&Fixture.Screen, Ids[3], u8"a text that wraps over more lines than the offset has room for above"));
+        // 11 glyphs of 5 and the padding: 63 x 14, its top-left at the pointer less 20 and 30.
+        static const float Pointers[3][2] = { { 500.0f, 250.0f }, { 500.0f, 10.0f }, { 5.0f, 250.0f } };
+        static const float Expected[3][2] = { { 480.0f, 220.0f }, { 480.0f, 26.0f }, { 0.0f, 220.0f } };
+        for (size_t Index = 0U; Index < 3U; Index++)
+        {
+            TestUI_MovePointer(&Fixture, Pointers[Index][0], Pointers[Index][1]);
+            TestUI_Ticks(run, &Fixture, PAST_DELAY_TICKS + 2U);
+            Widget* Display = FindDisplay(&Fixture);
+            if (TEST_CHECK(run, (Display != NULL) && IsShowing(&Fixture, "up and left")))
+            {
+                TEST_CHECK(run, TestUI_IsBox(UIScreen_GetWidgetPixelBox(&Fixture.Screen, Display), Expected[Index][0], Expected[Index][1],
+                    63.0f, 14.0f));
+            }
+        }
+        // Taller than the offset has room for, near the bottom: mirrored it would still leave the surface, so it is kept on it.
+        TestUI_MovePointer(&Fixture, 500.0f, 490.0f);
+        TestUI_Ticks(run, &Fixture, PAST_DELAY_TICKS + 2U);
+        Widget* Display = FindDisplay(&Fixture);
+        if (TEST_CHECK(run, Display != NULL))
+        {
+            Rectangle Box = UIScreen_GetWidgetPixelBox(&Fixture.Screen, Display);
+            TEST_CHECK(run, (Box.height > 40.0f) && (Box.y >= 0.0f) && ((Box.y + Box.height) <= (TEST_UI_SURFACE_HEIGHT + 0.01f)));
+        }
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+
 // Public functions.
 void UITooltipTests_Run(TestRun* run)
 {
@@ -511,6 +562,7 @@ void UITooltipTests_Run(TestRun* run)
         { "a_provider_giving_nothing_too_much_or_failing", AProviderGivingNothingTooMuchOrFailing },
         { "the_box_follows_its_text", TheBoxFollowsItsText },
         { "it_counts_in_the_screens_scale", ItCountsInTheScreensScale },
+        { "a_negative_offset_puts_it_left_and_above", ANegativeOffsetPutsItLeftAndAbove },
     };
     TestRun_RunSuite(run, "UITooltip", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }
