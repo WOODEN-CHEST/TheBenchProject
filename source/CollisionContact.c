@@ -43,6 +43,11 @@
 #define FEATURE_GJK_POINT 0xFFU
 /** The feature byte of a point cut by a clipping plane (plus the plane's index). */
 #define FEATURE_CLIPPED 0x80U
+/** How far past a triangle's plane (metres) the surface under a shape is looked for, besides what folds add. */
+#define SURFACE_REACH_SLACK 0.02f
+/** The tangent of the steepest fold of a flat seam (5 degrees, COLLISION_MESH_FLAT_EDGE_COSINE): past such a seam the
+ *  surface may lie this far behind a triangle's plane per metre from the seam. */
+#define SURFACE_FOLD_TANGENT 0.0875f
 
 
 // Types.
@@ -64,6 +69,24 @@ typedef struct ManifoldPointsStruct
     CollisionContactPoint Points[CLIP_CAPACITY];
     uint32_t Count;
 } ManifoldPoints;
+
+/** The surface under a shape that a triangle's face stands for: a point of it and its unit normal, toward the shape. */
+typedef struct ContactSurfaceStruct
+{
+    Vector3 Point;
+    Vector3 Normal;
+} ContactSurface;
+
+/** What a look for the surface under a shape found in a triangle's mesh. */
+typedef enum SurfaceSearchEnum
+{
+    /** The surface the face stands for (written to the ContactSurface). */
+    SurfaceSearch_Found,
+    /** Another surface, turned from the face by more than a flat seam folds: the face is not what lies there. */
+    SurfaceSearch_Other,
+    /** Nothing of the mesh lies there. */
+    SurfaceSearch_None
+} SurfaceSearch;
 
 
 // Static functions: supporting faces.
@@ -600,10 +623,65 @@ static uint32_t GetBoundaryRegion(Vector3 weights)
     return IsOnCa ? 3U : 0U;
 }
 
-/* Applies a triangle's sides and active edges to a contact's normal and points; false when there is no contact (the
- * other shape lies behind a one-sided triangle, or past the separation along the face normal). */
-static bool AdjustForTriangle(const CollisionConvex* a, const CollisionConvex* b, float maxSeparation, Vector3* normal,
-    Vector3* pointA, Vector3* pointB, float* separation)
+/* The surface under @p other that @p triangle's face stands for, the face turned toward the other shape being
+ * @p facing: where the line through the other shape's centre along the face's normal meets the triangle's mesh near the
+ * face's plane, turned from the face by no more than a flat seam folds. Near means from @p reach above the plane (but
+ * never past the centre: a surface higher up lies beyond any contact the triangle gives, or rises toward the shape) to
+ * as far below it as such folds can take a surface between the contact's point on the triangle @p onTriangle and the
+ * point under the centre, plus SURFACE_REACH_SLACK. @p outSurface is written only when it is found. Not found: the
+ * other shape stands beside the surface (next to a wall whose top meets the triangle only at a corner: nothing there)
+ * or over a steeper fold (a sliver between two pieces: another surface). A triangle on its own stands for its face's
+ * plane. */
+static SurfaceSearch FindSurfaceUnder(const CollisionConvex* triangle, const CollisionConvex* other, Vector3 facing,
+    Vector3 onTriangle, float reach, ContactSurface* outSurface)
+{
+    if (triangle->Mesh == NULL)
+    {
+        *outSurface = (ContactSurface){ .Point = triangle->Vertices[0], .Normal = facing };
+        return SurfaceSearch_Found;
+    }
+    CollisionAffine WorldToMesh;
+    if (!CollisionAffine_TryInvert(&triangle->MeshToWorld, &WorldToMesh))
+    {
+        return SurfaceSearch_None;
+    }
+    float Height = fmaxf(0.0f, CollisionMath_Dot(CollisionMath_Subtract(other->Center, triangle->Vertices[0]), facing));
+    Vector3 Foot = CollisionMath_AddScaled(other->Center, facing, -Height);
+    float Above = fminf(Height, reach);
+    float Below = SURFACE_REACH_SLACK
+        + (SURFACE_FOLD_TANGENT * CollisionMath_Length(CollisionMath_Subtract(Foot, onTriangle)));
+    Vector3 Start = CollisionMath_AddScaled(Foot, facing, Above);
+    Vector3 Toward = CollisionMath_Scale(facing, -(Above + Below));
+    CollisionRayHit Hit;
+    if (!CollisionGeometry_RaycastMesh(triangle->Mesh, CollisionAffine_TransformPoint(&WorldToMesh, Start),
+        CollisionAffine_TransformVector(&WorldToMesh, Toward), 1.0f, !triangle->IsOneSided, &Hit))
+    {
+        return SurfaceSearch_None;
+    }
+    // The hit's normal faces the ray (back toward the other shape) in the mesh's space, and so in the world's.
+    Vector3 Normal = CollisionMath_NormalizeOr(CollisionAffine_TransposeTransformVector(&WorldToMesh, Hit.Normal),
+        facing);
+    if (CollisionMath_Dot(Normal, facing) < COLLISION_MESH_FLAT_EDGE_COSINE)
+    {
+        return SurfaceSearch_Other;
+    }
+    *outSurface = (ContactSurface){ .Point = CollisionMath_AddScaled(Start, Toward, Hit.T), .Normal = Normal };
+    return SurfaceSearch_Found;
+}
+
+/* Whether a feature of a triangle (a region of CollisionMath_GetClosestTrianglePoint: 1 to 3 an edge, 4 to 6 a corner)
+ * touches one of its seam corners: the surface may go on there where its mesh cannot see. */
+static bool IsOnSeam(uint8_t seamCorners, uint32_t region)
+{
+    static const uint8_t RegionCorners[7] = { 0x0U, 0x3U, 0x6U, 0x5U, 0x1U, 0x2U, 0x4U };
+    return (region < 7U) && ((seamCorners & RegionCorners[region]) != 0U);
+}
+
+/* Applies a triangle's sides and active edges to a contact's normal and points (from EPA when @p isOverlapping, else
+ * from GJK); false when there is no contact (the other shape lies behind a one-sided triangle, or past the separation
+ * from the surface under it). */
+static bool AdjustForTriangle(const CollisionConvex* a, const CollisionConvex* b, float maxSeparation,
+    bool isOverlapping, Vector3* normal, Vector3* pointA, Vector3* pointB, float* separation)
 {
     bool IsTriangleA = a->Kind == CollisionConvexKind_Triangle;
     const CollisionConvex* Triangle = IsTriangleA ? a : b;
@@ -649,21 +727,41 @@ static bool AdjustForTriangle(const CollisionConvex* a, const CollisionConvex* b
             UsesFace = (Active & 0x6U) == 0U;
             break;
     }
-    UsesFace = UsesFace || (Triangle->IsOneSided && (CollisionMath_Dot(Outward, Face) < 0.0f));
-    if (!UsesFace)
+    bool IsBackFacing = Triangle->IsOneSided && (CollisionMath_Dot(Outward, Face) < 0.0f);
+    if (!UsesFace && !IsBackFacing)
     {
         return true;
     }
-    Vector3 Deepest = CollisionConvex_SupportFull(Other, CollisionMath_Negate(Facing));
-    float Separation = CollisionMath_Dot(CollisionMath_Subtract(Deepest, V[0]), Facing);
+    // GJK's contact inside the face is the face's own: its normal, and the true distance (the face's plane would reach
+    // past a small or tilted face, a sliver between two pieces, into the shape).
+    if ((Region == 0U) && !isOverlapping && !IsBackFacing)
+    {
+        return true;
+    }
+    // An inner edge or corner stands for the surface its flat or concave neighbours continue, an overlap of the face
+    // for the surface the face is part of, and a one-sided triangle's front for the solid behind it, only where that
+    // surface lies under the other shape: there the contact is the surface's own (its normal, and how deep the shape's
+    // deepest point lies under its plane). Anywhere else the face's plane is no surface: beside a hedge whose top meets
+    // this triangle only at a corner it would claim a character sunk most of its height into the top, and past a fold
+    // it leans into the shape. The contact then stays as found, the triangle's own. On a seam with another mesh (a
+    // terrain chunk's border) the surface may go on out of this mesh's sight, and the face's plane stands for it.
+    ContactSurface Surface = { .Point = V[0], .Normal = Facing };
+    SurfaceSearch Search = FindSurfaceUnder(Triangle, Other, Facing, IsTriangleA ? *pointA : *pointB,
+        maxSeparation + SURFACE_REACH_SLACK, &Surface);
+    if ((Search == SurfaceSearch_Other) || ((Search == SurfaceSearch_None) && !IsOnSeam(Triangle->SeamCorners, Region)))
+    {
+        return true;
+    }
+    Vector3 Deepest = CollisionConvex_SupportFull(Other, CollisionMath_Negate(Surface.Normal));
+    float Separation = CollisionMath_Dot(CollisionMath_Subtract(Deepest, Surface.Point), Surface.Normal);
     if (Separation > maxSeparation)
     {
         return false;
     }
-    Vector3 OnTriangle = CollisionMath_AddScaled(Deepest, Facing, -Separation);
-    *normal = IsTriangleA ? Facing : CollisionMath_Negate(Facing);
-    *pointA = IsTriangleA ? OnTriangle : Deepest;
-    *pointB = IsTriangleA ? Deepest : OnTriangle;
+    Vector3 OnSurface = CollisionMath_AddScaled(Deepest, Surface.Normal, -Separation);
+    *normal = IsTriangleA ? Surface.Normal : CollisionMath_Negate(Surface.Normal);
+    *pointA = IsTriangleA ? OnSurface : Deepest;
+    *pointB = IsTriangleA ? Deepest : OnSurface;
     *separation = Separation;
     return true;
 }
@@ -701,7 +799,8 @@ bool CollisionGeometry_Collide(const CollisionConvex* a, const CollisionConvex* 
         Separation = -Penetration.Depth;
     }
     bool HasTriangle = (a->Kind == CollisionConvexKind_Triangle) != (b->Kind == CollisionConvexKind_Triangle);
-    if (HasTriangle && !AdjustForTriangle(a, b, maxSeparation, &Normal, &PointA, &PointB, &Separation))
+    if (HasTriangle && !AdjustForTriangle(a, b, maxSeparation, Distance.AreCoresOverlapping, &Normal, &PointA, &PointB,
+        &Separation))
     {
         return false;
     }

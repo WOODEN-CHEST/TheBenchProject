@@ -59,6 +59,10 @@ typedef struct GameModelStruct GameModel;
 #define COLLISION_HULL_MIN_VERTICES ((uint32_t)4)
 /** @brief The most triangles a collision mesh may hold. */
 #define COLLISION_MESH_MAX_TRIANGLES ((uint32_t)1U << 20U)
+/** @brief Two triangles lie flat across an edge they share when their unit normals' dot product is above this (cos 5
+ *  degrees): CollisionMesh_IsSharedEdgeActive's flatness, and how far the surface under a shape may turn from a
+ *  triangle's face and still count as that face's surface in a contact. */
+#define COLLISION_MESH_FLAT_EDGE_COSINE 0.9961947f
 /** @brief The size every primitive starts at in CollisionShape_Create: a radius, half height or half extent, metres. */
 #define COLLISION_SHAPE_DEFAULT_SIZE 0.5f
 /** @brief A collider's mass when neither its world model nor its placement gives one, in kilograms (how pushes are
@@ -149,9 +153,16 @@ typedef struct CollisionMeshTriangleStruct
      *  attributes: a world model's surfaces take each corner's texture coordinates so). */
     uint32_t _sourceIndex;
     /** @brief Which edges are active: bit 0 for (v0, v1), bit 1 for (v1, v2), bit 2 for (v2, v0). An inactive edge is
-     *  shared with a neighbour across a flat or concave seam: contacts on it take the face normal, so shapes slide over
-     *  seams without catching. */
+     *  shared with a neighbour across a flat or concave seam: a contact on it (or on a corner between two inactive
+     *  edges) with a shape that stands over the mesh's surface takes that surface's normal, so shapes slide over seams
+     *  without catching; with a shape beside the surface (next to a wall whose top meets this triangle only at a corner)
+     *  it keeps its own normal and separation. */
     uint8_t _activeEdges;
+    /** @brief Which corners lie on a seam with another mesh: bit 0 for v0, bit 1 for v1, bit 2 for v2, set when the
+     *  vertex is on an edge of this mesh's border that its part gave inactive (a terrain chunk's border where the
+     *  terrain goes on smoothly in the next chunk). The surface around such a corner continues where this mesh cannot
+     *  see it, so a contact there that finds no surface under the other shape keeps the face's plane. */
+    uint8_t _seamCorners;
 } CollisionMeshTriangle;
 
 /**
@@ -375,7 +386,8 @@ void CollisionHull_Destroy(CollisionHull* self);
 // Functions: meshes.
 /**
  * @brief Whether an edge two triangles share is active (see CollisionMeshTriangle): it is, unless the two lie flat
- *        across it (their normals within 5 degrees) or fold concave seen from the first one's front. The rule every
+ *        across it (their normals within 5 degrees: COLLISION_MESH_FLAT_EDGE_COSINE) or fold concave seen from the
+ *        first one's front. The rule every
  *        collision mesh marks its edges by; a terrain marks its own with it over the whole terrain (TerrainMesh.h).
  *        The triangles must share the edge with consistent winding (it runs opposite ways in the two); an edge that
  *        does not is active, which the caller decides.

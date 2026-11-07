@@ -35,8 +35,9 @@
  *   so no hit is skipped whatever the speed.
  * - Planes: an unbounded plane is a half-space with its own closed forms; a bounded one is its solid slab as a box view
  *   with the one-sided rules applied (CollisionPlaneView).
- * - Triangles carry their mesh's active-edge bits: a contact on an inactive edge takes the face normal (no catching on
- *   seams), and a one-sided triangle ignores what lies behind it.
+ * - Triangles carry their mesh's active-edge bits and the mesh itself: a contact on an inactive edge, with a shape
+ *   that stands over the mesh's surface, is that surface's contact (no catching on seams); with a shape beside the
+ *   surface it stays as found. A one-sided triangle ignores what lies behind it.
  *
  * Every normal of a contact or a cast points from A to B: moving B along it (or A against it) by the depth separates
  * them. Separations are signed: above 0 apart, below 0 penetrating.
@@ -105,9 +106,16 @@ typedef struct CollisionConvexStruct
     const CollisionHull* Hull;
     /** Triangle: its world corners, counter-clockwise seen from its front. */
     Vector3 Vertices[3];
-    /** Triangle: the active-edge bits (CollisionMeshTriangle) and whether it collides from its front only. */
+    /** Triangle: the active-edge bits and the seam corners (CollisionMeshTriangle) and whether it collides from its
+     *  front only. */
     uint8_t ActiveEdges;
+    uint8_t SeamCorners;
     bool IsOneSided;
+    /** Triangle: the mesh it belongs to (borrowed; it must outlive the view) and the mesh's placement, through which a
+     *  contact on an inner edge or corner looks for the surface under the other shape. NULL: a triangle on its own,
+     *  whose face is all the surface there is. */
+    const CollisionMesh* Mesh;
+    CollisionAffine MeshToWorld;
 
     /* Filled by CollisionConvex_Prepare. */
     /** World to local, for the faces' normals and the rays. */
@@ -260,7 +268,8 @@ Vector3 CollisionConvex_SupportFull(const CollisionConvex* self, Vector3 directi
 bool CollisionConvex_FromShape(const CollisionShape* shape, const CollisionAffine* shapeToWorld,
     CollisionConvex* outConvex);
 
-/* A triangle view from a mesh's triangle under @p meshToWorld. */
+/* A triangle view from a mesh's triangle under @p meshToWorld; the view borrows @p mesh (its contacts look at the
+ * surface around the triangle) and copies the placement. */
 void CollisionConvex_FromMeshTriangle(const CollisionMesh* mesh, uint32_t triangle, const CollisionAffine* meshToWorld,
     bool isTwoSided, CollisionConvex* outConvex);
 

@@ -219,12 +219,18 @@ void CollisionConvex_FromMeshTriangle(const CollisionMesh* mesh, uint32_t triang
         uint8_t Bits = Source->_activeEdges;
         // Edges (0,1) (1,2) (2,0) become (0,2) (2,1) (1,0): bit 0 <- old bit 2, bit 1 <- old bit 1, bit 2 <- old bit 0.
         outConvex->ActiveEdges = (uint8_t)(((Bits >> 2U) & 1U) | (Bits & 2U) | ((Bits & 1U) << 2U));
+        // Corners 1 and 2 trade places.
+        uint8_t Corners = Source->_seamCorners;
+        outConvex->SeamCorners = (uint8_t)((Corners & 1U) | ((Corners & 2U) << 1U) | ((Corners & 4U) >> 1U));
     }
     else
     {
         outConvex->ActiveEdges = Source->_activeEdges;
+        outConvex->SeamCorners = Source->_seamCorners;
     }
     outConvex->IsOneSided = !isTwoSided;
+    outConvex->Mesh = mesh;
+    outConvex->MeshToWorld = *meshToWorld;
     CollisionConvex_Prepare(outConvex);
 }
 

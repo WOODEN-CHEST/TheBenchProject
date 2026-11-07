@@ -1,5 +1,6 @@
 #include "TestSuites.h"
 #include "TestAssets.h"
+#include "TestCollision.h"
 #include "TestText.h"
 #include "TestWorld.h"
 #include "AssetManager.h"
@@ -31,6 +32,8 @@
 /** The default character's radius and height. */
 #define TEST_RADIUS CHARACTER_DEFAULT_RADIUS
 #define TEST_HEIGHT CHARACTER_DEFAULT_HEIGHT
+/** The slabs of the test hedge (TestCollision.h): about 7.8 m of it. */
+#define HEDGE_SLABS 16U
 
 
 // Types.
@@ -1913,6 +1916,110 @@ static void ARunAlongATurnedWallNeverStallsAndNothingPushesTheWalker(TestRun* ru
     Scene_Deconstruct(run, &Scene);
 }
 
+/* A static hedge as a path object makes one (TestCollision.h: two-sided, its top and bottom fanned, its slices folded 2
+ * degrees), HEDGE_SLABS long across the scene's origin, as its collider's placed shape. */
+static void AddHedge(TestRun* run, CharacterScene* scene)
+{
+    WorldObject* Object = NULL;
+    WorldComponent* Component = NULL;
+    if (!TEST_CHECK_SUCCESS(run, World_CreateObject(&scene->World, (const unsigned char*)u8"hedge", &Object)))
+    {
+        return;
+    }
+    uint64_t Id = WorldObject_GetId(Object);
+    TEST_CHECK_SUCCESS(run, WorldObject_SetPosition(Object, TestWorld_At((Vector3){ 0.0f, 0.0f, 0.0f })));
+    TEST_CHECK_SUCCESS(run, WorldObject_SetMobility(Object, WorldMobility_Static));
+    CollisionMesh* Hedge = TestCollision_CreateHedge(run, HEDGE_SLABS);
+    if ((Hedge == NULL)
+        || !TEST_CHECK_SUCCESS(run, World_AddComponent(&scene->World, Id, WorldComponentType_Collider, &Component)))
+    {
+        CollisionMesh_Destroy(Hedge);
+        return;
+    }
+    WorldColliderPlacedShapes* Shapes = WorldColliderPlacedShapes_Create(1U, 1U);
+    Shapes->Meshes[0] = Hedge;
+    Shapes->Shapes[0] = CollisionShape_Create(CollisionShapeType_Mesh);
+    Shapes->Shapes[0].Mesh = Hedge;
+    Shapes->Shapes[0].IsTwoSided = true;
+    WorldColliderComponent_SetPlacedShapes(WorldColliderComponent_FromComponent(Component), Shapes);
+    WorldColliderPlacedShapes_Release(Shapes);
+}
+
+/* A runner meeting a bent hedge on its convex or its concave side, straight on, slanting or almost along it, stops at it
+ * or slides along it on its feet, its gap kept, and the collision step never moves it. The hedge's fanned top and bottom
+ * meet its sides at corners whose triangles have only inner edges, and its slices fold: taken for the surface beside
+ * them, the top's plane would throw a runner metres in a tick (down into the ground, or up onto the hedge), and a
+ * neighbouring slice's would shake a slider a few millimetres at every fold. */
+static void ARunIntoABentHedgeStopsOrSlidesAndNothingPushesTheRunner(TestRun* run)
+{
+    static const float Slants[] = { 0.0f, 35.0f, 70.0f };
+    for (int Side = 0; Side < 2; Side++)
+    {
+        for (size_t Slant = 0U; Slant < (sizeof(Slants) / sizeof(Slants[0])); Slant++)
+        {
+            CharacterScene Scene;
+            if (Scene_Construct(run, &Scene))
+            {
+                AddFloor(run, &Scene);
+                AddHedge(run, &Scene);
+                Vector3 Center;
+                Vector3 Outward;
+                TestCollision_GetHedgeFrame(HEDGE_SLABS, 0.5f, &Center, &Outward);
+                Vector3 Away = (Side == 0) ? Outward : Vector3Negate(Outward);
+                uint64_t Id = AddCharacter(run, &Scene, Vector3Add(Center, Vector3Scale(Away, 1.5f)));
+                OverrideFloat(run, &Scene, Id, CharacterSetting_RunSpeed, 5.0f);
+                OverrideFloat(run, &Scene, Id, CharacterSetting_Acceleration, 48.0f);
+                CharacterInput Input = CreateWalk(Vector3RotateByAxisAngle(Vector3Negate(Away),
+                    (Vector3){ 0.0f, 1.0f, 0.0f }, Slants[Slant] * DEG2RAD));
+                Input.IsRunning = true;
+                SetInput(run, &Scene, Id, &Input);
+
+                // How far the feet keep from the hedge's centreline (its curvature's centre is TEST_HEDGE_RADIUS on +Z).
+                Vector3 Curvature = { 0.0f, 0.0f, TEST_HEDGE_RADIUS };
+                float Closest = FLT_MAX;
+                float LargestPush = 0.0f;
+                float LargestStep = 0.0f;
+                bool IsAlwaysGrounded = true;
+                Vector3 Previous = GetFeet(&Scene, Id);
+                for (uint32_t Index = 0U; Index < ((6U * TICKS_PER_SECOND) / 5U); Index++)
+                {
+                    WorldCharacters_Update(Scene.Characters, TEST_DELTA);
+                    Vector3 Moved = GetFeet(&Scene, Id);
+                    WorldCollision_Step(Scene.Collision, TEST_DELTA);
+                    World_UpdateTransforms(&Scene.World);
+                    Vector3 Feet = GetFeet(&Scene, Id);
+                    LargestPush = Math_MaxFloat(LargestPush, Vector3Distance(Feet, Moved));
+                    LargestStep = Math_MaxFloat(LargestStep, Vector3Distance(Feet, Previous));
+                    IsAlwaysGrounded = IsAlwaysGrounded && GetState(&Scene, Id)->IsGrounded && IsNear(Feet.y, 0.0f, 0.01f);
+                    // Only beside the hedge: a slide may run past its end and round it.
+                    float Turn = atan2f(Feet.x - Curvature.x, Curvature.z - Feet.z) * RAD2DEG;
+                    if (fabsf(Turn) < ((0.5f * (float)HEDGE_SLABS * TEST_HEDGE_BEND_DEGREES) - TEST_HEDGE_BEND_DEGREES))
+                    {
+                        float FromCurvature = Vector2Distance((Vector2){ Feet.x, Feet.z },
+                            (Vector2){ Curvature.x, Curvature.z });
+                        Closest = Math_MinFloat(Closest, (Side == 0) ? (FromCurvature - TEST_HEDGE_RADIUS)
+                            : (TEST_HEDGE_RADIUS - FromCurvature));
+                    }
+                    Previous = Feet;
+                }
+                // The capsule's side rests its gap (2 mm) from the hedge's side, whose slices are chords 2 mm inside
+                // the convex side's circle and 2 mm outside the concave side's.
+                float Resting = (0.5f * TEST_HEDGE_WIDTH) + TEST_RADIUS;
+                bool IsAtTheHedge = TEST_CHECK(run, (Closest > (Resting - 0.001f)) && (Closest < (Resting + 0.006f)));
+                bool IsSmooth = TEST_CHECK(run, (LargestPush < 1e-6f) && IsAlwaysGrounded
+                    && (LargestStep < (1.05f * 5.0f * TEST_DELTA)));
+                if (!IsAtTheHedge || !IsSmooth)
+                {
+                    printf("      (side %d, %.0f degrees: closest %.4f m from the centreline, largest push %.5f m, largest "
+                        "step %.4f m, %s)\n", Side, (double)Slants[Slant], (double)Closest, (double)LargestPush,
+                        (double)LargestStep, IsAlwaysGrounded ? "grounded" : "left the ground");
+                }
+            }
+            Scene_Deconstruct(run, &Scene);
+        }
+    }
+}
+
 
 // Static functions: rolling off edges, jumps, air and ground control, the crouch's ease.
 /* The horizontal speed of a character's last move. */
@@ -2866,6 +2973,8 @@ void WorldCharacterTests_Run(TestRun* run)
         { "the_character_let_go_of_stops_walking", TheCharacterLetGoOfStopsWalking },
         { "a_run_along_a_turned_wall_never_stalls_and_nothing_pushes_the_walker",
             ARunAlongATurnedWallNeverStallsAndNothingPushesTheWalker },
+        { "a_run_into_a_bent_hedge_stops_or_slides_and_nothing_pushes_the_runner",
+            ARunIntoABentHedgeStopsOrSlidesAndNothingPushesTheRunner },
         { "walking_off_a_block_rolls_a_little_then_falls", WalkingOffABlockRollsALittleThenFalls },
         { "running_off_a_ledge_lands_as_from_its_top", RunningOffALedgeLandsAsFromItsTop },
         { "running_off_a_ramps_end_keeps_its_descent", RunningOffARampsEndKeepsItsDescent },

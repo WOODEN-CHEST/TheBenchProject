@@ -13,10 +13,12 @@
  *
  * ACTIVE EDGES. A shape sliding over a mesh touches the edges between triangles; taking such an edge's own normal would
  * make it catch on a flat floor's seams (a "ghost" collision). An edge shared by two triangles is inactive when the two
- * lie flat (normals within FLAT_EDGE_COSINE) or fold concave (CollisionMesh_IsSharedEdgeActive); contacts on inactive
- * edges then take the face normal. Border edges, convex folds and edges shared by more than two triangles stay active.
+ * lie flat (normals within COLLISION_MESH_FLAT_EDGE_COSINE) or fold concave (CollisionMesh_IsSharedEdgeActive); a
+ * contact on an inactive edge then takes the normal of the surface under the shape (source/CollisionContact.c). Border
+ * edges, convex folds and edges shared by more than two triangles stay active.
  * A part may give its triangles' activity itself (a terrain chunk, whose border edges have neighbours in the next
- * chunk): those triangles keep it.
+ * chunk): those triangles keep it. The corners of a border edge given inactive are SEAM CORNERS, around which the
+ * surface goes on out of this mesh's sight.
  *
  * BVH. Median splits along the longest axis of the triangles' centres, at most LEAF_TRIANGLES per leaf, depth-first
  * with the first child next to its parent, built with an explicit stack (no recursion).
@@ -28,8 +30,6 @@
 #define NONE UINT32_MAX
 /** The most triangles a BVH leaf holds. */
 #define LEAF_TRIANGLES 4U
-/** Two triangles lie flat across their edge when their normals' cosine is above this (5 degrees apart). */
-#define FLAT_EDGE_COSINE 0.9961947f
 /** A triangle is degenerate when the sine of its angle at the first corner is below this. */
 #define DEGENERATE_SINE 1e-6f
 /** The deepest a BVH can be: a median split halves the triangles, so log2 of the most triangles plus room. */
@@ -307,20 +307,56 @@ static bool IsEdgeActive(const Vector3* vertices, const BuildTriangle* first, ui
         vertices[first->Indices[firstEdge]], vertices[second->Indices[(secondEdge + 2U) % 3U]]);
 }
 
-/* Each triangle's active edge bits: the ones its part gave, the rest computed from the mesh's own triangles. */
-static void FindActiveEdges(const Vector3* vertices, const BuildTriangle* triangles, uint32_t triangleCount,
-    uint8_t* outActive)
+/* Marks the corners of every triangle that lie on an edge of the mesh's border its part gave inactive: a seam with
+ * another mesh (a terrain chunk's border where the terrain goes on). */
+static void FindSeamCorners(const EdgeEntry* table, size_t capacity, const BuildTriangle* triangles,
+    uint32_t triangleCount, uint32_t vertexCount, uint8_t* outSeamCorners)
+{
+    uint8_t* IsSeamVertex = Memory_Allocate(vertexCount);
+    Memory_Zero(IsSeamVertex, vertexCount);
+    bool IsAnySeam = false;
+    for (size_t Slot = 0U; Slot < capacity; Slot++)
+    {
+        const EdgeEntry* Entry = &table[Slot];
+        if ((Entry->Low == NONE) || (Entry->Count != 1U))
+        {
+            continue;
+        }
+        uint8_t Given = triangles[Entry->Triangle].GivenActive;
+        if ((Given != GIVEN_ACTIVE_NONE) && ((Given & (1U << Entry->Edge)) == 0U))
+        {
+            IsSeamVertex[Entry->Low] = 1U;
+            IsSeamVertex[Entry->High] = 1U;
+            IsAnySeam = true;
+        }
+    }
+    for (uint32_t Triangle = 0U; (Triangle < triangleCount) && IsAnySeam; Triangle++)
+    {
+        for (uint32_t Corner = 0U; Corner < 3U; Corner++)
+        {
+            if (IsSeamVertex[triangles[Triangle].Indices[Corner]] != 0U)
+            {
+                outSeamCorners[Triangle] = (uint8_t)(outSeamCorners[Triangle] | (1U << Corner));
+            }
+        }
+    }
+    Memory_Free(IsSeamVertex);
+}
+
+/* Each triangle's active edge bits (the ones its part gave, the rest computed from the mesh's own triangles) and its
+ * seam corners (FindSeamCorners). */
+static void FindActiveEdges(const Vector3* vertices, uint32_t vertexCount, const BuildTriangle* triangles,
+    uint32_t triangleCount, uint8_t* outActive, uint8_t* outSeamCorners)
 {
     bool IsAnyComputed = false;
+    bool IsAnyGiven = false;
     for (uint32_t Triangle = 0U; Triangle < triangleCount; Triangle++)
     {
-        outActive[Triangle] = (triangles[Triangle].GivenActive != GIVEN_ACTIVE_NONE) ? triangles[Triangle].GivenActive
-            : (uint8_t)ALL_EDGE_BITS;
-        IsAnyComputed = IsAnyComputed || (triangles[Triangle].GivenActive == GIVEN_ACTIVE_NONE);
-    }
-    if (!IsAnyComputed)
-    {
-        return;
+        bool IsGiven = triangles[Triangle].GivenActive != GIVEN_ACTIVE_NONE;
+        outActive[Triangle] = IsGiven ? triangles[Triangle].GivenActive : (uint8_t)ALL_EDGE_BITS;
+        outSeamCorners[Triangle] = 0U;
+        IsAnyComputed = IsAnyComputed || !IsGiven;
+        IsAnyGiven = IsAnyGiven || IsGiven;
     }
     size_t Capacity = GetTableCapacity((size_t)triangleCount * 3U);
     EdgeEntry* Table = Memory_Allocate(Capacity * sizeof(EdgeEntry));
@@ -336,7 +372,11 @@ static void FindActiveEdges(const Vector3* vertices, const BuildTriangle* triang
                 Triangle, Edge);
         }
     }
-    for (size_t Slot = 0U; Slot < Capacity; Slot++)
+    if (IsAnyGiven)
+    {
+        FindSeamCorners(Table, Capacity, triangles, triangleCount, vertexCount, outSeamCorners);
+    }
+    for (size_t Slot = 0U; (Slot < Capacity) && IsAnyComputed; Slot++)
     {
         const EdgeEntry* Entry = &Table[Slot];
         if ((Entry->Low == NONE) || (Entry->Count != 2U))
@@ -493,7 +533,7 @@ static void BuildNodes(const BuildTriangle* triangles, uint32_t* order, uint32_t
 // Public functions.
 bool CollisionMesh_IsSharedEdgeActive(Vector3 normal, Vector3 otherNormal, Vector3 edgePoint, Vector3 otherOpposite)
 {
-    if (CollisionMath_Dot(normal, otherNormal) > FLAT_EDGE_COSINE)
+    if (CollisionMath_Dot(normal, otherNormal) > COLLISION_MESH_FLAT_EDGE_COSINE)
     {
         return false;
     }
@@ -529,8 +569,10 @@ Error CollisionMesh_Create(const CollisionMeshPart* parts, size_t partCount, Mat
             : "A collision mesh's vertices must be finite.");
     }
 
-    uint8_t* Active = Memory_Allocate(TriangleCount);
-    FindActiveEdges(Vertices, Triangles, TriangleCount, Active);
+    // One allocation: the active edge bits, then the seam corners.
+    uint8_t* Active = Memory_Allocate((size_t)TriangleCount * 2U);
+    uint8_t* SeamCorners = Active + TriangleCount;
+    FindActiveEdges(Vertices, VertexCount, Triangles, TriangleCount, Active, SeamCorners);
     uint32_t* Order = Memory_Allocate((size_t)TriangleCount * sizeof(uint32_t));
     for (uint32_t Index = 0U; Index < TriangleCount; Index++)
     {
@@ -569,7 +611,7 @@ Error CollisionMesh_Create(const CollisionMeshPart* parts, size_t partCount, Mat
         const BuildTriangle* Source = &Triangles[Order[Index]];
         OutTriangles[Index] = (CollisionMeshTriangle){ ._indices = { Source->Indices[0], Source->Indices[1],
             Source->Indices[2] }, ._part = Source->Part, ._sourceIndex = Source->SourceIndex,
-            ._activeEdges = Active[Order[Index]] };
+            ._activeEdges = Active[Order[Index]], ._seamCorners = SeamCorners[Order[Index]] };
     }
     for (size_t Part = 0U; Part < partCount; Part++)
     {

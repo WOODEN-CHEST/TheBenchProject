@@ -29,7 +29,9 @@ Collision for the 3D world. The modules:
   (see "Terrain").
 
 Tests:
-- `tests/CollisionGeometryTests.c`: the maths, with seeded fuzz tests that casts never miss a contact;
+- `tests/CollisionGeometryTests.c`: the maths, with seeded fuzz tests that casts never miss a contact, and the contacts
+  of shapes beside and over a hedge bent as a path object bends one (`tests/TestCollision.{h,c}` builds it: fanned top
+  and bottom, slices folded 2 degrees; the character tests run into it too);
 - `tests/WorldColliderTests.c`: the `collision` section and the collider;
 - `tests/WorldCollisionTests.c`: the collision world, including the trees against brute force on a moving random scene
   (the brute force places the shapes as the world does, in double, and works relative to each query's origin, so the
@@ -86,12 +88,24 @@ space, an optional part `Name`, and the sizes its type uses. Build one with `Col
 - **Meshes** (`CollisionMesh_Create(parts, count, transform)`, `_CreateFromModel`):
   - each part's triangles go through the transform;
   - vertices with exactly equal positions are welded and degenerate triangles skipped (at most 2^20 triangles);
-  - each edge is marked **active** or not: an edge shared across a flat or concave seam is inactive, so contacts on it
-    take the face's normal and shapes slide over seams without catching. A contact's witness point lies exactly on the
-    edge it touches, which the closest-point region test calls inside (its tests tie there): the contact reads its
-    feature from the point's barycentric weights (a weight of at most 1e-5 puts it on the opposite edge,
-    `TRIANGLE_BOUNDARY_WEIGHT`), so a contact on an active edge keeps its own normal (read as inside, a capsule beside
-    a mesh box's bottom or top edge would take that face's normal and plane distance, a push of most of its height);
+  - each edge is marked **active** or not: an edge shared across a flat seam (normals within 5 degrees,
+    `COLLISION_MESH_FLAT_EDGE_COSINE`) or a concave one is inactive, so shapes slide over seams without catching. A
+    contact GJK finds inside a triangle is the face's own (its normal, its true distance). A contact on an inactive
+    edge, or on a corner between two inactive edges of its triangle, stands for the surface its neighbours continue,
+    and an overlap of the face (EPA) for the surface the face is part of, but only where that surface lies under the
+    other shape: the line through the shape's centre along the face's normal (`FindSurfaceUnder` in
+    `source/CollisionContact.c`) must meet the triangle's mesh near the face's plane (from the contact's reach above it
+    to what flat seams' folds allow below), turned from the face by no more than a flat seam. Found, the contact is that
+    surface's (its normal, the depth of the shape's deepest point under its plane). Not found, it stays as GJK or EPA
+    found it: the shape stands beside the surface, as a character beside a hedge whose fanned top meets the hedge's side
+    only at corners (the top's plane would claim it sunk most of its height into the top), or over a fold steeper than a
+    seam (a sliver between two pieces, whose plane would lean into it). A one-sided triangle's contact whose normal
+    points behind it is pushed to its front the same way. Each such contact casts one short ray against its own mesh;
+    contacts inside triangles (found by GJK) and on active edges cast none. A contact's witness point lies exactly on
+    the edge it
+    touches, which the closest-point region test calls inside (its tests tie there): the contact reads its feature from
+    the point's barycentric weights (a weight of at most 1e-5 puts it on the opposite edge,
+    `TRIANGLE_BOUNDARY_WEIGHT`), so a contact on an active edge keeps its own normal;
   - a median-split BVH is built.
 
   Each triangle keeps its part and its index there (`_part`, `_sourceIndex`; with a hit's barycentrics they give the
@@ -101,7 +115,9 @@ space, an optional part `Name`, and the sizes its type uses. Build one with `Col
   for (v0, v1), bit 1 for (v1, v2), bit 2 for (v2, v0)) and its own source index (`SourceIndices`) instead: the mesh
   keeps them as given (the parts' welding and degenerate triangles change neither) and computes nothing for them. The
   terrain passes the flags it computed over the whole terrain, so a chunk's border edges are active only where the
-  terrain itself has an edge, and its triangle indices, so a hit names the terrain's triangle.
+  terrain itself has an edge, and its triangle indices, so a hit names the terrain's triangle. The corners of a border
+  edge given inactive are **seam corners** (`_seamCorners`): the surface goes on past the mesh there, out of its sight,
+  so a contact on one that finds no surface under the shape in its own mesh keeps the face's plane.
 - **Sets** (`CollisionSet`): a named compound of shapes. Limits: 32 sets in a world model, 128 shapes in a set, 1024 in
   a world model. Names follow `[a-z][a-z0-9_.-]*`, at most 128 bytes (`CollisionShape_IsValidName`).
 - `CollisionShape_GetTransform` gives the shape's own transform (rotation, then centre).
@@ -192,7 +208,8 @@ A terrain component ([Terrain.md](Terrain.md)) is the collision world's second s
 - **Seams do not catch.** Each part brings the terrain's own edge flags (computed over the whole terrain, "Given edges
   and indices" above): an edge on a chunk's border is inactive where the terrain is smooth across it, so a capsule
   sliding across it takes the face's normal, exactly as inside a chunk (the tests check a ball's contacts across seams
-  and compare a capsule's walk across them with the same walk on a box).
+  and compare a capsule's walk across them with the same walk on a box). A contact on such a border edge or its corners
+  whose shape stands over the next chunk keeps the face's plane: its own chunk cannot see the next one.
 - **Terrain alone:** a query's filter with `IsTerrainOnly` sees nothing else, on whichever layers its mask lets through: the
   ground under a path, whatever stands on it (`PathGround_Project`, [Paths.md](Paths.md)).
 - **Hits name the terrain's triangle:** `MeshPart` is the chunk and `SourceTriangle` the terrain's triangle index
@@ -491,12 +508,17 @@ wall pushes 0.2 m crates at 2 m/s against a static wall, then pushes on against 
 The passes over every collider stop early at a static one, and a collider's result is emptied only when a step writes
 it, so colliders at rest cost little beyond the sync.
 
+Against meshes, a contact on an inner edge or corner casts one short ray into its mesh (the surface under the shape,
+"Meshes" above): about 0.5 microseconds on an 8000-triangle mesh. A capsule resting on a bumpy 1 m grid, collided with
+every triangle near it, takes about 1.9 microseconds a time, 0.6 of them the rays.
+
 ## The narrowphase (private)
 
 - **Convex views** (`CollisionConvex`): a point, segment, box, cylinder, hull or triangle under any affine transform,
   with a radius for the rounded shapes. A sphere is a point plus a radius and a capsule a segment plus a radius, but only
   under a similarity; under an uneven scale they become exact supports of the transformed shape. A mesh triangle carries
-  its active edges and whether it is one-sided. Planes have their own view.
+  its active edges, whether it is one-sided, and its mesh with the mesh's placement (borrowed for the view's life), so a
+  contact on an inner edge can look for the surface under the other shape. Planes have their own view.
 - **GJK** finds distances (Johnson's sub-algorithm). It tracks its best simplex and stops when it makes no progress,
   which keeps smooth shapes from cycling.
   - **Never overstated.** Every support also bounds the distance from below, and an exit before convergence reports
@@ -624,6 +646,10 @@ terrain").
   stamped on every event.
 - **`WorldCollision_CollideObject` skips an object's own plane and mesh shapes.** It is marked `// TODO:`; the
   collision step does not use it.
+- **A mesh looks for the surface under a shape in itself alone.** At a seam corner (a terrain chunk's border) a contact
+  that finds none keeps the face's plane, so a shape standing beside a terrain bank right where the bank's fanned top
+  meets a chunk's border may still read the top's plane (pushed down, or up onto it). Within a mesh, and on meshes
+  whose edges are computed (models, path objects), it never does.
 - **A mesh's debug wireframe draws every edge every frame:** fine for test content; the test terrain's 61 000 triangles
   are drawn whole with F7 too (the renderer's chunk key, the minus key, draws only the chunks in view).
 - **A terrain chunk with more than 2^20 triangles** gets no collision (warned once: everything falls through it). A

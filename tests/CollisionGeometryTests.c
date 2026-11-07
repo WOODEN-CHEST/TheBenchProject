@@ -1,4 +1,5 @@
 #include "TestSuites.h"
+#include "TestCollision.h"
 #include "CollisionGeometry.h"
 #include "CollisionMath.h"
 #include "CollisionShape.h"
@@ -6,6 +7,7 @@
 #include <float.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 
 
 // Macros.
@@ -1403,6 +1405,139 @@ static void ACapsuleBesideAMeshBoxIsPushedOutSideways(TestRun* run)
     CollisionMesh_Destroy(Cube);
 }
 
+/* Every contact of a shape with a mesh's triangles, two-sided as a path object's mesh is (with @p isInnerOnly only the
+ * triangles whose edges are all inactive, facing along or against @p facing); counts those found and those closer than
+ * @p leastSeparation or with a normal (from the triangle to the shape) not along @p away by at least @p leastAlong. */
+static void CollideWithEveryTriangle(const CollisionMesh* mesh, const CollisionConvex* shape, bool isInnerOnly,
+    Vector3 facing, float leastSeparation, Vector3 away, float leastAlong, uint32_t* touching, uint32_t* wrong)
+{
+    CollisionAffine Identity = CollisionAffine_Identity();
+    for (uint32_t Triangle = 0U; Triangle < mesh->_triangleCount; Triangle++)
+    {
+        CollisionConvex Face;
+        CollisionConvex_FromMeshTriangle(mesh, Triangle, &Identity, true, &Face);
+        if (isInnerOnly && ((mesh->_triangles[Triangle]._activeEdges != 0U)
+            || (fabsf(CollisionMath_Dot(Face.TriangleNormal, facing)) < 0.99f)))
+        {
+            continue;
+        }
+        CollisionContact Contact;
+        if (CollisionGeometry_Collide(&Face, shape, 0.05f, &Contact))
+        {
+            (*touching)++;
+            *wrong += ((Contact.Separation < leastSeparation) || (CollisionMath_Dot(Contact.Normal, away) < leastAlong))
+                ? 1U : 0U;
+        }
+    }
+}
+
+/* A capsule standing beside a hedge as a path object bends one (TestCollision.h: its top and bottom fanned, most of
+ * their triangles meeting the outline only at a corner with inner edges on both sides of it; its slices folded 2
+ * degrees), pressed 3 mm into its convex or its concave side at any height, is pushed out sideways by every triangle it
+ * touches, by no more than it is pressed in (and the 2 mm a slice's middle stands out on the concave side). A contact on
+ * such a corner must not take the top's or the bottom's face, whose plane would push the capsule down or up by most of
+ * its height (a character running into a hedge would be thrown metres in a tick), nor a neighbouring slice's, which
+ * leans into the capsule past the fold. */
+static void ACapsuleBesideABentHedgeIsPushedOutSideways(TestRun* run)
+{
+    CollisionMesh* Hedge = TestCollision_CreateHedge(run, 4U);
+    if (Hedge == NULL)
+    {
+        return;
+    }
+    uint32_t Touching = 0U;
+    uint32_t Wrong = 0U;
+    for (int Side = 0; Side < 2; Side++)
+    {
+        for (int Along = 0; Along <= 20; Along++)
+        {
+            Vector3 Center;
+            Vector3 Outward;
+            TestCollision_GetHedgeFrame(4U, 0.05f * (float)Along, &Center, &Outward);
+            Vector3 Away = (Side == 0) ? Outward : CollisionMath_Negate(Outward);
+            for (int Height = -24; Height <= 24; Height++)
+            {
+                Vector3 Axis = CollisionMath_AddScaled(Center, Away, (0.5f * TEST_HEDGE_WIDTH) + 0.3f - 0.003f);
+                Axis.y = (0.5f * TEST_HEDGE_HEIGHT) + (0.05f * (float)Height);
+                CollisionConvex Body = Capsule(Axis, 0.3f, 0.575f, V3(0.0f, 0.0f, 0.0f));
+                CollideWithEveryTriangle(Hedge, &Body, false, V3(0.0f, 0.0f, 0.0f), -0.006f, Away, 0.0f, &Touching,
+                    &Wrong);
+            }
+        }
+    }
+    TEST_CHECK(run, (Touching > 1000U) && (Wrong == 0U));
+    if (Wrong != 0U)
+    {
+        printf("      (%u of %u contacts pushed the capsule in or too far)\n", Wrong, Touching);
+    }
+    CollisionMesh_Destroy(Hedge);
+}
+
+/* Over a bent hedge's fanned top a ball resting 2 mm up, out to 5 cm from the outline, meets each of the fan's triangles
+ * with only inner edges with the top's own normal and its true 2 mm (the seams and the corners do not catch, wherever the
+ * triangle meets the ball); beside its convex side a capsule
+ * resting 2 mm from a slice, 10 cm from the next fold, is no closer than that to any triangle: the next slice's plane,
+ * which leans 3.5 mm into it there, and the top's, which it stands beside, are not the surface under it. */
+static void ShapesNearABentHedgeReadTheSurfaceUnderThem(TestRun* run)
+{
+    CollisionMesh* Hedge = TestCollision_CreateHedge(run, 4U);
+    if (Hedge == NULL)
+    {
+        return;
+    }
+    uint32_t Touching = 0U;
+    uint32_t Wrong = 0U;
+    for (int Along = 1; Along <= 19; Along++)
+    {
+        Vector3 Center;
+        Vector3 Outward;
+        TestCollision_GetHedgeFrame(4U, 0.05f * (float)Along, &Center, &Outward);
+        for (int Across = -4; Across <= 4; Across++)
+        {
+            Vector3 Point = CollisionMath_AddScaled(Center, Outward, 0.1f * (float)Across);
+            Point.y = TEST_HEDGE_HEIGHT + 0.3f + 0.002f;
+            CollisionConvex Ball = Sphere(Point, 0.3f);
+            CollideWithEveryTriangle(Hedge, &Ball, true, V3(0.0f, 1.0f, 0.0f), 0.0019f, V3(0.0f, 1.0f, 0.0f), 0.9999f,
+                &Touching, &Wrong);
+        }
+    }
+    TEST_CHECK(run, (Touching > 100U) && (Wrong == 0U));
+    if ((Touching <= 100U) || (Wrong != 0U))
+    {
+        printf("      (%u of %u contacts of the ball over the top were tilted or too close)\n", Wrong, Touching);
+    }
+
+    // The second slab's convex face: from its outer corners at the second and the third slice.
+    Vector3 Start;
+    Vector3 End;
+    Vector3 Outward;
+    TestCollision_GetHedgeFrame(4U, 0.25f, &Start, &Outward);
+    Start = CollisionMath_AddScaled(Start, Outward, 0.5f * TEST_HEDGE_WIDTH);
+    TestCollision_GetHedgeFrame(4U, 0.5f, &End, &Outward);
+    End = CollisionMath_AddScaled(End, Outward, 0.5f * TEST_HEDGE_WIDTH);
+    Vector3 Along = CollisionMath_NormalizeOr(CollisionMath_Subtract(End, Start), V3(1.0f, 0.0f, 0.0f));
+    Vector3 Face = CollisionMath_Cross(Along, V3(0.0f, 1.0f, 0.0f));
+    if (CollisionMath_Dot(Face, Outward) < 0.0f)
+    {
+        Face = CollisionMath_Negate(Face);
+    }
+    Touching = 0U;
+    Wrong = 0U;
+    for (int Height = -4; Height <= 4; Height++)
+    {
+        Vector3 Axis = CollisionMath_AddScaled(CollisionMath_AddScaled(End, Along, -0.1f), Face, 0.3f + 0.002f);
+        Axis.y = (0.5f * TEST_HEDGE_HEIGHT) + (0.1f * (float)Height);
+        CollisionConvex Body = Capsule(Axis, 0.3f, 0.575f, V3(0.0f, 0.0f, 0.0f));
+        CollideWithEveryTriangle(Hedge, &Body, false, V3(0.0f, 0.0f, 0.0f), 0.0018f, Face, 0.0f, &Touching, &Wrong);
+    }
+    TEST_CHECK(run, (Touching > 10U) && (Wrong == 0U));
+    if (Wrong != 0U)
+    {
+        printf("      (%u of %u contacts of the capsule beside the slice were closer than its gap)\n", Wrong, Touching);
+    }
+    CollisionMesh_Destroy(Hedge);
+}
+
 /* Rays at a gently bumpy grid's shared edges and corners never slip between its triangles. */
 static void RaysDoNotSlipBetweenMeshTriangles(TestRun* run)
 {
@@ -1567,6 +1702,8 @@ void CollisionGeometryTests_Run(TestRun* run)
         { "crossed_capsules_touch_at_one_point", CrossedCapsulesTouchAtOnePoint },
         { "rays_do_not_slip_between_mesh_triangles", RaysDoNotSlipBetweenMeshTriangles },
         { "a_capsule_beside_a_mesh_box_is_pushed_out_sideways", ACapsuleBesideAMeshBoxIsPushedOutSideways },
+        { "a_capsule_beside_a_bent_hedge_is_pushed_out_sideways", ACapsuleBesideABentHedgeIsPushedOutSideways },
+        { "shapes_near_a_bent_hedge_read_the_surface_under_them", ShapesNearABentHedgeReadTheSurfaceUnderThem },
         { "random_cast_hits_are_where_the_shapes_meet", RandomCastHitsAreWhereTheShapesMeet },
         { "turning_drops_land_on_bounded_floors", TurningDropsLandOnBoundedFloors },
     };
