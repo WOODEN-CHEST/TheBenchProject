@@ -50,6 +50,17 @@
  * widget in the same slot. Never hold a Widget* across anything that can run hooks or event handlers; keep the id and
  * re-resolve it (UIScreen_TryGetWidgetById / UIScreen_IsWidgetAlive).
  *
+ * SCALE. A widget has a scale of its own (Widget_SetScale, default 1) that multiplies everything drawn inside it: text,
+ * nine-slice corners, padding, minimum sizes. Its EFFECTIVE SCALE (Widget_GetEffectiveScale) is the screen's times its own and
+ * every ancestor's: surface pixels per one of its own UI pixels. Its Measure hook answers in its own UI pixels, and
+ * Widget_Measure turns the answer (and the width it gets) into its parent's; a placement's offsets count in the parent's
+ * effective scale. Scale never changes a fixed or a stretched box: it reaches a box only through a content-sized one.
+ *
+ * RENDER TRANSFORM. A widget can be turned, moved and scaled with its subtree for drawing and pointing alone
+ * (Widget_SetRenderTransform, UIPlacement.h's UIRenderTransform): it is drawn through the transform and hit where it shows, while
+ * layout, measuring, its estimated bounds and keyboard navigation keep the box layout gave it. Clips stay axis-aligned: a cut
+ * subtree inside a turned widget is clipped to the bounding box of the turned clip. A widget without one costs nothing.
+ *
  * EDIT ELEMENTS. A widget that needs entering (Widget_NeedsEntering: a slider, a text box) takes keys of its own only once it
  * is entered: by the accept action while it is focused, a press on it, Tab going on from another entered element, or
  * UIScreen_EnterWidget. Until then the arrows and Tab move past it and typing on it does nothing. The screen leaves it on the
@@ -79,6 +90,12 @@ typedef struct WidgetStruct Widget;
 #define WIDGET_MAX_TREE_DEPTH ((size_t)64)
 /** @brief The available width of a Measure with nothing to limit it: an infinity, so comparisons and minimums just work. */
 #define UI_MEASURE_UNBOUNDED_WIDTH (INFINITY)
+/** @brief The bounds of a widget's own scale (Widget_SetScale). */
+#define WIDGET_MIN_SCALE 0.125f
+#define WIDGET_MAX_SCALE 8.0f
+/** @brief The bounds an effective scale is kept to, however many scaled widgets nest. */
+#define WIDGET_MIN_EFFECTIVE_SCALE (1.0f / 64.0f)
+#define WIDGET_MAX_EFFECTIVE_SCALE 64.0f
 
 
 // Types.
@@ -97,21 +114,33 @@ typedef enum WidgetBasePropertyEnum
     /** @brief The widget's z layer; UIPropertyType_Float. */
     WidgetBaseProperty_ZLayer,
     /** @brief The widget's render tint; UIPropertyType_RenderColor. */
-    WidgetBaseProperty_RenderTint
+    WidgetBaseProperty_RenderTint,
+    /** @brief The widget's own scale (Widget_SetScale); UIPropertyType_Float. */
+    WidgetBaseProperty_Scale,
+    /** @brief The render transform's turn in radians; UIPropertyType_Float. Setting it gives the widget its render transform. */
+    WidgetBaseProperty_Rotation,
+    /** @brief The render transform's pivot in [0;1] of the box; UIPropertyType_Vector2. Setting it gives the widget its render
+     *  transform. */
+    WidgetBaseProperty_Pivot,
+    /** @brief The render transform's offset in the parent's UI pixels; UIPropertyType_Vector2. Setting it gives the widget its
+     *  render transform. */
+    WidgetBaseProperty_VisualOffset,
+    /** @brief The render transform's visual scale per axis; UIPropertyType_Vector2. Setting it gives the widget its render
+     *  transform. */
+    WidgetBaseProperty_VisualScale
 } WidgetBaseProperty;
 
 /**
- * @brief What a widget's Measure hook gets: a way to convert units for the screen's viewport, and the scale.
+ * @brief What a widget's Measure hook gets: a way to convert units for the screen's viewport.
  *
- * Built by the screen on the stack for its layout pass; owns nothing.
+ * Built by the screen on the stack for its layout pass; owns nothing. A hook turns surface pixels into its own UI pixels with
+ * its widget's effective scale (Widget_GetEffectiveScale).
  */
 typedef struct UIMeasureContextStruct
 {
     /** @brief A measuring-only render context for the screen's viewport (RenderContext_CreateMeasuring), for converting
      *  between pixel, relative and fitted units. Borrowed for the call; never draw through it. */
     RenderContext* Measure;
-    /** @brief The screen's scale: surface pixels per UI pixel. */
-    float Scale;
 } UIMeasureContext;
 
 /**
@@ -235,12 +264,17 @@ typedef struct WidgetVTableStruct
      *  declared type). Optional. */
     Error (*SetProperty)(void* self, int32_t propertyId, const UIPropertyValue* value);
 
-    /** @brief Gives the widget's preferred size in UI pixels when it has @p availableWidth UI pixels to the width
-     *  (possibly UI_MEASURE_UNBOUNDED_WIDTH): a label its text's, a stack its children's. Containers ask through
-     *  Widget_Measure, which caches the answer. Runs in the layout pass, on the update side: it may load assets and refresh
-     *  its own text, and must not destroy widgets, move focus or change another widget. Without a slot the size is zero.
-     *  Optional. */
+    /** @brief Gives the widget's preferred size in its own UI pixels (its effective scale's) when it has @p availableWidth of
+     *  them to the width (possibly UI_MEASURE_UNBOUNDED_WIDTH): a label its text's, a stack its children's. Containers ask
+     *  through Widget_Measure, which converts both to and from their own units and caches the answer. Runs in the layout pass,
+     *  on the update side: it may load assets and refresh its own text, and must not destroy widgets, move focus or change
+     *  another widget. Without a slot the size is zero. Optional. */
     Error (*Measure)(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize);
+    /** @brief Answers whether a point holds the widget, standing in for the test against its box for this widget alone (its
+     *  children are tested on their own; a cut subtree is still cut to the box). @p args has the point on the screen, in the
+     *  widget's box and whether it lies in the box. Runs on the update side, whenever the screen looks up what is under a
+     *  point, and must not change any state. Without a slot the box decides. Optional. */
+    bool (*HitTest)(void* self, const WidgetHitTestArgs* args);
 } WidgetVTable;
 
 /**
@@ -278,6 +312,15 @@ typedef struct WidgetStruct
     float _zLayer;
     /** @brief Render tint multiplied into this widget's (and its subtree's) drawing; defaults to white. */
     RenderColor _renderTint;
+    /** @brief Its own scale; 1 unless set. */
+    float _scale;
+    /** @brief The screen's scale times its own and every ancestor's, kept current whenever one of them changes or it is
+     *  attached somewhere: surface pixels per one of its own UI pixels. */
+    float _effectiveScale;
+    /** @brief True when drawing and pointing go through _renderTransform. */
+    bool _hasRenderTransform;
+    /** @brief The render transform; meaningful only when _hasRenderTransform is true. */
+    UIRenderTransform _renderTransform;
 
     /** @brief When true (default) the widget and its subtree are rendered and can be hit by the pointer. */
     bool _isRendered;
@@ -593,16 +636,19 @@ static inline UIStackHint Widget_GetStackHint(const Widget* self)
 Error Widget_SetStackHint(Widget* self, const UIStackHint* hint);
 
 /**
- * @brief Returns the widget's preferred size in UI pixels for an available width.
+ * @brief Returns the widget's preferred size for an available width, both in the caller's UI pixels: those of the widget's
+ *        parent (its effective scale's), which is what a container asks in.
  *
- * The answer of the Measure hook, cached until Widget_InvalidateMeasure reaches the widget, the available width changes (it
- * is quantized, so float noise does not count) or the screen's scale, viewport or theme changes. Allocates nothing itself.
- * A NaN or negative available width counts as 0; a size the hook gives that is not a finite number >= 0 counts as 0. Depth
- * is bounded by WIDGET_MAX_TREE_DEPTH.
+ * The width is divided by the scale the widget adds (its effective scale over its parent's: its own scale, unless the effective
+ * scale is kept to its bounds) before the Measure hook gets it, and the hook's answer, in the widget's own UI pixels, is
+ * multiplied by it. The hook's answer is cached until Widget_InvalidateMeasure reaches the widget, the available
+ * width changes (it is quantized, so float noise does not count), an effective scale on its way changes, or the screen's
+ * scale, viewport or theme changes. Allocates nothing itself. A NaN or negative available width counts as 0; a size the hook
+ * gives that is not a finite number >= 0 counts as 0. Depth is bounded by WIDGET_MAX_TREE_DEPTH.
  * @param self The widget; must not be NULL.
  * @param context The measuring context; must not be NULL.
- * @param availableWidth The width available, in UI pixels, or UI_MEASURE_UNBOUNDED_WIDTH.
- * @param outSize [out] Receives the size. Must not be NULL.
+ * @param availableWidth The width available, in the parent's UI pixels, or UI_MEASURE_UNBOUNDED_WIDTH.
+ * @param outSize [out] Receives the size, in the parent's UI pixels. Must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if a pointer is NULL; otherwise the hook's error.
  */
 Error Widget_Measure(Widget* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize);
@@ -665,6 +711,80 @@ static inline RenderColor Widget_GetRenderTint(const Widget* self)
  *          Opacity is NaN or infinite.
  */
 Error Widget_SetRenderTint(Widget* self, RenderColor tint);
+
+/**
+ * @brief Returns the widget's own scale.
+ * @param self The widget; must not be NULL.
+ * @returns The scale; 1 unless set.
+ */
+static inline float Widget_GetScale(const Widget* self)
+{
+    return self->_scale;
+}
+
+/**
+ * @brief Sets the widget's own scale: everything drawn inside it, its subtree included, is that much larger (text, nine-slice
+ *        corners, padding, minimum sizes), while a fixed or stretched box keeps its size.
+ *
+ * The effective scales of the widget and its subtree follow at once, and their cached preferred sizes and those of its
+ * ancestors are dropped. O(subtree).
+ * @param self The widget; must not be NULL.
+ * @param scale The scale; finite, within [WIDGET_MIN_SCALE, WIDGET_MAX_SCALE].
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for a scale out of bounds or not
+ *          a number.
+ */
+Error Widget_SetScale(Widget* self, float scale);
+
+/**
+ * @brief Returns the widget's effective scale: the screen's scale times its own and every ancestor's, kept within
+ *        [WIDGET_MIN_EFFECTIVE_SCALE, WIDGET_MAX_EFFECTIVE_SCALE]. Surface pixels per one of its own UI pixels: what a Measure,
+ *        a Layout or a Render hook turns its UI pixels into surface pixels with. Kept current, so it costs a read.
+ * @param self The widget; must not be NULL.
+ * @returns The effective scale.
+ */
+static inline float Widget_GetEffectiveScale(const Widget* self)
+{
+    return self->_effectiveScale;
+}
+
+/**
+ * @brief Gives the widget a render transform: from now on it and its subtree are drawn through it and hit where they show.
+ *
+ * Layout, measuring, the estimated bounds and keyboard navigation keep the box layout gave it, and the navigation outlines
+ * are drawn untransformed. An identity transform costs nothing.
+ * @param self The widget; must not be NULL.
+ * @param transform The transform; must not be NULL. Copied.
+ * @returns Success; ErrorCode_IllegalArgument if a pointer is NULL; ErrorCode_ArgumentOutOfRange if the transform is not valid
+ *          (UIRenderTransform_IsValid).
+ */
+Error Widget_SetRenderTransform(Widget* self, const UIRenderTransform* transform);
+
+/**
+ * @brief Takes the widget's render transform away: it is drawn and hit where layout put it again.
+ * @param self The widget; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error Widget_ClearRenderTransform(Widget* self);
+
+/**
+ * @brief Returns whether the widget has a render transform.
+ * @param self The widget; must not be NULL.
+ * @returns true if it has one.
+ */
+static inline bool Widget_HasRenderTransform(const Widget* self)
+{
+    return self->_hasRenderTransform;
+}
+
+/**
+ * @brief Returns the widget's render transform.
+ * @param self The widget; must not be NULL.
+ * @returns The transform; the identity (UIRenderTransform_Create) when it has none.
+ */
+static inline UIRenderTransform Widget_GetRenderTransform(const Widget* self)
+{
+    return self->_hasRenderTransform ? self->_renderTransform : UIRenderTransform_Create();
+}
 
 /**
  * @brief Returns whether the widget is rendered: its subtree is drawn and can be hit by the pointer, and it takes room in a

@@ -16,6 +16,9 @@
  * normalized position and size, each edge rounded to a whole surface pixel, so edges stay crisp and two boxes sharing an
  * edge in UI pixels share it on the surface at any scale.
  *
+ * A RENDER TRANSFORM (UIRenderTransform) is how a widget shows apart from where layout put it: a rotation, a visual offset and
+ * a visual scale around a pivot. Drawing and pointing go through it; layout, measuring and keyboard navigation never see it.
+ *
  * Everything here is pure: plain values, no widgets, no state.
  */
 
@@ -26,6 +29,8 @@
 #define UI_LAYOUT_MAX_LENGTH 1e9f
 /** @brief The largest offset of a placement from its anchor, in UI pixels: far beyond any surface, far below where a float ends. */
 #define UI_PLACEMENT_MAX_OFFSET 1e30f
+/** @brief The largest visual scale a render transform may give an axis, either way (a negative one mirrors). */
+#define UI_RENDER_TRANSFORM_MAX_SCALE 1000.0f
 
 
 // Types.
@@ -111,6 +116,29 @@ typedef struct UIStackHintStruct
     /** @brief The cross size in UI pixels, when HasCrossSize; within [0, UI_LAYOUT_MAX_LENGTH]. */
     float CrossSize;
 } UIStackHint;
+
+
+/**
+ * @brief How a widget shows, apart from where layout put it. A plain value; build one with UIRenderTransform_Create.
+ *
+ * Seen from its parent, a point of the widget's box goes to Pivot + Offset + Rotate(Rotation, VisualScale * (point - Pivot)): it
+ * is scaled about the pivot, turned about it, then moved. Everything is worked out in surface pixels, where the axes have the
+ * same unit (normalized coordinates are not, so a turn there would shear).
+ */
+typedef struct UIRenderTransformStruct
+{
+    /** @brief The turn in radians, clockwise on the surface (its y runs down); finite. */
+    float Rotation;
+    /** @brief The point it turns and scales about, in [0;1] of its box per axis ((0.5, 0.5) is its centre); finite, and may lie
+     *  outside the box. */
+    Vector2 Pivot;
+    /** @brief How far it shows from where layout put it, in its parent's UI pixels (the surface's axes, not its own); each within
+     *  UI_PLACEMENT_MAX_OFFSET. */
+    Vector2 Offset;
+    /** @brief How much larger it shows per axis; each within UI_RENDER_TRANSFORM_MAX_SCALE either way. 0 on an axis draws it as a
+     *  line there and holds no point; a negative value mirrors it. Measuring and text layout never see it. */
+    Vector2 VisualScale;
+} UIRenderTransform;
 
 
 // Helpers.
@@ -223,6 +251,22 @@ static inline UIStackHint UIStackHint_Fill(float weight)
 }
 
 
+/**
+ * @brief The render transform that changes nothing: no turn, the pivot at the centre, no offset, a visual scale of 1.
+ * @returns The transform.
+ */
+static inline UIRenderTransform UIRenderTransform_Create(void)
+{
+    return (UIRenderTransform)
+    {
+        .Rotation = 0.0f,
+        .Pivot = { .x = 0.5f, .y = 0.5f },
+        .Offset = { .x = 0.0f, .y = 0.0f },
+        .VisualScale = { .x = 1.0f, .y = 1.0f }
+    };
+}
+
+
 // Functions.
 /**
  * @brief Returns whether a placement can be used: its anchors in [0;1] and its offsets within UI_PLACEMENT_MAX_OFFSET.
@@ -262,3 +306,54 @@ bool UILayoutLength_IsValid(float length);
  */
 void UIPlacement_Resolve(const UIPlacement* placement, Vector2 parentPosition, Vector2 parentSize, Vector2 surfaceSizePixels,
     float scale, Vector2* outPosition, Vector2* outSize);
+
+
+// The render transform.
+/**
+ * @brief Returns whether a render transform's values are usable: every value finite, the offsets within UI_PLACEMENT_MAX_OFFSET
+ *        and the visual scale within UI_RENDER_TRANSFORM_MAX_SCALE.
+ * @param transform The transform; must not be NULL.
+ * @returns true if valid.
+ */
+bool UIRenderTransform_IsValid(const UIRenderTransform* transform);
+
+/**
+ * @brief Returns whether a render transform changes nothing: no turn, no offset and a visual scale of 1 (the pivot does not
+ *        matter then).
+ * @param transform The transform; must not be NULL.
+ * @returns true if it is the identity.
+ */
+bool UIRenderTransform_IsIdentity(const UIRenderTransform* transform);
+
+/**
+ * @brief Returns a render transform as a matrix in surface pixels, in raymath's convention (column vectors, the translation in
+ *        m12 and m13), for a widget whose box is @p boxPixels.
+ * @param transform The transform; must not be NULL.
+ * @param boxPixels The widget's box as layout put it, in surface pixels.
+ * @param offsetScale Surface pixels per UI pixel of the offset: its parent's effective scale.
+ * @returns The matrix.
+ */
+Matrix UIRenderTransform_GetMatrix(const UIRenderTransform* transform, Rectangle boxPixels, float offsetScale);
+
+/**
+ * @brief Returns where a render transform shows a point of its widget: the point in surface pixels as layout sees it, moved as
+ *        UIRenderTransform_GetMatrix moves it.
+ * @param transform The transform; must not be NULL.
+ * @param boxPixels The widget's box as layout put it, in surface pixels.
+ * @param offsetScale Surface pixels per UI pixel of the offset.
+ * @param point The point in surface pixels.
+ * @returns Where it shows, in surface pixels.
+ */
+Vector2 UIRenderTransform_ApplyToPoint(const UIRenderTransform* transform, Rectangle boxPixels, float offsetScale, Vector2 point);
+
+/**
+ * @brief Finds the point of a widget a render transform shows at a given place: the inverse of UIRenderTransform_ApplyToPoint.
+ * @param transform The transform; must not be NULL.
+ * @param boxPixels The widget's box as layout put it, in surface pixels.
+ * @param offsetScale Surface pixels per UI pixel of the offset.
+ * @param point Where it shows, in surface pixels.
+ * @param outPoint [out] Receives the point as layout sees it, in surface pixels, when there is one. Must not be NULL.
+ * @returns true when there is one; false for a visual scale of 0 on an axis, where the transform holds no point.
+ */
+bool UIRenderTransform_TryInvertPoint(const UIRenderTransform* transform, Rectangle boxPixels, float offsetScale, Vector2 point,
+    Vector2* outPoint);

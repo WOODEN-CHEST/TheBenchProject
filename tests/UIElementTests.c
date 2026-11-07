@@ -37,62 +37,84 @@
 
 
 // Types.
-/* A button of another make: it embeds the same capability and calls the same helpers, and draws nothing of the theme's. */
-typedef struct OwnButtonWidgetStruct
+/* A button of another look: it writes Render and Measure alone, and draws nothing of the theme's. */
+typedef struct OwnButtonLookStruct
 {
-    Widget Base;
-    UIButtonCapability Button;
-    int ConstructionMarker;
-} OwnButtonWidget;
+    UIButtonLookBase Base;
+} OwnButtonLook;
+
+/* A button look that keeps a laid-out text, to see what the theme gives it. */
+typedef struct FontProbeLookStruct
+{
+    UIButtonLookBase Base;
+    UIElementText Text;
+} FontProbeLook;
 
 
-// Static functions: another button type.
-static Error OwnButton_Construct(void* widget, void* args)
+// Static functions: other button looks.
+static Error OwnButton_Render(void* self, UIRenderContext* context)
 {
-    OwnButtonWidget* Own = widget;
-    Own->ConstructionMarker = 42;
-    return UIButtonCapability_Construct(&Own->Button, &Own->Base, args);
+    (void)self;
+    (void)context;
+    return Error_CreateSuccess();
 }
 
-static Error OwnButton_OnDeconstruct(void* self)
+static Error OwnButton_Measure(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
 {
-    return UIButtonCapability_Deconstruct(&((OwnButtonWidget*)self)->Button);
+    (void)self;
+    (void)context;
+    (void)availableWidth;
+    *outSize = (Vector2){ .x = 77.0f, .y = 33.0f };
+    return Error_CreateSuccess();
 }
 
-static Error OwnButton_Update(void* self, ProgramTime time)
+static const UILookVTable OwnButtonVTable = { .Render = OwnButton_Render, .Measure = OwnButton_Measure };
+
+static Error FontProbe_Construct(void* self, void* args)
 {
-    OwnButtonWidget* Own = self;
-    return UIButtonCapability_Update(&Own->Button, &Own->Base, time);
+    const UIButtonArgs* Arguments = args;
+    return UIElementText_Construct(&((FontProbeLook*)self)->Text, UIKit_GetTextFactory(Arguments->Kit), UIKit_GetAssets(Arguments->Kit),
+        NULL);
 }
 
-static Error OwnButton_OnMouseInput(void* self, const WidgetMouseInputArgs* args)
+static Error FontProbe_Deconstruct(void* self)
 {
-    OwnButtonWidget* Own = self;
-    return UIButtonCapability_OnMouseInput(&Own->Button, &Own->Base, args);
+    return UIElementText_Deconstruct(&((FontProbeLook*)self)->Text);
 }
 
-static Error OwnButton_OnKeyboardInput(void* self, const WidgetKeyboardInputArgs* args, bool* outIsHandled)
+static Error FontProbe_Update(void* self, ProgramTime time)
 {
-    OwnButtonWidget* Own = self;
-    return UIButtonCapability_OnKeyboardInput(&Own->Button, &Own->Base, args, outIsHandled);
+    (void)time;
+    FontProbeLook* Probe = self;
+    return UIElementText_Refresh(&Probe->Text, &Probe->Base.Base, &Probe->Base.Button._text);
 }
 
-static void* OwnButton_ResolveButton(void* widget)
+static Error FontProbe_Render(void* self, UIRenderContext* context)
 {
-    return &((OwnButtonWidget*)widget)->Button;
+    (void)self;
+    (void)context;
+    return Error_CreateSuccess();
 }
 
-static void* OwnButton_ResolveLook(void* widget)
+static Error FontProbe_Measure(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
 {
-    return &((OwnButtonWidget*)widget)->Button._look;
+    (void)context;
+    (void)availableWidth;
+    FontProbeLook* Probe = self;
+    Error Result = UIElementText_Refresh(&Probe->Text, &Probe->Base.Base, &Probe->Base.Button._text);
+    Vector2 Pixels = UIElementText_GetPixelSize(&Probe->Text, Widget_GetScreen(&Probe->Base.Base));
+    float Scale = Widget_GetEffectiveScale(&Probe->Base.Base);
+    *outSize = (Vector2){ .x = Pixels.x / Scale, .y = Pixels.y / Scale };
+    return Result;
 }
 
-static const WidgetVTable OwnButtonVTable =
+static const UILookVTable FontProbeVTable =
 {
-    .OnDeconstruct = OwnButton_OnDeconstruct,
-    .Update = OwnButton_Update,
-    .OnMouseInput = OwnButton_OnMouseInput,
-    .OnKeyboardInput = OwnButton_OnKeyboardInput,
+    .Construct = FontProbe_Construct,
+    .Deconstruct = FontProbe_Deconstruct,
+    .Update = FontProbe_Update,
+    .Render = FontProbe_Render,
+    .Measure = FontProbe_Measure
 };
 
 
@@ -3324,18 +3346,25 @@ static void ASwapChangesEveryElementAtOnce(TestRun* run)
         TEST_CHECK(run, TestUI_IsBox(TestUI_GetPixelBox(run, &Fixture, Button), 0.0f, 0.0f, 42.0f, 42.0f));
         TEST_CHECK(run, TestUI_IsBox(TestUI_GetPixelBox(run, &Fixture, Label), 0.0f, 42.0f, 40.0f, 40.0f));
 
-        // The font is the theme's too.
-        Widget* ButtonBase = NULL;
+        // The font is the theme's too, for a look's text and a label's.
+        TEST_CHECK_SUCCESS(run, UIKit_RegisterLook(&Fixture.Kit, UIElementKind_Button, u8"tbp:font_probe", sizeof(FontProbeLook),
+            &FontProbeVTable, NULL));
+        UIButtonOptions ProbeOptions = UIButtonOptions_Create(u8"ab");
+        ProbeOptions.Element.Look = u8"font_probe";
+        uint64_t Probe = WIDGET_ID_INVALID;
+        TEST_CHECK_SUCCESS(run, UIKit_CreateButton(&Fixture.Kit, &Fixture.Screen, Column, &ProbeOptions, &Probe));
+        TestUI_Ticks(run, &Fixture, 2U);
+        Widget* ProbeBase = NULL;
         Widget* LabelBase = NULL;
-        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Button, &ButtonBase))
+        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Probe, &ProbeBase))
             && TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Label, &LabelBase)))
         {
-            const UIButtonCapability* Capability = Widget_GetCapability(ButtonBase, UIKit_GetCapabilityId(&Fixture.Kit, UIElementCapability_Button));
-            const unsigned char* Before = TextDocument_GetDefaultFontName(&Capability->_text._document);
+            const FontProbeLook* ProbeLook = (const FontProbeLook*)ProbeBase;
+            const unsigned char* Before = TextDocument_GetDefaultFontName(&ProbeLook->Text._document);
             TEST_CHECK(run, (Before != NULL) && (strstr((const char*)Before, "mono") != NULL));
             TEST_CHECK(run, TestUI_SetTheme(run, &Fixture, "{\"name\": \"fontless\"}"));
             TestUI_Ticks(run, &Fixture, 2U);
-            TEST_CHECK(run, TextDocument_GetDefaultFontName(&Capability->_text._document) == NULL);
+            TEST_CHECK(run, TextDocument_GetDefaultFontName(&ProbeLook->Text._document) == NULL);
             TEST_CHECK(run, TextDocument_GetDefaultFontName(LabelWidget_GetDocument((LabelWidget*)LabelBase)) == NULL);
         }
 
@@ -3348,36 +3377,32 @@ static void ASwapChangesEveryElementAtOnce(TestRun* run)
 
 
 // Tests: the kit and capabilities.
-/* A second type behind one capability: calling code does not change, and its hooks do not name a look. */
-static void ASecondTypeStandsBehindACapability(TestRun* run)
+/* A look that writes Render and Measure alone: the kind answers everything else, and calling code does not change. */
+static void ALookWithTwoHooksWorks(TestRun* run)
 {
     TestUIFixture Fixture;
     TestUIEvents Events;
     if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
     {
-        WidgetCapabilityEntry Capabilities[] =
-        {
-            { .CapabilityId = UIKit_GetCapabilityId(&Fixture.Kit, UIElementCapability_Button), .Resolver = OwnButton_ResolveButton },
-            { .CapabilityId = UIKit_GetCapabilityId(&Fixture.Kit, UIElementCapability_Look), .Resolver = OwnButton_ResolveLook },
-        };
-        WidgetTypeDescriptor Descriptor =
-        {
-            .Name = u8"OwnButton", .StructSize = sizeof(OwnButtonWidget), .VTable = &OwnButtonVTable, .Constructor = OwnButton_Construct,
-            .Capabilities = Capabilities, .CapabilityCount = 2U, .IsFocusable = true
-        };
         uint64_t Own = WIDGET_TYPE_ID_INVALID;
-        uint64_t Standard = UIKit_GetElementType(&Fixture.Kit, UIElementKind_Button);
-        TEST_CHECK_SUCCESS(run, UIWidgetFactory_RegisterType(&Fixture.Widgets, &Descriptor, &Own));
-        TEST_CHECK_SUCCESS(run, UIKit_SetElementType(&Fixture.Kit, UIElementKind_Button, Own));
-        TEST_CHECK(run, UIKit_GetElementType(&Fixture.Kit, UIElementKind_Button) == Own);
+        TEST_CHECK_SUCCESS(run, UIKit_RegisterLook(&Fixture.Kit, UIElementKind_Button, u8"tbp:own", sizeof(OwnButtonLook), &OwnButtonVTable,
+            &Own));
+        uint64_t Found = WIDGET_TYPE_ID_INVALID;
+        TEST_CHECK(run, UIKit_TryGetLookType(&Fixture.Kit, UIElementKind_Button, u8"own", &Found) && (Found == Own));
+        TEST_CHECK(run, UIKit_GetElementType(&Fixture.Kit, UIElementKind_Button) != Own); // The standard look stays the standard.
 
-        uint64_t Id = AddButton(run, &Fixture, u8"mine");
+        UIButtonOptions Options = UIButtonOptions_Create(u8"mine");
+        Options.Element.Look = u8"tbp:own";
+        Options.Element.HasPlacement = true;
+        Options.Element.Placement = PlaceAt(BUTTON_X, BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT);
+        uint64_t Id = WIDGET_ID_INVALID;
+        TEST_CHECK_SUCCESS(run, UIKit_CreateButton(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &Options, &Id));
+        TestUI_Tick(run, &Fixture);
         Widget* Base = NULL;
         if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
         {
             TEST_CHECK(run, Widget_GetTypeId(Base) == Own);
-            TEST_CHECK(run, ((OwnButtonWidget*)Base)->ConstructionMarker == 42);
-
+            TEST_CHECK(run, Widget_IsFocusable(Base)); // The kind's flags.
             // Calling code is what it always was.
             TEST_CHECK_SUCCESS(run, UIButton_SetText(&Fixture.Screen, Id, u8"other"));
             const unsigned char* Text = NULL;
@@ -3388,19 +3413,43 @@ static void ASecondTypeStandsBehindACapability(TestRun* run)
             TEST_CHECK_SUCCESS(run, UIButton_SetIsEnabled(&Fixture.Screen, Id, false));
             TestUI_Click(run, &Fixture, 150.0f, 120.0f);
             TEST_CHECK(run, Events.Count == 1U);
+            // It ignores the theme: no look capability, so a variant is refused, politely.
+            TEST_CHECK(run, GetLook(&Fixture, Id) == NULL);
+            TEST_CHECK_ERROR(run, UIElement_SetVariant(&Fixture.Screen, Id, u8"danger"), ErrorCode_InvalidOperation);
         }
 
-        // A type without the capability is refused, as is what is not a kind.
-        uint64_t Slider = UIKit_GetElementType(&Fixture.Kit, UIElementKind_Slider);
-        TEST_CHECK_ERROR(run, UIKit_SetElementType(&Fixture.Kit, UIElementKind_Button, Slider), ErrorCode_InvalidOperation);
-        TEST_CHECK_ERROR(run, UIKit_SetElementType(&Fixture.Kit, UIElementKind_Button, 9999U), ErrorCode_InvalidOperation);
-        TEST_CHECK_ERROR(run, UIKit_SetElementType(&Fixture.Kit, (UIElementKind)99, Own), ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK_ERROR(run, UIKit_SetElementType(NULL, UIElementKind_Button, Own), ErrorCode_IllegalArgument);
-        TEST_CHECK(run, UIKit_GetElementType(&Fixture.Kit, UIElementKind_Button) == Own);
+        // Its Measure is what a stack asks.
+        UIStackOptions Stack = UIStackOptions_Create(UIStackDirection_Column);
+        Stack.Element.HasPlacement = true;
+        Stack.Element.Placement = UIPlacement_Stretch(UIInsets_All(0.0f));
+        uint64_t Column = WIDGET_ID_INVALID;
+        TEST_CHECK_SUCCESS(run, UIKit_CreateStack(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &Stack, &Column));
+        UIButtonOptions Stacked = UIButtonOptions_Create(u8"x");
+        Stacked.Element.Look = u8"tbp:own";
+        Stacked.Element.Hint.Align = UIStackAlign_Start;
+        uint64_t StackedId = WIDGET_ID_INVALID;
+        TEST_CHECK_SUCCESS(run, UIKit_CreateButton(&Fixture.Kit, &Fixture.Screen, Column, &Stacked, &StackedId));
+        TestUI_Ticks(run, &Fixture, 2U);
+        TEST_CHECK(run, TestUI_IsBox(TestUI_GetPixelBox(run, &Fixture, StackedId), 0.0f, 0.0f, 77.0f, 33.0f));
 
-        TEST_CHECK_SUCCESS(run, UIKit_SetElementType(&Fixture.Kit, UIElementKind_Button, Standard));
-        uint64_t Back = AddButton(run, &Fixture, u8"standard");
-        TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Back, &Base) && (Widget_GetTypeId(Base) == Standard));
+        // Refusals.
+        TEST_CHECK_ERROR(run, UIKit_RegisterLook(&Fixture.Kit, UIElementKind_Button, u8"tbp:own", sizeof(OwnButtonLook), &OwnButtonVTable,
+            NULL), ErrorCode_InvalidOperation);
+        TEST_CHECK_ERROR(run, UIKit_RegisterLook(&Fixture.Kit, UIElementKind_Button, u8"Bad Name", sizeof(OwnButtonLook), &OwnButtonVTable,
+            NULL), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIKit_RegisterLook(&Fixture.Kit, UIElementKind_Button, u8"tbp:small", sizeof(Widget), &OwnButtonVTable,
+            NULL), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIKit_RegisterLook(&Fixture.Kit, UIElementKind_Label, u8"tbp:label", sizeof(OwnButtonLook), &OwnButtonVTable,
+            NULL), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIKit_RegisterLook(&Fixture.Kit, (UIElementKind)99, u8"tbp:x", sizeof(OwnButtonLook), &OwnButtonVTable, NULL),
+            ErrorCode_ArgumentOutOfRange);
+        UILookVTable NoRender = { .Measure = OwnButton_Measure };
+        TEST_CHECK_ERROR(run, UIKit_RegisterLook(&Fixture.Kit, UIElementKind_Button, u8"tbp:x", sizeof(OwnButtonLook), &NoRender, NULL),
+            ErrorCode_IllegalArgument);
+        TEST_CHECK_ERROR(run, UIKit_RegisterLook(NULL, UIElementKind_Button, u8"tbp:x", sizeof(OwnButtonLook), &OwnButtonVTable, NULL),
+            ErrorCode_IllegalArgument);
+        TEST_CHECK(run, !UIKit_TryGetLookType(&Fixture.Kit, UIElementKind_Button, u8"tbp:missing", &Found));
+        TEST_CHECK(run, !UIKit_TryGetLookType(&Fixture.Kit, UIElementKind_Toggle, u8"tbp:own", &Found));
     }
     TestUI_Deconstruct(run, &Fixture);
 }
@@ -3614,7 +3663,7 @@ void UIElementTests_Run(TestRun* run)
         { "a_kit_label_lets_the_pointer_through", AKitLabelLetsThePointerThrough },
         { "elements_work_without_a_theme", ElementsWorkWithoutATheme },
         { "a_swap_changes_every_element_at_once", ASwapChangesEveryElementAtOnce },
-        { "a_second_type_stands_behind_a_capability", ASecondTypeStandsBehindACapability },
+        { "a_look_with_two_hooks_works", ALookWithTwoHooksWorks },
         { "one_kit_per_factory_and_its_nulls", OneKitPerFactoryAndItsNulls },
         { "a_failed_creation_leaves_nothing_behind", AFailedCreationLeavesNothingBehind },
         { "values_that_do_not_blend_are_refused_by_keyframes", ValuesThatDoNotBlendAreRefusedByKeyframes },

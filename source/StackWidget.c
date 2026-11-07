@@ -252,7 +252,8 @@ Error UIStackLayout_Measure(const UIStackLayout* layout, Widget* widget, const U
 
 Error UIStackLayout_Arrange(const UIStackLayout* layout, Widget* widget, const UILayoutContext* context)
 {
-    float Scale = context->Sizing->Scale;
+    // Its own UI pixels: padding, spacing and its children's hints and placements all count in its effective scale.
+    float Scale = Widget_GetEffectiveScale(widget);
     Vector2 OwnSize = Widget_GetSize(widget);
     float OwnWidth = LimitOwnLength((OwnSize.x * context->ParentAbsoluteSize.x * context->SurfaceSizePixels.x) / Scale);
     float OwnHeight = LimitOwnLength((OwnSize.y * context->ParentAbsoluteSize.y * context->SurfaceSizePixels.y) / Scale);

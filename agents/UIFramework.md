@@ -28,8 +28,10 @@ The elements calling code builds a UI from (the kit, panels, buttons, stacks, th
 - **UIWidget** (`UIWidget.h/.c`): the abstract widget base (vtable, identity, geometry, flags, state, subwidgets,
   capabilities, typed properties, `Widget_Destroy`). Concrete widgets embed it first.
 - **UIScreen** (`UIScreen.h`, split by job into `source/UIScreen.c` (registry, roots, draw order, destruction,
-  update/render, layout), `UIScreenInput.c` (pointer, buttons, wheel, keys, text, focus), `UIScreenNavigation.c`,
-  `UIScreenAnimation.c` and `UIScreenEvents.c` (notifications), sharing the private `source/UIInternal.h`).
+  update/render, layout, hit testing and coordinates through render transforms), `UIScreenInput.c` (pointer, buttons, wheel, keys,
+  text, focus), `UIScreenNavigation.c`, `UIScreenAnimation.c`, `UIScreenEvents.c` (notifications and cues) and `UIScreenTooltips.c`
+  (hover text), sharing the private `source/UIInternal.h`).
+- **UITooltip** (`UITooltip.h`, implemented in `source/UIScreenTooltips.c`): hover text, a service of the screen (below, "Hover text").
 - **LabelWidget** (`LabelWidget.h/.c`): the first concrete widget (below).
 - **UITestFrame** (`UITestFrame.h/.c`): a debug game frame running a screen over the world test (see
   [WorldRuntime.md](WorldRuntime.md)).
@@ -37,7 +39,8 @@ The elements calling code builds a UI from (the kit, panels, buttons, stacks, th
   screens").
 - **UIWindowHost** (`UIWindowHost.h/.c`): the host of a screen that fills the game window (below, "Hosts").
 - **UIScalePolicy** (`UIScalePolicy.h/.c`): how a screen's scale follows the window and the monitor, pure (below, "Scale policies").
-- **UIPlacement** (`UIPlacement.h/.c`): placements, insets and a stack's hints, with their pure arithmetic (below, "UI pixels").
+- **UIPlacement** (`UIPlacement.h/.c`): placements, insets and a stack's hints, and the render transform (`UIRenderTransform`), with their
+  pure arithmetic (below, "UI pixels" and "Rendering, z order, clipping").
 
 ## Setting up a screen
 
@@ -117,11 +120,27 @@ NaN. Offsets past `UI_PLACEMENT_MAX_OFFSET` are refused, and a stack's padding, 
 position and size say, in normalized units. **A placement wins** over the position and the size set any other way: an animation of a placed
 widget's `Position` or `Size` changes nothing, so animate its tint or its placement. `Widget_ClearPlacement` leaves the box as it is.
 
-A widget's **preferred size** is an optional vtable slot, `Measure`: its size in UI pixels for an available width (`UI_MEASURE_UNBOUNDED_WIDTH` when
+A widget's **preferred size** is an optional vtable slot, `Measure`: its size in its own UI pixels for an available width (`UI_MEASURE_UNBOUNDED_WIDTH` when
 nothing limits it). Containers ask through `Widget_Measure`, which caches the answer until `Widget_InvalidateMeasure` reaches the widget (from itself or
 anything in its subtree: adding or removing a child, showing or hiding it and changing its stack hint do so themselves), the width changes (compared at a
-sixteenth of a UI pixel, so float noise does not count) or the screen's scale, viewport or theme changes. Nothing allocates. A size that is not a finite
-number `>= 0` counts as 0, and one past `UI_LAYOUT_MAX_LENGTH` is kept to it. The hook runs in the layout pass: it may load assets and refresh its own text, and must not destroy widgets or move focus.
+sixteenth of a UI pixel, so float noise does not count), an effective scale on its way changes, or the screen's scale, viewport or theme changes. Nothing
+allocates. A size that is not a finite number `>= 0` counts as 0, and one past `UI_LAYOUT_MAX_LENGTH` is kept to it. The hook runs in the layout pass: it may
+load assets and refresh its own text, and must not destroy widgets or move focus.
+
+**Scale.** Every widget has a scale of its own (`Widget_SetScale`, default 1, within `WIDGET_MIN_SCALE` and `WIDGET_MAX_SCALE`; the typed property
+`WidgetBaseProperty_Scale`, so it can be animated), separate from its size: size is the area it takes (its placement or its stack hint), scale multiplies
+what is drawn inside it (text, nine-slice corners, padding, a thumb, minimum sizes). Its **effective scale** (`Widget_GetEffectiveScale`) is the screen's
+times its own and every ancestor's, kept within `WIDGET_MIN_EFFECTIVE_SCALE` and `WIDGET_MAX_EFFECTIVE_SCALE`: surface pixels per one of its own UI pixels,
+what its hooks turn UI pixels into surface pixels with. It is kept current where it can change (a widget's scale, the screen's, a widget attached or moved:
+`Widget_InternalUpdateEffectiveScale` over the subtree), so reading it costs nothing, in Render too, and a parent's Layout measuring a child attached this
+tick already sees the child's. The rules:
+- A `Measure` hook answers in the widget's own UI pixels; `Widget_Measure` divides the width it is asked about by the scale the widget adds first and
+  multiplies the answer by it, so a container hears back in its own units. That scale is its own, or less where the effective scale is kept to its bounds:
+  the box always fits what is drawn.
+- A placement's offsets count in the parent's effective scale (a root's: the screen's), and so do a stack's padding, spacing and its children's hints
+  (`UIStackLayout_Arrange` counts in the stack's own). So a fixed or stretched box never changes with the widget's own scale, a content-sized one grows
+  with what it measures, and a child's fixed size counts in its parent's scale.
+- Scale multiplies down the tree: a compound scales as one, and a window can zoom what it holds.
 
 The `Layout` hook's `UILayoutContext` also has the parent's absolute position, the surface's size in pixels and what to hand to `Widget_Measure`.
 `UIRenderContext_GetPixelBox` gives a widget its box in whole surface pixels at render, and the `UIRenderContext_RenderPixel*` calls draw in them.
@@ -319,7 +338,8 @@ code or a world screen let go leave it.
 that moved in the release's tick arrives as a `Move` first, so a drag ends where the pointer ended. After the `ButtonRelease`, the top widget under the pointer, if another one, gets a
 `ReleaseOver`: `OnRelease` clicks and press-drag-release menus stand on it. A press that hit no widget has none. `UIScreen_HasHeldPress` tells whether any is held.
 
-**What a mouse input says** (`WidgetMouseInputArgs`): the button, the held `Modifiers`, the pointer's place on the screen and in the widget, the place the press began, how long ago,
+**What a mouse input says** (`WidgetMouseInputArgs`): the button, the held `Modifiers`, the pointer's place on the screen and in the widget (through the render
+transforms of the widget and its ancestors, undone: a turned slider is dragged along its own track), the place the press began, how long ago,
 `DeltaPixels` (surface pixels since this press's last `Move`) and `ClickCount`: how many presses of this button on this widget in a row, each within
 `UI_SCREEN_MULTI_CLICK_SECONDS` of the last and `UI_SCREEN_MULTI_CLICK_DISTANCE` UI pixels of its place.
 
@@ -340,6 +360,12 @@ capture changes nothing and the drag stays absolute: read `DeltaPixels` either w
 **The pointer's shape.** `Widget_SetCursorShape(widget, shape)`; `UIScreen_GetCursorShape` answers the shape of the widget holding the first held press, or else of the hovered one, or
 else the arrow, and `UIWindowHost` applies it when it changes. `NotAllowed` and the two diagonal resizes need a cursor theme on X11, and without one show the arrow.
 
+**What is under a point.** The top-most input-enabled widget whose box holds the point, with each render transform on the way undone (below,
+"Rendering, z order, clipping"); a cut subtree is cut to its box, and a transform with a visual scale of 0 holds no point, with its subtree. A widget type
+can stand in for its box with the optional `HitTest` slot (`WidgetHitTestArgs`: the point on the screen as asked, the point in its box with the transforms
+undone, and whether it lies in the box): a round button answers inside its circle, a widget standing for a world object answers through its own ray. It runs
+on the update side whenever the screen looks up what is under a point, and must not change state.
+
 **States.** Hovered (pointer), focused (keyboard target; at most one per screen), tabbed (a group navigation entered), entered (the
 edit element being edited: at most one, always the focused one), active (hovered or tabbed). Widgets get `IsFocusable`, `NeedsEntering`
 and `EntersItself` from their type (`Widget_SetIsFocusable`, `Widget_SetNeedsEntering`, `Widget_SetEntersItself` change them); an
@@ -349,7 +375,7 @@ for it. A box of no size holds no point.
 
 ## Notifications
 
-State changes (`UIEventKind_HoverChanged`, `FocusChanged`, `TabChanged`, `ActiveChanged`, `EnteredChanged`) and a widget type's own events
+State changes (`UIEventKind_HoverChanged`, `FocusChanged`, `TabChanged`, `ActiveChanged`, `EnteredChanged`), sound cues (`UIEventKind_Cue`, below) and a widget type's own events
 (`UIScreen_PostWidgetEvent`, `UIEventKind_Widget` with a type-defined id and an optional `UIPropertyValue`; `UIScreen_PostWidgetMouseEvent` adds the mouse's data by value,
 `UIEvent.HasMouse` and `UIEvent.Mouse`: button, modifiers, screen position, scroll delta, whether over the widget) are
 **queued** and delivered at one point, at the end of `UIScreen_Update` (after the widget updates and layout), never in
@@ -364,6 +390,28 @@ more notifications (delivered in the same pass, at most `UI_SCREEN_MAX_EVENTS_PE
 dropped, and logged once per streak of such updates, so handlers that keep posting cannot hang the game or flood the
 log). A widget's own vtable hooks still run immediately. The queue is shaped to later post into a game-wide event
 queue.
+
+**Cues.** `UIScreen_PostCue(screen, id, cue)` posts a named sound cue (`UIElementCue`: hover, press, release, activate, a value's step, open, close,
+refused, enter, leave), a `UIEventKind_Cue` notification whose `WidgetEventId` is the cue. Nothing plays them yet. While no subscription asks for the kind,
+for that widget or for every widget, nothing is queued, so a cue costs one look at the subscriptions. The screen posts `Enter` and `Leave` itself when an edit
+element is entered and left (best effort, as the state notifications are); elements post the rest. A cue is delivered even if its widget was destroyed after
+posting it.
+
+## Hover text
+
+A widget can have a text shown beside the pointer after it rests on it (`UITooltip.h`), a service of the screen rather than anything a widget type embeds:
+`UITooltip_Set(screen, id, text)` by value, `UITooltip_SetProvider(screen, id, provider, userData)` for text that changes (asked each update while the
+pointer rests there, on the update side, writing into a buffer the screen owns), `UITooltip_SetDelay` for a delay of its own (else the theme's
+`tooltip_delay`), `UITooltip_Clear`. The screen keeps a side table, emptied when a widget is torn down, so a widget without one costs nothing.
+
+Each update, right after the input, the screen works out where the pointer rests: the hovered widget, or the nearest ancestor with a hover text (a
+compound's parts show the compound's). The rest time grows while it stays there; once it passes the delay the text shows. Resting on something with
+another hover text, or the pointer leaving the screen, hides it and starts again; a mouse press hides it until the pointer rests on something else.
+`UITooltip_GetCurrent` tells where it rests, the text and whether it shows, before the delay too, for a status bar.
+
+It shows as a widget of the type the factory names (`UIWidgetFactory_SetTooltipType`; the kit registers the theme-driven one, [UIElements.md](UIElements.md)),
+made with no arguments the first time a text shows, as a root of the overlay layer: it takes no input, so the widget under it keeps the hover. That widget
+reads `UITooltip_GetCurrent` in its Update and places itself in its Layout. Without a type nothing shows and the rest still works.
 
 ## Update order
 
@@ -394,12 +442,25 @@ A layer belongs to a root: a root moved under a parent stops having one, and get
 layer, and entering a root with `ui_accept` raises it as a press does. The screen draws roots in draw
 order, each widget before its children, and a hidden widget hides its subtree. `AreSubWidgetsCut` clips a subtree (rendering and hit testing) to the widget's
 box through the render context's **clip stack** (`RenderContext_PushClip`), so nested clips intersect and a label's own
-cut nests inside its parent's. While navigating, outlines are drawn on top.
+cut nests inside its parent's. While navigating, outlines are drawn on top, untransformed.
+
+**The render transform.** Any widget can be turned, moved and scaled with its subtree for drawing and pointing alone (`Widget_SetRenderTransform`, a
+`UIRenderTransform`: `Rotation` in radians, clockwise on the surface; `Pivot` in [0;1] of its box, its centre by default; `Offset` in its parent's UI pixels;
+`VisualScale` per axis), with an explicit flag (`Widget_HasRenderTransform`, `Widget_ClearRenderTransform`), and as typed properties for animation
+(`WidgetBaseProperty_Rotation`, `_Pivot`, `_VisualOffset`, `_VisualScale`; setting one gives the widget the transform). It is worked out in surface pixels,
+where the axes share a unit. Drawing pushes its matrix around the widget's whole subtree (`RenderContext_PushTransform`, [Renderer.md](Renderer.md)),
+composed with the transforms above it, and pops it on every path, an error included; one that changes nothing pushes nothing. The hit test and
+`UIScreen_ScreenToWidget` go through its inverse (`UIScreen_WidgetToScreen` through the transform itself), so a turned button is clicked where it shows and a
+turned slider is dragged along its track. Layout, measuring, `Widget_GetEstimatedBounds`, keyboard navigation and its outlines keep the box layout gave it;
+`UIScreen_GetWidgetPixelBox` gives that box in surface pixels. Clips stay axis-aligned: a cut subtree inside a turned widget is drawn clipped to the bounding
+box of its turned clip, and hit only inside the turned box itself. This is a known limit. The visual offset and scale do what a placement cannot: a placed
+widget's position cannot be animated (the placement wins), but its offset can, so a window can slide in.
 
 ## Properties and animation
 
 Properties are typed. Every widget has the base properties (`WidgetBaseProperty_Position` / `Size` (Vector2), `ZLayer`
-(float), `RenderTint` (RenderColor)); a type declares its own in its descriptor (`WidgetPropertyDescriptor`: id below
+(float), `RenderTint` (RenderColor), `Scale` (float), the render transform's `Rotation` (float), `Pivot`, `VisualOffset` and `VisualScale` (Vector2), each
+validated by its setter); a type declares its own in its descriptor (`WidgetPropertyDescriptor`: id below
 `WIDGET_BASE_PROPERTY_START`, type, name). `Widget_GetProperty` / `Widget_SetProperty` take `UIPropertyValue`s and
 reject a value of the wrong type; `Widget_TryGetPropertyType` looks a property up. A value is a float, a vector, a colour, a render colour, a bool or a
 double; nothing blends the last two, so keyframes refuse them (they travel in events and plain properties).
@@ -430,7 +491,8 @@ Writing a new widget type (an element of the kit: [UIElements.md](UIElements.md)
 typed properties there; a type that uses the arrows or typing sets `NeedsEntering`, and answers `OnEnter` and `OnLeave` where entering and a
 cancel mean something to it); construct only the concrete part in the constructor; create child widgets in `Initialize`;
 report keys you handle through `outIsHandled` (handle a key's press to get its repeats and release), and the wheel the same way in `OnScrollInput`; a press that starts something must
-answer `OnPressLost` as well as the release (Destroy tells nothing: the widget is gone); post your own
+answer `OnPressLost` as well as the release (Destroy tells nothing: the widget is gone); answer `Measure` in your own UI pixels and turn them into surface pixels
+with `Widget_GetEffectiveScale`; give a `HitTest` hook when your shape is not your box; post your own
 events with `UIScreen_PostWidgetEvent` or `UIScreen_PostWidgetMouseEvent` (they reach subscribers even if the widget is destroyed in the same update);
 never write state in `Render`.
 
@@ -438,5 +500,5 @@ never write state in `Render`.
 
 The program-wide factory owns every widget's storage (per-type pools). A screen borrows the factory and owns its
 registry, queues and widgets' lifetimes. Teardown order at program end: screens (they destroy their widgets) → factory.
-Nothing allocates per tick in steady state: the snapshot, navigation candidates, event queue and keyframe storage are
-reused; childless widgets allocate no child lists.
+Nothing allocates per tick in steady state: the snapshot, navigation candidates, event queue, keyframe storage and hover text's
+buffer (which a provider writes into) are reused; childless widgets allocate no child lists.

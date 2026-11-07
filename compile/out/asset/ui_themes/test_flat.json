@@ -3,25 +3,58 @@
     "font": "tbp:ui_small",
     "text_size": 14,
     "transition_time": 0.06,
+    "tooltip_delay": 0.5,
+    "palette": {
+        "surface": "#26282c",
+        "surface_sunken": "#1c1e22",
+        "sunken_pressed": "#15161a",
+        "raised": "#3a3d44",
+        "raised_hover": "#4a4e57",
+        "raised_focus": "#414650",
+        "raised_disabled": "#2c2e33",
+        "pressed": "#2a2c31",
+        "selected": "#3d5a8a",
+        "outline": "#54585f",
+        "outline_strong": "#6a6f78",
+        "outline_disabled": "#383a3f",
+        "accent": "#9ec1ff",
+        "fill": "#6f8fc4",
+        "fill_hover": "#86a4d6",
+        "fill_disabled": "#44474e",
+        "inactive": "#5a5f68",
+        "handle": "#c8ccd4",
+        "handle_hover": "#e0e3e8",
+        "handle_focus": "#d6dbe4",
+        "editing": "#7fd69a",
+        "editing_outline": "#2f8a4c",
+        "label": "#e4e6ea",
+        "text": "#e8eaee",
+        "text_dim": "#9aa0aa",
+        "text_disabled": "#7b7f87",
+        "danger": "#7a2a2a",
+        "danger_hover": "#923434",
+        "danger_pressed": "#5e2020",
+        "danger_focus": "#843030"
+    },
     "elements": {
         "panel": {
             "padding": [ 8, 8 ],
             "spacing": 6,
             "background": {
                 "kind": "flat",
-                "colors": { "normal": "#26282c" },
-                "outline": { "thickness": 1, "colors": { "normal": "#3a3d44" } }
+                "colors": { "normal": "@surface" },
+                "outline": { "thickness": 1, "colors": { "normal": "@raised" } }
             },
             "variants": {
-                "inset": { "background": { "colors": { "normal": "#1c1e22" } } },
+                "inset": { "background": { "colors": { "normal": "@surface_sunken" } } },
                 "bare": { "padding": [ 0, 0 ], "background": { "kind": "none" } }
             }
         },
         "label": {
-            "text": { "normal": "#e4e6ea" },
+            "text": { "normal": "@label" },
             "variants": {
-                "heading": { "text": { "normal": "#9ec1ff" } },
-                "hint": { "text": { "normal": "#9aa0aa" } }
+                "heading": { "text": { "normal": "@accent" } },
+                "hint": { "text": { "normal": "@text_dim" } }
             }
         },
         "button": {
@@ -30,19 +63,19 @@
             "background": {
                 "kind": "flat",
                 "colors": {
-                    "normal": "#3a3d44",
-                    "hovered": "#4a4e57",
-                    "pressed": "#2a2c31",
-                    "focused": "#414650",
-                    "disabled": "#2c2e33",
-                    "selected": "#3d5a8a"
+                    "normal": "@raised",
+                    "hovered": "@raised_hover",
+                    "pressed": "@pressed",
+                    "focused": "@raised_focus",
+                    "disabled": "@raised_disabled",
+                    "selected": "@selected"
                 },
-                "outline": { "thickness": 1, "colors": { "normal": "#54585f", "focused": "#9ec1ff", "disabled": "#383a3f" } }
+                "outline": { "thickness": 1, "colors": { "normal": "@outline", "focused": "@accent", "disabled": "@outline_disabled" } }
             },
-            "text": { "normal": "#e8eaee", "disabled": "#7b7f87" },
+            "text": { "normal": "@text", "disabled": "@text_disabled" },
             "variants": {
                 "danger": {
-                    "background": { "colors": { "normal": "#7a2a2a", "hovered": "#923434", "pressed": "#5e2020", "focused": "#843030" } }
+                    "background": { "colors": { "normal": "@danger", "hovered": "@danger_hover", "pressed": "@danger_pressed", "focused": "@danger_focus" } }
                 }
             }
         },
@@ -52,23 +85,34 @@
             "min_size": [ 16, 24 ],
             "box": {
                 "kind": "flat",
-                "colors": { "normal": "#1c1e22", "hovered": "#2a2c31", "pressed": "#15161a", "disabled": "#26282c" },
-                "outline": { "thickness": 1, "colors": { "normal": "#6a6f78", "focused": "#9ec1ff", "disabled": "#3a3d44" } }
+                "colors": { "normal": "@surface_sunken", "hovered": "@pressed", "pressed": "@sunken_pressed", "disabled": "@surface" },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline_strong", "focused": "@accent", "disabled": "@raised" } }
             },
-            "check": { "kind": "flat", "colors": { "normal": "#9ec1ff", "disabled": "#5a5f68" } },
-            "text": { "normal": "#e8eaee", "disabled": "#7b7f87" }
+            "check": { "kind": "flat", "colors": { "normal": "@accent", "disabled": "@inactive" } },
+            "text": { "normal": "@text", "disabled": "@text_disabled" }
         },
         "slider": {
             "min_size": [ 64, 24 ],
             "thumb_size": [ 12, 20 ],
             "track_thickness": 4,
-            "track": { "kind": "flat", "colors": { "normal": "#1c1e22", "disabled": "#26282c" } },
-            "fill": { "kind": "flat", "colors": { "normal": "#6f8fc4", "hovered": "#86a4d6", "disabled": "#44474e" } },
+            "track": { "kind": "flat", "colors": { "normal": "@surface_sunken", "disabled": "@surface" } },
+            "fill": { "kind": "flat", "colors": { "normal": "@fill", "hovered": "@fill_hover", "disabled": "@fill_disabled" } },
             "thumb": {
                 "kind": "flat",
-                "colors": { "normal": "#c8ccd4", "hovered": "#e0e3e8", "pressed": "#9ec1ff", "focused": "#d6dbe4", "disabled": "#5a5f68", "entered": "#7fd69a" },
-                "outline": { "thickness": 1, "colors": { "normal": "#54585f", "focused": "#9ec1ff", "entered": "#2f8a4c" } }
+                "colors": { "normal": "@handle", "hovered": "@handle_hover", "pressed": "@accent", "focused": "@handle_focus", "disabled": "@inactive", "entered": "@editing" },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline", "focused": "@accent", "entered": "@editing_outline" } }
             }
+        },
+        "tooltip": {
+            "padding": [ 6, 3 ],
+            "offset": [ 12, 18 ],
+            "max_width": 320,
+            "background": {
+                "kind": "flat",
+                "colors": { "normal": "@raised" },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline" } }
+            },
+            "text": { "normal": "@text" }
         }
     }
 }

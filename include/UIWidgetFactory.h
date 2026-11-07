@@ -147,6 +147,8 @@ typedef struct UIWidgetFactoryStruct
     /** @brief The kit over this factory, the one way element functions find their capability ids from a screen; borrowed,
      *  NULL for none. */
     UIKit* _kit;
+    /** @brief The widget type screens show hover text with (UITooltip.h), or WIDGET_TYPE_ID_INVALID for none. */
+    uint64_t _tooltipTypeId;
 } UIWidgetFactory;
 
 
@@ -258,6 +260,28 @@ static inline void UIWidgetFactory_SetKit(UIWidgetFactory* self, UIKit* kit)
 static inline UIKit* UIWidgetFactory_GetKit(const UIWidgetFactory* self)
 {
     return self->_kit;
+}
+
+/**
+ * @brief Names the widget type screens show hover text with (the kit registers one): a screen makes one, with NULL arguments, the
+ *        first time a hover text shows, as a root in its overlay layer. The type's widget reads the text and the pointer with
+ *        UITooltip_GetCurrent and places itself.
+ * @param self The factory; must not be NULL.
+ * @param typeId The type, or WIDGET_TYPE_ID_INVALID for none (hover text then shows nowhere).
+ */
+static inline void UIWidgetFactory_SetTooltipType(UIWidgetFactory* self, uint64_t typeId)
+{
+    self->_tooltipTypeId = typeId;
+}
+
+/**
+ * @brief Returns the widget type screens show hover text with.
+ * @param self The factory; must not be NULL.
+ * @returns The type, or WIDGET_TYPE_ID_INVALID for none.
+ */
+static inline uint64_t UIWidgetFactory_GetTooltipType(const UIWidgetFactory* self)
+{
+    return self->_tooltipTypeId;
 }
 
 /**

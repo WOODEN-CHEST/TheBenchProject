@@ -9,9 +9,9 @@
 
 
 // Static functions.
-/* Sets the size-derived fields and resets the counters and the clip stack. */
+/* Sets the size-derived fields and resets the counters, the clip stack and the transform stack. */
 static void InitializeContext(RenderContext* self, Vector2 renderBufferSize, float targetAspectRatio,
-    Vector2 targetRelativePosition)
+    Vector2 targetRelativePosition, bool isMeasuring)
 {
     self->_renderBufferSizePixels = renderBufferSize;
     self->_renderBufferAspectRatio = renderBufferSize.x / renderBufferSize.y;
@@ -28,6 +28,8 @@ static void InitializeContext(RenderContext* self, Vector2 renderBufferSize, flo
 
     Memory_Zero(self->_clipStack, sizeof(self->_clipStack));
     self->_clipDepth = 0;
+    self->_transformDepth = 0; // The stack's entries are meaningful only below the depth: nothing to clear.
+    self->_isMeasuring = isMeasuring;
 }
 
 /* Clamps a pixel coordinate into [0; limit], so the int conversions in ApplyClip stay defined; NaN becomes 0. */
@@ -44,6 +46,10 @@ static float ClampToBuffer(float value, float limit)
 /* Applies the active clip to raylib's scissor, rounded outwards so it never cuts into a covered pixel. */
 static void ApplyClip(const RenderContext* self)
 {
+    if (self->_isMeasuring)
+    {
+        return;
+    }
     size_t StoredDepth = (self->_clipDepth < RENDER_CONTEXT_MAX_CLIP_DEPTH) ? self->_clipDepth : RENDER_CONTEXT_MAX_CLIP_DEPTH;
     Rectangle Clip = self->_clipStack[StoredDepth - 1U];
     Vector2 BufferSize = self->_renderBufferSizePixels;
@@ -68,6 +74,73 @@ static Rectangle IntersectRectangles(Rectangle a, Rectangle b)
         .width = Math_MaxFloat(0.0f, Right - Left),
         .height = Math_MaxFloat(0.0f, Bottom - Top)
     };
+}
+
+/* Where a matrix puts a point of the plane. */
+static Vector2 TransformPoint(const Matrix* matrix, float x, float y)
+{
+    return (Vector2)
+    {
+        .x = (matrix->m0 * x) + (matrix->m4 * y) + matrix->m12,
+        .y = (matrix->m1 * x) + (matrix->m5 * y) + matrix->m13
+    };
+}
+
+/* The axis-aligned bounding box of where a matrix puts a rectangle's four corners. */
+static Rectangle GetTransformedBounds(const Matrix* matrix, Rectangle rectangle)
+{
+    Vector2 Corners[4] =
+    {
+        TransformPoint(matrix, rectangle.x, rectangle.y),
+        TransformPoint(matrix, rectangle.x + rectangle.width, rectangle.y),
+        TransformPoint(matrix, rectangle.x, rectangle.y + rectangle.height),
+        TransformPoint(matrix, rectangle.x + rectangle.width, rectangle.y + rectangle.height)
+    };
+    float Left = Corners[0].x;
+    float Right = Corners[0].x;
+    float Top = Corners[0].y;
+    float Bottom = Corners[0].y;
+    for (size_t Index = 1U; Index < 4U; Index++)
+    {
+        Left = Math_MinFloat(Left, Corners[Index].x);
+        Right = Math_MaxFloat(Right, Corners[Index].x);
+        Top = Math_MinFloat(Top, Corners[Index].y);
+        Bottom = Math_MaxFloat(Bottom, Corners[Index].y);
+    }
+    return (Rectangle){ .x = Left, .y = Top, .width = Right - Left, .height = Bottom - Top };
+}
+
+/* The stored transform in effect, or NULL with none pushed. */
+static const Matrix* GetTransformInEffect(const RenderContext* self)
+{
+    if (self->_transformDepth == 0U)
+    {
+        return NULL;
+    }
+    size_t StoredDepth = (self->_transformDepth < RENDER_CONTEXT_MAX_TRANSFORM_DEPTH) ? self->_transformDepth
+        : RENDER_CONTEXT_MAX_TRANSFORM_DEPTH;
+    return &self->_transformStack[StoredDepth - 1U];
+}
+
+/* Puts the transform in effect on raylib's matrix stack, as its one entry from this context. */
+static void PushTransformToRaylib(const RenderContext* self)
+{
+    const Matrix* InEffect = GetTransformInEffect(self);
+    if (self->_isMeasuring || (InEffect == NULL))
+    {
+        return;
+    }
+    rlPushMatrix();
+    rlMultMatrixf(MatrixToFloat(*InEffect));
+}
+
+/* Takes this context's one entry off raylib's matrix stack. */
+static void PopTransformFromRaylib(const RenderContext* self)
+{
+    if (!self->_isMeasuring)
+    {
+        rlPopMatrix();
+    }
 }
 
 /* Componentwise color product, as raylib's DrawModelEx tints a material's albedo. */
@@ -159,7 +232,7 @@ void RenderContext_Create(RenderContext* self,
         };
     }
 
-    InitializeContext(self, RenderBufferSize, targetAspectRatio, targetRelativePosition);
+    InitializeContext(self, RenderBufferSize, targetAspectRatio, targetRelativePosition, false);
 }
 
 void RenderContext_CreateMeasuring(RenderContext* self,
@@ -180,7 +253,7 @@ void RenderContext_CreateMeasuring(RenderContext* self,
     {
         Size.y = 1.0f;
     }
-    InitializeContext(self, Size, targetAspectRatio, targetRelativePosition);
+    InitializeContext(self, Size, targetAspectRatio, targetRelativePosition, true);
 }
 
 void RenderContext_PushClip(RenderContext* self, Rectangle pixelRectangle)
@@ -194,6 +267,11 @@ void RenderContext_PushClip(RenderContext* self, Rectangle pixelRectangle)
     Rectangle Clip = pixelRectangle;
     Clip.width = Math_MaxFloat(0.0f, Clip.width);
     Clip.height = Math_MaxFloat(0.0f, Clip.height);
+    const Matrix* InEffect = GetTransformInEffect(self);
+    if (InEffect != NULL)
+    {
+        Clip = GetTransformedBounds(InEffect, Clip);
+    }
     if (self->_clipDepth > 0U)
     {
         Clip = IntersectRectangles(self->_clipStack[self->_clipDepth - 1U], Clip);
@@ -216,10 +294,53 @@ void RenderContext_PopClip(RenderContext* self)
     }
     if (self->_clipDepth == 0U)
     {
-        EndScissorMode();
+        if (!self->_isMeasuring)
+        {
+            EndScissorMode();
+        }
         return;
     }
     ApplyClip(self);
+}
+
+void RenderContext_PushTransform(RenderContext* self, const Matrix* pixelMatrix)
+{
+    if (self->_transformDepth >= RENDER_CONTEXT_MAX_TRANSFORM_DEPTH)
+    {
+        self->_transformDepth++; // Too deep to store: counted so the pops stay balanced, the transform stays as it is.
+        return;
+    }
+    const Matrix* Below = GetTransformInEffect(self);
+    Matrix Composed = (Below != NULL) ? MatrixMultiply(*pixelMatrix, *Below) : *pixelMatrix;
+    if (Below != NULL)
+    {
+        PopTransformFromRaylib(self);
+    }
+    self->_transformStack[self->_transformDepth] = Composed;
+    self->_transformDepth++;
+    PushTransformToRaylib(self);
+}
+
+void RenderContext_PopTransform(RenderContext* self)
+{
+    if (self->_transformDepth == 0U)
+    {
+        return;
+    }
+    self->_transformDepth--;
+    if (self->_transformDepth >= RENDER_CONTEXT_MAX_TRANSFORM_DEPTH)
+    {
+        return; // Still beyond the stored pushes: the transform did not change for this one.
+    }
+    PopTransformFromRaylib(self);
+    PushTransformToRaylib(self);
+}
+
+bool RenderContext_TryGetTransform(const RenderContext* self, Matrix* outMatrix)
+{
+    const Matrix* InEffect = GetTransformInEffect(self);
+    *outMatrix = (InEffect != NULL) ? *InEffect : MatrixIdentity();
+    return InEffect != NULL;
 }
 
 void RenderContext_RenderTexture2D(RenderContext* self, const TextureRenderArguments* args)
@@ -460,11 +581,19 @@ void RenderContext_BeginRendering(RenderContext* self)
 
 void RenderContext_EndRendering(RenderContext* self)
 {
-    // An unbalanced push would leave raylib's scissor on for whatever draws next.
+    // An unbalanced push would leave raylib's scissor on, or its matrix pushed, for whatever draws next.
     if (self->_clipDepth > 0U)
     {
-        EndScissorMode();
+        if (!self->_isMeasuring)
+        {
+            EndScissorMode();
+        }
         self->_clipDepth = 0;
+    }
+    if (self->_transformDepth > 0U)
+    {
+        PopTransformFromRaylib(self);
+        self->_transformDepth = 0;
     }
     if (self->_hasCustomRenderBuffer)
     {

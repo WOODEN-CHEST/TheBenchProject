@@ -696,8 +696,9 @@ Current module list:
   the pointer, the keyboard and the viewport). A screen holds a tree of widgets with slot + generation ids, routes the
   tick's GameInput (a held press owns the pointer past the surface, the focused widget gets every key first, consumed input does not reach the game), drives keyboard
   navigation through actions and the one rule for edit elements (keys of their own only once entered by Enter, a press or code; Escape, Enter, Tab and focus moving leave them; a held Tab
-  carries editing on), runs typed property animations, queues notifications to the end of its update, lays
-  widgets out in update and draws them with nested clipping. Widget_Destroy is deferred and takes the whole subtree.
+  carries editing on), runs typed property animations, queues notifications and sound cues (posted only while someone listens) to the end of its update, shows
+  hover text, lays widgets out in update (each widget's own scale multiplying down the tree) and draws them with nested clipping and render transforms (any
+  widget turned, moved and scaled with its subtree, hit where it shows). Widget_Destroy is deferred and takes the whole subtree.
   Covers these modules (UIScreen is split by job behind the private source/UIInternal.h):
   * UIInput - The argument structs handed to a widget's input hooks (keys and buttons are GameKeys), what entered an edit element and why it was left, the layers of a screen's roots and the pointer's shapes.
   * UIAnimation - Typed property values (UIPropertyValue), easing methods, keyframes, keyframe validation and
@@ -706,12 +707,18 @@ Current module list:
   * UIWidgetFactory - Registers capabilities and widget types (a descriptor: struct size, vtable, constructor,
     capabilities, typed properties, focusability, whether they are edit elements), owns per-type pools, creates widgets (base first, id reserved,
     constructor, then alive: a failed constructor leaves nothing) and counts live widgets. One per program.
-  * UIWidget - The abstract widget base (vtable incl. Layout, keyboard first refusal, a lost press and the wheel, entering and leaving, geometry/flags/state, subwidgets
-    with a separate draw order, moving whole to another parent, capabilities, typed properties, deferred destroy); concrete widgets embed it first.
+  * UIWidget - The abstract widget base (vtable incl. Layout, keyboard first refusal, a lost press and the wheel, entering and leaving, a hit test standing in for
+    its box, geometry/flags/state, its own scale and the effective scale kept current, a render transform, subwidgets with a separate draw order, moving whole to another
+    parent, capabilities, typed properties, deferred destroy); concrete widgets embed it first.
   * UIScreen - The context: id registry, roots, focus, the entered edit element, input routing, keyboard navigation + outlines, animations,
-    notifications (subscriptions; queued, delivered at the end of UIScreen_Update), layout pass and rendering.
-  * UIPlacement - Where a widget sits in UI pixels: placements (anchors and offsets), insets and a stack's hints, with their pure arithmetic, each edge a whole
-    surface pixel. Placements are applied in the layout pass; a widget's preferred size is its Measure hook, cached (UIFramework.md, "UI pixels").
+    notifications and cues (subscriptions; queued, delivered at the end of UIScreen_Update), hover text, layout pass and rendering (hit tests and coordinates through
+    render transforms).
+  * UITooltip - Hover text as a service of the screen (UITooltip.h, source/UIScreenTooltips.c): a side table emptied at a widget's teardown, text by value or from a
+    provider, the delay (its own or the theme's), falling back up the tree, hidden by a press or moving off, shown by a widget of the type the factory names in the
+    overlay layer; UITooltip_GetCurrent for a status bar.
+  * UIPlacement - Where a widget sits in UI pixels: placements (anchors and offsets, counted in the parent's effective scale), insets and a stack's hints, with their
+    pure arithmetic, each edge a whole surface pixel; and the render transform (a turn, a visual offset and a visual scale about a pivot: its matrix in surface pixels,
+    a point through it and back). Placements are applied in the layout pass; a widget's preferred size is its Measure hook, cached (UIFramework.md, "UI pixels").
   * UIScalePolicy - How a screen's scale follows the window and the monitor, pure: a fixed value; constant pixels (from the monitor's height in quarters, times the player's
     scale: resizing gives more room); following the window's height against 1080, times the player's scale (resizing scales the UI).
   * UIWindowHost - The host of a UI that fills the game window: each tick the viewport and the scale from its policy, the pointer and the keyboard from GameInput, then
@@ -727,19 +734,25 @@ Current module list:
   element's code changing. Covers:
   * UIBoxStyle - How a box is drawn (nothing, flat, nine-slice), a colour per state; resolving a state and cutting a box into nine quads are pure.
   * UITheme - The ui_theme asset type (a standard type, JSON in ui_themes/; include/UITheme.h, source/UITheme.c, source/UIThemeDefinition.c, private source/UIThemeInternal.h): a
-    font, a text size, a transition time and per element kind its metrics and parts, with named variants that change only what they name; unknown keys refused, every rule checked
-    when read; its textures and font loaded as dependencies. A screen holds one (UIScreen_SetTheme).
-  * UIElement - What every element kind shares: its look (a kind, a variant, the state shown, eased from state to state), its text, its press behaviour (click modes, per button), its options,
-    its events (activated, changed, committed, cancelled, pressed, released, double clicked, scrolled, context requested; the mouse's data by value).
-  * UIKit - The one way to make elements, over one widget factory: registers the capabilities and standard widget types, holds the table from element kind to widget type (replaceable:
-    a look with another structure), and UIKit_Create* makes an element and gives its id. Calling code uses a kind's functions by id, never a widget type or a look.
+    font, a text size, a transition time, a hover delay, a palette of named colours ("@name", resolved when read) and per element kind its metrics, parts, custom values a
+    look reads and the look's name, with named variants that change only what they name; unknown keys refused, every rule checked when read; its textures and font loaded
+    as dependencies. A screen holds one (UIScreen_SetTheme).
+  * UIElement - What every element kind shares: its options (a look by name, a scale), plain text content (UITextContent), icons (a letter or a sprite animation by
+    name), its press behaviour (click modes, per button), its events (activated, changed, committed, cancelled, pressed, released, double clicked, scrolled, context
+    requested; the mouse's data by value) and cues; and the helpers looks draw with: a look's state eased from state to state (UIElementLook), its laid-out text
+    (UIElementText) and icon (UIElementIconView).
+  * UIKit - The one way to make elements, over one widget factory: registers the capabilities, holds the looks by kind and name and composes each one's widget type from
+    the kind's behaviour (private source/UIKitInternal.h) and the look's hooks (UIKit_RegisterLook: Render and Measure, maybe Update), and UIKit_Create* makes an element
+    with the look its options or the theme name, else the standard one, and gives its id. Calling code uses a kind's functions by id, never a widget type or a look.
+  * UIStandardLooks - The kit's standard look, tbp:test_box, for the panel, the button, the toggle and the slider (theme-driven boxes, flat or nine-slice), and the widget
+    that shows hover text (the theme's tooltip kind).
   * StackWidget - Children in a row or a column, with padding and spacing: fixed, content or filling, aligned across; its arithmetic (UIStackLayout) shared with the panel.
   * UIPanel - A background and padding for what it holds.
   * UILabel - LabelWidget as an element of the kit: its text size in UI pixels, its font and colours from the theme.
-  * UIButton - Activates by its click mode and buttons, or Enter or Space; an enabled flag (a disabled button swallows the click); an optional toggled look; it can take the wheel.
+  * UIButton - Activates by its click mode and buttons, or Enter or Space; an enabled flag (a disabled button swallows the click); an optional toggled look and icon; it can take the wheel.
   * UIToggle - A checkbox: on, off or mixed, with the same click modes.
-  * UISlider - A value in a range, by a drag that goes past the window to its limit, the arrows or the wheel (only while entered or with Ctrl), with an optional step and default (the reset action); changed, committed, cancelled. An edit element: its four arrows are its own only once Enter, a press or code entered it.
-  * UIGalleryFrame - A game frame showing every element in every state and trying the routing and the keyboard (a box to go into, whose sliders Enter enters), started with --ui-gallery: T the theme, + and - the scale, P the scale policy, L the event log.
+  * UISlider - A value in a range, by a drag that goes past the window to its limit, the arrows or the wheel (only while entered or with Ctrl), with an optional step and default (the reset action); changed, committed, cancelled. An edit element: its four arrows are its own only once Enter, a press or code entered it. Its look tells it the thumb's length.
+  * UIGalleryFrame - A game frame on two pages, started with --ui-gallery: every element in every state, the routing and the keyboard (a box to go into, whose sliders Enter enters); the scale rows, a turning panel, a panel sliding in, a second look of the button, icons; hover text on everything. N the page, T the theme (three: flat, nine-slice, another palette), + and - the scale, P the scale policy, L the event log.
 * Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text as a STRICT TREE: a parent owns
   its children, a tree has at most 64 levels, components own copies of their strings, and fonts and sprite animations
   are named, never held. Every change gives the component and its ancestors a new revision. Covers three modules (plus

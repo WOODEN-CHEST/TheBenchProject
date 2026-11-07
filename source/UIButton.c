@@ -1,17 +1,8 @@
 #include "UIButton.h"
 #include "UIKit.h"
+#include "UIKitInternal.h"
 #include "UIScreen.h"
 #include "UIWidgetFactory.h"
-#include "wr/WRMath.h"
-
-
-// Types.
-/* The standard button widget. */
-typedef struct UIButtonWidgetStruct
-{
-    Widget Base;
-    UIButtonCapability Button;
-} UIButtonWidget;
 
 
 // Static functions.
@@ -35,101 +26,94 @@ static Error ResolveButton(UIScreen* screen, uint64_t widgetId, Widget** outWidg
 }
 
 
-// Static functions: the standard widget's hooks.
-static Error UIButtonWidget_ConstructVT(void* widget, void* args)
+// Static functions: the kind's behaviour, for the kit's composed widget types.
+static UIButtonCapability* GetCapability(void* widget)
 {
-    UIButtonWidget* Button = widget;
-    if (args == NULL)
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIButton: the arguments are required.");
-    }
-    return UIButtonCapability_Construct(&Button->Button, &Button->Base, args);
-}
-
-static Error UIButtonWidget_OnDeconstructVT(void* self)
-{
-    return UIButtonCapability_Deconstruct(&((UIButtonWidget*)self)->Button);
-}
-
-static Error UIButtonWidget_UpdateVT(void* self, ProgramTime time)
-{
-    UIButtonWidget* Button = self;
-    return UIButtonCapability_Update(&Button->Button, &Button->Base, time);
-}
-
-static Error UIButtonWidget_MeasureVT(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
-{
-    (void)context;
-    (void)availableWidth;
-    UIButtonWidget* Button = self;
-    return UIButtonCapability_Measure(&Button->Button, &Button->Base, outSize);
-}
-
-static Error UIButtonWidget_RenderVT(void* self, UIRenderContext* context)
-{
-    UIButtonWidget* Button = self;
-    UIScreen* Screen = Widget_GetScreen(&Button->Base);
-    Rectangle Box = UIRenderContext_GetPixelBox(context);
-    if (UIElement_IsBoxEmpty(Box))
-    {
-        return Error_CreateSuccess();
-    }
-    Error Result = UIElementLook_DrawBox(&Button->Button._look, UIElementLook_GetStyle(&Button->Button._look, Screen),
-        UIButtonPart_Background, context, Box, UIScreen_GetScale(Screen));
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-    return UIButtonCapability_RenderText(&Button->Button, &Button->Base, context, Box);
-}
-
-static Error UIButtonWidget_OnMouseInputVT(void* self, const WidgetMouseInputArgs* args)
-{
-    UIButtonWidget* Button = self;
-    return UIButtonCapability_OnMouseInput(&Button->Button, &Button->Base, args);
-}
-
-static Error UIButtonWidget_OnPressLostVT(void* self, GameKey button)
-{
-    UIButtonCapability_OnPressLost(&((UIButtonWidget*)self)->Button, button);
-    return Error_CreateSuccess();
-}
-
-static Error UIButtonWidget_OnScrollInputVT(void* self, const WidgetScrollInputArgs* args, bool* outIsHandled)
-{
-    UIButtonWidget* Button = self;
-    return UIButtonCapability_OnScrollInput(&Button->Button, &Button->Base, args, outIsHandled);
-}
-
-static Error UIButtonWidget_OnKeyboardInputVT(void* self, const WidgetKeyboardInputArgs* args, bool* outIsHandled)
-{
-    UIButtonWidget* Button = self;
-    return UIButtonCapability_OnKeyboardInput(&Button->Button, &Button->Base, args, outIsHandled);
-}
-
-static void* ResolveLook(void* widget)
-{
-    return &((UIButtonWidget*)widget)->Button._look;
+    return &((UIButtonLookBase*)widget)->Button;
 }
 
 static void* ResolveCapability(void* widget)
 {
-    return &((UIButtonWidget*)widget)->Button;
+    return GetCapability(widget);
+}
+
+static Error Behaviour_Construct(void* widget, void* args)
+{
+    if (args == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIButton: the arguments are required.");
+    }
+    return UIButtonCapability_Construct(GetCapability(widget), widget, args);
+}
+
+static Error Behaviour_Deconstruct(void* widget)
+{
+    UIButtonCapability_Deconstruct(GetCapability(widget));
+    return Error_CreateSuccess();
+}
+
+static Error Behaviour_Update(void* widget, ProgramTime time)
+{
+    (void)time;
+    UIButtonCapability_Update(GetCapability(widget), widget);
+    return Error_CreateSuccess();
+}
+
+static Error Behaviour_OnHoverStart(void* widget, const WidgetHoverArgs* args)
+{
+    (void)args;
+    return UIElement_PostCue(widget, UIElementCue_Hover);
+}
+
+static Error Behaviour_OnMouseInput(void* widget, const WidgetMouseInputArgs* args)
+{
+    return UIButtonCapability_OnMouseInput(GetCapability(widget), widget, args);
+}
+
+static Error Behaviour_OnPressLost(void* widget, GameKey button)
+{
+    UIButtonCapability_OnPressLost(GetCapability(widget), button);
+    return Error_CreateSuccess();
+}
+
+static Error Behaviour_OnScrollInput(void* widget, const WidgetScrollInputArgs* args, bool* outIsHandled)
+{
+    return UIButtonCapability_OnScrollInput(GetCapability(widget), widget, args, outIsHandled);
+}
+
+static Error Behaviour_OnKeyboardInput(void* widget, const WidgetKeyboardInputArgs* args, bool* outIsHandled)
+{
+    return UIButtonCapability_OnKeyboardInput(GetCapability(widget), widget, args, outIsHandled);
 }
 
 
 // Fields.
-static const WidgetVTable UIButtonWidgetVTable =
+static const UIKindBehaviour ButtonBehaviour =
 {
-    .OnDeconstruct = UIButtonWidget_OnDeconstructVT,
-    .Update = UIButtonWidget_UpdateVT,
-    .Render = UIButtonWidget_RenderVT,
-    .OnMouseInput = UIButtonWidget_OnMouseInputVT,
-    .OnPressLost = UIButtonWidget_OnPressLostVT,
-    .OnScrollInput = UIButtonWidget_OnScrollInputVT,
-    .OnKeyboardInput = UIButtonWidget_OnKeyboardInputVT,
-    .Measure = UIButtonWidget_MeasureVT
+    .Kind = UIElementKind_Button,
+    .HasCapability = true,
+    .Capability = UIElementCapability_Button,
+    .ResolveCapability = ResolveCapability,
+    .BaseSize = sizeof(UIButtonLookBase),
+    .IsFocusable = true,
+    .NeedsEntering = false,
+    .EntersItself = false,
+    .Construct = Behaviour_Construct,
+    .Deconstruct = Behaviour_Deconstruct,
+    .Update = Behaviour_Update,
+    .OnHoverStart = Behaviour_OnHoverStart,
+    .OnMouseInput = Behaviour_OnMouseInput,
+    .OnPressLost = Behaviour_OnPressLost,
+    .OnScrollInput = Behaviour_OnScrollInput,
+    .OnKeyboardInput = Behaviour_OnKeyboardInput
 };
+
+
+// Internal functions (declared in UIKitInternal.h).
+const UIKindBehaviour* UIButton_GetKindBehaviour(void)
+{
+    return &ButtonBehaviour;
+}
 
 
 // Public functions: calling code.
@@ -138,7 +122,17 @@ Error UIButton_SetText(UIScreen* screen, uint64_t widgetId, const unsigned char*
     Widget* Target = NULL;
     UIButtonCapability* Button = NULL;
     Error Result = ResolveButton(screen, widgetId, &Target, &Button);
-    return (Result.Code == ErrorCode_Success) ? UIElementText_Set(&Button->_text, Target, text) : Result;
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    bool HasChanged = false;
+    Result = UITextContent_Set(&Button->_text, text, &HasChanged);
+    if ((Result.Code == ErrorCode_Success) && HasChanged)
+    {
+        Widget_InvalidateMeasure(Target);
+    }
+    return Result;
 }
 
 Error UIButton_GetText(UIScreen* screen, uint64_t widgetId, const unsigned char** outText)
@@ -148,7 +142,7 @@ Error UIButton_GetText(UIScreen* screen, uint64_t widgetId, const unsigned char*
     Error Result = ResolveButton(screen, widgetId, &Target, &Button);
     if (Result.Code == ErrorCode_Success)
     {
-        *outText = UIElementText_Get(&Button->_text);
+        *outText = UITextContent_Get(&Button->_text);
     }
     return Result;
 }
@@ -240,6 +234,27 @@ Error UIButton_SetActivationButtons(UIScreen* screen, uint64_t widgetId, uint8_t
     return Error_CreateSuccess();
 }
 
+Error UIButton_SetIcon(UIScreen* screen, uint64_t widgetId, const UIElementIcon* icon)
+{
+    Widget* Target = NULL;
+    UIButtonCapability* Button = NULL;
+    Error Result = ResolveButton(screen, widgetId, &Target, &Button);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if ((icon == NULL) || !UIElementIcon_IsValid(icon))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIButton_SetIcon: the icon is not valid.");
+    }
+    if (!UIElementIcon_Equals(&Button->_icon, icon))
+    {
+        Button->_icon = *icon;
+        Widget_InvalidateMeasure(Target);
+    }
+    return Error_CreateSuccess();
+}
+
 Error UIButton_SetTakesWheel(UIScreen* screen, uint64_t widgetId, bool takesWheel)
 {
     Widget* Target = NULL;
@@ -257,25 +272,22 @@ Error UIButton_SetTakesWheel(UIScreen* screen, uint64_t widgetId, bool takesWhee
 Error UIButtonCapability_Construct(UIButtonCapability* self, Widget* widget, const UIButtonArgs* args)
 {
     const UIButtonOptions* Options = args->Options;
-    if (!UIPressable_AreSettingsValid(Options->ClickMode, Options->ActivationButtons))
+    if (!UIPressable_AreSettingsValid(Options->ClickMode, Options->ActivationButtons) || !UIElementIcon_IsValid(&Options->Icon))
     {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIButton: an unknown click mode, or a bit that is no mouse button.");
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
+            "UIButton: an unknown click mode, a bit that is no mouse button, or an icon that is not valid.");
     }
-    Error Result = UIElementLook_Construct(&self->_look, UIElementKind_Button, Options->Element.Variant);
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = UIElement_ApplyOptions(widget, &Options->Element);
-    }
+    Error Result = UIElement_ApplyOptions(widget, &Options->Element);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
-    Result = UIElementText_Construct(&self->_text, UIKit_GetTextFactory(args->Kit), UIKit_GetAssets(args->Kit),
-        UIKit_GetLogger(args->Kit), Options->Text);
+    Result = UITextContent_Construct(&self->_text, Options->Text);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
+    self->_icon = Options->Icon;
     self->_press = UIPressable_Create();
     self->_press._clickMode = Options->ClickMode;
     self->_press._activationButtons = Options->ActivationButtons;
@@ -290,31 +302,41 @@ Error UIButtonCapability_Construct(UIButtonCapability* self, Widget* widget, con
     return Error_CreateSuccess();
 }
 
-Error UIButtonCapability_Deconstruct(UIButtonCapability* self)
+void UIButtonCapability_Deconstruct(UIButtonCapability* self)
 {
-    return UIElementText_Deconstruct(&self->_text);
+    UITextContent_Deconstruct(&self->_text);
 }
 
-Error UIButtonCapability_Update(UIButtonCapability* self, Widget* widget, ProgramTime time)
+void UIButtonCapability_Update(UIButtonCapability* self, Widget* widget)
 {
-    UIScreen* Screen = Widget_GetScreen(widget);
-    UIPressable_Update(&self->_press, Screen);
-    UIElementState State = UIElementState_Choose(self->_isEnabled, UIPressable_IsPressed(&self->_press), false, Widget_IsEntered(widget),
+    UIPressable_Update(&self->_press, Widget_GetScreen(widget));
+}
+
+UIElementState UIButtonCapability_GetState(const UIButtonCapability* self, const Widget* widget)
+{
+    return UIElementState_Choose(self->_isEnabled, UIPressable_IsPressed(&self->_press), false, Widget_IsEntered(widget),
         self->_isToggled, Widget_IsHovered(widget), Widget_IsFocused(widget));
-    UIElementLook_Update(&self->_look, Screen, State, time.PassedTime);
-    return UIElementText_Refresh(&self->_text, Screen);
 }
 
 Error UIButtonCapability_OnMouseInput(UIButtonCapability* self, Widget* widget, const WidgetMouseInputArgs* args)
 {
     Error Result = self->_isEnabled ? UIElement_PostMouseEvents(widget, args) : Error_CreateSuccess();
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIElement_PostMouseCues(widget, args, self->_isEnabled);
+    }
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
     bool IsActivated = false;
     UIPressable_OnMouseInput(&self->_press, widget, args, self->_isEnabled, &IsActivated);
-    return IsActivated ? UIElement_PostActivatedByMouse(widget, args) : Error_CreateSuccess();
+    if (!IsActivated)
+    {
+        return Error_CreateSuccess();
+    }
+    Result = UIElement_PostActivatedByMouse(widget, args);
+    return (Result.Code == ErrorCode_Success) ? UIElement_PostCue(widget, UIElementCue_Activate) : Result;
 }
 
 void UIButtonCapability_OnPressLost(UIButtonCapability* self, GameKey button)
@@ -345,69 +367,8 @@ Error UIButtonCapability_OnKeyboardInput(UIButtonCapability* self, Widget* widge
     UIPressable_OnKeyboardInput(&self->_press, widget, args, self->_isEnabled, outIsHandled, &IsActivated);
     if (IsActivated)
     {
-        return UIElement_PostActivatedByKey(widget, args);
+        Error Result = UIElement_PostActivatedByKey(widget, args);
+        return (Result.Code == ErrorCode_Success) ? UIElement_PostCue(widget, UIElementCue_Activate) : Result;
     }
     return (self->_isEnabled && !*outIsHandled) ? UIElement_OnContextKey(widget, args, outIsHandled) : Error_CreateSuccess();
-}
-
-Error UIButtonCapability_Measure(UIButtonCapability* self, Widget* widget, Vector2* outSize)
-{
-    const UIScreen* Screen = Widget_GetScreen(widget);
-    Error Result = UIElementText_Refresh(&self->_text, Screen);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-    float Scale = UIScreen_GetScale(Screen);
-    Vector2 Text = UIElementText_GetPixelSize(&self->_text, Screen);
-    const UIThemeStyle* Style = UIElementLook_GetStyle(&self->_look, Screen);
-    Vector2 Padding = UIThemeStyle_GetVector(Style, UIElementKind_Button, UIButtonPart_Padding);
-    Vector2 Minimum = UIThemeStyle_GetVector(Style, UIElementKind_Button, UIButtonPart_MinSize);
-    outSize->x = Math_MaxFloat((Text.x / Scale) + (2.0f * Padding.x), Minimum.x);
-    outSize->y = Math_MaxFloat((Text.y / Scale) + (2.0f * Padding.y), Minimum.y);
-    return Error_CreateSuccess();
-}
-
-Error UIButtonCapability_RenderText(const UIButtonCapability* self, Widget* widget, UIRenderContext* context, Rectangle box)
-{
-    UIScreen* Screen = Widget_GetScreen(widget);
-    const UIThemeStyle* Style = UIElementLook_GetStyle(&self->_look, Screen);
-    Color TextColor = UIElementLook_BlendColors(&self->_look, UIThemeStyle_GetColors(Style, UIButtonPart_Text), WHITE);
-    Vector2 Text = UIElementText_GetPixelSize(&self->_text, Screen);
-    bool IsTooLong = Text.x > box.width;
-    float PaddingPixels = UIThemeStyle_GetVector(Style, UIElementKind_Button, UIButtonPart_Padding).x * UIScreen_GetScale(Screen);
-    float X = IsTooLong ? (box.x + PaddingPixels) : (box.x + Math_FloorFloat(((box.width - Text.x) * 0.5f) + 0.5f));
-    float Y = box.y + Math_FloorFloat(((box.height - Text.y) * 0.5f) + 0.5f);
-    if (IsTooLong)
-    {
-        RenderContext_PushClip(UIRenderContext_GetRenderContext(context), box);
-    }
-    Error Result = UIElementText_Draw(&self->_text, context, X, Y, TextColor);
-    if (IsTooLong)
-    {
-        RenderContext_PopClip(UIRenderContext_GetRenderContext(context));
-    }
-    return Result;
-}
-
-Error UIButton_RegisterType(UIWidgetFactory* factory, uint64_t lookCapabilityId, uint64_t buttonCapabilityId, uint64_t* outTypeId)
-{
-    WidgetCapabilityEntry Capabilities[] =
-    {
-        { .CapabilityId = lookCapabilityId, .Resolver = ResolveLook },
-        { .CapabilityId = buttonCapabilityId, .Resolver = ResolveCapability }
-    };
-    WidgetTypeDescriptor Descriptor =
-    {
-        .Name = u8"Button",
-        .StructSize = sizeof(UIButtonWidget),
-        .VTable = &UIButtonWidgetVTable,
-        .Constructor = UIButtonWidget_ConstructVT,
-        .Capabilities = Capabilities,
-        .CapabilityCount = sizeof(Capabilities) / sizeof(Capabilities[0]),
-        .Properties = NULL,
-        .PropertyCount = 0U,
-        .IsFocusable = true
-    };
-    return UIWidgetFactory_RegisterType(factory, &Descriptor, outTypeId);
 }

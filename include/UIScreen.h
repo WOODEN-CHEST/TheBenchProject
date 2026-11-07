@@ -190,8 +190,39 @@ typedef enum UIEventKindEnum
     /** @brief The edit element was entered or left (IsSet is the new entered state). */
     UIEventKind_EnteredChanged,
     /** @brief An event the widget's type posted (WidgetEventId says which; Value may carry data). */
-    UIEventKind_Widget
+    UIEventKind_Widget,
+    /** @brief A named sound cue (WidgetEventId is a UIElementCue): what an element would sound like. Posted only while a
+     *  subscription asks for this kind (UIScreen_PostCue), and delivered even if the widget was destroyed after posting it. */
+    UIEventKind_Cue
 } UIEventKind;
+
+/**
+ * @brief The named cues elements post for what they do, for sounds to hang on later (UIEventKind_Cue). Nothing plays them yet; a
+ *        cue costs nothing while nobody subscribes to the kind.
+ */
+typedef enum UIElementCueEnum
+{
+    /** @brief The pointer came onto it. */
+    UIElementCue_Hover,
+    /** @brief A button went down on it. */
+    UIElementCue_Press,
+    /** @brief The button of a press on it came up. */
+    UIElementCue_Release,
+    /** @brief It did what it is for (a click, a toggle). */
+    UIElementCue_Activate,
+    /** @brief Its value moved by a step (an arrow, a notch of the wheel, a reset). */
+    UIElementCue_ValueStep,
+    /** @brief It opened (a popup, a list). */
+    UIElementCue_Open,
+    /** @brief It closed. */
+    UIElementCue_Close,
+    /** @brief It refused what was asked (a press on a disabled element). */
+    UIElementCue_Refused,
+    /** @brief An edit element was entered: its keys are its own now. The screen posts it. */
+    UIElementCue_Enter,
+    /** @brief An edit element was left. The screen posts it. */
+    UIElementCue_Leave
+} UIElementCue;
 
 /**
  * @brief The input a widget's own event tells of, by value, so a handler needs no widget (UIScreen_PostWidgetMouseEvent).
@@ -396,6 +427,22 @@ typedef struct UIScreenStruct
     /** @brief True once a delivery dropped notifications, until a later one delivers notifications without dropping
      *  any (the warning is logged once per streak). */
     bool _isEventOverflowLogged;
+
+    /** @brief Hover text's side table (UITooltip.h; a private element type), one entry per widget that has one. Owned. */
+    GenericBuffer _tooltips;
+    /** @brief The widget whose hover text the pointer rests on (the hovered widget or the nearest ancestor with one), or
+     *  WIDGET_ID_INVALID. */
+    uint64_t _tooltipWidgetId;
+    /** @brief How long the pointer has rested there, in seconds. */
+    double _tooltipRestSeconds;
+    /** @brief Whether its text shows. */
+    bool _isTooltipShown;
+    /** @brief Whether a press hid it: it stays hidden until the pointer rests on something else. */
+    bool _isTooltipSuppressed;
+    /** @brief The text where the pointer rests, NUL-terminated UTF-8 (bytes). Owned. */
+    GenericBuffer _tooltipText;
+    /** @brief The widget that shows it (a root in the overlay layer), or WIDGET_ID_INVALID until one is needed. */
+    uint64_t _tooltipDisplayId;
 
     /** @brief True while UIScreen_Update runs. */
     bool _isUpdating;
@@ -820,7 +867,8 @@ bool UIScreen_TryGetTopmostAt(UIScreen* self, Vector2 screenPosition, Widget** o
 
 // Coordinate conversion.
 /**
- * @brief Converts a widget-local [0;1] position to a screen [0;1] position.
+ * @brief Converts a widget-local [0;1] position to a screen [0;1] position: where it shows, through the render transforms of the
+ *        widget and its ancestors.
  * @param self The screen; must not be NULL.
  * @param widget The reference widget; must not be NULL.
  * @param widgetLocal The widget-local position.
@@ -829,13 +877,24 @@ bool UIScreen_TryGetTopmostAt(UIScreen* self, Vector2 screenPosition, Widget** o
 Vector2 UIScreen_WidgetToScreen(const UIScreen* self, const Widget* widget, Vector2 widgetLocal);
 
 /**
- * @brief Converts a screen [0;1] position to a widget-local [0;1] position.
+ * @brief Converts a screen [0;1] position to a widget-local [0;1] position, the render transforms of the widget and its ancestors
+ *        undone (the inverse of UIScreen_WidgetToScreen), so a turned slider is dragged along its own track. A transform that holds
+ *        no point (a visual scale of 0) is passed over.
  * @param self The screen; must not be NULL.
  * @param widget The reference widget; must not be NULL.
  * @param screenPosition The screen position.
  * @returns The equivalent widget-local position (components are 0 where the widget has zero size).
  */
 Vector2 UIScreen_ScreenToWidget(const UIScreen* self, const Widget* widget, Vector2 screenPosition);
+
+/**
+ * @brief Returns a widget's box as layout put it, in surface pixels of the screen's viewport: the box its look draws in, before
+ *        any render transform turns it.
+ * @param self The screen; must not be NULL.
+ * @param widget The widget; must not be NULL.
+ * @returns The box.
+ */
+Rectangle UIScreen_GetWidgetPixelBox(const UIScreen* self, const Widget* widget);
 
 
 // Update and render.
@@ -1075,3 +1134,15 @@ Error UIScreen_PostWidgetEvent(UIScreen* self, uint64_t widgetId, int32_t widget
  *          alive; ErrorCode_BufferTooLarge if the queue could not grow.
  */
 Error UIScreen_PostWidgetMouseEvent(UIScreen* self, uint64_t widgetId, int32_t widgetEventId, const UIEventMouse* mouse);
+
+/**
+ * @brief Posts a sound cue for a widget (UIEventKind_Cue, its WidgetEventId the cue), delivered at the end of the update like every
+ *        notification. Nothing is queued while no subscription asks for UIEventKind_Cue for that widget or for every widget, so it
+ *        costs nothing while nobody listens.
+ * @param self The screen; must not be NULL.
+ * @param widgetId The widget; must be alive.
+ * @param cue The cue.
+ * @returns Success (also when nobody listens); ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_InvalidOperation if the
+ *          widget is not alive; ErrorCode_BufferTooLarge if the queue could not grow.
+ */
+Error UIScreen_PostCue(UIScreen* self, uint64_t widgetId, UIElementCue cue);

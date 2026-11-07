@@ -1,10 +1,12 @@
 #include "UIElement.h"
+#include "AssetManager.h"
 #include "NamespacedKey.h"
 #include "TextComponent.h"
 #include "TextComponentFactory.h"
 #include "UIKit.h"
 #include "UIRenderContext.h"
 #include "UIScreen.h"
+#include "wr/WRChar.h"
 #include "wr/WRMath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
@@ -224,9 +226,70 @@ Error UIElementLook_DrawBox(const UIElementLook* self, const UIThemeStyle* style
 }
 
 
-// Public functions: the text.
-Error UIElementText_Construct(UIElementText* self, TextComponentFactory* factory, AssetManager* assets, Logger* logger,
-    const unsigned char* text)
+// Public functions: the text content.
+/* A copy of a text, or an error for one that is not valid UTF-8. */
+static Error CopyText(const unsigned char* text, unsigned char** outCopy)
+{
+    const unsigned char* Source = (text != NULL) ? text : (const unsigned char*)u8"";
+    if (!StringUTF8_IsEncodingValid(Source))
+    {
+        return Error_Construct2(ErrorCode_InvalidTextEncoding, "UI element: the text is not valid UTF-8.");
+    }
+    size_t Size = StringUTF8_GetByteLength(Source) + 1U;
+    *outCopy = Memory_Allocate(Size);
+    Memory_Copy(Source, *outCopy, Size);
+    return Error_CreateSuccess();
+}
+
+Error UITextContent_Construct(UITextContent* self, const unsigned char* text)
+{
+    self->_text = NULL;
+    self->_revision = 1U;
+    return CopyText(text, &self->_text);
+}
+
+void UITextContent_Deconstruct(UITextContent* self)
+{
+    Memory_Free(self->_text);
+    self->_text = NULL;
+}
+
+Error UITextContent_Set(UITextContent* self, const unsigned char* text, bool* outHasChanged)
+{
+    if (outHasChanged != NULL)
+    {
+        *outHasChanged = false;
+    }
+    if (text == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UITextContent_Set: text must not be NULL.");
+    }
+    bool IsSame = false;
+    Error Compare = StringUTF8_EqualsExact(self->_text, text, &IsSame);
+    Error_Deconstruct(&Compare);
+    if (IsSame)
+    {
+        return Error_CreateSuccess();
+    }
+    unsigned char* Copy = NULL;
+    Error Result = CopyText(text, &Copy);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Memory_Free(self->_text);
+    self->_text = Copy;
+    self->_revision++;
+    if (outHasChanged != NULL)
+    {
+        *outHasChanged = true;
+    }
+    return Error_CreateSuccess();
+}
+
+
+// Public functions: the text a look draws.
+Error UIElementText_Construct(UIElementText* self, TextComponentFactory* factory, AssetManager* assets, Logger* logger)
 {
     Error Result = TextLayout_Construct(&self->_layout);
     if (Result.Code != ErrorCode_Success)
@@ -241,7 +304,7 @@ Error UIElementText_Construct(UIElementText* self, TextComponentFactory* factory
         return Result;
     }
     StringComponent* String = NULL;
-    Result = TextComponentFactory_CreateString(factory, (text != NULL) ? text : (const unsigned char*)u8"", &String);
+    Result = TextComponentFactory_CreateString(factory, (const unsigned char*)u8"", &String);
     if (Result.Code == ErrorCode_Success)
     {
         Result = StringComponent_SetSize(String, ELEMENT_TEXT_COMPONENT_SIZE);
@@ -264,6 +327,11 @@ Error UIElementText_Construct(UIElementText* self, TextComponentFactory* factory
         return Result;
     }
     self->_hasAppliedTheme = false;
+    self->_appliedThemeRevision = 0U;
+    self->_hasAppliedContent = false;
+    self->_appliedContentRevision = 0U;
+    self->_isWrapped = false;
+    self->_wrapWidth = 0.0f;
     return Error_CreateSuccess();
 }
 
@@ -282,37 +350,28 @@ Error UIElementText_Deconstruct(UIElementText* self)
     return First;
 }
 
-Error UIElementText_Set(UIElementText* self, Widget* widget, const unsigned char* text)
+void UIElementText_SetWrapWidth(UIElementText* self, bool isWrapped, float wrapWidth)
 {
-    if (text == NULL)
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIElementText_Set: text must not be NULL.");
-    }
-    StringComponent* String = TextComponent_AsStringComponent(TextDocument_GetRoot(&self->_document));
-    bool IsSame = false;
-    Error Compare = StringUTF8_EqualsExact(StringComponent_GetText(String), text, &IsSame);
-    Error_Deconstruct(&Compare);
-    if (IsSame)
-    {
-        return Error_CreateSuccess();
-    }
-    Error Result = StringComponent_SetText(String, text);
-    if (Result.Code == ErrorCode_Success)
-    {
-        Widget_InvalidateMeasure(widget);
-    }
-    return Result;
+    self->_isWrapped = isWrapped && (wrapWidth > 0.0f) && !Math_IsInfinityFloat(wrapWidth);
+    self->_wrapWidth = self->_isWrapped ? wrapWidth : 0.0f;
 }
 
-const unsigned char* UIElementText_Get(const UIElementText* self)
+Error UIElementText_Refresh(UIElementText* self, const Widget* widget, const UITextContent* content)
 {
-    return StringComponent_GetText(TextComponent_AsStringComponent(TextDocument_GetRoot(&self->_document)));
-}
-
-Error UIElementText_Refresh(UIElementText* self, const UIScreen* screen)
-{
-    const UITheme* Theme = UIScreen_GetTheme(screen);
-    uint64_t Revision = UIScreen_GetThemeRevision(screen);
+    const UIScreen* Screen = Widget_GetScreen(widget);
+    if ((content != NULL) && (!self->_hasAppliedContent || (self->_appliedContentRevision != UITextContent_GetRevision(content))))
+    {
+        StringComponent* String = TextComponent_AsStringComponent(TextDocument_GetRoot(&self->_document));
+        Error Result = StringComponent_SetText(String, UITextContent_Get(content));
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+        self->_hasAppliedContent = true;
+        self->_appliedContentRevision = UITextContent_GetRevision(content);
+    }
+    const UITheme* Theme = UIScreen_GetTheme(Screen);
+    uint64_t Revision = UIScreen_GetThemeRevision(Screen);
     if (!self->_hasAppliedTheme || (self->_appliedThemeRevision != Revision))
     {
         Error Result = TextDocument_SetDefaultFontName(&self->_document, UITheme_GetFontName(Theme));
@@ -323,9 +382,16 @@ Error UIElementText_Refresh(UIElementText* self, const UIScreen* screen)
         self->_hasAppliedTheme = true;
         self->_appliedThemeRevision = Revision;
     }
+    float Scale = Widget_GetEffectiveScale(widget);
     TextLayoutOptions Options = TextLayoutOptions_CreateDefault();
-    Options.SizeMultiplier = Math_ClampFloat(UIScreen_PixelsToFitted(screen, UITheme_GetTextSize(Theme) * UIScreen_GetScale(screen)),
-        0.0f, TEXT_LAYOUT_SIZE_MULTIPLIER_MAX);
+    Options.SizeMultiplier = Math_ClampFloat(UIScreen_PixelsToFitted(Screen, UITheme_GetTextSize(Theme) * Scale), 0.0f,
+        TEXT_LAYOUT_SIZE_MULTIPLIER_MAX);
+    if (self->_isWrapped)
+    {
+        Options.HasMaxWidth = true;
+        Options.MaxWidth = UIScreen_PixelsToFitted(Screen, self->_wrapWidth * Scale);
+        Options.IsWrapEnabled = true;
+    }
     return TextLayout_Refresh(&self->_layout, &self->_document, &Options);
 }
 
@@ -338,6 +404,210 @@ Vector2 UIElementText_GetPixelSize(const UIElementText* self, const UIScreen* sc
 
 Error UIElementText_Draw(const UIElementText* self, UIRenderContext* context, float x, float y, Color color)
 {
+    TextLayoutDrawArguments Arguments = TextLayoutDrawArguments_Create(RenderVector2D_Window((Vector2){ .x = x, .y = y }));
+    Arguments.Tint = UIRenderColor_Multiply(UIRenderContext_GetTint(context), UIRenderColor_FromColor(color));
+    return TextLayout_Draw(&self->_layout, UIRenderContext_GetRenderContext(context), &Arguments);
+}
+
+
+// Public functions: the icon.
+Error UIElementIcon_FromSpriteAnimation(const unsigned char* animationName, UIElementIcon* outIcon)
+{
+    if ((animationName == NULL) || (outIcon == NULL))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIElementIcon_FromSpriteAnimation: a name is required.");
+    }
+    UIElementIcon Icon = UIElementIcon_None();
+    GenericBuffer Name;
+    GenericBuffer_CreateConstant(&Name, Icon.Name, sizeof(Icon.Name), sizeof(unsigned char), 0U);
+    Error Result = NamespacedKey_Parse(animationName, StringUTF8_GetByteLength(animationName), NULL, &Name);
+    if ((Result.Code != ErrorCode_Success) || !AssetManager_IsValidAssetName(Icon.Name))
+    {
+        Error_Deconstruct(&Result);
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIElementIcon_FromSpriteAnimation: the name is not a valid asset name.");
+    }
+    Icon.Kind = UIElementIconKind_SpriteAnimation;
+    *outIcon = Icon;
+    return Error_CreateSuccess();
+}
+
+bool UIElementIcon_IsValid(const UIElementIcon* icon)
+{
+    switch (icon->Kind)
+    {
+        case UIElementIconKind_None:
+            return true;
+        case UIElementIconKind_Letter:
+            return (icon->Letter != 0U) && CharUTF8_IsCodePointValid((CodePoint)icon->Letter);
+        case UIElementIconKind_SpriteAnimation:
+        {
+            size_t Length = 0U;
+            while ((Length < sizeof(icon->Name)) && (icon->Name[Length] != 0U))
+            {
+                Length++;
+            }
+            return (Length < sizeof(icon->Name)) && AssetManager_IsValidAssetName(icon->Name);
+        }
+    }
+    return false;
+}
+
+bool UIElementIcon_Equals(const UIElementIcon* a, const UIElementIcon* b)
+{
+    if (a->Kind != b->Kind)
+    {
+        return false;
+    }
+    switch (a->Kind)
+    {
+        case UIElementIconKind_None:
+            return true;
+        case UIElementIconKind_Letter:
+            return a->Letter == b->Letter;
+        case UIElementIconKind_SpriteAnimation:
+        {
+            bool IsSame = false;
+            Error Compare = StringUTF8_EqualsExact(a->Name, b->Name, &IsSame);
+            Error_Deconstruct(&Compare);
+            return IsSame;
+        }
+    }
+    return false;
+}
+
+Error UIElementIconView_Construct(UIElementIconView* self, TextComponentFactory* factory, AssetManager* assets, Logger* logger)
+{
+    Error Result = TextLayout_Construct(&self->_layout);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = TextDocument_Construct(&self->_document, factory, assets, logger);
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error Cleanup = TextLayout_Deconstruct(&self->_layout);
+        Error_Deconstruct(&Cleanup);
+        return Result;
+    }
+    self->_factory = factory;
+    self->_shown = UIElementIcon_None();
+    self->_hasAppliedTheme = false;
+    self->_appliedThemeRevision = 0U;
+    return Error_CreateSuccess();
+}
+
+Error UIElementIconView_Deconstruct(UIElementIconView* self)
+{
+    Error First = TextLayout_Deconstruct(&self->_layout);
+    Error DocumentResult = TextDocument_Deconstruct(&self->_document);
+    if ((DocumentResult.Code != ErrorCode_Success) && (First.Code == ErrorCode_Success))
+    {
+        First = DocumentResult;
+    }
+    else
+    {
+        Error_Deconstruct(&DocumentResult);
+    }
+    return First;
+}
+
+/* The tree an icon shows: a letter one line tall, or an animation in a square one line tall; NULL for none. */
+static Error MakeIconTree(TextComponentFactory* factory, const UIElementIcon* icon, TextComponent** outRoot)
+{
+    *outRoot = NULL;
+    switch (icon->Kind)
+    {
+        case UIElementIconKind_None:
+            return Error_CreateSuccess();
+        case UIElementIconKind_Letter:
+        {
+            StringComponent* Letter = NULL;
+            Error Result = TextComponentFactory_CreateCodepoint(factory, (CodePoint)icon->Letter, &Letter);
+            if (Result.Code == ErrorCode_Success)
+            {
+                *outRoot = StringComponent_AsComponent(Letter);
+                Result = StringComponent_SetSize(Letter, ELEMENT_TEXT_COMPONENT_SIZE);
+            }
+            return Result;
+        }
+        case UIElementIconKind_SpriteAnimation:
+        {
+            SpriteComponent* Sprite = NULL;
+            Error Result = TextComponentFactory_CreateSprite(factory, icon->Name, &Sprite);
+            if (Result.Code == ErrorCode_Success)
+            {
+                *outRoot = SpriteComponent_AsComponent(Sprite);
+                Result = SpriteComponent_SetSize(Sprite, (Vector2){ .x = ELEMENT_TEXT_COMPONENT_SIZE, .y = ELEMENT_TEXT_COMPONENT_SIZE });
+            }
+            return Result;
+        }
+    }
+    return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIElementIconView: an icon of an unknown kind.");
+}
+
+Error UIElementIconView_Refresh(UIElementIconView* self, const Widget* widget, const UIElementIcon* icon)
+{
+    if (!UIElementIcon_Equals(&self->_shown, icon))
+    {
+        TextComponent* Root = NULL;
+        Error Result = MakeIconTree(self->_factory, icon, &Root);
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = TextDocument_SetRoot(&self->_document, Root);
+            Root = NULL; // The document owns it now, even when returning the old tree failed.
+        }
+        if (Root != NULL)
+        {
+            Error Cleanup = TextComponentFactory_ReturnTree(self->_factory, Root);
+            Error_Deconstruct(&Cleanup);
+        }
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+        self->_shown = *icon;
+    }
+    const UIScreen* Screen = Widget_GetScreen(widget);
+    const UITheme* Theme = UIScreen_GetTheme(Screen);
+    uint64_t Revision = UIScreen_GetThemeRevision(Screen);
+    if (!self->_hasAppliedTheme || (self->_appliedThemeRevision != Revision))
+    {
+        Error Result = TextDocument_SetDefaultFontName(&self->_document, UITheme_GetFontName(Theme));
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+        self->_hasAppliedTheme = true;
+        self->_appliedThemeRevision = Revision;
+    }
+    TextLayoutOptions Options = TextLayoutOptions_CreateDefault();
+    Options.SizeMultiplier = Math_ClampFloat(UIScreen_PixelsToFitted(Screen, UITheme_GetTextSize(Theme) * Widget_GetEffectiveScale(widget)),
+        0.0f, TEXT_LAYOUT_SIZE_MULTIPLIER_MAX);
+    return TextLayout_Refresh(&self->_layout, &self->_document, &Options);
+}
+
+Error UIElementIconView_Update(UIElementIconView* self, ProgramTime time)
+{
+    return TextDocument_Update(&self->_document, time);
+}
+
+Vector2 UIElementIconView_GetPixelSize(const UIElementIconView* self, const UIScreen* screen)
+{
+    if (!UIElementIconView_IsShowing(self))
+    {
+        return (Vector2){ .x = 0.0f, .y = 0.0f };
+    }
+    Vector2 Fitted = TextLayout_GetSize(&self->_layout);
+    float Pixels = 1.0f / UIScreen_PixelsToFitted(screen, 1.0f);
+    return (Vector2){ .x = Fitted.x * Pixels, .y = Fitted.y * Pixels };
+}
+
+Error UIElementIconView_Draw(const UIElementIconView* self, UIRenderContext* context, float x, float y, Color color)
+{
+    if (!UIElementIconView_IsShowing(self))
+    {
+        return Error_CreateSuccess();
+    }
     TextLayoutDrawArguments Arguments = TextLayoutDrawArguments_Create(RenderVector2D_Window((Vector2){ .x = x, .y = y }));
     Arguments.Tint = UIRenderColor_Multiply(UIRenderContext_GetTint(context), UIRenderColor_FromColor(color));
     return TextLayout_Draw(&self->_layout, UIRenderContext_GetRenderContext(context), &Arguments);
@@ -535,6 +805,26 @@ Error UIElement_PostMouseEvents(Widget* widget, const WidgetMouseInputArgs* args
     return Error_CreateSuccess();
 }
 
+Error UIElement_PostCue(Widget* widget, UIElementCue cue)
+{
+    return UIScreen_PostCue(Widget_GetScreen(widget), Widget_GetId(widget), cue);
+}
+
+Error UIElement_PostMouseCues(Widget* widget, const WidgetMouseInputArgs* args, bool isEnabled)
+{
+    switch (args->Type)
+    {
+        case UIMouseInputType_ButtonPress:
+            return UIElement_PostCue(widget, isEnabled ? UIElementCue_Press : UIElementCue_Refused);
+        case UIMouseInputType_ButtonRelease:
+            return isEnabled ? UIElement_PostCue(widget, UIElementCue_Release) : Error_CreateSuccess();
+        case UIMouseInputType_Move:
+        case UIMouseInputType_ReleaseOver:
+            return Error_CreateSuccess();
+    }
+    return Error_CreateSuccess();
+}
+
 Error UIElement_PostActivatedByMouse(Widget* widget, const WidgetMouseInputArgs* args)
 {
     UIEventMouse Mouse = MakeEventMouse(args, IsPointerOver(widget, args->ScreenPosition));
@@ -566,6 +856,10 @@ Error UIElement_ApplyOptions(Widget* widget, const UIElementOptions* options)
     {
         Result = Widget_SetPlacement(widget, &options->Placement);
     }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = Widget_SetScale(widget, options->Scale);
+    }
     return Result;
 }
 
@@ -588,4 +882,14 @@ Error UIElement_SetVariant(UIScreen* screen, uint64_t widgetId, const unsigned c
         Widget_InvalidateMeasure(Target);
     }
     return Result;
+}
+
+Error UIElement_SetScale(UIScreen* screen, uint64_t widgetId, float scale)
+{
+    Widget* Target = NULL;
+    if ((screen == NULL) || !UIScreen_TryGetWidgetById(screen, widgetId, &Target))
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "UIElement_SetScale: the widget is gone.");
+    }
+    return Widget_SetScale(Target, scale);
 }

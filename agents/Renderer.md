@@ -104,11 +104,29 @@ NaN rectangle cannot overflow the integer scissor). The stack holds
 clip. `RenderContext_EndRendering` turns off a clip left pushed. Users: the UI screen (`AreSubWidgetsCut`) and
 `TextLayout_Draw` (a label's cut).
 
+Under a transform (below) a clip is where the drawing stands before the transform, and what is pushed is the
+axis-aligned bounding box of where the transform puts it: the scissor never turns, so clipped content inside a turned box
+shows within that bounding box. This is a known limit.
+
+## Transforms
+
+`RenderContext_PushTransform(context, &pixelMatrix)` turns, moves and scales everything drawn until the matching
+`RenderContext_PopTransform`: the matrix maps render-buffer pixels to render-buffer pixels, in raymath's convention (column
+vectors, the translation in `m12` and `m13`). raylib applies it to every vertex on the CPU (rlgl's `rlVertex3f` while its
+matrix stack is in use), so textures, glyphs, rectangles and lines all follow. Transforms nest on the context's own stack,
+each push composed with the one in effect (the pushed one applied first), and only the composed matrix is on raylib's
+matrix stack, one entry at a time: raylib's stack holds 32 entries, a widget tree 64 levels. The stack holds
+`RENDER_CONTEXT_MAX_TRANSFORM_DEPTH` (64); deeper pushes are counted (pops stay balanced) but keep the deepest stored one.
+`RenderContext_TryGetTransform` reads the one in effect. Push and pop in pairs within one rendering pass;
+`RenderContext_EndRendering` drops whatever is left, as it does a clip. Users: the UI screen, for a widget's render
+transform ([UIFramework.md](UIFramework.md), "Rendering, z order, clipping").
+
 ## Measuring without a target
 
 `RenderContext_CreateMeasuring(context, sizePixels, targetAspectRatio, targetRelativePosition)` builds a context for a
 buffer of a known size with no target, for unit conversions outside rendering: the UI's Layout pass (in update) uses one
-for its viewport. Never begin rendering or draw through it.
+for its viewport. Never begin rendering or draw through it. Its clips and transforms are kept as on a real context (the
+stacks, the clip and the transform in effect) and never reach raylib, so their arithmetic can be checked without a window.
 
 ## Who uses it
 
@@ -121,7 +139,8 @@ directly.
 ## Pitfalls
 
 - Main thread only, with the window's GL context alive.
-- Clip only through `RenderContext_PushClip` / `PopClip`, balanced within one rendering pass.
+- Clip only through `RenderContext_PushClip` / `PopClip`, and transform only through `RenderContext_PushTransform` /
+  `PopTransform`, each balanced within one rendering pass, error paths included.
 - `RenderContext_RenderModel` uses each material's own shader and copies `RENDERER_MATERIAL_MAP_COUNT` maps per mesh
   (raylib's private `MAX_MATERIAL_MAPS`, 12 in the pinned build; see BUILDING.md). The world renderer's per-draw copies
   use the same constant.

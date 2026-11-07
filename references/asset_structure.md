@@ -1745,7 +1745,7 @@ Buildings are assembled from a kit of pieces and saved as prefabs (`agents/Prefa
 
 ## UI themes.
 
-The look of the UI's elements as data (`agents/UIElements.md`): a JSON file in `ui_themes/`. The whole UI changes at once with no element's code changing, and a pack can bring and override themes by their names. Unknown keys are refused everywhere, and every rule is checked when the file is read.
+The look of the UI's elements as data (`agents/UIElements.md`): a JSON file in `ui_themes/`. The whole UI changes at once with no element's code changing, and a pack can bring and override themes by their names. Unknown keys are refused everywhere but inside a `custom` block (whose keys are the look's), and every rule is checked when the file is read.
 
 ```
 {
@@ -1754,14 +1754,22 @@ The look of the UI's elements as data (`agents/UIElements.md`): a JSON file in `
                                          //            leaves raylib's built-in font. Default: the built-in font
     "text_size": number,                 // [OPTIONAL] the line height in UI pixels, in [4;256]. Default: 14
     "transition_time": number,           // [OPTIONAL] how long colours fade from state to state, in seconds, in [0;5]. Default: 0 (at once)
-    "elements": {                        // [OPTIONAL] a block per kind, each [OPTIONAL]: panel, label, button, toggle, slider
+    "tooltip_delay": number,             // [OPTIONAL] how long the pointer rests on an element before its hover text shows, in seconds,
+                                         //            in [0;10]. Default: 0.5
+    "palette": {                         // [OPTIONAL] at most 64 colours, by a name: 1 to 31 of a-z, 0-9, _, . and -, starting with a letter
+        "accent": "#9ec1ff",             //            each a plain colour ("Colors" above), never "@..."
+        "danger": "#7a2a2a"
+    },
+    "elements": {                        // [OPTIONAL] a block per kind, each [OPTIONAL]: panel, label, button, toggle, slider, tooltip
         "button": {
+            "look": namespaced key,      // [OPTIONAL] the code that draws the kind's elements; see below
             "padding": [8, 4],           // metrics: UI pixels, each number in [0;4096]; the table below has each kind's and its default
             "background": box,           // parts: a box or a colour per state; see below
             "text": colors,
+            "custom": { ... },           // [OPTIONAL] values for the look, by key; see below
             "variants": {                // [OPTIONAL] at most 16, by a name: 1 to 31 of a-z, 0-9, _, . and -, starting with a letter
-                "danger": {              // the kind's values with what this names on top, down to one state's colour
-                    "background": { "colors": { "normal": "#7a2a2a" } }
+                "danger": {              // the kind's values with what this names on top, down to one state's colour (no "look")
+                    "background": { "colors": { "normal": "@danger" } }
                 }
             }
         }
@@ -1776,10 +1784,26 @@ The look of the UI's elements as data (`agents/UIElements.md`): a JSON file in `
 | `button` | `padding` [8, 4], `min_size` [24, 24] | `background`: a box; `text`: colors |
 | `toggle` | `box_size` [16, 16], `spacing` 6, `min_size` [16, 24] | `box`: a box; `check`: a box, inside it while on, as a bar while mixed; `text`: colors |
 | `slider` | `min_size` [64, 24], `thumb_size` [12, 20], `track_thickness` 4 | `track`, `fill` (the track up to the thumb), `thumb`: boxes |
+| `tooltip` | `padding` [6, 3], `offset` [12, 18] (where its top-left sits from the pointer), `max_width` 320 (its text wraps past it) | `background`: a box; `text`: colors |
 
 A part a theme leaves out draws a plain box and is logged once; `"kind": "none"` leaves a box empty on purpose.
 
-**Colors** are a color per state, in the form of "Colors" above: `{ "normal": "#3a3a3a", "hovered": "#4a4a4a" }`. The states are `normal`, `hovered`, `pressed`, `focused`, `disabled`, `selected`, `invalid` and `entered` (an edit element, such as a slider, being edited: its keys are its own). A state left out takes `normal`'s, and `entered` takes `focused`'s first; with no `normal` either, opaque white. A nine-slice's `sources` fall back the same way.
+**Colors** are a color per state, each in the form of "Colors" above or `"@name"`, a colour of the theme's palette: `{ "normal": "#3a3a3a", "hovered": "@raised_hover" }`. The states are `normal`, `hovered`, `pressed`, `focused`, `disabled`, `selected`, `invalid` and `entered` (an edit element, such as a slider, being edited: its keys are its own). A state left out takes `normal`'s, and `entered` takes `focused`'s first; with no `normal` either, opaque white. A nine-slice's `sources` fall back the same way.
+
+**The palette** names a theme's colours once. Any other colour of the theme (a box's `colors` and its outline's, a colours part such as `text`, a custom colour) may then be written `"@name"`, and is that colour: references are resolved when the file is read, whatever the order of its keys, so a loaded theme holds plain colours and swapping one palette for another changes everything that names it (`tbp:test_light` is `tbp:test_flat` with another palette). A palette colour is a plain colour, never a reference. A name the palette does not have, or `"@..."` in a theme without a palette, is refused with a message naming where it is.
+
+**A look** (`"look"`) names the code that draws a kind's elements: a namespaced key (written without a namespace, `tbp`'s), registered in code, not an asset. The theme only carries the name and checks its form: it loads whether a look of that name exists or not. Only a kind's own block names a look; a variant draws with its kind's.
+
+**Custom values** (`"custom"`) are what a look with visuals the kind's parts do not describe reads, by keys the look chooses: 1 to 31 of a-z, 0-9, _, . and -, starting with a letter, at most 16 in a style. A value's form tells what it is:
+```
+"custom": {
+    "corner_radius": 6,                  // a number: a JSON number, finite, in [-1000000;1000000]
+    "shadow_offset": [2, 3],             // a vector: an array of exactly two JSON numbers, each in the same bounds
+    "glow": "#9ec1ff80",                 // a colour: a string, any string form of "Colors" above, or "@name" from the palette
+    "badge": box                         // a box: a compound, read as a box part is (a nine-slice's texture loads with the theme)
+}
+```
+Anything else (a boolean, null, another array) is refused. A variant starts with its kind's custom values: each of its own replaces its kind's of the same key whole (a box there is read anew, with its own `"kind"`), or is added, and the 16 count both together. The look gives each key its default, for a theme that leaves it out.
 
 **A box:**
 ```
@@ -1802,4 +1826,4 @@ A part a theme leaves out draws a plain box and is logged once; `"kind": "none"`
 }
 ```
 
-A theme may name at most 64 different textures. A texture that does not load, or whose art does not fit (a rectangle past the texture's edge, margins wider than a rectangle), is logged once when the theme loads and leaves only its parts plain. Give art `"filtering": "point"` and `"wrap": "clamp"` in its texture definition, so a corner's edge does not take in its neighbour.
+A theme may name at most 64 different textures, its custom boxes' included. A texture that does not load, or whose art does not fit (a rectangle past the texture's edge, margins wider than a rectangle), is logged once when the theme loads and leaves only its boxes plain. Give art `"filtering": "point"` and `"wrap": "clamp"` in its texture definition, so a corner's edge does not take in its neighbour.

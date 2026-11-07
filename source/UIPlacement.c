@@ -1,4 +1,5 @@
 #include "UIPlacement.h"
+#include "raylib/raymath.h"
 #include "wr/WRMath.h"
 
 
@@ -100,4 +101,77 @@ void UIPlacement_Resolve(const UIPlacement* placement, Vector2 parentPosition, V
         placement->OffsetMin.x, placement->OffsetMax.x, &outPosition->x, &outSize->x);
     ResolveAxis(parentPosition.y, parentSize.y, surfaceSizePixels.y, scale, placement->AnchorMin.y, placement->AnchorMax.y,
         placement->OffsetMin.y, placement->OffsetMax.y, &outPosition->y, &outSize->y);
+}
+
+
+// Public functions: the render transform.
+bool UIRenderTransform_IsValid(const UIRenderTransform* transform)
+{
+    bool IsScaleValid = (Math_AbsFloat(transform->VisualScale.x) <= UI_RENDER_TRANSFORM_MAX_SCALE)
+        && (Math_AbsFloat(transform->VisualScale.y) <= UI_RENDER_TRANSFORM_MAX_SCALE);
+    return IsFloatFinite(transform->Rotation) && IsFloatFinite(transform->Pivot.x) && IsFloatFinite(transform->Pivot.y)
+        && IsOffsetValid(transform->Offset) && IsScaleValid;
+}
+
+bool UIRenderTransform_IsIdentity(const UIRenderTransform* transform)
+{
+    return (transform->Rotation == 0.0f) && (transform->Offset.x == 0.0f) && (transform->Offset.y == 0.0f)
+        && (transform->VisualScale.x == 1.0f) && (transform->VisualScale.y == 1.0f);
+}
+
+/* The pivot in surface pixels. */
+static Vector2 GetPivotPixels(const UIRenderTransform* transform, Rectangle boxPixels)
+{
+    return (Vector2)
+    {
+        .x = boxPixels.x + (transform->Pivot.x * boxPixels.width),
+        .y = boxPixels.y + (transform->Pivot.y * boxPixels.height)
+    };
+}
+
+Matrix UIRenderTransform_GetMatrix(const UIRenderTransform* transform, Rectangle boxPixels, float offsetScale)
+{
+    Vector2 Pivot = GetPivotPixels(transform, boxPixels);
+    Matrix ToPivot = MatrixTranslate(-Pivot.x, -Pivot.y, 0.0f);
+    Matrix Scale = MatrixScale(transform->VisualScale.x, transform->VisualScale.y, 1.0f);
+    Matrix Turn = MatrixRotateZ(transform->Rotation);
+    Matrix Back = MatrixTranslate(Pivot.x + (transform->Offset.x * offsetScale), Pivot.y + (transform->Offset.y * offsetScale), 0.0f);
+    return MatrixMultiply(MatrixMultiply(MatrixMultiply(ToPivot, Scale), Turn), Back);
+}
+
+Vector2 UIRenderTransform_ApplyToPoint(const UIRenderTransform* transform, Rectangle boxPixels, float offsetScale, Vector2 point)
+{
+    Vector2 Pivot = GetPivotPixels(transform, boxPixels);
+    float Cos = Math_CosFloat(transform->Rotation);
+    float Sin = Math_SinFloat(transform->Rotation);
+    float X = (point.x - Pivot.x) * transform->VisualScale.x;
+    float Y = (point.y - Pivot.y) * transform->VisualScale.y;
+    return (Vector2)
+    {
+        .x = Pivot.x + (transform->Offset.x * offsetScale) + ((X * Cos) - (Y * Sin)),
+        .y = Pivot.y + (transform->Offset.y * offsetScale) + ((X * Sin) + (Y * Cos))
+    };
+}
+
+bool UIRenderTransform_TryInvertPoint(const UIRenderTransform* transform, Rectangle boxPixels, float offsetScale, Vector2 point,
+    Vector2* outPoint)
+{
+    if ((transform->VisualScale.x == 0.0f) || (transform->VisualScale.y == 0.0f))
+    {
+        return false;
+    }
+    Vector2 Pivot = GetPivotPixels(transform, boxPixels);
+    float Cos = Math_CosFloat(transform->Rotation);
+    float Sin = Math_SinFloat(transform->Rotation);
+    float X = point.x - Pivot.x - (transform->Offset.x * offsetScale);
+    float Y = point.y - Pivot.y - (transform->Offset.y * offsetScale);
+    // Turned back (the transpose of a turn is its inverse), then scaled back.
+    float TurnedX = (X * Cos) + (Y * Sin);
+    float TurnedY = (Y * Cos) - (X * Sin);
+    *outPoint = (Vector2)
+    {
+        .x = Pivot.x + (TurnedX / transform->VisualScale.x),
+        .y = Pivot.y + (TurnedY / transform->VisualScale.y)
+    };
+    return true;
 }

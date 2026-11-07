@@ -202,6 +202,11 @@ static void ForgetDyingReferences(UIScreen* self)
     {
         self->_enteredWidgetId = WIDGET_ID_INVALID;
     }
+    // The hover text that shows goes with its widget at once.
+    if (IsIdDying(self, UIScreen_InternalGetCurrentTooltipWidgetId(self)))
+    {
+        UIScreen_InternalForgetCurrentTooltip(self);
+    }
     // The stack is a path into the tree: everything after the first dying entry lies inside it.
     for (size_t Index = 0; Index < self->_navStack._count; Index++)
     {
@@ -242,6 +247,7 @@ static Error TeardownSubtree(UIScreen* self, Widget* widget)
 
     uint64_t Id = widget->_id;
     UIScreen_InternalRemoveWidgetSubscriptions(self, Id);
+    UIScreen_InternalRemoveWidgetTooltip(self, Id);
     size_t SlotIndex = 0;
     if (FindSlot(self, Id, &SlotIndex) != NULL)
     {
@@ -277,9 +283,68 @@ static bool PointInBox(Vector2 point, Vector2 position, Vector2 size)
         && (point.y >= position.y) && (point.y <= (position.y + size.y));
 }
 
+/* Whether drawing and pointing go through the widget's render transform: one that changes nothing costs nothing. */
+static bool HasActiveTransform(const Widget* widget)
+{
+    return widget->_hasRenderTransform && !UIRenderTransform_IsIdentity(&widget->_renderTransform);
+}
+
+/* A box in normalized screen coordinates, in surface pixels. */
+static Rectangle BoxToPixels(Vector2 position, Vector2 size, Vector2 surfacePixels)
+{
+    return (Rectangle){ .x = position.x * surfacePixels.x, .y = position.y * surfacePixels.y, .width = size.x * surfacePixels.x,
+        .height = size.y * surfacePixels.y };
+}
+
+/* Where in its box a widget is shown at a point of its parent's space (normalized screen coordinates, the transforms above
+ * it undone), its own transform undone too. False when its transform holds no point. */
+static bool TryUndoTransform(const Widget* widget, Vector2 position, Vector2 size, Vector2 surfacePixels, Vector2 point,
+    Vector2* outPoint)
+{
+    if (!HasActiveTransform(widget))
+    {
+        *outPoint = point;
+        return true;
+    }
+    Vector2 Mapped;
+    Vector2 PointPixels = { .x = point.x * surfacePixels.x, .y = point.y * surfacePixels.y };
+    if (!UIRenderTransform_TryInvertPoint(&widget->_renderTransform, BoxToPixels(position, size, surfacePixels),
+        Widget_InternalGetParentScale(widget), PointPixels, &Mapped))
+    {
+        return false;
+    }
+    *outPoint = (Vector2){ .x = Mapped.x / surfacePixels.x, .y = Mapped.y / surfacePixels.y };
+    return true;
+}
+
+/* Where a point of a widget's box (normalized screen coordinates, as layout sees it) shows in its parent's space. */
+static Vector2 ApplyTransform(const Widget* widget, Vector2 position, Vector2 size, Vector2 surfacePixels, Vector2 point)
+{
+    if (!HasActiveTransform(widget))
+    {
+        return point;
+    }
+    Vector2 PointPixels = { .x = point.x * surfacePixels.x, .y = point.y * surfacePixels.y };
+    Vector2 Shown = UIRenderTransform_ApplyToPoint(&widget->_renderTransform, BoxToPixels(position, size, surfacePixels),
+        Widget_InternalGetParentScale(widget), PointPixels);
+    return (Vector2){ .x = Shown.x / surfacePixels.x, .y = Shown.y / surfacePixels.y };
+}
+
+/* A point in a box, as a share of it per axis; 0 on an axis of no size. */
+static Vector2 ToBoxShare(Vector2 point, Vector2 position, Vector2 size)
+{
+    return (Vector2)
+    {
+        .x = (size.x != 0.0f) ? ((point.x - position.x) / size.x) : 0.0f,
+        .y = (size.y != 0.0f) ? ((point.y - position.y) / size.y) : 0.0f
+    };
+}
+
 /* The top-most input-enabled widget of a subtree at a point; a widget that is not rendered is not there, with its subtree.
+ * @p point is in the parent's space with the transforms above it undone; @p screenPosition is what the screen was asked about.
  * Recursion is bounded by WIDGET_MAX_TREE_DEPTH. */
-static Widget* HitTestNode(Widget* widget, Vector2 screenPosition, Vector2 parentPosition, Vector2 parentSize)
+static Widget* HitTestNode(Widget* widget, Vector2 screenPosition, Vector2 point, Vector2 parentPosition, Vector2 parentSize,
+    Vector2 surfacePixels)
 {
     if (!Widget_IsRendered(widget))
     {
@@ -290,21 +355,37 @@ static Widget* HitTestNode(Widget* widget, Vector2 screenPosition, Vector2 paren
     Vector2 AbsolutePosition = { .x = parentPosition.x + (Position.x * parentSize.x), .y = parentPosition.y + (Position.y * parentSize.y) };
     Vector2 AbsoluteSize = { .x = Size.x * parentSize.x, .y = Size.y * parentSize.y };
 
-    bool IsInside = PointInBox(screenPosition, AbsolutePosition, AbsoluteSize);
+    Vector2 Local = point;
+    if (!TryUndoTransform(widget, AbsolutePosition, AbsoluteSize, surfacePixels, point, &Local))
+    {
+        return NULL; // A transform that holds no point: neither the widget nor anything it holds shows anywhere to be hit.
+    }
+    bool IsInside = PointInBox(Local, AbsolutePosition, AbsoluteSize);
     if (Widget_AreSubWidgetsCut(widget) && !IsInside)
     {
         return NULL; // Clipped: neither the widget nor its (clipped) children can be hit here.
     }
     for (size_t Index = widget->_drawOrder._count; Index-- > 0U;)
     {
-        Widget* Hit = HitTestNode(Widget_InternalGetDrawOrderAt(&widget->_drawOrder, Index), screenPosition,
-            AbsolutePosition, AbsoluteSize);
+        Widget* Hit = HitTestNode(Widget_InternalGetDrawOrderAt(&widget->_drawOrder, Index), screenPosition, Local,
+            AbsolutePosition, AbsoluteSize, surfacePixels);
         if (Hit != NULL)
         {
             return Hit;
         }
     }
-    return (Widget_IsInputEnabled(widget) && IsInside) ? widget : NULL;
+    if (!Widget_IsInputEnabled(widget))
+    {
+        return NULL;
+    }
+    bool IsHit = IsInside;
+    if (widget->VTable->HitTest != NULL)
+    {
+        WidgetHitTestArgs Args = { .ScreenPosition = screenPosition, .LocalPosition = ToBoxShare(Local, AbsolutePosition, AbsoluteSize),
+            .IsInsideBox = IsInside };
+        IsHit = widget->VTable->HitTest(widget, &Args);
+    }
+    return IsHit ? widget : NULL;
 }
 
 /* A pixel edge, snapped when float noise is all that keeps it from a whole pixel. */
@@ -325,23 +406,15 @@ static Rectangle ScreenBoxToPixels(RenderContext* renderContext, Vector2 positio
     return (Rectangle){ .x = Left, .y = Top, .width = Right - Left, .height = Bottom - Top };
 }
 
-/* Draws a subtree: the widget, then its children by draw order; one that is not rendered hides its subtree. Recursion is
- * bounded by WIDGET_MAX_TREE_DEPTH. */
 static Error RenderNode(RenderContext* renderContext, Widget* widget, Vector2 parentPosition, Vector2 parentSize,
-    RenderColor parentTint)
-{
-    if (!Widget_IsRendered(widget))
-    {
-        return Error_CreateSuccess();
-    }
-    Vector2 Position = Widget_GetPosition(widget);
-    Vector2 Size = Widget_GetSize(widget);
-    Vector2 AbsolutePosition = { .x = parentPosition.x + (Position.x * parentSize.x), .y = parentPosition.y + (Position.y * parentSize.y) };
-    Vector2 AbsoluteSize = { .x = Size.x * parentSize.x, .y = Size.y * parentSize.y };
-    RenderColor Tint = UIRenderColor_Multiply(parentTint, Widget_GetRenderTint(widget));
+    RenderColor parentTint);
 
+/* Draws a widget, then its children by draw order (clipped to its box when it cuts them). */
+static Error RenderWidgetAndChildren(RenderContext* renderContext, Widget* widget, Vector2 absolutePosition, Vector2 absoluteSize,
+    RenderColor tint)
+{
     UIRenderContext Context;
-    UIRenderContext_Create(&Context, renderContext, AbsolutePosition, AbsoluteSize, Tint);
+    UIRenderContext_Create(&Context, renderContext, absolutePosition, absoluteSize, tint);
     Error RenderResult = Widget_Render(widget, &Context);
     if (RenderResult.Code != ErrorCode_Success)
     {
@@ -355,17 +428,47 @@ static Error RenderNode(RenderContext* renderContext, Widget* widget, Vector2 pa
     bool IsClipped = Widget_AreSubWidgetsCut(widget);
     if (IsClipped)
     {
-        RenderContext_PushClip(renderContext, ScreenBoxToPixels(renderContext, AbsolutePosition, AbsoluteSize));
+        RenderContext_PushClip(renderContext, ScreenBoxToPixels(renderContext, absolutePosition, absoluteSize));
     }
     Error Result = Error_CreateSuccess();
     for (size_t Index = 0; (Index < widget->_drawOrder._count) && (Result.Code == ErrorCode_Success); Index++)
     {
-        Result = RenderNode(renderContext, Widget_InternalGetDrawOrderAt(&widget->_drawOrder, Index), AbsolutePosition,
-            AbsoluteSize, Tint);
+        Result = RenderNode(renderContext, Widget_InternalGetDrawOrderAt(&widget->_drawOrder, Index), absolutePosition,
+            absoluteSize, tint);
     }
     if (IsClipped)
     {
         RenderContext_PopClip(renderContext);
+    }
+    return Result;
+}
+
+/* Draws a subtree; one that is not rendered hides its subtree, and a render transform turns all of it. Whatever it pushes it pops
+ * on every path, an error included. Recursion is bounded by WIDGET_MAX_TREE_DEPTH. */
+static Error RenderNode(RenderContext* renderContext, Widget* widget, Vector2 parentPosition, Vector2 parentSize,
+    RenderColor parentTint)
+{
+    if (!Widget_IsRendered(widget))
+    {
+        return Error_CreateSuccess();
+    }
+    Vector2 Position = Widget_GetPosition(widget);
+    Vector2 Size = Widget_GetSize(widget);
+    Vector2 AbsolutePosition = { .x = parentPosition.x + (Position.x * parentSize.x), .y = parentPosition.y + (Position.y * parentSize.y) };
+    Vector2 AbsoluteSize = { .x = Size.x * parentSize.x, .y = Size.y * parentSize.y };
+    RenderColor Tint = UIRenderColor_Multiply(parentTint, Widget_GetRenderTint(widget));
+
+    bool IsTransformed = HasActiveTransform(widget);
+    if (IsTransformed)
+    {
+        Rectangle BoxPixels = BoxToPixels(AbsolutePosition, AbsoluteSize, renderContext->_renderBufferSizePixels);
+        Matrix Local = UIRenderTransform_GetMatrix(&widget->_renderTransform, BoxPixels, Widget_InternalGetParentScale(widget));
+        RenderContext_PushTransform(renderContext, &Local);
+    }
+    Error Result = RenderWidgetAndChildren(renderContext, widget, AbsolutePosition, AbsoluteSize, Tint);
+    if (IsTransformed)
+    {
+        RenderContext_PopTransform(renderContext);
     }
     return Result;
 }
@@ -462,13 +565,13 @@ static Error UpdateWidgets(UIScreen* self, ProgramTime time)
 }
 
 /* Turns a widget's placement into its position and size, writing them only when they change: an idle screen does not
- * hit-test again every tick. */
+ * hit-test again every tick. Its offsets count in its parent's effective scale (a root's: the screen's). */
 static Error ApplyPlacement(const UIScreen* self, Widget* widget, Vector2 parentPosition, Vector2 parentSize)
 {
     Vector2 Position;
     Vector2 Size;
-    UIPlacement_Resolve(&widget->_placement, parentPosition, parentSize, self->_viewport.SizePixels, self->_scale, &Position,
-        &Size);
+    UIPlacement_Resolve(&widget->_placement, parentPosition, parentSize, self->_viewport.SizePixels,
+        Widget_InternalGetParentScale(widget), &Position, &Size);
     if ((Position.x != widget->_position.x) || (Position.y != widget->_position.y))
     {
         Error Result = Widget_SetPosition(widget, Position);
@@ -499,7 +602,7 @@ static Error LayoutWidgets(UIScreen* self)
     RenderContext Measure;
     RenderContext_CreateMeasuring(&Measure, self->_viewport.SizePixels, self->_viewport.TargetAspectRatio,
         self->_viewport.TargetRelativePosition);
-    UIMeasureContext Sizing = { .Measure = &Measure, .Scale = self->_scale };
+    UIMeasureContext Sizing = { .Measure = &Measure };
     for (size_t Index = 0; Index < self->_updateSnapshot._count; Index++)
     {
         Widget* Target = UIScreen_InternalResolve(self, *(uint64_t*)GenericBuffer_GetPointerToElement(&self->_updateSnapshot, Index));
@@ -544,6 +647,10 @@ static Error RunUpdate(UIScreen* self, ProgramTime time, const UIScreenInput* in
     if (Result.Code == ErrorCode_Success)
     {
         Result = UIScreen_InternalRouteInput(self, time, input);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIScreen_InternalUpdateTooltip(self, time);
     }
     if (Result.Code == ErrorCode_Success)
     {
@@ -763,6 +870,7 @@ static bool LinkRoot(UIScreen* self, Widget* widget)
         Widget_InternalSetScreenRoot(widget, false, 0U);
         return false;
     }
+    Widget_InternalUpdateEffectiveScale(widget, self->_scale);
     self->_isHitTestDirty = true;
     return true;
 }
@@ -926,6 +1034,7 @@ Error UIScreen_Construct(UIScreen* self, UIWidgetFactory* factory, Logger* logge
     GenericBuffer_AllocateVariable(&self->_updateSnapshot, 16U, sizeof(uint64_t));
     UIScreen_InternalInitializeNavigation(self);
     UIScreen_InternalInitializeEvents(self);
+    UIScreen_InternalInitializeTooltips(self);
 
     self->_nextSequence = 1U;
     return Error_CreateSuccess();
@@ -967,6 +1076,7 @@ Error UIScreen_Deconstruct(UIScreen* self)
     KeepFirstError(&FirstError, &AnimationResult);
     UIScreen_InternalReleaseEvents(self);
     UIScreen_InternalReleaseNavigation(self);
+    UIScreen_InternalReleaseTooltips(self);
     Memory_Free(self->_slots._data);
     Memory_Free(self->_roots._data);
     Memory_Free(self->_rootDrawOrder._data);
@@ -1022,6 +1132,11 @@ Error UIScreen_SetScale(UIScreen* self, float scale)
     {
         self->_scale = scale;
         self->_measureGeneration++;
+        self->_isHitTestDirty = true; // Visual offsets count in the scale: what shows under the pointer can move with no box changing.
+        for (size_t Index = 0; Index < self->_roots._count; Index++)
+        {
+            Widget_InternalUpdateEffectiveScale(*(Widget**)GenericBuffer_GetPointerToElement(&self->_roots, Index), scale);
+        }
     }
     return Error_CreateSuccess();
 }
@@ -1262,7 +1377,8 @@ bool UIScreen_TryGetTopmostAt(UIScreen* self, Vector2 screenPosition, Widget** o
     for (size_t Index = self->_rootDrawOrder._count; Index-- > 0U;)
     {
         Widget* Root = Widget_InternalGetDrawOrderAt(&self->_rootDrawOrder, Index);
-        Widget* Hit = (Root->_rootLayer != UIScreenLayer_Overlay) ? HitTestNode(Root, screenPosition, RootPosition, RootSize) : NULL;
+        Widget* Hit = (Root->_rootLayer != UIScreenLayer_Overlay)
+            ? HitTestNode(Root, screenPosition, screenPosition, RootPosition, RootSize, self->_viewport.SizePixels) : NULL;
         if (Hit != NULL)
         {
             *outWidget = Hit;
@@ -1274,30 +1390,86 @@ bool UIScreen_TryGetTopmostAt(UIScreen* self, Vector2 screenPosition, Widget** o
 
 
 // Public functions: coordinate conversion.
+/* The chain from a widget's root down to it, and each one's absolute box as layout put it. Returns how many. */
+static size_t GetChainBoxes(const Widget* widget, const Widget** outChain, Vector2* outPositions, Vector2* outSizes)
+{
+    size_t Count = 0;
+    for (const Widget* Current = widget; (Current != NULL) && (Count < WIDGET_MAX_TREE_DEPTH); Current = Current->_parent)
+    {
+        outChain[Count++] = Current;
+    }
+    // Reversed: the root first.
+    for (size_t Index = 0; Index < (Count / 2U); Index++)
+    {
+        const Widget* Swap = outChain[Index];
+        outChain[Index] = outChain[Count - 1U - Index];
+        outChain[Count - 1U - Index] = Swap;
+    }
+    Vector2 ParentPosition = { .x = 0.0f, .y = 0.0f };
+    Vector2 ParentSize = { .x = 1.0f, .y = 1.0f };
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        const Widget* Node = outChain[Index];
+        outPositions[Index] = (Vector2){ .x = ParentPosition.x + (Node->_position.x * ParentSize.x),
+            .y = ParentPosition.y + (Node->_position.y * ParentSize.y) };
+        outSizes[Index] = (Vector2){ .x = Node->_size.x * ParentSize.x, .y = Node->_size.y * ParentSize.y };
+        ParentPosition = outPositions[Index];
+        ParentSize = outSizes[Index];
+    }
+    return Count;
+}
+
 Vector2 UIScreen_WidgetToScreen(const UIScreen* self, const Widget* widget, Vector2 widgetLocal)
 {
-    UNUSED(self);
-    Vector2 AbsolutePosition;
-    Vector2 AbsoluteSize;
-    UIScreen_InternalGetAbsoluteBox(widget, &AbsolutePosition, &AbsoluteSize);
-    return (Vector2)
+    const Widget* Chain[WIDGET_MAX_TREE_DEPTH];
+    Vector2 Positions[WIDGET_MAX_TREE_DEPTH];
+    Vector2 Sizes[WIDGET_MAX_TREE_DEPTH];
+    size_t Count = GetChainBoxes(widget, Chain, Positions, Sizes);
+    if (Count == 0U)
     {
-        .x = AbsolutePosition.x + (widgetLocal.x * AbsoluteSize.x),
-        .y = AbsolutePosition.y + (widgetLocal.y * AbsoluteSize.y)
-    };
+        return widgetLocal;
+    }
+    Vector2 Point = { .x = Positions[Count - 1U].x + (widgetLocal.x * Sizes[Count - 1U].x),
+        .y = Positions[Count - 1U].y + (widgetLocal.y * Sizes[Count - 1U].y) };
+    // The widget's own transform first, then each ancestor's out to the root.
+    for (size_t Index = Count; Index-- > 0U;)
+    {
+        Point = ApplyTransform(Chain[Index], Positions[Index], Sizes[Index], self->_viewport.SizePixels, Point);
+    }
+    return Point;
 }
 
 Vector2 UIScreen_ScreenToWidget(const UIScreen* self, const Widget* widget, Vector2 screenPosition)
 {
-    UNUSED(self);
-    Vector2 AbsolutePosition;
-    Vector2 AbsoluteSize;
-    UIScreen_InternalGetAbsoluteBox(widget, &AbsolutePosition, &AbsoluteSize);
-    return (Vector2)
+    const Widget* Chain[WIDGET_MAX_TREE_DEPTH];
+    Vector2 Positions[WIDGET_MAX_TREE_DEPTH];
+    Vector2 Sizes[WIDGET_MAX_TREE_DEPTH];
+    size_t Count = GetChainBoxes(widget, Chain, Positions, Sizes);
+    if (Count == 0U)
     {
-        .x = (AbsoluteSize.x != 0.0f) ? ((screenPosition.x - AbsolutePosition.x) / AbsoluteSize.x) : 0.0f,
-        .y = (AbsoluteSize.y != 0.0f) ? ((screenPosition.y - AbsolutePosition.y) / AbsoluteSize.y) : 0.0f
-    };
+        return screenPosition;
+    }
+    // Each transform undone from the root in: a level that holds no point (a visual scale of 0) is passed as it is, so a drag
+    // still has a place to go.
+    Vector2 Point = screenPosition;
+    for (size_t Index = 0; Index < Count; Index++)
+    {
+        Vector2 Undone;
+        if (TryUndoTransform(Chain[Index], Positions[Index], Sizes[Index], self->_viewport.SizePixels, Point, &Undone))
+        {
+            Point = Undone;
+        }
+    }
+    return ToBoxShare(Point, Positions[Count - 1U], Sizes[Count - 1U]);
+}
+
+
+Rectangle UIScreen_GetWidgetPixelBox(const UIScreen* self, const Widget* widget)
+{
+    Vector2 Position;
+    Vector2 Size;
+    UIScreen_InternalGetAbsoluteBox(widget, &Position, &Size);
+    return BoxToPixels(Position, Size, self->_viewport.SizePixels);
 }
 
 

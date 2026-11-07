@@ -20,10 +20,28 @@
     "\"outline\": {\"thickness\": 2, \"colors\": {\"normal\": \"#111111\"}}}," \
     "\"text\": {\"normal\": \"#e8e8e8\", \"disabled\": \"#808080\"}," \
     "\"variants\": {\"danger\": {\"background\": {\"colors\": {\"normal\": \"#7a2a2a\"}}}, \"bare\": {\"background\": {\"kind\": \"none\"}, \"min_size\": [1, 2]}}}}}"
+/** A theme whose colours come from its palette, in every place a colour can be: a box's colours, its outline's, a colours
+ *  part, a custom colour, and a variant's of each. The palette comes after the elements in the text. */
+#define PALETTE_THEME \
+    "{\"name\": \"painted\", \"elements\": {\"button\": {" \
+    "\"background\": {\"kind\": \"flat\", \"colors\": {\"normal\": \"@fill\", \"hovered\": \"#aabbcc\"}, \"outline\": {\"colors\": {\"normal\": \"@edge\"}}}," \
+    "\"text\": {\"normal\": \"@ink\", \"disabled\": \"@faded\"}, \"custom\": {\"glow\": \"@glow\"}," \
+    "\"variants\": {\"loud\": {\"background\": {\"colors\": {\"normal\": \"@edge\"}}, \"custom\": {\"glow\": \"@ink\"}}}}}," \
+    "\"palette\": {\"fill\": \"#102030\", \"edge\": \"#405060\", \"ink\": [1, 2, 3], \"glow\": {\"r\": 7, \"g\": 8, \"b\": 9, \"a\": 10}," \
+    "\"faded\": \"#11223344\"}}"
+/** A slider with a custom value of every kind, at the bounds too, and a variant that names nothing. */
+#define CUSTOM_THEME \
+    "{\"name\": \"custom\", \"palette\": {\"gold\": \"#ffd27a\"}, \"elements\": {\"slider\": {\"custom\": {" \
+    "\"radius\": 4.5, \"count\": 3, \"lowest\": -1000000, \"highest\": 1000000, \"offset\": [1, -2.5], \"tint\": \"#ff000080\"," \
+    "\"gold\": \"@gold\", \"frame\": {\"kind\": \"flat\", \"colors\": {\"normal\": \"@gold\"}, \"outline\": {\"thickness\": 2}}," \
+    "\"art\": {\"kind\": \"nine_slice\", \"texture\": \"art\", \"margins\": 2}}," \
+    "\"variants\": {\"plain\": {}}}, \"button\": {\"min_size\": [1, 1]}}}"
 /** How many bytes a refusal test's JSON may take. */
 #define THEME_TEXT_CAPACITY ((size_t)1024)
 /** Room for a log's path and text. */
 #define LOG_BUFFER_CAPACITY ((size_t)256)
+/** Where the game's shipped themes are, from the repository's root. */
+#define SHIPPED_THEME_DIRECTORY "compile/out/asset/ui_themes/"
 
 
 // Types.
@@ -111,6 +129,79 @@ static bool DoQuadsTileTheBox(const UINineSliceQuad* quads, Rectangle box)
     return true;
 }
 
+/* Builds every definition of a table, each of which must be refused with its message. */
+static void CheckRefusals(TestRun* run, const Refusal* refusals, size_t count)
+{
+    TestAssetFixture Fixture;
+    if (!TestAssetFixture_Construct(run, &Fixture))
+    {
+        return;
+    }
+    for (size_t Index = 0U; Index < count; Index++)
+    {
+        const char* Parts[] = { refusals[Index].MessagePart, NULL };
+        Error Result = BuildTheme(&Fixture, refusals[Index].Json);
+        if (!TestText_CheckErrorMessage(run, Result, ErrorCode_InvalidAssetDefinition, Parts))
+        {
+            printf("    in refusal %zu: %s\n", Index, refusals[Index].Json);
+        }
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+/* A button whose kind has @p kindCount custom numbers ("k0", ...) and a variant that names @p overrideCount of them again
+ * and adds @p addCount of its own ("n0", ...). */
+static void WriteMergedCustomTheme(char* text, size_t capacity, int kindCount, int overrideCount, int addCount)
+{
+    int Length = snprintf(text, capacity, "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {");
+    for (int Index = 0; Index < kindCount; Index++)
+    {
+        Length += snprintf(text + Length, capacity - (size_t)Length, "%s\"k%d\": %d", (Index > 0) ? ", " : "", Index, Index);
+    }
+    Length += snprintf(text + Length, capacity - (size_t)Length, "}, \"variants\": {\"v\": {\"custom\": {");
+    for (int Index = 0; Index < (overrideCount + addCount); Index++)
+    {
+        bool IsOverride = Index < overrideCount;
+        Length += snprintf(text + Length, capacity - (size_t)Length, "%s\"%c%d\": 100", (Index > 0) ? ", " : "",
+            IsOverride ? 'k' : 'n', IsOverride ? Index : (Index - overrideCount));
+    }
+    snprintf(text + Length, capacity - (size_t)Length, "}}}}}}");
+}
+
+/* Reads a shipped theme's file ("compile/out/asset/ui_themes/<file>") into @p outText, NUL-terminated. */
+static bool ReadShippedTheme(TestRun* run, const char* file, GenericBuffer* outText)
+{
+    char Relative[LOG_BUFFER_CAPACITY];
+    snprintf(Relative, sizeof(Relative), "%s%s", SHIPPED_THEME_DIRECTORY, file);
+    GenericBuffer Path;
+    GenericBuffer_AllocateVariable(&Path, 0U, sizeof(unsigned char));
+    bool IsRead = TEST_CHECK_SUCCESS(run, TestRun_BuildRepositoryPath(run, Relative, &Path))
+        && TEST_CHECK_SUCCESS(run, FileSystem_ReadAllText(Path._data, outText));
+    Memory_Free(Path._data);
+    return IsRead;
+}
+
+/* The font and the art the shipped themes name, built in code so they load without a window (16 x 16 textures). */
+static bool AddShippedThemeDependencies(TestRun* run, TestAssetFixture* fixture)
+{
+    return TestAssets_AddFont(run, fixture, "ui_small", 5, NULL) && TestAssets_AddTexture(run, fixture, "ui_box", 11U, NULL)
+        && TestAssets_AddTexture(run, fixture, "ui_check", 12U, NULL) && TestAssets_AddTexture(run, fixture, "ui_track", 13U, NULL)
+        && TestAssets_AddTexture(run, fixture, "ui_knob", 14U, NULL);
+}
+
+/* The colour a part of a kind's style (or of one of its variants) shows in a state: a box's fill or a colours part's. */
+static Color PartColor(const UITheme* theme, UIElementKind kind, const char* variant, int32_t part, UIElementState state)
+{
+    const UIThemeStyle* Style = UITheme_FindStyle(theme, kind, (const unsigned char*)variant);
+    const UIBoxStyle* Box = UIThemeStyle_GetBox(Style, part);
+    if (Box != NULL)
+    {
+        return UIBoxStyle_Resolve(Box, state).Fill;
+    }
+    const UIStateColors* Colors = UIThemeStyle_GetColors(Style, part);
+    return (Colors != NULL) ? UIStateColors_Resolve(Colors, state, BLANK) : BLANK;
+}
+
 /* Counts the occurrences of @p needle in "<directory>/logs/latest.log". */
 static size_t CountInLog(TestRun* run, const unsigned char* directory, const char* needle)
 {
@@ -147,7 +238,9 @@ static void AMinimalThemeGetsTheDefaults(TestRun* run)
             TEST_CHECK(run, UITheme_GetFontName(Theme) == NULL);
             TEST_CHECK(run, UITheme_GetTextSize(Theme) == UI_THEME_DEFAULT_TEXT_SIZE);
             TEST_CHECK(run, UITheme_GetTransitionSeconds(Theme) == 0.0f);
+            TEST_CHECK(run, UITheme_GetTooltipDelaySeconds(Theme) == UI_THEME_DEFAULT_TOOLTIP_DELAY_SECONDS);
             TEST_CHECK(run, UITheme_FindStyle(Theme, UIElementKind_Button, NULL) == NULL);
+            TEST_CHECK(run, UITheme_GetLookName(Theme, UIElementKind_Button) == NULL);
         }
         TestAssetFixture_Deconstruct(run, &Fixture);
     }
@@ -158,7 +251,11 @@ static void NoThemeAtAllAnswersWithTheDefaults(TestRun* run)
     TEST_CHECK(run, UITheme_GetFontName(NULL) == NULL);
     TEST_CHECK(run, UITheme_GetTextSize(NULL) == UI_THEME_DEFAULT_TEXT_SIZE);
     TEST_CHECK(run, UITheme_GetTransitionSeconds(NULL) == 0.0f);
+    TEST_CHECK(run, UITheme_GetTooltipDelaySeconds(NULL) == UI_THEME_DEFAULT_TOOLTIP_DELAY_SECONDS);
+    TEST_CHECK(run, UITheme_GetLookName(NULL, UIElementKind_Button) == NULL);
     TEST_CHECK(run, UITheme_FindStyle(NULL, UIElementKind_Button, NULL) == NULL);
+    TEST_CHECK(run, UIThemeStyle_FindCustomNumber(NULL, u8"radius", 2.0f) == 2.0f);
+    TEST_CHECK(run, UIThemeStyle_FindCustomBox(NULL, u8"frame") == NULL);
     TEST_CHECK(run, UIThemeStyle_GetBox(NULL, UIButtonPart_Background) == NULL);
     TEST_CHECK(run, UIThemeStyle_GetColors(NULL, UIButtonPart_Text) == NULL);
     Vector2 Padding = UIThemeStyle_GetVector(NULL, UIElementKind_Button, UIButtonPart_Padding);
@@ -380,21 +477,93 @@ static void EveryRuleIsRefusedWithItsMessage(TestRun* run)
         { "{\"name\": \"t\", \"elements\": {\"button\": {\"variants\": {\"a\": {\"variants\": {}}}}}}", "variants" },
         { "{\"name\": \"t\", \"elements\": {\"button\": {\"variants\": {\"a\": {\"background\": {\"colors\": {}}}}}}}", "needs a \"kind\"" },
         { "{\"name\": \"t\", \"elements\": {\"button\": {\"background\": {\"kind\": \"flat\"}, \"variants\": {\"a\": {\"background\": {\"kind\": \"nine_slice\"}}}}}}", "needs a \"texture\" and \"margins\"" },
+        { "{\"name\": \"t\", \"tooltip_delay\": -0.5}", "UI theme \"tbp:t\", tooltip_delay: -0.5 is outside [0, 10]" },
+        { "{\"name\": \"t\", \"tooltip_delay\": 10.5}", "tooltip_delay: 10.5 is outside" },
+        { "{\"name\": \"t\", \"tooltip_delay\": \"soon\"}", "tooltip_delay" },
+        { "{\"name\": \"t\", \"elements\": {\"tooltip\": {\"thumb\": {}}}}", "thumb" },
+        { "{\"name\": \"t\", \"elements\": {\"tooltip\": {\"max_width\": 5000}}}", "elements.tooltip.max_width: 5000 is outside" },
+        { "{\"name\": \"t\", \"elements\": {\"tooltip\": {\"offset\": [-1, 0]}}}", "elements.tooltip.offset: each component" },
+        { "{\"name\": \"t\", \"elements\": {\"tooltip\": {\"background\": {}}}}", "elements.tooltip.background: it needs a \"kind\"" },
     };
-    TestAssetFixture Fixture;
-    if (TestAssetFixture_Construct(run, &Fixture))
+    CheckRefusals(run, Refusals, sizeof(Refusals) / sizeof(Refusals[0]));
+}
+
+/* A palette's own rules, and a reference that cannot be resolved, refused with where it is. */
+static void PaletteRulesAreRefusedNamingWhere(TestRun* run)
+{
+    static const Refusal Refusals[] =
     {
-        for (size_t Index = 0U; Index < (sizeof(Refusals) / sizeof(Refusals[0])); Index++)
-        {
-            const char* Parts[] = { Refusals[Index].MessagePart, NULL };
-            Error Result = BuildTheme(&Fixture, Refusals[Index].Json);
-            if (!TestText_CheckErrorMessage(run, Result, ErrorCode_InvalidAssetDefinition, Parts))
-            {
-                printf("    in refusal %zu: %s\n", Index, Refusals[Index].Json);
-            }
-        }
-        TestAssetFixture_Deconstruct(run, &Fixture);
-    }
+        { "{\"name\": \"t\", \"palette\": 1}", "UI theme \"tbp:t\", palette: must be a compound" },
+        { "{\"name\": \"t\", \"palette\": {\"Bad\": \"#000000\"}}", "palette.Bad: a palette colour's name" },
+        { "{\"name\": \"t\", \"palette\": {\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\": \"#000000\"}}", "a palette colour's name" },
+        { "{\"name\": \"t\", \"palette\": {\"a\": \"#000000\", \"b\": \"@a\"}}", "palette.b: a palette colour is a colour, never a reference" },
+        { "{\"name\": \"t\", \"palette\": {\"a\": \"@a\"}}", "palette.a: a palette colour is a colour, never a reference" },
+        { "{\"name\": \"t\", \"palette\": {\"a\": \"#ggg\"}}", "palette.a" },
+        { "{\"name\": \"t\", \"palette\": {\"a\": true}}", "palette.a" },
+        { "{\"name\": \"t\", \"palette\": {\"a\": \"#000000\"}, \"elements\": {\"button\": {\"text\": {\"normal\": \"@b\"}}}}",
+            "elements.button.text.normal: \"@b\" names no colour of the theme's palette" },
+        { "{\"name\": \"t\", \"elements\": {\"label\": {\"text\": {\"hovered\": \"@a\"}}}}",
+            "elements.label.text.hovered: \"@a\" names a palette colour, but the theme has no \"palette\"" },
+        { "{\"name\": \"t\", \"palette\": {}, \"elements\": {\"label\": {\"text\": {\"normal\": \"@a\"}}}}", "\"@a\" names no colour" },
+        { "{\"name\": \"t\", \"palette\": {\"a\": \"#000000\"}, \"elements\": {\"label\": {\"text\": {\"normal\": \"@\"}}}}", "\"@\" names no colour" },
+        { "{\"name\": \"t\", \"palette\": {\"a\": \"#000000\"}, \"elements\": {\"label\": {\"text\": {\"normal\": \"@A\"}}}}", "\"@A\" names no colour" },
+        { "{\"name\": \"t\", \"palette\": {\"a\": \"#000000\"}, \"elements\": {\"button\": {\"background\": {\"kind\": \"flat\", \"colors\": {\"pressed\": \"@z\"}}}}}",
+            "elements.button.background.colors.pressed: \"@z\"" },
+        { "{\"name\": \"t\", \"palette\": {\"a\": \"#000000\"}, \"elements\": {\"panel\": {\"background\": {\"kind\": \"flat\", \"outline\": {\"colors\": {\"hovered\": \"@z\"}}}}}}",
+            "elements.panel.background.outline.colors.hovered: \"@z\"" },
+        { "{\"name\": \"t\", \"palette\": {\"a\": \"#000000\"}, \"elements\": {\"button\": {\"custom\": {\"glow\": \"@z\"}}}}",
+            "elements.button.custom.glow: \"@z\"" },
+        { "{\"name\": \"t\", \"palette\": {\"a\": \"#000000\"}, \"elements\": {\"button\": {\"variants\": {\"v\": {\"text\": {\"normal\": \"@z\"}}}}}}",
+            "elements.button.variants.v.text.normal: \"@z\"" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"background\": {\"kind\": \"flat\", \"colors\": {\"glowing\": \"@a\"}}}}}",
+            "elements.button.background.colors: unknown state \"glowing\"" },
+    };
+    CheckRefusals(run, Refusals, sizeof(Refusals) / sizeof(Refusals[0]));
+}
+
+/* Custom values of no known form, out of bounds or under a bad key, refused with where they are. */
+static void CustomRulesAreRefusedNamingWhere(TestRun* run)
+{
+    static const Refusal Refusals[] =
+    {
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": 1}}}", "elements.button.custom: must be a compound" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"Bad\": 1}}}}", "elements.button.custom.Bad: a custom value's key" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\": 1}}}}", "a custom value's key" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"1st\": 1}}}}", "a custom value's key" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": 1000001}}}}", "elements.button.custom.x: 1e+06 is outside" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": -1000001}}}}", "elements.button.custom.x: -1e+06 is outside" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": 1e39}}}}", "elements.button.custom.x" }, // no finite float
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": [0, 2000000]}}}}", "elements.button.custom.x: 2e+06 is outside" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": [1e39, 0]}}}}", "elements.button.custom.x" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": [1, 2, 3]}}}}", "elements.button.custom.x: a custom vector is an array of exactly two numbers" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": [1]}}}}", "exactly two numbers" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": []}}}}", "exactly two numbers" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": [\"1\", \"2\"]}}}}", "exactly two numbers" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": [[1], 2]}}}}", "exactly two numbers" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": true}}}}", "elements.button.custom.x: a custom value is a number" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": null}}}}", "a custom value is a number" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": \"red\"}}}}", "elements.button.custom.x" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": \"12\"}}}}", "elements.button.custom.x" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": {}}}}}", "elements.button.custom.x: it needs a \"kind\"" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": {\"kind\": \"flat\", \"shine\": 1}}}}}", "shine" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": {\"kind\": \"nine_slice\", \"margins\": 2}}}}}", "needs a \"texture\" and \"margins\"" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": {\"kind\": \"none\", \"outline\": {}}}}}}", "only a \"flat\" box" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": {\"kind\": \"flat\", \"colors\": {\"normal\": \"#ggg\"}}}}}}",
+            "elements.button.custom.x.colors.normal" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"variants\": {\"v\": {\"custom\": {\"x\": false}}}}}}", "elements.button.variants.v.custom.x" },
+        // A variant's entry replaces its kind's whole: a box there is read anew and needs its own kind.
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"f\": {\"kind\": \"flat\"}}, \"variants\": {\"v\": {\"custom\": {\"f\": {\"colors\": {}}}}}}}}",
+            "elements.button.variants.v.custom.f: it needs a \"kind\"" },
+        // The look's key belongs to a kind's own block.
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"look\": 5}}}", "elements.button.look" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"look\": \"Not A Name\"}}}", "elements.button.look" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"look\": \"\"}}}", "elements.button.look" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"look\": \"a:\"}}}", "elements.button.look" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"variants\": {\"v\": {\"look\": \"round\"}}}}}",
+            "elements.button.variants.v.look: only a kind's own block names a look" },
+        { "{\"name\": \"t\", \"elements\": {\"button\": {\"variants\": {\"v\": {\"look\": 1, \"min_size\": [1, 1]}}}}}", "only a kind's own block names a look" },
+    };
+    CheckRefusals(run, Refusals, sizeof(Refusals) / sizeof(Refusals[0]));
 }
 
 /* Numbers and rectangles at their limits read; a file past them is refused however many it holds. */
@@ -478,6 +647,523 @@ static void HostileSizesAndCountsAreRefused(TestRun* run)
     TEST_CHECK_ERROR(run, BuildTheme(&Fixture, "{\"name\": \"t\", \"elements\": {\"button\": {\"padding\": [1e308, 1]}}}"), ErrorCode_InvalidAssetDefinition);
     TEST_CHECK_ERROR(run, BuildTheme(&Fixture, "not json"), ErrorCode_InvalidJSON);
     TEST_CHECK_ERROR(run, BuildTheme(&Fixture, "[]"), ErrorCode_InvalidAssetDefinition);
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+
+/* 64 palette colours and 16 custom values read, one more does not; a variant counts what it inherits from its kind. */
+static void PaletteAndCustomCountsHaveTheirLimits(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    if (!TestAssetFixture_Construct(run, &Fixture))
+    {
+        return;
+    }
+    char Text[THEME_TEXT_CAPACITY * 8U];
+    for (int Count = 64; Count <= 65; Count++)
+    {
+        int Length = snprintf(Text, sizeof(Text), "{\"name\": \"t\", \"palette\": {");
+        for (int Index = 0; Index < Count; Index++)
+        {
+            Length += snprintf(Text + Length, sizeof(Text) - (size_t)Length, "%s\"c%d\": \"#0000%02x\"", (Index > 0) ? ", " : "", Index, Index);
+        }
+        snprintf(Text + Length, sizeof(Text) - (size_t)Length, "}, \"elements\": {\"label\": {\"text\": {\"normal\": \"@c%d\"}}}}", Count - 1);
+        if (Count <= 64)
+        {
+            TEST_CHECK_SUCCESS(run, BuildTheme(&Fixture, Text));
+        }
+        else
+        {
+            const char* Parts[] = { "palette: a palette may name at most 64 colours", NULL };
+            TEST_CHECK(run, TestText_CheckErrorMessage(run, BuildTheme(&Fixture, Text), ErrorCode_InvalidAssetDefinition, Parts));
+        }
+    }
+
+    for (int Count = 16; Count <= 17; Count++)
+    {
+        int Length = snprintf(Text, sizeof(Text), "{\"name\": \"t\", \"elements\": {\"toggle\": {\"custom\": {");
+        for (int Index = 0; Index < Count; Index++)
+        {
+            Length += snprintf(Text + Length, sizeof(Text) - (size_t)Length, "%s\"k%d\": %d", (Index > 0) ? ", " : "", Index, Index);
+        }
+        snprintf(Text + Length, sizeof(Text) - (size_t)Length, "}}}}");
+        if (Count <= 16)
+        {
+            TEST_CHECK_SUCCESS(run, BuildTheme(&Fixture, Text));
+        }
+        else
+        {
+            const char* Parts[] = { "elements.toggle.custom: a style may have at most 16 custom values", NULL };
+            TEST_CHECK(run, TestText_CheckErrorMessage(run, BuildTheme(&Fixture, Text), ErrorCode_InvalidAssetDefinition, Parts));
+        }
+    }
+
+    // The kind's 10 and the variant's 6 more fill the 16; a 7th does not fit, whatever the variant names again.
+    static const struct { int KindCount; int OverrideCount; int AddCount; bool IsRead; } Merges[] =
+    {
+        { 10, 0, 6, true }, { 10, 0, 7, false }, { 10, 10, 6, true }, { 10, 5, 7, false }, { 16, 16, 0, true },
+        { 16, 15, 1, false }, { 0, 0, 16, true }, { 1, 0, 16, false },
+    };
+    for (size_t Index = 0U; Index < (sizeof(Merges) / sizeof(Merges[0])); Index++)
+    {
+        WriteMergedCustomTheme(Text, sizeof(Text), Merges[Index].KindCount, Merges[Index].OverrideCount, Merges[Index].AddCount);
+        if (Merges[Index].IsRead)
+        {
+            TEST_CHECK_SUCCESS(run, BuildTheme(&Fixture, Text));
+            continue;
+        }
+        const char* Parts[] = { "elements.button.variants.v.custom.n", "a variant's own and its kind's together", NULL };
+        if (!TestText_CheckErrorMessage(run, BuildTheme(&Fixture, Text), ErrorCode_InvalidAssetDefinition, Parts))
+        {
+            printf("    in merge %zu\n", Index);
+        }
+    }
+
+    // A number past a double's range never reaches the theme: the JSON reader refuses the document.
+    TEST_CHECK_ERROR(run, BuildTheme(&Fixture, "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": 1e400}}}}"), ErrorCode_InvalidJSON);
+    TEST_CHECK_ERROR(run, BuildTheme(&Fixture, "{\"name\": \"t\", \"elements\": {\"button\": {\"custom\": {\"x\": [0, -1e400]}}}}"), ErrorCode_InvalidJSON);
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+
+// Tests: palettes, custom values, looks and hover text.
+/* Every colour can name the palette, however the file orders its keys; a variant's references resolve on top of its kind's
+ * values, and a literal colour mixes with them. */
+static void PaletteColorsResolveEverywhere(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    if (!TestAssetFixture_Construct(run, &Fixture))
+    {
+        return;
+    }
+    const UITheme* Theme = LoadTheme(run, &Fixture, PALETTE_THEME, "painted", &User);
+    if (TEST_CHECK(run, Theme != NULL))
+    {
+        const UIThemeStyle* Base = UITheme_FindStyle(Theme, UIElementKind_Button, NULL);
+        const UIBoxStyle* Box = UIThemeStyle_GetBox(Base, UIButtonPart_Background);
+        if (TEST_CHECK(run, Box != NULL))
+        {
+            TEST_CHECK(run, IsColor(UIBoxStyle_Resolve(Box, UIElementState_Normal).Fill, Rgb(0x10, 0x20, 0x30)));
+            TEST_CHECK(run, IsColor(UIBoxStyle_Resolve(Box, UIElementState_Hovered).Fill, Rgb(0xaa, 0xbb, 0xcc)));
+            TEST_CHECK(run, IsColor(UIBoxStyle_Resolve(Box, UIElementState_Normal).Outline, Rgb(0x40, 0x50, 0x60)));
+        }
+        // Every plain colour form is a palette colour: a hex string with its alpha, an array, a compound.
+        const UIStateColors* Text = UIThemeStyle_GetColors(Base, UIButtonPart_Text);
+        if (TEST_CHECK(run, Text != NULL))
+        {
+            TEST_CHECK(run, IsColor(UIStateColors_Resolve(Text, UIElementState_Normal, BLANK), Rgb(1, 2, 3)));
+            TEST_CHECK(run, IsColor(UIStateColors_Resolve(Text, UIElementState_Disabled, BLANK), (Color){ 0x11, 0x22, 0x33, 0x44 }));
+        }
+        TEST_CHECK(run, IsColor(UIThemeStyle_FindCustomColor(Base, u8"glow", BLANK), (Color){ 7, 8, 9, 10 }));
+
+        const UIThemeStyle* Loud = UITheme_FindStyle(Theme, UIElementKind_Button, u8"loud");
+        const UIBoxStyle* LoudBox = UIThemeStyle_GetBox(Loud, UIButtonPart_Background);
+        if (TEST_CHECK(run, (Loud != Base) && (LoudBox != NULL)))
+        {
+            TEST_CHECK(run, IsColor(UIBoxStyle_Resolve(LoudBox, UIElementState_Normal).Fill, Rgb(0x40, 0x50, 0x60)));
+            TEST_CHECK(run, IsColor(UIBoxStyle_Resolve(LoudBox, UIElementState_Hovered).Fill, Rgb(0xaa, 0xbb, 0xcc)));
+            TEST_CHECK(run, IsColor(UIBoxStyle_Resolve(LoudBox, UIElementState_Normal).Outline, Rgb(0x40, 0x50, 0x60)));
+        }
+        TEST_CHECK(run, IsColor(UIThemeStyle_FindCustomColor(Loud, u8"glow", BLANK), Rgb(1, 2, 3)));
+        TEST_CHECK(run, IsColor(UIThemeStyle_FindCustomColor(Base, u8"glow", BLANK), (Color){ 7, 8, 9, 10 })); // the kind's kept
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+static void CustomValuesOfEveryKindAreRead(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    if (!TestAssetFixture_Construct(run, &Fixture))
+    {
+        return;
+    }
+    TEST_CHECK(run, TestAssets_AddTexture(run, &Fixture, "art", 7U, NULL));
+    const UITheme* Theme = LoadTheme(run, &Fixture, CUSTOM_THEME, "custom", &User);
+    if (TEST_CHECK(run, Theme != NULL))
+    {
+        const UIThemeStyle* Style = UITheme_FindStyle(Theme, UIElementKind_Slider, NULL);
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(Style, u8"radius", 0.0f) == 4.5f);
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(Style, u8"count", 0.0f) == 3.0f);
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(Style, u8"lowest", 0.0f) == -UI_THEME_MAX_CUSTOM_NUMBER);
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(Style, u8"highest", 0.0f) == UI_THEME_MAX_CUSTOM_NUMBER);
+        Vector2 Offset = UIThemeStyle_FindCustomVector(Style, u8"offset", (Vector2){ 0.0f, 0.0f });
+        TEST_CHECK(run, (Offset.x == 1.0f) && (Offset.y == -2.5f));
+        TEST_CHECK(run, IsColor(UIThemeStyle_FindCustomColor(Style, u8"tint", BLANK), (Color){ 255, 0, 0, 128 }));
+        TEST_CHECK(run, IsColor(UIThemeStyle_FindCustomColor(Style, u8"gold", BLANK), Rgb(0xff, 0xd2, 0x7a)));
+        const UIBoxStyle* Frame = UIThemeStyle_FindCustomBox(Style, u8"frame");
+        if (TEST_CHECK(run, Frame != NULL))
+        {
+            TEST_CHECK(run, (Frame->Kind == UIBoxKind_Flat) && Frame->HasOutline && (Frame->OutlineThickness == 2.0f));
+            TEST_CHECK(run, IsColor(UIBoxStyle_Resolve(Frame, UIElementState_Pressed).Fill, Rgb(0xff, 0xd2, 0x7a)));
+        }
+        const UIBoxStyle* Art = UIThemeStyle_FindCustomBox(Style, u8"art");
+        if (TEST_CHECK(run, Art != NULL))
+        {
+            TEST_CHECK(run, (Art->Kind == UIBoxKind_NineSlice) && (Art->Margins.Left == 2.0f) && (Art->PixelScale == 1.0f));
+            TEST_CHECK(run, Art->Texture != NULL); // loaded with the theme
+        }
+        TEST_CHECK(run, UIThemeStyle_FindCustomBox(UITheme_FindStyle(Theme, UIElementKind_Slider, u8"plain"), u8"art") != Art);
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(UITheme_FindStyle(Theme, UIElementKind_Slider, u8"plain"), u8"radius", 0.0f) == 4.5f);
+
+        // A key that is absent, or holds another kind of value, answers the default.
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(Style, u8"missing", 7.0f) == 7.0f);
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(Style, u8"offset", 7.0f) == 7.0f);
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(Style, u8"tint", 7.0f) == 7.0f);
+        Vector2 NotAVector = UIThemeStyle_FindCustomVector(Style, u8"radius", (Vector2){ 3.0f, 4.0f });
+        TEST_CHECK(run, (NotAVector.x == 3.0f) && (NotAVector.y == 4.0f));
+        TEST_CHECK(run, IsColor(UIThemeStyle_FindCustomColor(Style, u8"frame", RED), RED));
+        TEST_CHECK(run, IsColor(UIThemeStyle_FindCustomColor(Style, u8"missing", RED), RED));
+        TEST_CHECK(run, UIThemeStyle_FindCustomBox(Style, u8"tint") == NULL);
+        TEST_CHECK(run, UIThemeStyle_FindCustomBox(Style, u8"missing") == NULL);
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(Style, u8"radiusradiusradiusradiusradiusradius", 7.0f) == 7.0f);
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(Style, u8"Radius", 7.0f) == 7.0f);
+
+        // A style without a custom block, a NULL style and a NULL key answer the default.
+        const UIThemeStyle* Button = UITheme_FindStyle(Theme, UIElementKind_Button, NULL);
+        TEST_CHECK(run, (Button != NULL) && (UIThemeStyle_FindCustomNumber(Button, u8"radius", 7.0f) == 7.0f));
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(Style, NULL, 7.0f) == 7.0f);
+        TEST_CHECK(run, UIThemeStyle_FindCustomBox(Style, NULL) == NULL);
+    }
+    TEST_CHECK(run, UIThemeStyle_FindCustomNumber(NULL, u8"radius", 7.0f) == 7.0f);
+    Vector2 Fallback = UIThemeStyle_FindCustomVector(NULL, u8"offset", (Vector2){ 3.0f, 4.0f });
+    TEST_CHECK(run, (Fallback.x == 3.0f) && (Fallback.y == 4.0f));
+    TEST_CHECK(run, IsColor(UIThemeStyle_FindCustomColor(NULL, u8"tint", RED), RED));
+    TEST_CHECK(run, UIThemeStyle_FindCustomBox(NULL, u8"frame") == NULL);
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+/* A variant starts with its kind's custom values: its own replace the ones of their key, whatever their kind, or add to them. */
+static void AVariantMergesCustomValuesByKey(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    if (!TestAssetFixture_Construct(run, &Fixture))
+    {
+        return;
+    }
+    const UITheme* Theme = LoadTheme(run, &Fixture, "{\"name\": \"t\", \"elements\": {\"panel\": {"
+        "\"custom\": {\"a\": 1, \"b\": \"#010203\", \"c\": [1, 2]},"
+        "\"variants\": {\"v\": {\"custom\": {\"b\": 7, \"d\": {\"kind\": \"none\"}}}, \"w\": {\"padding\": [1, 1]}}}}}", "t", &User);
+    if (TEST_CHECK(run, Theme != NULL))
+    {
+        const UIThemeStyle* Base = UITheme_FindStyle(Theme, UIElementKind_Panel, NULL);
+        const UIThemeStyle* V = UITheme_FindStyle(Theme, UIElementKind_Panel, u8"v");
+        const UIThemeStyle* W = UITheme_FindStyle(Theme, UIElementKind_Panel, u8"w");
+        TEST_CHECK(run, (V != Base) && (W != Base));
+
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(V, u8"a", 0.0f) == 1.0f);                       // inherited
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(V, u8"b", 0.0f) == 7.0f);                       // replaced by a number
+        TEST_CHECK(run, IsColor(UIThemeStyle_FindCustomColor(V, u8"b", RED), RED));                   // the colour is gone
+        TEST_CHECK(run, UIThemeStyle_FindCustomVector(V, u8"c", (Vector2){ 0.0f, 0.0f }).y == 2.0f); // inherited
+        const UIBoxStyle* Added = UIThemeStyle_FindCustomBox(V, u8"d");
+        TEST_CHECK(run, (Added != NULL) && (Added->Kind == UIBoxKind_None));                          // added
+
+        // The kind's own values did not change with it, and a variant without a block has them all.
+        TEST_CHECK(run, IsColor(UIThemeStyle_FindCustomColor(Base, u8"b", RED), Rgb(1, 2, 3)));
+        TEST_CHECK(run, UIThemeStyle_FindCustomBox(Base, u8"d") == NULL);
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(W, u8"a", 0.0f) == 1.0f);
+        TEST_CHECK(run, IsColor(UIThemeStyle_FindCustomColor(W, u8"b", RED), Rgb(1, 2, 3)));
+        TEST_CHECK(run, UIThemeStyle_FindCustomVector(W, u8"c", (Vector2){ 0.0f, 0.0f }).x == 1.0f);
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+/* A custom nine-slice's texture loads with the theme like a part's; a variant's copy of it too, and again after the theme
+ * is unloaded and loaded anew. Art that cannot be used leaves only that box plain. */
+static void ACustomNineSliceGetsItsTexture(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    TestAssetCounters Counters = { 0 };
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    if (!TestAssetFixture_Construct(run, &Fixture))
+    {
+        return;
+    }
+    TEST_CHECK(run, TestAssets_AddTexture(run, &Fixture, "art", 7U, &Counters)); // 16 x 16
+    TEST_CHECK(run, TestAssets_AddTexture(run, &Fixture, "other", 8U, NULL));
+    const char* Json = "{\"name\": \"t\", \"elements\": {\"slider\": {\"custom\": {"
+        "\"art\": {\"kind\": \"nine_slice\", \"texture\": \"art\", \"margins\": 2, \"sources\": {\"hovered\": {\"x\": 8, \"y\": 8, \"width\": 8, \"height\": 8}}},"
+        "\"missing\": {\"kind\": \"nine_slice\", \"texture\": \"nobody\", \"margins\": 2},"
+        "\"wide\": {\"kind\": \"nine_slice\", \"texture\": \"art\", \"margins\": [9, 0, 9, 0]}},"
+        "\"variants\": {\"plain\": {}, \"own\": {\"custom\": {\"art\": {\"kind\": \"nine_slice\", \"texture\": \"other\", \"margins\": 1}}}}}}}";
+    const UITheme* Theme = LoadTheme(run, &Fixture, Json, "t", &User);
+    for (int Round = 0; (Round < 2) && TEST_CHECK(run, Theme != NULL); Round++)
+    {
+        const UIThemeStyle* Base = UITheme_FindStyle(Theme, UIElementKind_Slider, NULL);
+        const UIBoxStyle* Art = UIThemeStyle_FindCustomBox(Base, u8"art");
+        const GameTexture* ArtTexture = (Art != NULL) ? Art->Texture : NULL;
+        if (TEST_CHECK(run, ArtTexture != NULL))
+        {
+            UIBoxPaint Normal = UIBoxStyle_Resolve(Art, UIElementState_Normal);
+            TEST_CHECK(run, (Normal.Source.width == 16.0f) && (Normal.Source.height == 16.0f)); // the whole texture
+            TEST_CHECK(run, UIBoxStyle_Resolve(Art, UIElementState_Hovered).Source.x == 8.0f);
+        }
+        const UIBoxStyle* Inherited = UIThemeStyle_FindCustomBox(UITheme_FindStyle(Theme, UIElementKind_Slider, u8"plain"), u8"art");
+        TEST_CHECK(run, (Inherited != NULL) && (Inherited != Art) && (Inherited->Texture == ArtTexture));
+        const UIBoxStyle* Own = UIThemeStyle_FindCustomBox(UITheme_FindStyle(Theme, UIElementKind_Slider, u8"own"), u8"art");
+        TEST_CHECK(run, (Own != NULL) && (Own->Texture != NULL) && (Own->Texture != ArtTexture));
+        const UIBoxStyle* Missing = UIThemeStyle_FindCustomBox(Base, u8"missing");
+        const UIBoxStyle* Wide = UIThemeStyle_FindCustomBox(Base, u8"wide");
+        TEST_CHECK(run, (Missing != NULL) && (Missing->Texture == NULL)); // a texture that does not load
+        TEST_CHECK(run, (Wide != NULL) && (Wide->Texture == NULL));       // margins wider than the art
+        TEST_CHECK(run, Counters.LoadCount == (size_t)(Round + 1));
+
+        // Unloaded with its user and loaded anew from the same definition.
+        TEST_CHECK_SUCCESS(run, AssetManager_RetireUser(Fixture.Manager, User));
+        TEST_CHECK(run, Counters.UnloadCount == (size_t)(Round + 1));
+        UITheme* Again = NULL;
+        Theme = NULL;
+        if (TEST_CHECK_SUCCESS(run, AssetManager_GetNewUserID(Fixture.Manager, &User))
+            && TEST_CHECK_SUCCESS(run, AssetManager_LoadUITheme(Fixture.Manager, (const unsigned char*)u8"t", User, &Again)))
+        {
+            Theme = Again;
+        }
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+static void AKindNamesItsLook(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    if (!TestAssetFixture_Construct(run, &Fixture))
+    {
+        return;
+    }
+    const UITheme* Theme = LoadTheme(run, &Fixture, "{\"name\": \"t\", \"elements\": {\"button\": {\"look\": \"round_button\", \"variants\": {\"v\": {}}},"
+        "\"slider\": {\"look\": \"mod:knob\"}, \"tooltip\": {\"look\": \"tbp:speech_bubble\"}, \"label\": {}}}", "t", &User);
+    if (TEST_CHECK(run, Theme != NULL))
+    {
+        const unsigned char* Button = UITheme_GetLookName(Theme, UIElementKind_Button);
+        TEST_CHECK(run, (Button != NULL) && (strcmp((const char*)Button, "tbp:round_button") == 0)); // the default namespace
+        const unsigned char* Slider = UITheme_GetLookName(Theme, UIElementKind_Slider);
+        TEST_CHECK(run, (Slider != NULL) && (strcmp((const char*)Slider, "mod:knob") == 0));
+        const unsigned char* Tooltip = UITheme_GetLookName(Theme, UIElementKind_Tooltip);
+        TEST_CHECK(run, (Tooltip != NULL) && (strcmp((const char*)Tooltip, "tbp:speech_bubble") == 0));
+        TEST_CHECK(run, UITheme_GetLookName(Theme, UIElementKind_Label) == NULL); // a kind that names none
+        TEST_CHECK(run, UITheme_GetLookName(Theme, UIElementKind_Panel) == NULL); // a kind the theme leaves out
+        TEST_CHECK(run, UITheme_GetLookName(Theme, (UIElementKind)99) == NULL);
+        TEST_CHECK(run, UITheme_GetLookName(Theme, (UIElementKind)-1) == NULL);
+        TEST_CHECK(run, UITheme_FindStyle(Theme, UIElementKind_Button, u8"v") != UITheme_FindStyle(Theme, UIElementKind_Button, NULL));
+    }
+    TEST_CHECK(run, UITheme_GetLookName(NULL, UIElementKind_Button) == NULL);
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+static void TheTooltipDelayHasItsBoundsAndDefault(TestRun* run)
+{
+    TEST_CHECK(run, UITheme_GetTooltipDelaySeconds(NULL) == UI_THEME_DEFAULT_TOOLTIP_DELAY_SECONDS);
+    TestAssetFixture Fixture;
+    if (!TestAssetFixture_Construct(run, &Fixture))
+    {
+        return;
+    }
+    static const struct { const char* Json; const char* Name; float Seconds; } Themes[] =
+    {
+        { "{\"name\": \"a\"}", "a", UI_THEME_DEFAULT_TOOLTIP_DELAY_SECONDS },
+        { "{\"name\": \"b\", \"tooltip_delay\": 0}", "b", 0.0f },
+        { "{\"name\": \"c\", \"tooltip_delay\": 10}", "c", UI_THEME_MAX_TOOLTIP_DELAY_SECONDS },
+        { "{\"name\": \"d\", \"tooltip_delay\": 2.25}", "d", 2.25f },
+    };
+    for (size_t Index = 0U; Index < (sizeof(Themes) / sizeof(Themes[0])); Index++)
+    {
+        AssetUserID User = ASSET_USER_ID_INVALID;
+        const UITheme* Theme = LoadTheme(run, &Fixture, Themes[Index].Json, Themes[Index].Name, &User);
+        TEST_CHECK(run, (Theme != NULL) && (UITheme_GetTooltipDelaySeconds(Theme) == Themes[Index].Seconds));
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+/* Hover text is a kind like the others: its parts, their defaults, variants and custom values. */
+static void TheTooltipKindHasItsParts(TestRun* run)
+{
+    TEST_CHECK(run, strcmp((const char*)UIElementKind_GetName(UIElementKind_Tooltip), "tooltip") == 0);
+    TEST_CHECK(run, UIElementKind_GetPartCount(UIElementKind_Tooltip) == (size_t)UITooltipPart_Count);
+    static const struct { int32_t Part; const char* Key; UIThemePartKind Kind; } Parts[] =
+    {
+        { UITooltipPart_Padding, "padding", UIThemePartKind_Vector }, { UITooltipPart_Offset, "offset", UIThemePartKind_Vector },
+        { UITooltipPart_MaxWidth, "max_width", UIThemePartKind_Number }, { UITooltipPart_Background, "background", UIThemePartKind_Box },
+        { UITooltipPart_Text, "text", UIThemePartKind_Colors },
+    };
+    for (size_t Index = 0U; Index < (sizeof(Parts) / sizeof(Parts[0])); Index++)
+    {
+        const UIThemePartDescriptor* Descriptor = UIElementKind_GetPart(UIElementKind_Tooltip, Parts[Index].Part);
+        TEST_CHECK(run, (Descriptor != NULL) && (strcmp((const char*)Descriptor->Key, Parts[Index].Key) == 0)
+            && (Descriptor->Kind == Parts[Index].Kind));
+    }
+    Vector2 Padding = UIThemeStyle_GetVector(NULL, UIElementKind_Tooltip, UITooltipPart_Padding);
+    Vector2 Offset = UIThemeStyle_GetVector(NULL, UIElementKind_Tooltip, UITooltipPart_Offset);
+    TEST_CHECK(run, (Padding.x == 6.0f) && (Padding.y == 3.0f) && (Offset.x == 12.0f) && (Offset.y == 18.0f));
+    TEST_CHECK(run, UIThemeStyle_GetNumber(NULL, UIElementKind_Tooltip, UITooltipPart_MaxWidth) == 320.0f);
+
+    TestAssetFixture Fixture;
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    if (!TestAssetFixture_Construct(run, &Fixture))
+    {
+        return;
+    }
+    const UITheme* Theme = LoadTheme(run, &Fixture, "{\"name\": \"t\", \"palette\": {\"ink\": \"#202020\"}, \"elements\": {\"tooltip\": {"
+        "\"padding\": [4, 2], \"max_width\": 200, \"background\": {\"kind\": \"flat\", \"colors\": {\"normal\": \"#fafafa\"}},"
+        "\"text\": {\"normal\": \"@ink\"}, \"custom\": {\"tail\": 6},"
+        "\"variants\": {\"warning\": {\"background\": {\"colors\": {\"normal\": \"#ffe08a\"}}, \"offset\": [0, 24]}}}}}", "t", &User);
+    if (TEST_CHECK(run, Theme != NULL))
+    {
+        const UIThemeStyle* Style = UITheme_FindStyle(Theme, UIElementKind_Tooltip, NULL);
+        Vector2 ReadPadding = UIThemeStyle_GetVector(Style, UIElementKind_Tooltip, UITooltipPart_Padding);
+        TEST_CHECK(run, (ReadPadding.x == 4.0f) && (ReadPadding.y == 2.0f));
+        TEST_CHECK(run, UIThemeStyle_GetVector(Style, UIElementKind_Tooltip, UITooltipPart_Offset).y == 18.0f); // left out
+        TEST_CHECK(run, UIThemeStyle_GetNumber(Style, UIElementKind_Tooltip, UITooltipPart_MaxWidth) == 200.0f);
+        TEST_CHECK(run, IsColor(PartColor(Theme, UIElementKind_Tooltip, NULL, UITooltipPart_Background, UIElementState_Normal), Rgb(0xfa, 0xfa, 0xfa)));
+        TEST_CHECK(run, IsColor(PartColor(Theme, UIElementKind_Tooltip, NULL, UITooltipPart_Text, UIElementState_Normal), Rgb(0x20, 0x20, 0x20)));
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(Style, u8"tail", 0.0f) == 6.0f);
+
+        const UIThemeStyle* Warning = UITheme_FindStyle(Theme, UIElementKind_Tooltip, u8"warning");
+        TEST_CHECK(run, IsColor(PartColor(Theme, UIElementKind_Tooltip, "warning", UITooltipPart_Background, UIElementState_Normal), Rgb(0xff, 0xe0, 0x8a)));
+        TEST_CHECK(run, UIThemeStyle_GetVector(Warning, UIElementKind_Tooltip, UITooltipPart_Offset).y == 24.0f);
+        TEST_CHECK(run, UIThemeStyle_GetNumber(Warning, UIElementKind_Tooltip, UITooltipPart_MaxWidth) == 200.0f);
+        TEST_CHECK(run, UIThemeStyle_FindCustomNumber(Warning, u8"tail", 0.0f) == 6.0f);
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+
+// Tests: the shipped themes.
+/* Each shipped theme loads with every palette reference resolved, its looks show the colours checked here, and it has hover
+ * text of its own. The art and the font are built in code. */
+static void TheShippedThemesLoadAndResolve(TestRun* run)
+{
+    static const char* const Files[] = { "test_flat.json", "test_nine_slice.json", "test_light.json" };
+    static const char* const Names[] = { "tbp:test_flat", "tbp:test_nine_slice", "tbp:test_light" };
+    const UITheme* Themes[3] = { NULL, NULL, NULL };
+    TestAssetFixture Fixture;
+    if (!TestAssetFixture_Construct(run, &Fixture))
+    {
+        return;
+    }
+    TEST_CHECK(run, AddShippedThemeDependencies(run, &Fixture));
+    for (size_t Index = 0U; Index < (sizeof(Files) / sizeof(Files[0])); Index++)
+    {
+        GenericBuffer Text;
+        GenericBuffer_AllocateVariable(&Text, 0U, sizeof(unsigned char));
+        AssetUserID User = ASSET_USER_ID_INVALID;
+        if (ReadShippedTheme(run, Files[Index], &Text))
+        {
+            Themes[Index] = LoadTheme(run, &Fixture, (const char*)Text._data, Names[Index], &User);
+        }
+        Memory_Free(Text._data);
+        if (TEST_CHECK(run, Themes[Index] != NULL))
+        {
+            TEST_CHECK(run, strcmp((const char*)UITheme_GetName(Themes[Index]), Names[Index]) == 0);
+            TEST_CHECK(run, strcmp((const char*)UITheme_GetFontName(Themes[Index]), "tbp:ui_small") == 0);
+            TEST_CHECK(run, UITheme_GetTooltipDelaySeconds(Themes[Index]) == 0.5f);
+            TEST_CHECK(run, UIThemeStyle_GetBox(UITheme_FindStyle(Themes[Index], UIElementKind_Tooltip, NULL), UITooltipPart_Background) != NULL);
+            TEST_CHECK(run, UIThemeStyle_GetColors(UITheme_FindStyle(Themes[Index], UIElementKind_Tooltip, NULL), UITooltipPart_Text) != NULL);
+        }
+    }
+
+    const UITheme* Flat = Themes[0];
+    if (Flat != NULL)
+    {
+        TEST_CHECK(run, IsColor(PartColor(Flat, UIElementKind_Button, NULL, UIButtonPart_Background, UIElementState_Normal), Rgb(0x3a, 0x3d, 0x44)));
+        TEST_CHECK(run, IsColor(PartColor(Flat, UIElementKind_Button, NULL, UIButtonPart_Background, UIElementState_Disabled), Rgb(0x2c, 0x2e, 0x33)));
+        TEST_CHECK(run, IsColor(UIBoxStyle_Resolve(UIThemeStyle_GetBox(UITheme_FindStyle(Flat, UIElementKind_Button, NULL), UIButtonPart_Background),
+            UIElementState_Focused).Outline, Rgb(0x9e, 0xc1, 0xff)));
+        TEST_CHECK(run, IsColor(PartColor(Flat, UIElementKind_Button, "danger", UIButtonPart_Background, UIElementState_Hovered), Rgb(0x92, 0x34, 0x34)));
+        TEST_CHECK(run, IsColor(PartColor(Flat, UIElementKind_Button, "danger", UIButtonPart_Background, UIElementState_Disabled), Rgb(0x2c, 0x2e, 0x33)));
+        TEST_CHECK(run, IsColor(PartColor(Flat, UIElementKind_Label, NULL, UILabelPart_Text, UIElementState_Normal), Rgb(0xe4, 0xe6, 0xea)));
+        TEST_CHECK(run, IsColor(PartColor(Flat, UIElementKind_Label, "heading", UILabelPart_Text, UIElementState_Normal), Rgb(0x9e, 0xc1, 0xff)));
+        TEST_CHECK(run, IsColor(PartColor(Flat, UIElementKind_Toggle, NULL, UITogglePart_Box, UIElementState_Hovered), Rgb(0x2a, 0x2c, 0x31)));
+        TEST_CHECK(run, IsColor(PartColor(Flat, UIElementKind_Slider, NULL, UISliderPart_Thumb, UIElementState_Pressed), Rgb(0x9e, 0xc1, 0xff)));
+        TEST_CHECK(run, IsColor(PartColor(Flat, UIElementKind_Panel, "inset", UIPanelPart_Background, UIElementState_Normal), Rgb(0x1c, 0x1e, 0x22)));
+        TEST_CHECK(run, IsColor(PartColor(Flat, UIElementKind_Tooltip, NULL, UITooltipPart_Background, UIElementState_Normal), Rgb(0x3a, 0x3d, 0x44)));
+        TEST_CHECK(run, IsColor(PartColor(Flat, UIElementKind_Tooltip, NULL, UITooltipPart_Text, UIElementState_Normal), Rgb(0xe8, 0xea, 0xee)));
+    }
+    const UITheme* NineSlice = Themes[1];
+    if (NineSlice != NULL)
+    {
+        TEST_CHECK(run, IsColor(PartColor(NineSlice, UIElementKind_Button, NULL, UIButtonPart_Background, UIElementState_Normal), Rgb(0xb9, 0x8f, 0x4a)));
+        TEST_CHECK(run, IsColor(PartColor(NineSlice, UIElementKind_Button, NULL, UIButtonPart_Background, UIElementState_Hovered), Rgb(0xd2, 0xa6, 0x5a)));
+        TEST_CHECK(run, IsColor(PartColor(NineSlice, UIElementKind_Slider, NULL, UISliderPart_Fill, UIElementState_Normal), Rgb(0xd2, 0xa6, 0x5a)));
+        TEST_CHECK(run, IsColor(PartColor(NineSlice, UIElementKind_Slider, NULL, UISliderPart_Track, UIElementState_Normal), Rgb(0x1e, 0x18, 0x10)));
+        TEST_CHECK(run, IsColor(PartColor(NineSlice, UIElementKind_Toggle, NULL, UITogglePart_Check, UIElementState_Disabled), Rgb(0x4a, 0x44, 0x36)));
+        TEST_CHECK(run, IsColor(PartColor(NineSlice, UIElementKind_Label, "heading", UILabelPart_Text, UIElementState_Normal), Rgb(0xff, 0xd2, 0x7a)));
+        const UIBoxStyle* Tip = UIThemeStyle_GetBox(UITheme_FindStyle(NineSlice, UIElementKind_Tooltip, NULL), UITooltipPart_Background);
+        TEST_CHECK(run, (Tip != NULL) && (Tip->Kind == UIBoxKind_NineSlice) && (Tip->Texture != NULL));
+        TEST_CHECK(run, IsColor(PartColor(NineSlice, UIElementKind_Tooltip, NULL, UITooltipPart_Background, UIElementState_Normal), Rgb(0xd8, 0xc8, 0xa0)));
+        TEST_CHECK(run, IsColor(PartColor(NineSlice, UIElementKind_Tooltip, NULL, UITooltipPart_Text, UIElementState_Normal), Rgb(0x1e, 0x18, 0x10)));
+    }
+    // The light theme's palette changed what names it, and nothing else: dark text, its own accent, the same sizes.
+    const UITheme* Light = Themes[2];
+    if ((Flat != NULL) && (Light != NULL))
+    {
+        Color Text = PartColor(Light, UIElementKind_Label, NULL, UILabelPart_Text, UIElementState_Normal);
+        Color Surface = PartColor(Light, UIElementKind_Panel, NULL, UIPanelPart_Background, UIElementState_Normal);
+        TEST_CHECK(run, (((int)Text.r + Text.g + Text.b) < 150) && (((int)Surface.r + Surface.g + Surface.b) > 600));
+        TEST_CHECK(run, !IsColor(PartColor(Light, UIElementKind_Label, "heading", UILabelPart_Text, UIElementState_Normal),
+            PartColor(Flat, UIElementKind_Label, "heading", UILabelPart_Text, UIElementState_Normal)));
+        Vector2 LightPadding = UIThemeStyle_GetVector(UITheme_FindStyle(Light, UIElementKind_Button, NULL), UIElementKind_Button, UIButtonPart_Padding);
+        TEST_CHECK(run, (LightPadding.x == 10.0f) && (LightPadding.y == 4.0f));
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+/* The light theme is the flat one with another palette: the files are the same once their names and palettes are taken
+ * out, and the palettes name the same colours. Editing one theme without the other fails here. */
+static void TheLightThemeIsTheFlatOneWithAnotherPalette(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    if (!TestAssetFixture_Construct(run, &Fixture))
+    {
+        return;
+    }
+    static const char* const Files[] = { "test_flat.json", "test_light.json" };
+    JSONObjectValue Roots[2] = { { .Type = JSONValueType_None }, { .Type = JSONValueType_None } };
+    GenericBuffer Texts[2];
+    bool IsParsed = true;
+    for (size_t Index = 0U; Index < 2U; Index++)
+    {
+        GenericBuffer_AllocateVariable(&Texts[Index], 0U, sizeof(unsigned char));
+        GenericBuffer File;
+        GenericBuffer_AllocateVariable(&File, 0U, sizeof(unsigned char));
+        IsParsed = IsParsed && ReadShippedTheme(run, Files[Index], &File) && TestText_ParseJSON(run, Fixture.Pool, (const char*)File._data, &Roots[Index])
+            && TEST_CHECK(run, Roots[Index].Type == JSONValueType_Compound);
+        Memory_Free(File._data);
+    }
+    if (IsParsed)
+    {
+        JSONObjectValue Palettes[2];
+        TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Roots[0].Value.Compound, u8"palette", JSONValueType_Compound, &Palettes[0]));
+        TEST_CHECK_SUCCESS(run, JSONCompound_GetVerified(Roots[1].Value.Compound, u8"palette", JSONValueType_Compound, &Palettes[1]));
+        TEST_CHECK(run, JSONCompound_GetEntryCount(Palettes[0].Value.Compound) == JSONCompound_GetEntryCount(Palettes[1].Value.Compound));
+        CollectionEnumerator* Entries = ICollection_CreateEnumerator(JSONCompound_GetEntryCollection(Palettes[0].Value.Compound));
+        bool HasNext = false;
+        while ((Entries != NULL) && TEST_CHECK_SUCCESS(run, CollectionEnumerator_HasNext(Entries, &HasNext)) && HasNext)
+        {
+            JSONCompoundEntry Entry;
+            JSONObjectValue Other;
+            bool IsFound = false;
+            if (TEST_CHECK_SUCCESS(run, CollectionEnumerator_NextByValue(Entries, &Entry)))
+            {
+                TEST_CHECK_SUCCESS(run, JSONCompound_GetOptional(Palettes[1].Value.Compound, Entry.Key, &Other, &IsFound));
+            }
+            TEST_CHECK(run, IsFound);
+        }
+        CollectionEnumerator_Destroy(Entries);
+        for (size_t Index = 0U; Index < 2U; Index++)
+        {
+            TEST_CHECK_SUCCESS(run, JSONCompound_Remove(Roots[Index].Value.Compound, u8"name"));
+            TEST_CHECK_SUCCESS(run, JSONCompound_Remove(Roots[Index].Value.Compound, u8"palette"));
+            TEST_CHECK_SUCCESS(run, JSON_Serialize(&Roots[Index], &Texts[Index], JSONSerializeFlags_None));
+        }
+        TEST_CHECK(run, (Texts[0]._count == Texts[1]._count) && (Texts[0]._count > 0U) && Memory_IsEqual(Texts[0]._data, Texts[1]._data, Texts[0]._count));
+    }
+    for (size_t Index = 0U; Index < 2U; Index++)
+    {
+        TEST_CHECK_SUCCESS(run, JSONObjectPool_ReturnValue(Fixture.Pool, &Roots[Index]));
+        Memory_Free(Texts[Index]._data);
+    }
     TestAssetFixture_Deconstruct(run, &Fixture);
 }
 
@@ -835,7 +1521,19 @@ void UIThemeTests_Run(TestRun* run)
         { "an_empty_variants_block_is_no_variants", AnEmptyVariantsBlockIsNoVariants },
         { "a_part_of_another_kind_counts_as_left_out", APartOfAnotherKindCountsAsLeftOut },
         { "every_rule_is_refused_with_its_message", EveryRuleIsRefusedWithItsMessage },
+        { "palette_rules_are_refused_naming_where", PaletteRulesAreRefusedNamingWhere },
+        { "custom_rules_are_refused_naming_where", CustomRulesAreRefusedNamingWhere },
         { "hostile_sizes_and_counts_are_refused", HostileSizesAndCountsAreRefused },
+        { "palette_and_custom_counts_have_their_limits", PaletteAndCustomCountsHaveTheirLimits },
+        { "palette_colors_resolve_everywhere", PaletteColorsResolveEverywhere },
+        { "custom_values_of_every_kind_are_read", CustomValuesOfEveryKindAreRead },
+        { "a_variant_merges_custom_values_by_key", AVariantMergesCustomValuesByKey },
+        { "a_custom_nine_slice_gets_its_texture", ACustomNineSliceGetsItsTexture },
+        { "a_kind_names_its_look", AKindNamesItsLook },
+        { "the_tooltip_delay_has_its_bounds_and_default", TheTooltipDelayHasItsBoundsAndDefault },
+        { "the_tooltip_kind_has_its_parts", TheTooltipKindHasItsParts },
+        { "the_shipped_themes_load_and_resolve", TheShippedThemesLoadAndResolve },
+        { "the_light_theme_is_the_flat_one_with_another_palette", TheLightThemeIsTheFlatOneWithAnotherPalette },
         { "a_nine_slice_reads_its_art_and_its_font", ANineSliceReadsItsArtAndItsFont },
         { "a_variant_can_change_a_boxs_kind", AVariantCanChangeABoxsKind },
         { "art_that_cannot_be_used_leaves_only_its_part_plain", ArtThatCannotBeUsedLeavesOnlyItsPartPlain },

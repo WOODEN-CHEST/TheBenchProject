@@ -408,7 +408,7 @@ static void TheLongestLengthsStillAddUp(TestRun* run)
         {
             RenderContext Measure;
             RenderContext_CreateMeasuring(&Measure, (Vector2){ .x = 1000.0f, .y = 500.0f }, 2.0f, RenderTargetPosition_Centered());
-            UIMeasureContext Context = { .Measure = &Measure, .Scale = 1.0f };
+            UIMeasureContext Context = { .Measure = &Measure };
             Vector2 Size = { .x = 0.0f, .y = 0.0f };
             TEST_CHECK_SUCCESS(run, Widget_Measure(&Last->Base, &Context, 100.0f, &Size));
             TEST_CHECK(run, (Size.x == UI_LAYOUT_MAX_LENGTH) && (Size.y == UI_LAYOUT_MAX_LENGTH));
@@ -695,7 +695,7 @@ static void MeasureAnswersStayFiniteAndWidthsCompareWithoutNoise(TestRun* run)
         {
             RenderContext Measure;
             RenderContext_CreateMeasuring(&Measure, (Vector2){ .x = 1000.0f, .y = 500.0f }, 2.0f, RenderTargetPosition_Centered());
-            UIMeasureContext Context = { .Measure = &Measure, .Scale = 1.0f };
+            UIMeasureContext Context = { .Measure = &Measure };
             Vector2 Size = { .x = 9.0f, .y = 9.0f };
             TEST_CHECK_SUCCESS(run, Widget_Measure(&Sized->Base, &Context, 100.0f, &Size));
             TEST_CHECK(run, (Size.x == 0.0f) && (Size.y == 0.0f));
@@ -951,7 +951,7 @@ static void AStacksPreferredSizeIsItsChildrens(TestRun* run)
         Vector2 Size = { 0 };
         RenderContext Measure;
         RenderContext_CreateMeasuring(&Measure, (Vector2){ .x = 1000.0f, .y = 500.0f }, 2.0f, RenderTargetPosition_Centered());
-        UIMeasureContext Context = { .Measure = &Measure, .Scale = 1.0f };
+        UIMeasureContext Context = { .Measure = &Measure };
         if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Column, &ColumnWidget))
             && TEST_CHECK_SUCCESS(run, Widget_Measure(ColumnWidget, &Context, UI_MEASURE_UNBOUNDED_WIDTH, &Size)))
         {
@@ -1333,7 +1333,7 @@ static void AWrappedLabelAnswersForTheWidthItIsAsked(TestRun* run)
         {
             RenderContext Measure;
             RenderContext_CreateMeasuring(&Measure, (Vector2){ .x = 1000.0f, .y = 500.0f }, 2.0f, RenderTargetPosition_Centered());
-            UIMeasureContext Context = { .Measure = &Measure, .Scale = 1.0f };
+            UIMeasureContext Context = { .Measure = &Measure };
             Vector2 Size = { .x = 0.0f, .y = 0.0f };
             TEST_CHECK_SUCCESS(run, Widget_Measure(Base, &Context, 50.0f, &Size));
             TEST_CHECK(run, TestUI_IsSamePixel(Size.y, 42.0f)); // Three lines of 14.
@@ -1344,7 +1344,6 @@ static void AWrappedLabelAnswersForTheWidthItIsAsked(TestRun* run)
 
             // At twice the scale a width of 70 UI pixels is 140 surface pixels, and glyphs are 14 wide: two words fit.
             TEST_CHECK_SUCCESS(run, UIScreen_SetScale(&Fixture.Screen, 2.0f));
-            Context.Scale = 2.0f;
             TEST_CHECK_SUCCESS(run, Widget_Measure(Base, &Context, 70.0f, &Size));
             TEST_CHECK(run, TestUI_IsSamePixel(Size.y, 28.0f));
         }

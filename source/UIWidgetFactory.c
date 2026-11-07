@@ -164,6 +164,7 @@ Error UIWidgetFactory_Construct(UIWidgetFactory* self)
     GenericBuffer_AllocateVariable(&self->_capabilities, 8U, sizeof(CapabilityRecord));
     GenericBuffer_AllocateVariable(&self->_types, 8U, sizeof(TypeRecord));
     self->_kit = NULL;
+    self->_tooltipTypeId = WIDGET_TYPE_ID_INVALID;
     return Error_CreateSuccess();
 }
 

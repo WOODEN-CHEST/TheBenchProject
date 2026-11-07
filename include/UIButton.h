@@ -18,8 +18,9 @@
  * Disabled is the capability's state, not the input flag: an input-disabled widget is transparent to the pointer, and a
  * click on a disabled button must not reach what lies behind it. A disabled button swallows everything and reports nothing.
  *
- * The UIButtonCapability_* helpers are for widget types of their own: embed the capability, call them from the hooks and
- * draw differently. Calling code does not change.
+ * The capability is behaviour alone: its text and icon are plain content, and its look (UIKit_RegisterLook: a struct starting
+ * with UIButtonLookBase) draws them however it likes, reading the state to show with UIButtonCapability_GetState. Calling code
+ * does not change for any look.
  */
 
 
@@ -43,11 +44,12 @@ typedef struct UIButtonOptionsStruct
     uint8_t ActivationButtons;
     /** @brief Whether it takes the wheel, posting UIElementEvent_Scrolled, in place of letting it go on up the tree. */
     bool TakesWheel;
+    /** @brief Its icon, beside the text or in place of it as its look decides; none by default. Copied. */
+    UIElementIcon Icon;
 } UIButtonOptions;
 
 /**
- * @brief What a button type's constructor gets (UIKit_CreateButton passes it): the kit and the options. Hand it to
- *        UIButtonCapability_Construct.
+ * @brief What a button look's Construct gets (UIKit_CreateButton passes it): the kit and the options.
  */
 typedef struct UIButtonArgsStruct
 {
@@ -58,15 +60,15 @@ typedef struct UIButtonArgsStruct
 } UIButtonArgs;
 
 /**
- * @brief A button's capability: its state and its contract. Embedded by a widget type; its fields are read-only outside the
- *        button's module.
+ * @brief A button's capability: its logical state and its contract, no look. Embedded by a look's widget type right after its
+ *        Widget (UIButtonLookBase); its fields are read-only outside the button's module.
  */
 typedef struct UIButtonCapabilityStruct
 {
-    /** @brief The look. */
-    UIElementLook _look;
-    /** @brief The text. */
-    UIElementText _text;
+    /** @brief The text, as plain content. */
+    UITextContent _text;
+    /** @brief The icon. */
+    UIElementIcon _icon;
     /** @brief The press behaviour. */
     UIPressable _press;
     /** @brief Whether it takes clicks. */
@@ -76,6 +78,18 @@ typedef struct UIButtonCapabilityStruct
     /** @brief Whether it takes the wheel. */
     bool _takesWheel;
 } UIButtonCapability;
+
+/**
+ * @brief How every button look's widget struct starts: the widget, then the capability. A look's struct embeds this first (or
+ *        declares the same two members first), then what it draws with.
+ */
+typedef struct UIButtonLookBaseStruct
+{
+    /** @brief The widget. */
+    Widget Base;
+    /** @brief The button's behaviour. */
+    UIButtonCapability Button;
+} UIButtonLookBase;
 
 
 // Helpers.
@@ -87,7 +101,8 @@ typedef struct UIButtonCapabilityStruct
 static inline UIButtonOptions UIButtonOptions_Create(const unsigned char* text)
 {
     return (UIButtonOptions){ .Element = UIElementOptions_Create(), .Text = text, .IsEnabled = true, .IsToggled = false,
-        .ClickMode = UIClickMode_OnPressAndRelease, .ActivationButtons = UI_BUTTONS_LEFT, .TakesWheel = false };
+        .ClickMode = UIClickMode_OnPressAndRelease, .ActivationButtons = UI_BUTTONS_LEFT, .TakesWheel = false,
+        .Icon = UIElementIcon_None() };
 }
 
 
@@ -167,6 +182,16 @@ Error UIButton_SetClickMode(UIScreen* screen, uint64_t widgetId, UIClickMode cli
 Error UIButton_SetActivationButtons(UIScreen* screen, uint64_t widgetId, uint8_t activationButtons);
 
 /**
+ * @brief Sets a button's icon.
+ * @param screen The button's screen; must not be NULL.
+ * @param widgetId The button.
+ * @param icon The icon; must not be NULL. Copied.
+ * @returns Success; ErrorCode_InvalidOperation for a stale id or a widget that is no button; ErrorCode_ArgumentOutOfRange for an
+ *          icon that is not valid (UIElementIcon_IsValid).
+ */
+Error UIButton_SetIcon(UIScreen* screen, uint64_t widgetId, const UIElementIcon* icon);
+
+/**
  * @brief Sets whether a button takes the wheel, posting UIElementEvent_Scrolled, in place of letting it go on up the tree.
  * @param screen The button's screen; must not be NULL.
  * @param widgetId The button.
@@ -176,35 +201,41 @@ Error UIButton_SetActivationButtons(UIScreen* screen, uint64_t widgetId, uint8_t
 Error UIButton_SetTakesWheel(UIScreen* screen, uint64_t widgetId, bool takesWheel);
 
 
-// Behaviour helpers, for widget types embedding the capability.
+// Behaviour helpers, for looks and tests.
 /**
- * @brief Constructs the capability from a widget type's constructor.
+ * @brief Constructs the capability from the kind's arguments.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
- * @param args The constructor's arguments; must not be NULL.
- * @returns Success; ErrorCode_ArgumentOutOfRange for an unknown click mode or a bit that is no mouse button; otherwise the look's or
- *          the text's error, with nothing left to release.
+ * @param args The arguments; must not be NULL.
+ * @returns Success; ErrorCode_ArgumentOutOfRange for an unknown click mode, a bit that is no mouse button or an icon that is not
+ *          valid; otherwise the options' or the text's error, with nothing left to release.
  */
 Error UIButtonCapability_Construct(UIButtonCapability* self, Widget* widget, const UIButtonArgs* args);
 
 /**
- * @brief Releases the capability; call it from OnDeconstruct.
+ * @brief Releases the capability.
  * @param self The capability; must not be NULL.
- * @returns Success, or the first error.
  */
-Error UIButtonCapability_Deconstruct(UIButtonCapability* self);
+void UIButtonCapability_Deconstruct(UIButtonCapability* self);
 
 /**
- * @brief Advances the look and refreshes the text; call it from Update.
+ * @brief The behaviour's part of a tick: lets go of a key or a button whose release cannot reach it any more.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
- * @param time The tick's time.
- * @returns Success, or the text's error.
  */
-Error UIButtonCapability_Update(UIButtonCapability* self, Widget* widget, ProgramTime time);
+void UIButtonCapability_Update(UIButtonCapability* self, Widget* widget);
 
 /**
- * @brief Interprets mouse input; call it from OnMouseInput.
+ * @brief Returns the state a look shows for the button: disabled, pressed, entered, toggled (selected), hovered, focused or
+ *        normal (UIElementState_Choose).
+ * @param self The capability; must not be NULL.
+ * @param widget The widget; must not be NULL.
+ * @returns The state.
+ */
+UIElementState UIButtonCapability_GetState(const UIButtonCapability* self, const Widget* widget);
+
+/**
+ * @brief Interprets mouse input.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
  * @param args The input; must not be NULL.
@@ -213,14 +244,14 @@ Error UIButtonCapability_Update(UIButtonCapability* self, Widget* widget, Progra
 Error UIButtonCapability_OnMouseInput(UIButtonCapability* self, Widget* widget, const WidgetMouseInputArgs* args);
 
 /**
- * @brief Lets go of a press the screen says is lost; call it from OnPressLost.
+ * @brief Lets go of a press the screen says is lost.
  * @param self The capability; must not be NULL.
  * @param button The press's mouse button.
  */
 void UIButtonCapability_OnPressLost(UIButtonCapability* self, GameKey button);
 
 /**
- * @brief Interprets the wheel; call it from OnScrollInput.
+ * @brief Interprets the wheel.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
  * @param args The input; must not be NULL.
@@ -230,7 +261,7 @@ void UIButtonCapability_OnPressLost(UIButtonCapability* self, GameKey button);
 Error UIButtonCapability_OnScrollInput(UIButtonCapability* self, Widget* widget, const WidgetScrollInputArgs* args, bool* outIsHandled);
 
 /**
- * @brief Interprets keyboard input; call it from OnKeyboardInput.
+ * @brief Interprets keyboard input.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
  * @param args The input; must not be NULL.
@@ -239,32 +270,3 @@ Error UIButtonCapability_OnScrollInput(UIButtonCapability* self, Widget* widget,
  */
 Error UIButtonCapability_OnKeyboardInput(UIButtonCapability* self, Widget* widget, const WidgetKeyboardInputArgs* args,
     bool* outIsHandled);
-
-/**
- * @brief Gives its preferred size: its text with the theme's padding, at least the theme's minimum; call it from Measure.
- * @param self The capability; must not be NULL.
- * @param widget The widget; must not be NULL.
- * @param outSize [out] Receives the size in UI pixels. Must not be NULL.
- * @returns Success, or the text's error.
- */
-Error UIButtonCapability_Measure(UIButtonCapability* self, Widget* widget, Vector2* outSize);
-
-/**
- * @brief Draws its text, centred in a box (clipped to it when too long); a type of its own may draw it elsewhere.
- * @param self The capability; must not be NULL.
- * @param widget The widget; must not be NULL.
- * @param context The render context; must not be NULL.
- * @param box The box in surface pixels.
- * @returns Success, or the drawing's error.
- */
-Error UIButtonCapability_RenderText(const UIButtonCapability* self, Widget* widget, UIRenderContext* context, Rectangle box);
-
-/**
- * @brief Registers the button's standard widget type. Once per factory (the kit does).
- * @param factory The factory; must not be NULL.
- * @param lookCapabilityId The look's capability id.
- * @param buttonCapabilityId The button's capability id.
- * @param outTypeId [out] Receives the type's id. Must not be NULL.
- * @returns Success, or the factory's error.
- */
-Error UIButton_RegisterType(UIWidgetFactory* factory, uint64_t lookCapabilityId, uint64_t buttonCapabilityId, uint64_t* outTypeId);

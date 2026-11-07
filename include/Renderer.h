@@ -45,6 +45,9 @@
 
 /** @brief How many clip rectangles can be nested (RenderContext_PushClip); deeper pushes do not narrow the clip. */
 #define RENDER_CONTEXT_MAX_CLIP_DEPTH ((size_t)32)
+/** @brief How many transforms can be nested (RenderContext_PushTransform): as deep as a widget tree goes. Deeper pushes keep
+ *  the deepest stored transform. */
+#define RENDER_CONTEXT_MAX_TRANSFORM_DEPTH ((size_t)64)
 /** @brief Number of maps in a raylib Material (raylib's private MAX_MATERIAL_MAPS: 12 in the pinned build, see
  *  BUILDING.md; raylib.h does not export it). DrawMesh reads, and binds textures from, exactly this many entries of
  *  Material.maps, so a per-draw material copy must have this many. Rebuilding raylib with another value means
@@ -104,6 +107,17 @@ typedef struct RenderContextStruct
     Rectangle _clipStack[RENDER_CONTEXT_MAX_CLIP_DEPTH];
     /** @brief Number of pushed clips not yet popped; may exceed RENDER_CONTEXT_MAX_CLIP_DEPTH (see RenderContext_PushClip). */
     size_t _clipDepth;
+
+    /** @brief The pushed transforms in render-buffer pixels, each already composed with the ones below it (the pushed one
+     *  first, then those below); the entry at min(_transformDepth, RENDER_CONTEXT_MAX_TRANSFORM_DEPTH) - 1 is the one in
+     *  effect. Only entries below the depth are meaningful. */
+    Matrix _transformStack[RENDER_CONTEXT_MAX_TRANSFORM_DEPTH];
+    /** @brief Number of pushed transforms not yet popped; may exceed RENDER_CONTEXT_MAX_TRANSFORM_DEPTH (see
+     *  RenderContext_PushTransform). */
+    size_t _transformDepth;
+    /** @brief true for a context made with RenderContext_CreateMeasuring: clips and transforms are recorded and never reach
+     *  raylib, since nothing is drawn through it. */
+    bool _isMeasuring;
 } RenderContext;
 
 /**
@@ -524,7 +538,8 @@ void RenderContext_Create(RenderContext* self,
  *
  * Code that lays things out outside rendering (in update, where no target is bound) uses it to convert between
  * pixel, relative and fitted units exactly as a real context for a buffer of that size would. Never begin
- * rendering or draw through it: it has no target.
+ * rendering or draw through it: it has no target. Its clips and transforms are kept as on a real context (the stacks, the
+ * clip in effect) without touching raylib, so their arithmetic can be checked without a window.
  * @param self The render context to initialize; must not be NULL.
  * @param renderBufferSizePixels The buffer's size in pixels; a component that is not a positive finite number is
  *        treated as 1.
@@ -553,6 +568,10 @@ void RenderContext_Deconstruct(RenderContext* self);
  * rounded outwards to whole pixels and limited to the render buffer when applied (a NaN edge counts as 0). Pushes
  * beyond RENDER_CONTEXT_MAX_CLIP_DEPTH keep the clip of the deepest stored push (they are counted, so pops stay
  * balanced). Must be called inside a rendering pass, and every push popped before it ends.
+ *
+ * Under a transform (RenderContext_PushTransform) the rectangle is where the drawing stands before the transform, and the
+ * clip is the axis-aligned bounding box of where the transform puts it: the scissor is never turned, so clipped content
+ * inside a turned box shows within that bounding box.
  * @param self The render context; must not be NULL.
  * @param pixelRectangle The clip in render-buffer pixels (x, y, width, height); a negative size counts as empty.
  */
@@ -564,6 +583,36 @@ void RenderContext_PushClip(RenderContext* self, Rectangle pixelRectangle);
  * @param self The render context; must not be NULL.
  */
 void RenderContext_PopClip(RenderContext* self);
+
+/**
+ * @brief Turns, moves and scales everything drawn through raylib's batch until the matching RenderContext_PopTransform.
+ *
+ * The matrix maps render-buffer pixels to render-buffer pixels (raymath's convention: column vectors, the translation in
+ * m12 and m13). Transforms nest: a push composes its matrix with the one in effect, the pushed one applied first, on the
+ * context's own stack, and only the composed matrix is on raylib's matrix stack (which holds far fewer than a widget tree's
+ * depth), one at a time. raylib applies it to every vertex on the CPU, so textures, text, rectangles and lines all follow;
+ * clips pushed meanwhile become the bounding box of the transformed rectangle (RenderContext_PushClip). Pushes beyond
+ * RENDER_CONTEXT_MAX_TRANSFORM_DEPTH keep the deepest stored transform (they are counted, so pops stay balanced). Must be
+ * called inside a rendering pass, and every push popped before it ends (RenderContext_EndRendering drops what is left).
+ * @param self The render context; must not be NULL.
+ * @param pixelMatrix The transform in render-buffer pixels; must not be NULL.
+ */
+void RenderContext_PushTransform(RenderContext* self, const Matrix* pixelMatrix);
+
+/**
+ * @brief Undoes the latest RenderContext_PushTransform: the transform below it is in effect again, or none. Does nothing when
+ *        no transform is pushed.
+ * @param self The render context; must not be NULL.
+ */
+void RenderContext_PopTransform(RenderContext* self);
+
+/**
+ * @brief Returns the transform in effect: the composed matrix of every pushed transform.
+ * @param self The render context; must not be NULL.
+ * @param outMatrix [out] Receives the matrix, the identity when none is pushed. Must not be NULL.
+ * @returns true when a transform is pushed.
+ */
+bool RenderContext_TryGetTransform(const RenderContext* self, Matrix* outMatrix);
 
 /**
  * @brief Returns the target-area placement that centers it within the render buffer.
@@ -699,7 +748,8 @@ void RenderContext_End3DMode(RenderContext* self);
 void RenderContext_BeginRendering(RenderContext* self);
 
 /**
- * @brief Ends the rendering pass started by RenderContext_BeginRendering.
+ * @brief Ends the rendering pass started by RenderContext_BeginRendering. A clip or a transform left pushed is dropped first,
+ *        so whatever draws next starts clean.
  * @param self The render context; must not be NULL.
  */
 void RenderContext_EndRendering(RenderContext* self);

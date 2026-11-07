@@ -193,6 +193,14 @@ typedef struct LabelWidgetStruct
 
     /** @brief Its contract as a kit element, and its line height in UI pixels when it gives one. */
     UILabelCapability _element;
+    /** @brief Whether it is a kit element: its font and colours (and its text size, without its own) come from the screen's theme. */
+    bool _isElement;
+    /** @brief Its look as a kit element (the state shown and its fades); meaningful when _isElement. */
+    UIElementLook _elementLook;
+    /** @brief The screen's theme revision whose font the document has. */
+    uint64_t _appliedThemeRevision;
+    /** @brief Whether _appliedThemeRevision means anything yet. */
+    bool _hasAppliedTheme;
     /** @brief The text block's size at the last layout: when it changes the preferred size may have too. */
     Vector2 _lastLaidOutSize;
 } LabelWidget;

@@ -27,9 +27,10 @@
  * that stops reaching it ends the change at once, with its commit. The events carry the value as a double. Code setting the value posts nothing, and a value that is not a
  * finite number is refused. It also posts the events every element shares (UIElement_PostMouseEvents).
  *
- * Calling code uses the UISlider_* functions by widget id; widget types of their own embed the capability, call the
- * UISliderCapability_* helpers and are edit elements too (their descriptor's NeedsEntering). The value's arithmetic is pure, at
- * the end of this file.
+ * Calling code uses the UISlider_* functions by widget id. The capability is behaviour alone; a look (UIKit_RegisterLook: a struct
+ * starting with UISliderLookBase) draws the track and the thumb as it likes, reading the state with UISliderCapability_GetState, and
+ * tells the behaviour how long its thumb is (UISliderCapability_SetThumbLength), so a press on the thumb holds it where it was
+ * grabbed. The value's arithmetic is pure, at the end of this file.
  */
 
 
@@ -60,7 +61,7 @@ typedef struct UISliderOptionsStruct
 } UISliderOptions;
 
 /**
- * @brief What a slider type's constructor gets (UIKit_CreateSlider passes it): the kit and the options.
+ * @brief What a slider look's Construct gets (UIKit_CreateSlider passes it): the kit and the options.
  */
 typedef struct UISliderArgsStruct
 {
@@ -71,12 +72,11 @@ typedef struct UISliderArgsStruct
 } UISliderArgs;
 
 /**
- * @brief A slider's capability. Embedded by a widget type; its fields are read-only outside the slider's module.
+ * @brief A slider's capability: its logical state, no look. Embedded by a look's widget type right after its Widget
+ *        (UISliderLookBase); its fields are read-only outside the slider's module.
  */
 typedef struct UISliderCapabilityStruct
 {
-    /** @brief The look. */
-    UIElementLook _look;
     /** @brief The value. */
     double _value;
     /** @brief The range's lower end. */
@@ -104,7 +104,21 @@ typedef struct UISliderCapabilityStruct
     double _sessionStartValue;
     /** @brief How far from the thumb's centre a drag holds it, in surface pixels. */
     double _grabOffsetPixels;
+    /** @brief How long the look's thumb is along the track, in the widget's own UI pixels: its centre travels the track less this,
+     *  and a press within it holds it. 0 until the look says (a thumb of no length: the pointer is the value). */
+    float _thumbLength;
 } UISliderCapability;
+
+/**
+ * @brief How every slider look's widget struct starts: the widget, then the capability.
+ */
+typedef struct UISliderLookBaseStruct
+{
+    /** @brief The widget. */
+    Widget Base;
+    /** @brief The slider's behaviour. */
+    UISliderCapability Slider;
+} UISliderLookBase;
 
 
 // Helpers.
@@ -193,27 +207,42 @@ Error UISlider_SetIsEnabled(UIScreen* screen, uint64_t widgetId, bool isEnabled)
 Error UISlider_SetDefault(UIScreen* screen, uint64_t widgetId, bool hasDefault, double value);
 
 
-// Behaviour helpers, for widget types embedding the capability.
+// Behaviour helpers, for looks and tests.
 /**
- * @brief Constructs the capability from a widget type's constructor.
+ * @brief Constructs the capability from the kind's arguments.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
- * @param args The constructor's arguments; must not be NULL.
- * @returns Success; ErrorCode_ArgumentOutOfRange for a range, a value or a step that is not valid.
+ * @param args The arguments; must not be NULL.
+ * @returns Success; ErrorCode_ArgumentOutOfRange for a range, a value, a step or a default that is not valid; otherwise the options'
+ *          error.
  */
 Error UISliderCapability_Construct(UISliderCapability* self, Widget* widget, const UISliderArgs* args);
 
 /**
- * @brief Advances the look, and ends a key's change whose release cannot reach the slider any more; call it from Update.
+ * @brief The behaviour's part of a tick: ends a drag or a key's change whose release cannot reach the slider any more.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
- * @param time The tick's time.
  * @returns Success, or the event queue's error.
  */
-Error UISliderCapability_Update(UISliderCapability* self, Widget* widget, ProgramTime time);
+Error UISliderCapability_Update(UISliderCapability* self, Widget* widget);
 
 /**
- * @brief Interprets mouse input; call it from OnMouseInput.
+ * @brief Returns the state a look shows for the slider: disabled, pressed (a drag), entered, hovered, focused or normal.
+ * @param self The capability; must not be NULL.
+ * @param widget The widget; must not be NULL.
+ * @returns The state.
+ */
+UIElementState UISliderCapability_GetState(const UISliderCapability* self, const Widget* widget);
+
+/**
+ * @brief Tells the behaviour how long the look's thumb is along the track; call it from the look's Update when it can change.
+ * @param self The capability; must not be NULL.
+ * @param length The length in the widget's own UI pixels; a value that is not a finite number >= 0 counts as 0.
+ */
+void UISliderCapability_SetThumbLength(UISliderCapability* self, float length);
+
+/**
+ * @brief Interprets mouse input.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
  * @param args The input; must not be NULL.
@@ -222,8 +251,7 @@ Error UISliderCapability_Update(UISliderCapability* self, Widget* widget, Progra
 Error UISliderCapability_OnMouseInput(UISliderCapability* self, Widget* widget, const WidgetMouseInputArgs* args);
 
 /**
- * @brief Ends a drag whose press the screen says is lost: the value stays where it got to, and the change is committed; call it from
- *        OnPressLost.
+ * @brief Ends a drag whose press the screen says is lost: the value stays where it got to, and the change is committed.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
  * @param button The press's mouse button.
@@ -232,7 +260,7 @@ Error UISliderCapability_OnMouseInput(UISliderCapability* self, Widget* widget, 
 Error UISliderCapability_OnPressLost(UISliderCapability* self, Widget* widget, GameKey button);
 
 /**
- * @brief Interprets the wheel, which it takes only while entered or with Ctrl; call it from OnScrollInput.
+ * @brief Interprets the wheel, which it takes only while entered or with Ctrl.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
  * @param args The input; must not be NULL.
@@ -242,7 +270,7 @@ Error UISliderCapability_OnPressLost(UISliderCapability* self, Widget* widget, G
 Error UISliderCapability_OnScrollInput(UISliderCapability* self, Widget* widget, const WidgetScrollInputArgs* args, bool* outIsHandled);
 
 /**
- * @brief Ends the change in progress when the slider is left; call it from OnLeave.
+ * @brief Ends the change in progress when the slider is left.
  *
  * A drag or a held key's change ends there: committed on UILeaveReason_Keep (unless the value ended where it began), taken back on
  * UILeaveReason_Cancel. What is left of it does nothing: the drag's moves and release, the key's repeats and release (until it is
@@ -255,7 +283,7 @@ Error UISliderCapability_OnScrollInput(UISliderCapability* self, Widget* widget,
 Error UISliderCapability_OnLeave(UISliderCapability* self, Widget* widget, UILeaveReason reason);
 
 /**
- * @brief Interprets keyboard input; call it from OnKeyboardInput.
+ * @brief Interprets keyboard input.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
  * @param args The input; must not be NULL.
@@ -264,24 +292,6 @@ Error UISliderCapability_OnLeave(UISliderCapability* self, Widget* widget, UILea
  */
 Error UISliderCapability_OnKeyboardInput(UISliderCapability* self, Widget* widget, const WidgetKeyboardInputArgs* args,
     bool* outIsHandled);
-
-/**
- * @brief Gives its preferred size: the theme's minimum, at least the thumb's height; call it from Measure.
- * @param self The capability; must not be NULL.
- * @param widget The widget; must not be NULL.
- * @param outSize [out] Receives the size in UI pixels. Must not be NULL.
- */
-void UISliderCapability_Measure(const UISliderCapability* self, Widget* widget, Vector2* outSize);
-
-/**
- * @brief Registers the slider's standard widget type. Once per factory (the kit does).
- * @param factory The factory; must not be NULL.
- * @param lookCapabilityId The look's capability id.
- * @param sliderCapabilityId The slider's capability id.
- * @param outTypeId [out] Receives the type's id. Must not be NULL.
- * @returns Success, or the factory's error.
- */
-Error UISlider_RegisterType(UIWidgetFactory* factory, uint64_t lookCapabilityId, uint64_t sliderCapabilityId, uint64_t* outTypeId);
 
 
 // The value's arithmetic.

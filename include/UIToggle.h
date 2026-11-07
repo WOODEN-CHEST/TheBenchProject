@@ -12,8 +12,8 @@
  *
  * A click by its click mode, Enter or Space. Off and on swap; a click from mixed turns it on. It posts UIElementEvent_Changed and
  * then UIElementEvent_Committed, each with the bool it is now, and the events every element shares (UIElement_PostMouseEvents). Calling
- * code uses the UIToggle_* functions by widget id; widget types of their own embed the capability and call the UIToggleCapability_*
- * helpers.
+ * code uses the UIToggle_* functions by widget id. The capability is behaviour alone; a look (UIKit_RegisterLook: a struct starting
+ * with UIToggleLookBase) draws the box, the check and the text as it likes, reading the state with UIToggleCapability_GetState.
  */
 
 
@@ -51,7 +51,7 @@ typedef struct UIToggleOptionsStruct
 } UIToggleOptions;
 
 /**
- * @brief What a toggle type's constructor gets (UIKit_CreateToggle passes it): the kit and the options.
+ * @brief What a toggle look's Construct gets (UIKit_CreateToggle passes it): the kit and the options.
  */
 typedef struct UIToggleArgsStruct
 {
@@ -62,14 +62,13 @@ typedef struct UIToggleArgsStruct
 } UIToggleArgs;
 
 /**
- * @brief A toggle's capability. Embedded by a widget type; its fields are read-only outside the toggle's module.
+ * @brief A toggle's capability: its logical state, no look. Embedded by a look's widget type right after its Widget
+ *        (UIToggleLookBase); its fields are read-only outside the toggle's module.
  */
 typedef struct UIToggleCapabilityStruct
 {
-    /** @brief The look. */
-    UIElementLook _look;
-    /** @brief The text. */
-    UIElementText _text;
+    /** @brief The text, as plain content. */
+    UITextContent _text;
     /** @brief The press behaviour. */
     UIPressable _press;
     /** @brief Its state. */
@@ -77,6 +76,17 @@ typedef struct UIToggleCapabilityStruct
     /** @brief Whether it takes clicks. */
     bool _isEnabled;
 } UIToggleCapability;
+
+/**
+ * @brief How every toggle look's widget struct starts: the widget, then the capability.
+ */
+typedef struct UIToggleLookBaseStruct
+{
+    /** @brief The widget. */
+    Widget Base;
+    /** @brief The toggle's behaviour. */
+    UIToggleCapability Toggle;
+} UIToggleLookBase;
 
 
 // Helpers.
@@ -152,35 +162,40 @@ Error UIToggle_SetClickMode(UIScreen* screen, uint64_t widgetId, UIClickMode cli
 Error UIToggle_SetActivationButtons(UIScreen* screen, uint64_t widgetId, uint8_t activationButtons);
 
 
-// Behaviour helpers, for widget types embedding the capability.
+// Behaviour helpers, for looks and tests.
 /**
- * @brief Constructs the capability from a widget type's constructor.
+ * @brief Constructs the capability from the kind's arguments.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
- * @param args The constructor's arguments; must not be NULL.
+ * @param args The arguments; must not be NULL.
  * @returns Success; ErrorCode_ArgumentOutOfRange for an unknown state or click mode, or a bit that is no mouse button; otherwise the
- *          look's or the text's error, with nothing left to release.
+ *          options' or the text's error, with nothing left to release.
  */
 Error UIToggleCapability_Construct(UIToggleCapability* self, Widget* widget, const UIToggleArgs* args);
 
 /**
- * @brief Releases the capability; call it from OnDeconstruct.
+ * @brief Releases the capability.
  * @param self The capability; must not be NULL.
- * @returns Success, or the first error.
  */
-Error UIToggleCapability_Deconstruct(UIToggleCapability* self);
+void UIToggleCapability_Deconstruct(UIToggleCapability* self);
 
 /**
- * @brief Advances the look and refreshes the text; call it from Update.
+ * @brief The behaviour's part of a tick: lets go of a key or a button whose release cannot reach it any more.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
- * @param time The tick's time.
- * @returns Success, or the text's error.
  */
-Error UIToggleCapability_Update(UIToggleCapability* self, Widget* widget, ProgramTime time);
+void UIToggleCapability_Update(UIToggleCapability* self, Widget* widget);
 
 /**
- * @brief Interprets mouse input; call it from OnMouseInput.
+ * @brief Returns the state a look shows for the toggle: disabled, pressed, entered, hovered, focused or normal.
+ * @param self The capability; must not be NULL.
+ * @param widget The widget; must not be NULL.
+ * @returns The state.
+ */
+UIElementState UIToggleCapability_GetState(const UIToggleCapability* self, const Widget* widget);
+
+/**
+ * @brief Interprets mouse input.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
  * @param args The input; must not be NULL.
@@ -189,14 +204,14 @@ Error UIToggleCapability_Update(UIToggleCapability* self, Widget* widget, Progra
 Error UIToggleCapability_OnMouseInput(UIToggleCapability* self, Widget* widget, const WidgetMouseInputArgs* args);
 
 /**
- * @brief Lets go of a press the screen says is lost; call it from OnPressLost.
+ * @brief Lets go of a press the screen says is lost.
  * @param self The capability; must not be NULL.
  * @param button The press's mouse button.
  */
 void UIToggleCapability_OnPressLost(UIToggleCapability* self, GameKey button);
 
 /**
- * @brief Interprets keyboard input; call it from OnKeyboardInput.
+ * @brief Interprets keyboard input.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
  * @param args The input; must not be NULL.
@@ -205,22 +220,3 @@ void UIToggleCapability_OnPressLost(UIToggleCapability* self, GameKey button);
  */
 Error UIToggleCapability_OnKeyboardInput(UIToggleCapability* self, Widget* widget, const WidgetKeyboardInputArgs* args,
     bool* outIsHandled);
-
-/**
- * @brief Gives its preferred size: the box, the spacing and the text, at least the theme's minimum; call it from Measure.
- * @param self The capability; must not be NULL.
- * @param widget The widget; must not be NULL.
- * @param outSize [out] Receives the size in UI pixels. Must not be NULL.
- * @returns Success, or the text's error.
- */
-Error UIToggleCapability_Measure(UIToggleCapability* self, Widget* widget, Vector2* outSize);
-
-/**
- * @brief Registers the toggle's standard widget type. Once per factory (the kit does).
- * @param factory The factory; must not be NULL.
- * @param lookCapabilityId The look's capability id.
- * @param toggleCapabilityId The toggle's capability id.
- * @param outTypeId [out] Receives the type's id. Must not be NULL.
- * @returns Success, or the factory's error.
- */
-Error UIToggle_RegisterType(UIWidgetFactory* factory, uint64_t lookCapabilityId, uint64_t toggleCapabilityId, uint64_t* outTypeId);

@@ -12,11 +12,13 @@
 #include "StackWidget.h"
 #include "UIKit.h"
 #include "UIScreen.h"
+#include "UITooltip.h"
 #include "UIWidget.h"
 #include "UIWidgetFactory.h"
 #include "UIWindowHost.h"
 #include "raylib/raylib.h"
 #include "wr/WRCompile.h"
+#include "wr/WRMath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRUserData.h"
 
@@ -25,11 +27,11 @@
 /** Debug name used in log and crash messages. */
 #define FRAME_DEBUG_NAME ((const unsigned char*)u8"UIGallery")
 /** The themes the T key goes through. */
-#define THEME_COUNT ((size_t)2)
+#define THEME_COUNT ((size_t)3)
 /** The scales the + and - keys go through. */
 #define SCALE_COUNT ((size_t)6)
 /** How many elements are named in the log. */
-#define MAX_NAMED_ELEMENTS ((size_t)48)
+#define MAX_NAMED_ELEMENTS ((size_t)80)
 /** Room for a status line. */
 #define STATUS_CAPACITY ((size_t)160)
 /** The background behind everything, opaque: the gallery has no world under it. */
@@ -40,6 +42,15 @@
 #define SCRUB_START_PIXELS 3.0f
 /** The keyboard box's width, in UI pixels. */
 #define KEYBOARD_BOX_WIDTH 320.0f
+/** How many pages the gallery has (N steps through them). */
+#define PAGE_COUNT ((size_t)2)
+/** How long the turning panel takes for a whole turn, and how far the slide-in starts, in UI pixels, and how long it takes. */
+#define TURN_SECONDS 20.0
+#define SLIDE_DISTANCE 360.0f
+#define SLIDE_SECONDS 0.45
+/** The diamond look's size, in its own UI pixels. */
+#define DIAMOND_SIZE 28.0f
+#define PI_F 3.14159265f
 
 
 // Types.
@@ -72,14 +83,26 @@ typedef struct UIGalleryFrameStruct
 
     size_t _themeIndex;
     size_t _scaleIndex;
+    /** The pages (roots), which N shows one at a time, and the one shown. */
+    uint64_t _pageIds[PAGE_COUNT];
+    size_t _pageIndex;
+    /** The turning panel and the panel that slides in. */
+    uint64_t _turningId;
+    uint64_t _slideId;
     bool _isEventLogEnabled;
     uint64_t _wheelStackType;
     uint64_t _scrubBoxType;
-    uint64_t _statusId;
+    /** Each page's status line, all kept saying the same. */
+    uint64_t _statusIds[PAGE_COUNT];
+    /** The button that slides the slide-in panel in again. */
+    uint64_t _slideButtonId;
     double _time;
     double _lastChangedLogTime;
     NamedElement _names[MAX_NAMED_ELEMENTS];
     size_t _nameCount;
+    /** The elements given a hover text of their own; the rest named get one saying what they are. */
+    uint64_t _describedIds[MAX_NAMED_ELEMENTS];
+    size_t _describedCount;
 } UIGalleryFrame;
 
 /* A stack that takes the wheel, as a scroll area does: its children's wheel comes up to it. */
@@ -110,7 +133,7 @@ typedef struct GalleryBuildStruct
 
 
 // Fields.
-static const unsigned char* const ThemeNames[THEME_COUNT] = { u8"tbp:test_flat", u8"tbp:test_nine_slice" };
+static const unsigned char* const ThemeNames[THEME_COUNT] = { u8"tbp:test_flat", u8"tbp:test_nine_slice", u8"tbp:test_light" };
 static const float Scales[SCALE_COUNT] = { 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f };
 /* Text in every alphabet the font has, for looking at small sizes. */
 static const unsigned char SampleText[] = u8"The quick brown fox jumps over the lazy dog 0123456789 āčēģīķļņšūž Ждём";
@@ -233,12 +256,35 @@ static void AddSlider(GalleryBuild* build, uint64_t parent, const char* name, do
     }
 }
 
+/* Puts a text in every page's status line. */
+static Error SetStatus(UIGalleryFrame* frame, const char* text)
+{
+    Error First = Error_CreateSuccess();
+    for (size_t Index = 0U; Index < PAGE_COUNT; Index++)
+    {
+        if (frame->_statusIds[Index] == WIDGET_ID_INVALID)
+        {
+            continue;
+        }
+        Error Result = UILabel_SetText(&frame->_screen, frame->_statusIds[Index], (const unsigned char*)text);
+        if (First.Code == ErrorCode_Success)
+        {
+            First = Result;
+        }
+        else
+        {
+            Error_Deconstruct(&Result);
+        }
+    }
+    return First;
+}
+
 /* Sets a status line and logs it. */
 static void ReportScrub(UIGalleryFrame* frame, const char* what, float pixels)
 {
     char Status[STATUS_CAPACITY];
     snprintf(Status, sizeof(Status), "the scrub box %s: %.0f pixels", what, (double)pixels);
-    Error Result = UILabel_SetText(&frame->_screen, frame->_statusId, (const unsigned char*)Status);
+    Error Result = SetStatus(frame, Status);
     Error_Deconstruct(&Result);
     if ((frame->_services->Logger != NULL) && frame->_isEventLogEnabled)
     {
@@ -547,7 +593,10 @@ static void BuildLayouts(GalleryBuild* build, uint64_t page)
     BuildKeyboard(build, Panel);
 }
 
-/* The page: a heading, two panels side by side, and a status line. */
+static void BuildLooksPage(GalleryBuild* build);
+static void DescribeEverything(GalleryBuild* build);
+
+/* The first page: a heading, two panels side by side, and a status line; then the second page, and hover text on everything. */
 static Error BuildPage(UIGalleryFrame* frame)
 {
     GalleryBuild Build = { .Frame = frame, .Result = Error_CreateSuccess() };
@@ -569,8 +618,305 @@ static Error BuildPage(UIGalleryFrame* frame)
     }
     BuildElements(&Build, Panels);
     BuildLayouts(&Build, Panels);
-    frame->_statusId = AddLabel(&Build, Page, u8"Nothing yet.", u8"hint");
+    frame->_statusIds[0] = AddLabel(&Build, Page, u8"Nothing yet.", u8"hint");
+    frame->_pageIds[0] = Page;
+    BuildLooksPage(&Build);
+    DescribeEverything(&Build);
     return Build.Result;
+}
+
+
+// Static functions: the second page.
+/* A look of the button with Render and Measure alone: a diamond in the theme's button colours for the state the button is in, with no
+ * fade (it has no Update) and no text. It does not keep a UIElementLook, so it does not declare the look capability. */
+typedef struct DiamondLookStruct
+{
+    UIButtonLookBase Base;
+} DiamondLook;
+
+static Error Diamond_Render(void* self, UIRenderContext* context)
+{
+    DiamondLook* Look = self;
+    Rectangle Box = UIRenderContext_GetPixelBox(context);
+    if (UIElement_IsBoxEmpty(Box))
+    {
+        return Error_CreateSuccess();
+    }
+    const UIThemeStyle* Style = UITheme_FindStyle(UIScreen_GetTheme(Widget_GetScreen(&Look->Base.Base)), UIElementKind_Button, NULL);
+    const UIBoxStyle* Background = UIThemeStyle_GetBox(Style, UIButtonPart_Background);
+    const UIStateColors* Text = UIThemeStyle_GetColors(Style, UIButtonPart_Text);
+    UIElementState State = UIButtonCapability_GetState(&Look->Base.Button, &Look->Base.Base);
+    Color Fill = (Background != NULL) ? UIStateColors_Resolve(&Background->Colors, State, GRAY) : GRAY;
+    Color Mark = (Text != NULL) ? UIStateColors_Resolve(Text, State, WHITE) : WHITE;
+    float Side = Math_MinFloat(Box.width, Box.height) * 0.70710678f; // A square turned an eighth fits the box.
+    Vector2 Middle = { .x = 0.5f, .y = 0.5f };
+    Error Result = UIRenderContext_RenderRectangle(context, Middle, (Vector2){ .x = Side / Box.width, .y = Side / Box.height }, Middle, PI_F * 0.25f,
+        UIRenderColor_FromColor(Fill));
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    float Inner = Side * 0.35f;
+    return UIRenderContext_RenderRectangle(context, Middle, (Vector2){ .x = Inner / Box.width, .y = Inner / Box.height }, Middle, PI_F * 0.25f,
+        UIRenderColor_FromColor(Mark));
+}
+
+static Error Diamond_Measure(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
+{
+    UNUSED(self);
+    UNUSED(context);
+    UNUSED(availableWidth);
+    *outSize = (Vector2){ .x = DIAMOND_SIZE, .y = DIAMOND_SIZE };
+    return Error_CreateSuccess();
+}
+
+static const UILookVTable DiamondLookVTable = { .Render = Diamond_Render, .Measure = Diamond_Measure };
+
+/* Gives an element its hover text; nothing for an id that is not there. */
+static void Describe(GalleryBuild* build, uint64_t id, const unsigned char* text)
+{
+    UIGalleryFrame* Frame = build->Frame;
+    if (!HasFailed(build) && (id != WIDGET_ID_INVALID))
+    {
+        build->Result = UITooltip_Set(&Frame->_screen, id, text);
+        if (Frame->_describedCount < MAX_NAMED_ELEMENTS)
+        {
+            Frame->_describedIds[Frame->_describedCount] = id;
+            Frame->_describedCount++;
+        }
+    }
+}
+
+/* Hover text on everything named that has none of its own yet: what it is. */
+static void DescribeEverything(GalleryBuild* build)
+{
+    UIGalleryFrame* Frame = build->Frame;
+    for (size_t Index = 0U; (Index < Frame->_nameCount) && !HasFailed(build); Index++)
+    {
+        bool HasOwn = false;
+        for (size_t Described = 0U; Described < Frame->_describedCount; Described++)
+        {
+            HasOwn = HasOwn || (Frame->_describedIds[Described] == Frame->_names[Index].Id);
+        }
+        if (!HasOwn)
+        {
+            char Text[STATUS_CAPACITY];
+            snprintf(Text, sizeof(Text), "This is %s.", Frame->_names[Index].Name);
+            Describe(build, Frame->_names[Index].Id, (const unsigned char*)Text);
+        }
+    }
+}
+
+/* A button of the scale rows: a fixed width and height in its row, or sized by its content, at a scale of its own. */
+static uint64_t AddScaledButton(GalleryBuild* build, uint64_t parent, const unsigned char* text, const char* name, bool isFixed, float width,
+    float scale)
+{
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIButtonOptions Options = UIButtonOptions_Create(text);
+        Options.Element.Scale = scale;
+        Options.Element.Hint = isFixed ? UIStackHint_Fixed(width) : UIStackHint_Content();
+        Options.Element.Hint.Align = UIStackAlign_Start;
+        Options.Element.Hint.HasCrossSize = isFixed;
+        Options.Element.Hint.CrossSize = 24.0f;
+        build->Result = UIKit_CreateButton(&build->Frame->_kit, &build->Frame->_screen, parent, &Options, &Id);
+        Remember(build, Id, name);
+    }
+    return Id;
+}
+
+/* The scale rows: the element design's table of size against scale. */
+static void BuildScaleRows(GalleryBuild* build, uint64_t panel)
+{
+    AddLabel(build, panel, u8"Size and scale: fixed 100 x 24, fixed 400 x 24, fixed at scale 2, by content at scale 2, fixed in a box of scale 2", u8"heading");
+    uint64_t Row = AddRow(build, panel, 8.0f);
+    Describe(build, AddScaledButton(build, Row, u8"Button", "the 100 by 24 button", true, 100.0f, 1.0f), u8"Fixed 100 x 24 at scale 1.");
+    Describe(build, AddScaledButton(build, Row, u8"Long button", "the long button", true, 400.0f, 1.0f),
+        u8"A long button: fixed 400 x 24. Its size changes, its text and corners do not.");
+    Describe(build, AddScaledButton(build, Row, u8"Big, fixed", "the big fixed button", true, 100.0f, 2.0f),
+        u8"Scale 2 in a fixed 100 x 24 box: everything inside is twice as large, the box is not, and its text is clipped.");
+    Describe(build, AddScaledButton(build, Row, u8"By content", "the big button by content", false, 0.0f, 2.0f),
+        u8"Scale 2, sized by its content: the box grows with what it measures.");
+    uint64_t Box = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIPanelOptions Options = UIPanelOptions_Create();
+        Options.Direction = UIStackDirection_Row; // Its child's fixed 100 is a width.
+        Options.Element.Variant = u8"inset";
+        Options.Element.Scale = 2.0f;
+        Options.Element.Hint.Align = UIStackAlign_Start;
+        build->Result = UIKit_CreatePanel(&build->Frame->_kit, &build->Frame->_screen, Row, &Options, &Box);
+        Remember(build, Box, "the box of scale 2");
+    }
+    Describe(build, AddScaledButton(build, Box, u8"In a box", "the button in the box of scale 2", true, 100.0f, 1.0f),
+        u8"Fixed 100 x 24 at scale 1, in a box of scale 2: its size counts in its parent's scale, so it is 200 x 48 on the screen.");
+}
+
+/* Starts the turning panel's turn: a whole one, over and over. */
+static Error StartTurning(UIGalleryFrame* frame)
+{
+    UIKeyframe Turn[2] =
+    {
+        { .Time = 0.0, .Interpolation = UIInterpolation_Linear, .CustomEasing = NULL, .Value = { .FloatValue = 0.0f } },
+        { .Time = TURN_SECONDS, .Interpolation = UIInterpolation_Linear, .CustomEasing = NULL, .Value = { .FloatValue = 2.0f * PI_F } }
+    };
+    UIAnimationOptions Options = UIAnimationOptions_CreateDefault();
+    Options.IsLooping = true;
+    uint64_t Animation = 0U;
+    return UIScreen_StartAnimation(&frame->_screen, frame->_turningId, WidgetBaseProperty_Rotation, UIPropertyType_Float, Turn, 2U, Options, &Animation);
+}
+
+/* Slides the slide-in panel in from the left by its visual offset: layout never moves it. */
+static Error StartSlideIn(UIGalleryFrame* frame)
+{
+    UIKeyframe Slide[2] =
+    {
+        { .Time = 0.0, .Interpolation = UIInterpolation_ExpOutPow3, .CustomEasing = NULL, .Value = { .Vector2Value = { -SLIDE_DISTANCE, 0.0f } } },
+        { .Time = SLIDE_SECONDS, .Interpolation = UIInterpolation_Linear, .CustomEasing = NULL, .Value = { .Vector2Value = { 0.0f, 0.0f } } }
+    };
+    uint64_t Animation = 0U;
+    return UIScreen_StartAnimation(&frame->_screen, frame->_slideId, WidgetBaseProperty_VisualOffset, UIPropertyType_Vector2, Slide, 2U,
+        UIAnimationOptions_CreateDefault(), &Animation);
+}
+
+/* A fixed box of a row for a turning or sliding panel. */
+static uint64_t AddMovingPanel(GalleryBuild* build, uint64_t parent, const char* name)
+{
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIPanelOptions Options = UIPanelOptions_Create();
+        Options.Element.Variant = u8"inset";
+        Options.HasSpacing = true;
+        Options.Spacing = 8.0f;
+        Options.Element.Hint = UIStackHint_Fixed(260.0f);
+        Options.Element.Hint.Align = UIStackAlign_Start;
+        Options.Element.Hint.HasCrossSize = true;
+        Options.Element.Hint.CrossSize = 110.0f;
+        build->Result = UIKit_CreatePanel(&build->Frame->_kit, &build->Frame->_screen, parent, &Options, &Id);
+        Remember(build, Id, name);
+    }
+    return Id;
+}
+
+/* The turning panel and the one that slides in. */
+static void BuildMovingRows(GalleryBuild* build, uint64_t panel)
+{
+    UIGalleryFrame* Frame = build->Frame;
+    AddLabel(build, panel, u8"Any widget turns with what it holds and is clicked where it shows; a visual offset slides a panel in", u8"heading");
+    uint64_t Row = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        // Room above and below for the turning panel's corners, which layout does not see.
+        UIStackOptions Options = UIStackOptions_Create(UIStackDirection_Row);
+        Options.Layout.Spacing = 80.0f;
+        Options.Layout.Padding = (UIInsets){ .Left = 20.0f, .Top = 90.0f, .Right = 0.0f, .Bottom = 90.0f };
+        build->Result = UIKit_CreateStack(&Frame->_kit, &Frame->_screen, panel, &Options, &Row);
+    }
+    Frame->_turningId = AddMovingPanel(build, Row, "the turning panel");
+    Describe(build, Frame->_turningId, u8"It turns once in 20 seconds, its button and slider with it; layout and navigation keep its box.");
+    Describe(build, AddButton(build, Frame->_turningId, u8"Click me while I turn", "the turning button", true, false, NULL, UIStackHint_Content()),
+        u8"Hit where it shows: the pointer goes through the turn's inverse.");
+    AddSlider(build, Frame->_turningId, "the turning slider", 40.0, false, 0.0, true);
+    Frame->_slideId = AddMovingPanel(build, Row, "the sliding panel");
+    Describe(build, Frame->_slideId, u8"It slides in by its visual offset, which layout never sees.");
+    Frame->_slideButtonId = AddButton(build, Frame->_slideId, u8"Slide in again", "the slide-in button", true, false, NULL, UIStackHint_Content());
+    Describe(build, Frame->_slideButtonId, u8"Slides this panel in again from the left.");
+    if (!HasFailed(build))
+    {
+        build->Result = StartTurning(Frame);
+    }
+    if (!HasFailed(build))
+    {
+        build->Result = StartSlideIn(Frame);
+    }
+}
+
+/* A button of the diamond look. */
+static uint64_t AddDiamond(GalleryBuild* build, uint64_t parent, const char* name, bool isEnabled, bool isToggled)
+{
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIButtonOptions Options = UIButtonOptions_Create(NULL);
+        Options.Element.Look = u8"tbp:gallery_diamond";
+        Options.IsEnabled = isEnabled;
+        Options.IsToggled = isToggled;
+        build->Result = UIKit_CreateButton(&build->Frame->_kit, &build->Frame->_screen, parent, &Options, &Id);
+        Remember(build, Id, name);
+    }
+    return Id;
+}
+
+/* The second page: scale, turns and offsets, a second look, icons. */
+static void BuildLooksPage(GalleryBuild* build)
+{
+    UIGalleryFrame* Frame = build->Frame;
+    if (HasFailed(build))
+    {
+        return;
+    }
+    UIStackOptions PageOptions = UIStackOptions_Create(UIStackDirection_Column);
+    PageOptions.Layout.Padding = UIInsets_All(12.0f);
+    PageOptions.Layout.Spacing = 8.0f;
+    PageOptions.Element.HasPlacement = true;
+    PageOptions.Element.Placement = UIPlacement_Stretch(UIInsets_All(0.0f));
+    uint64_t Page = WIDGET_ID_INVALID;
+    build->Result = UIKit_CreateStack(&Frame->_kit, &Frame->_screen, WIDGET_ID_INVALID, &PageOptions, &Page);
+    Frame->_pageIds[1] = Page;
+    AddLabel(build, Page, u8"UI gallery: looks, scale and turns", u8"heading");
+    AddLabel(build, Page, u8"N the other page, T the theme (the third is the first with another palette), + and - the scale. Hover anything for its text.", u8"hint");
+    uint64_t Panel = AddPanel(build, Page, UIStackHint_Fill(1.0f), NULL);
+    BuildScaleRows(build, Panel);
+    BuildMovingRows(build, Panel);
+
+    AddLabel(build, Panel, u8"A second look of the button: Render and Measure only, the kind does the rest", u8"heading");
+    uint64_t Diamonds = AddRow(build, Panel, 10.0f);
+    Describe(build, AddDiamond(build, Diamonds, "the diamond button", true, false),
+        u8"Another look of the same button: a diamond in the theme's colours. It wrote Render and Measure; clicks, keys and events are the button's.");
+    Describe(build, AddDiamond(build, Diamonds, "the toggled diamond", true, true), u8"Toggled: the look reads the state the button is in.");
+    Describe(build, AddDiamond(build, Diamonds, "the disabled diamond", false, false), u8"Disabled: it swallows the click, as every button does.");
+
+    AddLabel(build, Panel, u8"Icons: a placeholder letter before the text, until art exists", u8"heading");
+    uint64_t Icons = AddRow(build, Panel, 6.0f);
+    const char* const IconNames[] = { "the save button", "the open button", "the play button" };
+    const unsigned char* const IconTexts[] = { u8"Save", u8"Open", u8"Play" };
+    const uint32_t Letters[] = { (uint32_t)'S', (uint32_t)'O', (uint32_t)'P' };
+    for (size_t Index = 0U; (Index < 3U) && !HasFailed(build); Index++)
+    {
+        UIButtonOptions Options = UIButtonOptions_Create(IconTexts[Index]);
+        Options.Icon = UIElementIcon_FromLetter(Letters[Index]);
+        uint64_t Id = WIDGET_ID_INVALID;
+        build->Result = UIKit_CreateButton(&Frame->_kit, &Frame->_screen, Icons, &Options, &Id);
+        Remember(build, Id, IconNames[Index]);
+    }
+    Frame->_statusIds[1] = AddLabel(build, Page, u8"Nothing yet.", u8"hint");
+    Widget* PageBase = NULL;
+    if (!HasFailed(build) && UIScreen_TryGetWidgetById(&Frame->_screen, Page, &PageBase))
+    {
+        build->Result = Widget_SetIsRendered(PageBase, false);
+    }
+}
+
+/* Shows the next page and hides the one shown. */
+static Error ShowNextPage(UIGalleryFrame* frame)
+{
+    Widget* Shown = NULL;
+    Widget* Next = NULL;
+    size_t NextIndex = (frame->_pageIndex + 1U) % PAGE_COUNT;
+    if (!UIScreen_TryGetWidgetById(&frame->_screen, frame->_pageIds[frame->_pageIndex], &Shown)
+        || !UIScreen_TryGetWidgetById(&frame->_screen, frame->_pageIds[NextIndex], &Next))
+    {
+        return Error_CreateSuccess();
+    }
+    Error Result = Widget_SetIsRendered(Shown, false);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = Widget_SetIsRendered(Next, true);
+    }
+    frame->_pageIndex = NextIndex;
+    return Result;
 }
 
 
@@ -625,7 +971,13 @@ static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserDa
     }
     char Status[STATUS_CAPACITY];
     snprintf(Status, sizeof(Status), "%s %s%s", GetElementName(Frame, event->WidgetId), IsKnown ? EventNames[event->WidgetEventId] : "posted", Value);
-    Error Result = UILabel_SetText(screen, Frame->_statusId, (const unsigned char*)Status);
+    (void)screen;
+    Error Result = SetStatus(Frame, Status);
+    if (Result.Code == ErrorCode_Success)
+    {
+        bool IsSlideAgain = (event->WidgetId == Frame->_slideButtonId) && (event->WidgetEventId == (int32_t)UIElementEvent_Activated);
+        Result = IsSlideAgain ? StartSlideIn(Frame) : Error_CreateSuccess();
+    }
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
@@ -648,7 +1000,8 @@ static Error OnEnteredChanged(UIScreen* screen, const UIEvent* event, const User
     UIGalleryFrame* Frame = UserData_GetPointer(userData);
     char Status[STATUS_CAPACITY];
     snprintf(Status, sizeof(Status), "%s %s", GetElementName(Frame, event->WidgetId), event->IsSet ? "entered: its keys are its own" : "left");
-    Error Result = UILabel_SetText(screen, Frame->_statusId, (const unsigned char*)Status);
+    (void)screen;
+    Error Result = SetStatus(Frame, Status);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
@@ -698,7 +1051,15 @@ static Error HandleKeys(UIGalleryFrame* frame, GameInput* input)
         UIWindowHost_SetPolicy(&frame->_host, frame->_isFollowingHeight ? UIScalePolicy_FollowHeight() : UIScalePolicy_ConstantPixels());
         const char* Name = frame->_isFollowingHeight ? "the UI follows the window's height." : "the UI keeps its pixels: the window gives room.";
         LogLine(frame, "%s", Name);
-        Error Result = UILabel_SetText(&frame->_screen, frame->_statusId, (const unsigned char*)Name);
+        Error Result = SetStatus(frame, Name);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+    }
+    if (GameInput_IsKeyPressed(input, GameKey_N))
+    {
+        Error Result = ShowNextPage(frame);
         if (Result.Code != ErrorCode_Success)
         {
             return Result;
@@ -872,6 +1233,10 @@ static Error BuildFrameContents(UIGalleryFrame* frame)
     {
         Result = UIKit_Construct(&frame->_kit, &frame->_widgetFactory, &frame->_textFactory, Shared->Assets, Shared->Logger);
         frame->_isKitConstructed = (Result.Code == ErrorCode_Success);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIKit_RegisterLook(&frame->_kit, UIElementKind_Button, u8"tbp:gallery_diamond", sizeof(DiamondLook), &DiamondLookVTable, NULL);
     }
     if (Result.Code == ErrorCode_Success)
     {

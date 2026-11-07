@@ -1,5 +1,6 @@
 #include "UISlider.h"
 #include "UIKit.h"
+#include "UIKitInternal.h"
 #include "UIScreen.h"
 #include "UIWidgetFactory.h"
 #include "wr/WRMath.h"
@@ -10,15 +11,6 @@
 #define DEFAULT_STEP_SHARE 0.01
 /** How far from a whole step, in steps, a value is still on it: float noise (0.1 x 3) does not make it lie between two. */
 #define ON_STEP_TOLERANCE 1e-9
-
-
-// Types.
-/* The standard slider widget. */
-typedef struct UISliderWidgetStruct
-{
-    Widget Base;
-    UISliderCapability Slider;
-} UISliderWidget;
 
 
 // Static functions: small helpers.
@@ -83,7 +75,8 @@ static Error MoveWholeChange(UISliderCapability* self, Widget* widget, double va
     {
         return Result;
     }
-    return PostValue(widget, UIElementEvent_Committed, self->_value);
+    Result = PostValue(widget, UIElementEvent_Committed, self->_value);
+    return (Result.Code == ErrorCode_Success) ? UIElement_PostCue(widget, UIElementCue_ValueStep) : Result;
 }
 
 /* The change in progress ends: committed unless the value ended where it began. */
@@ -110,15 +103,12 @@ static bool IsInSession(const UISliderCapability* self)
     return self->_isDragging || (self->_sessionKey != GameKey_Unknown);
 }
 
-/* The widget's width and the thumb's, in surface pixels. */
+/* The widget's width and the thumb's, in surface pixels, as layout put the box (a render transform turns the drawing and the
+ * pointer alike, so the drag's arithmetic stays along the box). */
 static void GetTrackPixels(const UISliderCapability* self, Widget* widget, double* outWidth, double* outThumb)
 {
-    UIScreen* Screen = Widget_GetScreen(widget);
-    Vector2 Start = UIScreen_WidgetToScreen(Screen, widget, (Vector2){ .x = 0.0f, .y = 0.0f });
-    Vector2 End = UIScreen_WidgetToScreen(Screen, widget, (Vector2){ .x = 1.0f, .y = 0.0f });
-    *outWidth = (double)(End.x - Start.x) * (double)UIScreen_GetViewport(Screen).SizePixels.x;
-    Vector2 Thumb = UIThemeStyle_GetVector(UIElementLook_GetStyle(&self->_look, Screen), UIElementKind_Slider, UISliderPart_ThumbSize);
-    *outThumb = (double)Thumb.x * (double)UIScreen_GetScale(Screen);
+    *outWidth = (double)UIScreen_GetWidgetPixelBox(Widget_GetScreen(widget), widget).width;
+    *outThumb = (double)self->_thumbLength * (double)Widget_GetEffectiveScale(widget);
 }
 
 /* The value the pointer means, less how far from the thumb's centre it holds the thumb. */
@@ -182,134 +172,91 @@ static bool TryGetKeyTarget(const UISliderCapability* self, const UIScreen* scre
 }
 
 
-// Static functions: the standard widget's hooks.
-static Error UISliderWidget_ConstructVT(void* widget, void* args)
+// Static functions: the kind's behaviour, for the kit's composed widget types.
+static UISliderCapability* GetCapability(void* widget)
 {
-    UISliderWidget* Slider = widget;
-    if (args == NULL)
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UISlider: the arguments are required.");
-    }
-    return UISliderCapability_Construct(&Slider->Slider, &Slider->Base, args);
-}
-
-static Error UISliderWidget_UpdateVT(void* self, ProgramTime time)
-{
-    UISliderWidget* Slider = self;
-    return UISliderCapability_Update(&Slider->Slider, &Slider->Base, time);
-}
-
-static Error UISliderWidget_MeasureVT(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
-{
-    (void)context;
-    (void)availableWidth;
-    UISliderWidget* Slider = self;
-    UISliderCapability_Measure(&Slider->Slider, &Slider->Base, outSize);
-    return Error_CreateSuccess();
-}
-
-/* The track across the box, the fill up to the thumb and the thumb, centred across. */
-static Error UISliderWidget_RenderVT(void* self, UIRenderContext* context)
-{
-    UISliderWidget* Slider = self;
-    const UISliderCapability* Capability = &Slider->Slider;
-    UIScreen* Screen = Widget_GetScreen(&Slider->Base);
-    float Scale = UIScreen_GetScale(Screen);
-    const UIThemeStyle* Style = UIElementLook_GetStyle(&Capability->_look, Screen);
-    Rectangle Box = UIRenderContext_GetPixelBox(context);
-    if (UIElement_IsBoxEmpty(Box))
-    {
-        return Error_CreateSuccess();
-    }
-
-    float Thickness = Math_MaxFloat(1.0f, Math_FloorFloat((UIThemeStyle_GetNumber(Style, UIElementKind_Slider, UISliderPart_TrackThickness) * Scale) + 0.5f));
-    Vector2 ThumbSize = UIThemeStyle_GetVector(Style, UIElementKind_Slider, UISliderPart_ThumbSize);
-    float ThumbWidth = Math_FloorFloat((ThumbSize.x * Scale) + 0.5f);
-    float ThumbHeight = Math_FloorFloat((ThumbSize.y * Scale) + 0.5f);
-    float Fraction = (float)UISlider_GetFraction(Capability->_value, Capability->_minimum, Capability->_maximum);
-    float ThumbX = Box.x + Math_FloorFloat((Fraction * Math_MaxFloat(0.0f, Box.width - ThumbWidth)) + 0.5f);
-
-    Rectangle Track =
-    {
-        .x = Box.x,
-        .y = Box.y + Math_FloorFloat(((Box.height - Thickness) * 0.5f) + 0.5f),
-        .width = Box.width,
-        .height = Thickness
-    };
-    Rectangle Fill = Track;
-    Fill.width = (ThumbX + (ThumbWidth * 0.5f)) - Box.x;
-    Rectangle Thumb =
-    {
-        .x = ThumbX,
-        .y = Box.y + Math_FloorFloat(((Box.height - ThumbHeight) * 0.5f) + 0.5f),
-        .width = ThumbWidth,
-        .height = ThumbHeight
-    };
-    Error Result = UIElementLook_DrawBox(&Capability->_look, Style, UISliderPart_Track, context, Track, Scale);
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = UIElementLook_DrawBox(&Capability->_look, Style, UISliderPart_Fill, context, Fill, Scale);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = UIElementLook_DrawBox(&Capability->_look, Style, UISliderPart_Thumb, context, Thumb, Scale);
-    }
-    return Result;
-}
-
-static Error UISliderWidget_OnMouseInputVT(void* self, const WidgetMouseInputArgs* args)
-{
-    UISliderWidget* Slider = self;
-    return UISliderCapability_OnMouseInput(&Slider->Slider, &Slider->Base, args);
-}
-
-static Error UISliderWidget_OnPressLostVT(void* self, GameKey button)
-{
-    UISliderWidget* Slider = self;
-    return UISliderCapability_OnPressLost(&Slider->Slider, &Slider->Base, button);
-}
-
-static Error UISliderWidget_OnScrollInputVT(void* self, const WidgetScrollInputArgs* args, bool* outIsHandled)
-{
-    UISliderWidget* Slider = self;
-    return UISliderCapability_OnScrollInput(&Slider->Slider, &Slider->Base, args, outIsHandled);
-}
-
-static Error UISliderWidget_OnKeyboardInputVT(void* self, const WidgetKeyboardInputArgs* args, bool* outIsHandled)
-{
-    UISliderWidget* Slider = self;
-    return UISliderCapability_OnKeyboardInput(&Slider->Slider, &Slider->Base, args, outIsHandled);
-}
-
-static Error UISliderWidget_OnLeaveVT(void* self, UILeaveReason reason)
-{
-    UISliderWidget* Slider = self;
-    return UISliderCapability_OnLeave(&Slider->Slider, &Slider->Base, reason);
-}
-
-static void* ResolveLook(void* widget)
-{
-    return &((UISliderWidget*)widget)->Slider._look;
+    return &((UISliderLookBase*)widget)->Slider;
 }
 
 static void* ResolveCapability(void* widget)
 {
-    return &((UISliderWidget*)widget)->Slider;
+    return GetCapability(widget);
+}
+
+static Error Behaviour_Construct(void* widget, void* args)
+{
+    if (args == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UISlider: the arguments are required.");
+    }
+    return UISliderCapability_Construct(GetCapability(widget), widget, args);
+}
+
+static Error Behaviour_Update(void* widget, ProgramTime time)
+{
+    (void)time;
+    return UISliderCapability_Update(GetCapability(widget), widget);
+}
+
+static Error Behaviour_OnHoverStart(void* widget, const WidgetHoverArgs* args)
+{
+    (void)args;
+    return UIElement_PostCue(widget, UIElementCue_Hover);
+}
+
+static Error Behaviour_OnMouseInput(void* widget, const WidgetMouseInputArgs* args)
+{
+    return UISliderCapability_OnMouseInput(GetCapability(widget), widget, args);
+}
+
+static Error Behaviour_OnPressLost(void* widget, GameKey button)
+{
+    return UISliderCapability_OnPressLost(GetCapability(widget), widget, button);
+}
+
+static Error Behaviour_OnScrollInput(void* widget, const WidgetScrollInputArgs* args, bool* outIsHandled)
+{
+    return UISliderCapability_OnScrollInput(GetCapability(widget), widget, args, outIsHandled);
+}
+
+static Error Behaviour_OnKeyboardInput(void* widget, const WidgetKeyboardInputArgs* args, bool* outIsHandled)
+{
+    return UISliderCapability_OnKeyboardInput(GetCapability(widget), widget, args, outIsHandled);
+}
+
+static Error Behaviour_OnLeave(void* widget, UILeaveReason reason)
+{
+    return UISliderCapability_OnLeave(GetCapability(widget), widget, reason);
 }
 
 
 // Fields.
-static const WidgetVTable UISliderWidgetVTable =
+static const UIKindBehaviour SliderBehaviour =
 {
-    .Update = UISliderWidget_UpdateVT,
-    .Render = UISliderWidget_RenderVT,
-    .OnMouseInput = UISliderWidget_OnMouseInputVT,
-    .OnPressLost = UISliderWidget_OnPressLostVT,
-    .OnScrollInput = UISliderWidget_OnScrollInputVT,
-    .OnKeyboardInput = UISliderWidget_OnKeyboardInputVT,
-    .OnLeave = UISliderWidget_OnLeaveVT,
-    .Measure = UISliderWidget_MeasureVT
+    .Kind = UIElementKind_Slider,
+    .HasCapability = true,
+    .Capability = UIElementCapability_Slider,
+    .ResolveCapability = ResolveCapability,
+    .BaseSize = sizeof(UISliderLookBase),
+    .IsFocusable = true,
+    .NeedsEntering = true,
+    .EntersItself = false,
+    .Construct = Behaviour_Construct,
+    .Update = Behaviour_Update,
+    .OnHoverStart = Behaviour_OnHoverStart,
+    .OnMouseInput = Behaviour_OnMouseInput,
+    .OnPressLost = Behaviour_OnPressLost,
+    .OnScrollInput = Behaviour_OnScrollInput,
+    .OnKeyboardInput = Behaviour_OnKeyboardInput,
+    .OnLeave = Behaviour_OnLeave
 };
+
+
+// Internal functions (declared in UIKitInternal.h).
+const UIKindBehaviour* UISlider_GetKindBehaviour(void)
+{
+    return &SliderBehaviour;
+}
 
 
 // Public functions: calling code.
@@ -433,11 +380,7 @@ Error UISliderCapability_Construct(UISliderCapability* self, Widget* widget, con
     {
         return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UISlider: the range, the value, the step or the default is not valid.");
     }
-    Error Result = UIElementLook_Construct(&self->_look, UIElementKind_Slider, Options->Element.Variant);
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = UIElement_ApplyOptions(widget, &Options->Element);
-    }
+    Error Result = UIElement_ApplyOptions(widget, &Options->Element);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
@@ -455,6 +398,7 @@ Error UISliderCapability_Construct(UISliderCapability* self, Widget* widget, con
     self->_endedKey = GameKey_Unknown;
     self->_sessionStartValue = self->_value;
     self->_grabOffsetPixels = 0.0;
+    self->_thumbLength = 0.0f;
     if (!Options->IsEnabled)
     {
         Error Focus = Widget_SetIsFocusable(widget, false); // The widget is not alive yet: nothing can fail or run.
@@ -463,7 +407,7 @@ Error UISliderCapability_Construct(UISliderCapability* self, Widget* widget, con
     return Error_CreateSuccess();
 }
 
-Error UISliderCapability_Update(UISliderCapability* self, Widget* widget, ProgramTime time)
+Error UISliderCapability_Update(UISliderCapability* self, Widget* widget)
 {
     UIScreen* Screen = Widget_GetScreen(widget);
     // A key's release that cannot reach the slider any more (it was detached or disabled for input meanwhile) still ends the change, and so
@@ -480,19 +424,28 @@ Error UISliderCapability_Update(UISliderCapability* self, Widget* widget, Progra
             Result = EndSession(self, widget);
         }
     }
-    UIElementState State = UIElementState_Choose(self->_isEnabled, self->_isDragging, false, Widget_IsEntered(widget), false,
-        Widget_IsHovered(widget), Widget_IsFocused(widget));
-    UIElementLook_Update(&self->_look, Screen, State, time.PassedTime);
     return Result;
+}
+
+UIElementState UISliderCapability_GetState(const UISliderCapability* self, const Widget* widget)
+{
+    return UIElementState_Choose(self->_isEnabled, self->_isDragging, false, Widget_IsEntered(widget), false, Widget_IsHovered(widget),
+        Widget_IsFocused(widget));
+}
+
+void UISliderCapability_SetThumbLength(UISliderCapability* self, float length)
+{
+    self->_thumbLength = ((length > 0.0f) && !Math_IsInfinityFloat(length)) ? length : 0.0f;
 }
 
 Error UISliderCapability_OnMouseInput(UISliderCapability* self, Widget* widget, const WidgetMouseInputArgs* args)
 {
-    if (!self->_isEnabled)
+    Error EventResult = UIElement_PostMouseCues(widget, args, self->_isEnabled);
+    if ((EventResult.Code != ErrorCode_Success) || !self->_isEnabled)
     {
-        return Error_CreateSuccess();
+        return EventResult;
     }
-    Error EventResult = UIElement_PostMouseEvents(widget, args);
+    EventResult = UIElement_PostMouseEvents(widget, args);
     if (EventResult.Code != ErrorCode_Success)
     {
         return EventResult;
@@ -602,41 +555,10 @@ Error UISliderCapability_OnKeyboardInput(UISliderCapability* self, Widget* widge
         self->_sessionKey = args->Key;
         self->_sessionStartValue = self->_value;
     }
-    return MoveTo(self, widget, Target);
+    double Before = self->_value;
+    Error Result = MoveTo(self, widget, Target);
+    return ((Result.Code == ErrorCode_Success) && (self->_value != Before)) ? UIElement_PostCue(widget, UIElementCue_ValueStep) : Result;
 }
-
-void UISliderCapability_Measure(const UISliderCapability* self, Widget* widget, Vector2* outSize)
-{
-    const UIThemeStyle* Style = UIElementLook_GetStyle(&self->_look, Widget_GetScreen(widget));
-    Vector2 Minimum = UIThemeStyle_GetVector(Style, UIElementKind_Slider, UISliderPart_MinSize);
-    Vector2 Thumb = UIThemeStyle_GetVector(Style, UIElementKind_Slider, UISliderPart_ThumbSize);
-    outSize->x = Math_MaxFloat(Minimum.x, Thumb.x);
-    outSize->y = Math_MaxFloat(Minimum.y, Thumb.y);
-}
-
-Error UISlider_RegisterType(UIWidgetFactory* factory, uint64_t lookCapabilityId, uint64_t sliderCapabilityId, uint64_t* outTypeId)
-{
-    WidgetCapabilityEntry Capabilities[] =
-    {
-        { .CapabilityId = lookCapabilityId, .Resolver = ResolveLook },
-        { .CapabilityId = sliderCapabilityId, .Resolver = ResolveCapability }
-    };
-    WidgetTypeDescriptor Descriptor =
-    {
-        .Name = u8"Slider",
-        .StructSize = sizeof(UISliderWidget),
-        .VTable = &UISliderWidgetVTable,
-        .Constructor = UISliderWidget_ConstructVT,
-        .Capabilities = Capabilities,
-        .CapabilityCount = sizeof(Capabilities) / sizeof(Capabilities[0]),
-        .Properties = NULL,
-        .PropertyCount = 0U,
-        .IsFocusable = true,
-        .NeedsEntering = true
-    };
-    return UIWidgetFactory_RegisterType(factory, &Descriptor, outTypeId);
-}
-
 
 // Public functions: the value's arithmetic.
 double UISlider_ClampAndSnap(double value, double minimum, double maximum, bool hasStep, double step)

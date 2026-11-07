@@ -11,8 +11,10 @@
  * @file UIPanel.h
  * @brief The panel element: a background and padding for what it holds, its children stacked as a StackWidget's are.
  *
- * Its padding and spacing come from the theme unless its options give them. It takes input, so a click on a panel does not
- * reach what lies behind it; it is not focusable.
+ * Its padding and spacing come from its look (the standard one reads the theme's) unless its options give them. It takes input,
+ * so a click on a panel does not reach what lies behind it; it is not focusable. Its look (UIKit_RegisterLook: a struct starting with
+ * UIPanelLookBase) draws its background and lays its children out inside its frame (UIPanel_GetLayout, then UIStackLayout_Arrange);
+ * a look without a Layout of its own gets the options' padding and spacing, or none.
  */
 
 
@@ -37,24 +39,33 @@ typedef struct UIPanelOptionsStruct
 } UIPanelOptions;
 
 /**
- * @brief A panel's capability: its look and how it stacks its children. Embedded by a widget type; its fields are
- *        read-only outside the panel's module.
+ * @brief A panel's state: how it stacks its children, with the options' padding and spacing. No look; embedded by a look's widget
+ *        type right after its Widget (UIPanelLookBase). Its fields are read-only outside the panel's module.
  */
 typedef struct UIPanelCapabilityStruct
 {
-    /** @brief The look. */
-    UIElementLook _look;
     /** @brief How its children stack. */
     UIStackDirection _direction;
-    /** @brief Whether _padding replaces the theme's. */
+    /** @brief Whether _padding replaces the look's. */
     bool _hasPadding;
     /** @brief Its own padding. */
     UIInsets _padding;
-    /** @brief Whether _spacing replaces the theme's. */
+    /** @brief Whether _spacing replaces the look's. */
     bool _hasSpacing;
     /** @brief Its own spacing. */
     float _spacing;
 } UIPanelCapability;
+
+/**
+ * @brief How every panel look's widget struct starts: the widget, then the panel's state.
+ */
+typedef struct UIPanelLookBaseStruct
+{
+    /** @brief The widget. */
+    Widget Base;
+    /** @brief The panel's state. */
+    UIPanelCapability Panel;
+} UIPanelLookBase;
 
 
 // Helpers.
@@ -76,10 +87,10 @@ static inline UIPanelOptions UIPanelOptions_Create(void)
 }
 
 
-// Behaviour helpers, for widget types embedding the capability.
+// Helpers, for looks.
 /**
- * @brief Constructs the capability from a widget type's constructor.
- * @param self The capability; must not be NULL.
+ * @brief Constructs the panel's state from its options.
+ * @param self The state; must not be NULL.
  * @param widget The widget; must not be NULL.
  * @param options The options; must not be NULL.
  * @returns Success; ErrorCode_ArgumentOutOfRange for an option that is not valid.
@@ -87,39 +98,11 @@ static inline UIPanelOptions UIPanelOptions_Create(void)
 Error UIPanelCapability_Construct(UIPanelCapability* self, Widget* widget, const UIPanelOptions* options);
 
 /**
- * @brief Advances the look; call it from Update.
- * @param self The capability; must not be NULL.
- * @param widget The widget; must not be NULL.
- * @param time The tick's time.
+ * @brief Returns how the panel stacks its children: its direction, and the options' padding and spacing where they give them, else
+ *        the look's.
+ * @param self The state; must not be NULL.
+ * @param lookPadding The look's padding, in the panel's own UI pixels.
+ * @param lookSpacing The look's spacing, in the panel's own UI pixels.
+ * @returns The layout.
  */
-void UIPanelCapability_Update(UIPanelCapability* self, Widget* widget, ProgramTime time);
-
-/**
- * @brief Writes its children's placements; call it from Layout.
- * @param self The capability; must not be NULL.
- * @param widget The widget; must not be NULL.
- * @param context The layout context; must not be NULL.
- * @returns Success, or a child's Measure error.
- */
-Error UIPanelCapability_Layout(UIPanelCapability* self, Widget* widget, const UILayoutContext* context);
-
-/**
- * @brief Gives its preferred size: its children's with padding, at least the theme's minimum; call it from Measure.
- * @param self The capability; must not be NULL.
- * @param widget The widget; must not be NULL.
- * @param context The measuring context; must not be NULL.
- * @param availableWidth The width available, in UI pixels.
- * @param outSize [out] Receives the size. Must not be NULL.
- * @returns Success, or a child's Measure error.
- */
-Error UIPanelCapability_Measure(UIPanelCapability* self, Widget* widget, const UIMeasureContext* context, float availableWidth,
-    Vector2* outSize);
-
-/**
- * @brief Registers the panel's standard widget type. Once per factory (the kit does).
- * @param factory The factory; must not be NULL.
- * @param lookCapabilityId The look's capability id.
- * @param outTypeId [out] Receives the type's id. Must not be NULL.
- * @returns Success, or the factory's error.
- */
-Error UIPanel_RegisterType(UIWidgetFactory* factory, uint64_t lookCapabilityId, uint64_t* outTypeId);
+UIStackLayout UIPanel_GetLayout(const UIPanelCapability* self, UIInsets lookPadding, float lookSpacing);

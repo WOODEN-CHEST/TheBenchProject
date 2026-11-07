@@ -396,6 +396,24 @@ void UIEnteringTests_Run(TestRun* run);
  *  pixels (UILayoutTests.c). */
 void UILayoutTests_Run(TestRun* run);
 
+/** @brief The render transform: its arithmetic against raymath, the renderer's transform stack and clips, hit tests and coordinates
+ *  through turned and nested widgets, a drag along a turned slider, what rendering pushes and pops, the hit test hook, the typed
+ *  properties (UITransformTests.c). */
+void UITransformTests_Run(TestRun* run);
+
+/** @brief Per-element scale: the design's table of size against scale, nesting, a fixed child in a scaled parent, the standard looks
+ *  scaled whole, wrapped labels settling under a scale, hostile scales, an animated scale, whole pixels at odd scales
+ *  (UIScaleTests.c). */
+void UIScaleTests_Run(TestRun* run);
+
+/** @brief Looks: the look an element gets (its options, its theme, the standard one), an unknown name, two looks of a kind on one
+ *  screen, looks of every composed kind, cues and their cost while nobody listens, icons as content (UILookTests.c). */
+void UILookTests_Run(TestRun* run);
+
+/** @brief Hover text: its delay, a press and moving off, falling back up the tree, a widget gone, a provider, keeping on the
+ *  surface, a screen with nothing to show it with (UITooltipTests.c). */
+void UITooltipTests_Run(TestRun* run);
+
 /** @brief The ui_theme asset type: every key, each refusal with its message, state fallbacks, variants, hostile sizes and
  *  counts, a screen's theme swap and teardown; box styles; the nine-slice's quads (UIThemeTests.c). */
 void UIThemeTests_Run(TestRun* run);

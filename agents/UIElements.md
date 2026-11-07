@@ -9,8 +9,9 @@ notifications).
 | UIPlacement | `include/UIPlacement.h`, `source/UIPlacement.c` | Pure: placements (anchors and UI pixel offsets), insets, a stack's hints, turning a placement into a widget's normalized box. |
 | UIBoxStyle | `include/UIBoxStyle.h`, `source/UIBoxStyle.c` | How a box is drawn: nothing, flat or nine-slice, a colour per state. The nine quads and resolving a state are pure. |
 | UITheme | `include/UITheme.h`, `source/UITheme.c`, `source/UIThemeDefinition.c`, private `source/UIThemeInternal.h` | The `ui_theme` asset type: the look of every element kind as data. |
-| UIElement | `include/UIElement.h`, `source/UIElement.c` | What every element kind shares: its look, its text, its press behaviour, its options and its events. |
-| UIKit | `include/UIKit.h`, `source/UIKit.c` | The one way to make elements, over one widget factory: capabilities, standard types, the table from kind to type. |
+| UIElement | `include/UIElement.h`, `source/UIElement.c` | What every element kind shares: its options, its events and cues, plain text content, icons, the press behaviour, and the helpers looks draw with. |
+| UIKit | `include/UIKit.h`, `source/UIKit.c`, private `source/UIKitInternal.h` | The one way to make elements, over one widget factory: capabilities, the looks registered by kind and name, the widget types it composes. |
+| UIStandardLooks | `include/UIStandardLooks.h`, `source/UIStandardLooks.c` | The kit's standard look (`tbp:test_box`) for the panel, the button, the toggle and the slider, and the widget that shows hover text. |
 | StackWidget | `include/StackWidget.h`, `source/StackWidget.c` | Children in a row or a column. Its arithmetic (`UIStackLayout`) is shared with the panel. |
 | UIPanel | `include/UIPanel.h`, `source/UIPanel.c` | A background and padding for what it holds. |
 | UILabel | `include/UILabel.h`, `source/UILabel.c`, with `LabelWidget` | `LabelWidget` as an element of the kit. |
@@ -48,23 +49,53 @@ UIScreen_Subscribe(&Screen, SaveId, UI_EVENT_KIND_MASK(UIEventKind_Widget), OnSa
 UIButton_SetText(&Screen, SaveId, u8"Saved");   // by id, always: a stale id is refused, never a crash
 ```
 
-Teardown: the screen (it destroys the elements), the kit, then the factories. Every creation is whole or nothing: on a failure
+Teardown: the screen (it destroys the elements), the kit, then the factories. The kit refuses to go while widgets of its looks live
+(`ErrorCode_InvalidOperation`, the kit left as it was): they find their hooks through it. Every creation is whole or nothing: on a failure
 no widget stays behind and the id is `WIDGET_ID_INVALID`. Widgets added during a tick are placed from the next tick on, like
 every widget attached during a tick.
 
-## An element: behaviour, capability, look
+## An element: behaviour and a look
 
-An element kind has a **capability struct** holding its state and its contract (`UIButtonCapability`: its text, its enabled
-flag, its press), **behaviour helpers** on that struct which interpret input and post events (`UIButtonCapability_OnMouseInput`),
-and one **standard widget type** that embeds the capability, calls the helpers from its hooks and draws through the theme.
-Calling code names the capability, by widget id (`UIButton_SetText(screen, id, text)`), never a widget type or a look.
+An element is two things kept apart.
+
+- Its **behaviour** is a capability struct holding logical state and its contract (`UIButtonCapability`: its text and icon as plain
+  content, its enabled flag, its press), with helpers that interpret input and post events (`UIButtonCapability_OnMouseInput`). Calling code
+  talks only to it, by widget id (`UIButton_SetText(screen, id, text)`), never to a widget type or a look. No capability holds a look, a colour
+  or laid-out text: a text is a `UITextContent` (an owned copy of the UTF-8 and a revision), an icon a `UIElementIcon`.
+- Its **look** is a widget type that embeds the capability and draws: theme lookups, state fades (`UIElementLook`), laid-out text
+  (`UIElementText`), icons (`UIElementIconView`) and animation state live there. A look picks those up through the helpers and is free to ignore
+  them: a 3D sign standing for a button draws nothing in 2D at all.
 
 A variant costs, from cheapest:
-1. **Theme data:** colours, sizes, nine-slice art. Almost everything.
+1. **Theme data:** colours (from the palette), sizes, nine-slice art. Almost everything.
 2. **A named variant in the theme** (`UIElementOptions.Variant`, `UIElement_SetVariant`).
-3. **A widget type of its own** that embeds the same capability, calls the same helpers and draws differently or holds other
-   widgets. `UIWidgetFactory_RegisterType` with `UIKit_GetCapabilityId`, then `UIKit_SetElementType`: from then on `UIKit_Create*` makes it,
-   and calling code does not change. `tests/UIElementTests.c` has one (`OwnButtonWidget`).
+3. **A look of its own** (below): Render and Measure, maybe Update.
+
+**Looks.** A look is a struct that starts with its kind's look base (`UIPanelLookBase`, `UIButtonLookBase`, `UIToggleLookBase`,
+`UISliderLookBase`: the `Widget`, then the capability) and a `UILookVTable`:
+
+| Slot | | What it does |
+|---|---|---|
+| `Render` | required | draws, reading state (`UIButtonCapability_GetState` gives the state to show) |
+| `Measure` | required | the preferred size in its own UI pixels |
+| `Update` | optional | its part of a tick, after the behaviour's: fades, laid-out text, animation |
+| `Construct`, `Deconstruct` | optional | its own state, after the capability is built and before it is released, with the kind's arguments (`UIButtonArgs`: the kit and the options) |
+| `Layout` | optional | for a kind that holds children (the panel): lays them out inside its frame, in place of the kind's arrangement |
+| `HitTest` | optional | answers whether a point holds it, in place of its box (a round button, a world object) |
+| `GetThemeLook` | optional | its `UIElementLook`: a look that reads the theme declares the look capability through it, so variants work on it |
+
+`UIKit_RegisterLook(kit, kind, name, sizeof(MyLook), &MyLookVTable, &typeId)` composes the widget type: the kind answers the mouse, the keys, the
+wheel, a lost press, entering, leaving and hover (and posts the cues), and the look draws. `tests/UIElementTests.c` has a look with Render and
+Measure alone (`OwnButtonLook`), the gallery another (the diamond). Looks are registered by kind and a name, a namespaced key (`tbp:test_box`); the
+kit registers its standard look for every kind under `UI_KIT_STANDARD_LOOK` (`UIStandardLooks`: theme-driven boxes, flat or nine-slice, the example to
+follow). An element is made with the look its options name (`UIElementOptions.Look`), else the one the screen's theme names for its kind (`"look"` in
+the kind's block), else the standard one; a name no look answers gets the standard look and is logged once (per name). **Looks are fixed at
+creation:** swapping the theme changes the values a look reads, never an element's widget type. The label's and the tooltip's looks are not
+replaceable yet (`// TODO:` in `UIKit.c`'s kinds): `UIKit_RegisterLook` refuses them.
+
+A slider look also tells the behaviour how long its thumb is (`UISliderCapability_SetThumbLength`, in its own UI pixels, from its Update): a press within
+the thumb holds it where it was grabbed, and the thumb's centre travels the track less its length. A look that never says has a thumb of no length: the
+pointer is the value.
 
 **Finding the kit.** `UIKit_FromScreen` goes through the screen's factory, which is how the by-id functions find their capability
 ids. A second kit over a factory is refused.
@@ -72,9 +103,13 @@ ids. A second kit over a factory is refused.
 ### Adding an element kind
 1. A value in `UIElementKind`, a part enum and a row in `Kinds` (`source/UITheme.c`): the theme's reader and its checks come from
    that table, up to `UI_THEME_MAX_PARTS` values per kind.
-2. If it has input of its own, a value in `UIElementCapability`, and a capability struct with its helpers, in a module of its own.
-3. The kit's creation function, and its row in `RegisterEverything` and `KindCapabilities` (`source/UIKit.c`).
-4. Its section in `references/asset_structure.md`, "UI themes", and the gallery.
+2. If calling code talks to it, a value in `UIElementCapability`, and a capability struct holding behaviour alone (content as `UITextContent` and
+   `UIElementIcon`, never a look) with its helpers and its by-id functions, in a module of its own; a look base struct (`Widget`, then the capability).
+3. Its `UIKindBehaviour` (`source/UIKitInternal.h`: the capability's resolver, the flags its widgets start with, its hooks for construction, the
+   behaviour's update, input, entering, leaving and hover) and its case in `GetBehaviour` (`source/UIKit.c`), and its kit creation function, which
+   resolves the look (`ResolveLookType`).
+4. Its standard look in `UIStandardLooks.c`, registered in `UIStandardLooks_Register`.
+5. Its section in `references/asset_structure.md`, "UI themes", and the gallery.
 
 ## The elements
 
@@ -95,6 +130,8 @@ on the lines it was measured with. The rest of `LabelWidget.h` stays there for r
 
 **Button** (`UIButton.h`). Activates by its click mode (below). Enter (the `ui_accept` action's keys) or Space while focused activates at the
 press in every mode: handling the press owns the key, so its repeats do not activate again, and the space that key types goes nowhere. An optional toggled look (`selected`).
+An optional icon (`UIButtonOptions.Icon`, `UIButton_SetIcon`): a placeholder letter or a sprite animation by name; the standard look draws it before the text,
+`icon_spacing` (a custom value of the button's theme block, 4 by default) apart.
 With `TakesWheel` (`UIButton_SetTakesWheel`) it posts `Scrolled` and stops the wheel; without it the wheel goes on up the tree. **Disabled is the capability's state,
 not the input flag:** an input-disabled widget is transparent to the pointer, and a click on a disabled button must not reach what
 lies behind it, so a disabled button takes the click and reports nothing, nor the wheel if it takes that. It is not focusable while disabled.
@@ -147,7 +184,12 @@ Elements post through `UIScreen_PostWidgetEvent`, or `UIScreen_PostWidgetMouseEv
 | `ContextRequested` | a right press let go on the element, or the context menu action's key (`tbp:ui_context_menu`): then `Button` is the key, the place the element's middle, and `IsOverWidget` false | mouse data |
 
 The mouse data is in the event by value (`UIEvent.HasMouse`, `UIEvent.Mouse`: button, modifiers, screen position, scroll delta, whether over the element), so a handler needs no
-widget. For a key's activation `Button` is the key. A disabled element posts none of these, and a toggle and a slider tell the input events as a button does.
+widget.
+
+**Cues** (`UIEventKind_Cue`, [UIFramework.md](UIFramework.md), "Notifications"): elements post named sound cues for what they do, which nothing plays yet and which
+cost nothing while nobody subscribes. The kinds post `Hover` (the pointer came onto it), `Press` (a press on it while enabled; `Refused` while disabled), `Release`,
+`Activate` (a button's activation, a toggle's change) and `ValueStep` (a slider's arrow step, wheel notch or reset); the screen posts `Enter` and `Leave` for an edit element.
+`UIElement_PostCue` and `UIElement_PostMouseCues` are the helpers a new kind uses. For a key's activation `Button` is the key. A disabled element posts none of these, and a toggle and a slider tell the input events as a button does.
 
 A toggle's activation, a wheel notch and a reset are whole changes: `Changed` then `Committed` in one update. Code setting a value posts nothing, and
 a value that is not a finite number is refused. A slider that loses its press (detached, hidden, input-disabled, or its press handed on) ends the drag there, with its commit if the
@@ -158,8 +200,8 @@ change does nothing until it is pressed anew.
 ## Themes
 
 A theme is data, the `ui_theme` asset type (`ui_themes/`; the format is `references/asset_structure.md`, "UI themes"): a font and a
-text size, a transition time, and per element kind its metrics and parts. Packs bring and override themes by namespaced names. The whole
-UI changes at once, with no element's code changing.
+text size, a transition time, a hover delay, a palette, and per element kind its metrics, parts, custom values and look. Packs bring and
+override themes by namespaced names. The whole UI changes at once, with no element's code changing.
 
 - **Per screen:** `UIScreen_SetTheme` loads the theme under a new asset user of the screen's and retires the old one, which releases it and its textures.
   A font an element's text was laid out with stays held by that element's document until the element goes: as many as there are fonts, no more.
@@ -168,6 +210,19 @@ UI changes at once, with no element's code changing.
   theme past that, so a swap between an update and a render cannot leave a dangling pointer. Every lookup takes a NULL style and answers
   with the kind's default.
 - **Variants merge when read:** a variant is a copy of its kind's values with what it names on top, down to one state's colour.
+- **A palette:** a theme names its colours once (`"palette"`, at most `UI_THEME_MAX_PALETTE_COLORS`), and any other colour in it may be
+  `"@name"`. A palette colour is a plain colour, never a reference, so references cannot loop. They are resolved when the file is read, so
+  a loaded theme holds plain colours and code never sees a name; swapping one palette for another recolours everything that names it
+  (`tbp:test_light` is `tbp:test_flat` with another palette).
+- **A look by name:** a kind's block may name the look that draws its elements (`"look"`, `UITheme_GetLookName`). The theme carries only
+  the name: the kit resolves it when an element is made ("An element: behaviour and a look"), so a theme names a look that a mod's code
+  registers without the theme needing it to exist.
+- **Custom values:** a look whose visuals the kind's parts do not describe reads values of its own from its style's `"custom"` block, by
+  keys it chooses: `UIThemeStyle_FindCustomNumber`, `..Vector`, `..Color` (each with the default for a theme that leaves the key out) and
+  `..Box` (NULL then). The standard button's `icon_spacing` is one. A variant starts with its kind's custom values and replaces or adds keys.
+- **Hover text:** the `tooltip` kind is the box hover text shows in (its padding, its offset from the pointer, its wrap width, a background
+  and a text colour), and `"tooltip_delay"` is how long the pointer rests before it shows (`UITheme_GetTooltipDelaySeconds`; a widget may
+  have its own, `UITooltip_SetDelay`).
 - **States:** normal, hovered, pressed, focused, disabled, selected, invalid, entered (an edit element being edited, so its keys are its
   own). A state a theme leaves out falls back to normal; entered falls back to focused first. `UIElementState_Choose` picks the one that
   shows: disabled, pressed, invalid, entered, selected, hovered, focused, normal. Both test themes give the slider's thumb an entered colour
@@ -196,19 +251,30 @@ UI is scaled, and at 28 both go away while 14 pixels stays sharp enough to read 
 
 ## The gallery
 
-`sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test: every element in every state it can be put in,
-in stacks that show content, fixed and filling sizes, over a plain background. It keeps its pixels (`UIScalePolicy_ConstantPixels`): drag the window's edges, and the controls keep their size with more room around them. P switches to following the
-window's height and back, to compare them. T switches the theme (`tbp:test_flat`, `tbp:test_nine_slice`, whose art
-`asset_source/scripts/placeholder_ui.py` generates), + and - the player's scale, L the event log; Escape steps out one level at a time, and quits once nothing is focused. Each event shows in its status line and
-in the log, with its button, modifiers and place (a drag's `Changed` events a few times a second), and so does each element entered or left. A row tries the routing: a button per click mode (left and middle activate), a stack
-that takes the wheel holding two buttons that leave it, a button made with `TakesWheel`, a row with each pointer shape, and a box whose drag hides the cursor and reads the raw motion. Every
-slider has a default, so Backspace over one puts it back. The keyboard box (the right panel) holds a button, two sliders and a toggle to try Tab, the arrows and Enter on: the box is a
-focusable panel holding focusable elements, a group, so navigation reaches it as one, Enter goes in and Escape comes back out, and inside it Tab and the arrows stay among its elements.
-There the arrows move past the sliders, Enter or a click enters one (the green outline, the thumb's entered colour), Tab carries the editing into the next slider and only focuses the toggle.
-Escape steps out one level at a time, and quits once nothing is focused.
+`sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test, on two pages (N switches). It keeps its pixels
+(`UIScalePolicy_ConstantPixels`): drag the window's edges, and the controls keep their size with more room around them. P switches to following the
+window's height and back, to compare them. T switches the theme (`tbp:test_flat`, `tbp:test_nine_slice`, whose art `asset_source/scripts/placeholder_ui.py`
+generates, and `tbp:test_light`, the first with another palette), + and - the player's scale, L the event log; Escape steps out one level at a time, and
+quits once nothing is focused. Each event shows in the status line and in the log, with its button, modifiers and place (a drag's `Changed` events a few
+times a second), and so does each element entered or left. Everything has hover text.
+
+The first page: every element in every state it can be put in, in stacks that show content, fixed and filling sizes, over a plain background. A row tries the
+routing: a button per click mode (left and middle activate), a stack that takes the wheel holding two buttons that leave it, a button made with `TakesWheel`,
+a row with each pointer shape, and a box whose drag hides the cursor and reads the raw motion. Every slider has a default, so Backspace over one puts it back.
+The keyboard box (the right panel) holds a button, two sliders and a toggle to try Tab, the arrows and Enter on: the box is a focusable panel holding
+focusable elements, a group, so navigation reaches it as one, Enter goes in and Escape comes back out, and inside it Tab and the arrows stay among its
+elements. There the arrows move past the sliders, Enter or a click enters one (the green outline, the thumb's entered colour), Tab carries the editing into the
+next slider and only focuses the toggle.
+
+The second page: the scale rows (the element design's table: fixed 100 x 24, fixed 400 x 24, fixed at scale 2 with its text clipped, by content at scale 2,
+fixed 100 x 24 in a box of scale 2, so 200 x 48), a panel that turns once in 20 seconds with a button and a slider that work where they show, a panel that
+slides in by its visual offset (its button slides it in again), a second look of the button that writes only Render and Measure (a diamond in the theme's
+colours for the button's state, with no fade and no text), and buttons with placeholder letter icons.
 
 ## Rules for a new element
 
+- Behaviour and looks apart: the capability holds logical state and content, never a look, a colour or laid-out text; the look draws it. Calling code
+  uses the capability by id.
 - Input only through the hooks; `UIScreen_GetInput` for an action's keys (`UIElement_IsActionKey`, `UIElement_IsActionPress` with its modifiers counted) and held state. A key a player could rebind is
   an action's.
 - An element that uses the arrows or typing is an **edit element**: its descriptor sets `NeedsEntering`, so those keys reach it only once it is entered, and the screen leaves it on Escape,
@@ -218,8 +284,10 @@ Escape steps out one level at a time, and quits once nothing is focused.
 - A press that starts something answers `OnPressLost` as well as the release, and what stops the wheel says so in `OnScrollInput`. `UIElement_PostMouseEvents` tells the input events,
   `UIElement_OnContextKey` the menu key.
 - Render reads state, never writes it: state changes in the hooks and in Update. Report a missing part from Update, not Render.
-- Draw in whole surface pixels: `UIRenderContext_GetPixelBox`, then the `UIRenderContext_RenderPixel*` calls.
-- Answer `Measure` in UI pixels, and call `Widget_InvalidateMeasure` from whatever changes the answer. Answer without changing what you draw: a width you are
-  asked about may not be the width you end up with.
+- Draw in whole surface pixels: `UIRenderContext_GetPixelBox`, then the `UIRenderContext_RenderPixel*` calls. A render transform turns them as they are.
+- Answer `Measure` in your own UI pixels, and call `Widget_InvalidateMeasure` from whatever changes the answer. Answer without changing what you draw: a width you
+  are asked about may not be the width you end up with.
+- Turn UI pixels into surface pixels with the widget's effective scale (`Widget_GetEffectiveScale`), never the screen's: text, corners, padding, outlines.
+- Post the kind's cues (`UIElement_PostCue`) for what it does, as the standard kinds do.
 - Draw nothing in an empty box (`UIElement_IsBoxEmpty`): an element made in a handler has no box until its first layout, and a stack may leave it no room.
 - Work on any surface: read the pointer, the keyboard and sizes only from what the screen gives. A world screen's pixels are its render target's.

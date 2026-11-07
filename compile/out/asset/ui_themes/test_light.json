@@ -1,0 +1,118 @@
+{
+    "name": "tbp:test_light",
+    "font": "tbp:ui_small",
+    "text_size": 14,
+    "transition_time": 0.06,
+    "tooltip_delay": 0.5,
+    "palette": {
+        "surface": "#f3f4f6",
+        "surface_sunken": "#e3e6ea",
+        "sunken_pressed": "#d3d7dd",
+        "raised": "#d9dde3",
+        "raised_hover": "#e5e8ec",
+        "raised_focus": "#dde1e7",
+        "raised_disabled": "#eceef1",
+        "pressed": "#c3c9d1",
+        "selected": "#b7dcd6",
+        "outline": "#9aa1ab",
+        "outline_strong": "#7d8590",
+        "outline_disabled": "#d5d9de",
+        "accent": "#0f766e",
+        "fill": "#2a9d8f",
+        "fill_hover": "#35b5a5",
+        "fill_disabled": "#c5cad1",
+        "inactive": "#b4bac3",
+        "handle": "#ffffff",
+        "handle_hover": "#e9ecf0",
+        "handle_focus": "#f2f4f7",
+        "editing": "#9be7b0",
+        "editing_outline": "#1f7a3f",
+        "label": "#24292f",
+        "text": "#1f2328",
+        "text_dim": "#5b636e",
+        "text_disabled": "#8c939d",
+        "danger": "#f2b8b5",
+        "danger_hover": "#f7cbc9",
+        "danger_pressed": "#e8a19d",
+        "danger_focus": "#f4c1be"
+    },
+    "elements": {
+        "panel": {
+            "padding": [ 8, 8 ],
+            "spacing": 6,
+            "background": {
+                "kind": "flat",
+                "colors": { "normal": "@surface" },
+                "outline": { "thickness": 1, "colors": { "normal": "@raised" } }
+            },
+            "variants": {
+                "inset": { "background": { "colors": { "normal": "@surface_sunken" } } },
+                "bare": { "padding": [ 0, 0 ], "background": { "kind": "none" } }
+            }
+        },
+        "label": {
+            "text": { "normal": "@label" },
+            "variants": {
+                "heading": { "text": { "normal": "@accent" } },
+                "hint": { "text": { "normal": "@text_dim" } }
+            }
+        },
+        "button": {
+            "padding": [ 10, 4 ],
+            "min_size": [ 24, 24 ],
+            "background": {
+                "kind": "flat",
+                "colors": {
+                    "normal": "@raised",
+                    "hovered": "@raised_hover",
+                    "pressed": "@pressed",
+                    "focused": "@raised_focus",
+                    "disabled": "@raised_disabled",
+                    "selected": "@selected"
+                },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline", "focused": "@accent", "disabled": "@outline_disabled" } }
+            },
+            "text": { "normal": "@text", "disabled": "@text_disabled" },
+            "variants": {
+                "danger": {
+                    "background": { "colors": { "normal": "@danger", "hovered": "@danger_hover", "pressed": "@danger_pressed", "focused": "@danger_focus" } }
+                }
+            }
+        },
+        "toggle": {
+            "box_size": [ 16, 16 ],
+            "spacing": 6,
+            "min_size": [ 16, 24 ],
+            "box": {
+                "kind": "flat",
+                "colors": { "normal": "@surface_sunken", "hovered": "@pressed", "pressed": "@sunken_pressed", "disabled": "@surface" },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline_strong", "focused": "@accent", "disabled": "@raised" } }
+            },
+            "check": { "kind": "flat", "colors": { "normal": "@accent", "disabled": "@inactive" } },
+            "text": { "normal": "@text", "disabled": "@text_disabled" }
+        },
+        "slider": {
+            "min_size": [ 64, 24 ],
+            "thumb_size": [ 12, 20 ],
+            "track_thickness": 4,
+            "track": { "kind": "flat", "colors": { "normal": "@surface_sunken", "disabled": "@surface" } },
+            "fill": { "kind": "flat", "colors": { "normal": "@fill", "hovered": "@fill_hover", "disabled": "@fill_disabled" } },
+            "thumb": {
+                "kind": "flat",
+                "colors": { "normal": "@handle", "hovered": "@handle_hover", "pressed": "@accent", "focused": "@handle_focus", "disabled": "@inactive", "entered": "@editing" },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline", "focused": "@accent", "entered": "@editing_outline" } }
+            }
+        },
+        "tooltip": {
+            "padding": [ 6, 3 ],
+            "offset": [ 12, 18 ],
+            "max_width": 320,
+            "background": {
+                "kind": "flat",
+                "colors": { "normal": "@raised" },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline" } }
+            },
+            "text": { "normal": "@text" }
+        }
+    }
+}

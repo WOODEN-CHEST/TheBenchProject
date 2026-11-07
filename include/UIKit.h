@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "wr/WRError.h"
+#include "wr/WRMemory.h"
+#include "NamespacedKey.h"
 #include "StackWidget.h"
 #include "UIButton.h"
 #include "UIElement.h"
@@ -15,12 +17,19 @@
 
 /**
  * @file UIKit.h
- * @brief The one way calling code makes elements, over one widget factory.
+ * @brief The one way calling code makes elements, over one widget factory, and where looks are registered.
  *
- * The kit registers each element's capability and standard widget type once and keeps the table from element kind to widget
- * type, which a new look can replace (UIKit_SetElementType). Calling code creates an element with UIKit_Create* and keeps
- * its widget id, then uses the kind's functions by id (UIButton_SetText(screen, id, text)): it never names a widget type or
- * a look, so looks can be swapped under it.
+ * Calling code creates an element with UIKit_Create* and keeps its widget id, then uses the kind's functions by id
+ * (UIButton_SetText(screen, id, text)): it never names a widget type, so looks can be swapped under it.
+ *
+ * LOOKS. An element is behaviour (its kind's capability) and a look (a widget type that draws). A look costs a struct that starts
+ * with its kind's look base (UIButtonLookBase: the Widget, then the capability) and a UILookVTable with Render and Measure, maybe
+ * Update; UIKit_RegisterLook composes the widget type from it and the kind's behaviour: the kind answers the mouse, the keys, the
+ * wheel, a lost press, entering and leaving, and the look draws. Looks are registered by kind and name (a namespaced key); the kit
+ * registers its standard look for every kind under UI_KIT_STANDARD_LOOK (theme-driven boxes, flat or nine-slice). An element is made
+ * with the look its options name (UIElementOptions.Look), else the one the screen's theme names for its kind, else the standard one;
+ * a name no look answers is logged once and gets the standard look. Looks are fixed at creation: swapping the theme changes the values
+ * a look reads, never an element's widget type.
  *
  * ONE KIT PER FACTORY. A second kit over a factory is refused. Teardown order: screens first (they destroy the elements),
  * then the kit, then the factory.
@@ -34,6 +43,13 @@ typedef struct TextComponentFactoryStruct TextComponentFactory;
 typedef struct AssetManagerStruct AssetManager;
 /** @brief The logger; full type in Logger.h. Borrowed. */
 typedef struct LoggerStruct Logger;
+
+
+// Macros.
+/** @brief The name the kit's standard look is registered under for every kind: theme-driven boxes, flat or nine-slice. */
+#define UI_KIT_STANDARD_LOOK ((const unsigned char*)u8"tbp:test_box")
+/** @brief How many look names that answer no look the kit remembers having logged; past that, no more are logged. */
+#define UI_KIT_MAX_REPORTED_LOOKS ((size_t)16)
 
 
 // Types.
@@ -57,6 +73,35 @@ typedef enum UIElementCapabilityEnum
 } UIElementCapability;
 
 /**
+ * @brief What a look is made of: the hooks it writes. The kit calls them on the look's widget, a struct that starts with its kind's
+ *        look base (UIButtonLookBase, ...). Render and Measure are required; the rest are optional.
+ *
+ * Every hook gets the widget as @c self. A hook returning an error is a broken invariant, as any widget hook's (UIWidget.h).
+ */
+typedef struct UILookVTableStruct
+{
+    /** @brief Builds the look's own state (a UIElementLook, a UIElementText): after the kind built its capability, with the same
+     *  arguments (UIButtonArgs, ...). On a failure it must release what it acquired. Optional. */
+    Error (*Construct)(void* self, void* args);
+    /** @brief Releases the look's own state, before the kind releases its capability. Optional. */
+    Error (*Deconstruct)(void* self);
+    /** @brief The look's part of a tick (state fades, laid-out text, animation), after the behaviour's. Optional. */
+    Error (*Update)(void* self, ProgramTime time);
+    /** @brief Lays the children out, for a kind that holds them (the panel), in place of the kind's own arrangement. Optional. */
+    Error (*Layout)(void* self, const UILayoutContext* context);
+    /** @brief Draws; reads state, never writes it (WidgetVTable's Render). Required. */
+    Error (*Render)(void* self, UIRenderContext* context);
+    /** @brief Gives the preferred size in the widget's own UI pixels (WidgetVTable's Measure). Required. */
+    Error (*Measure)(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize);
+    /** @brief Answers whether a point holds the widget, in place of its box (WidgetVTable's HitTest): a round button, a world
+     *  object standing for a button. Optional. */
+    bool (*HitTest)(void* self, const WidgetHitTestArgs* args);
+    /** @brief Returns the look's UIElementLook: a look that reads the theme declares the look capability through it, so
+     *  UIElement_SetVariant works on it; a look that ignores the theme leaves it out. Optional. */
+    UIElementLook* (*GetThemeLook)(void* self);
+} UILookVTable;
+
+/**
  * @brief The kit. Construct with UIKit_Construct; its fields are read-only.
  */
 typedef struct UIKitStruct
@@ -71,10 +116,16 @@ typedef struct UIKitStruct
     Logger* _logger;
     /** @brief The capability ids, by UIElementCapability. */
     uint64_t _capabilities[UIElementCapability_Count];
-    /** @brief The widget type of each element kind. */
-    uint64_t _types[UIElementKind_Count];
     /** @brief The stack's widget type. */
     uint64_t _stackType;
+    /** @brief The registered looks (a private element type): kind, name, widget type, hooks. Owned. */
+    GenericBuffer _looks;
+    /** @brief Per factory type id less one, the index + 1 of its look in _looks (uint32_t), 0 for a type that is no look. Owned. */
+    GenericBuffer _lookByType;
+    /** @brief Look names already logged as answering no look. */
+    unsigned char _reportedLooks[UI_KIT_MAX_REPORTED_LOOKS][NAMESPACED_KEY_BUFFER_SIZE];
+    /** @brief How many of _reportedLooks are used. */
+    size_t _reportedLookCount;
 } UIKit;
 
 
@@ -92,9 +143,11 @@ typedef struct UIKitStruct
 Error UIKit_Construct(UIKit* self, UIWidgetFactory* factory, TextComponentFactory* textFactory, AssetManager* assets, Logger* logger);
 
 /**
- * @brief Leaves the factory without a kit. Its widget types stay registered until the factory goes. Safe on NULL.
+ * @brief Leaves the factory without a kit and releases the kit's tables. Its widget types stay registered until the factory goes,
+ *        but no widget of a look's type can be made past this. Refused while a widget of a look's type is alive, since its hooks
+ *        are found through the kit's tables: deconstruct the screens first. Safe on NULL.
  * @param self The kit, or NULL.
- * @returns Success.
+ * @returns Success; ErrorCode_InvalidOperation while widgets of its looks are alive (the kit is left as it was).
  */
 Error UIKit_Deconstruct(UIKit* self);
 
@@ -114,7 +167,7 @@ UIKit* UIKit_FromScreen(const UIScreen* screen);
 uint64_t UIKit_GetCapabilityId(const UIKit* self, UIElementCapability capability);
 
 /**
- * @brief Returns the widget type an element kind is made with.
+ * @brief Returns the widget type of a kind's standard look (UI_KIT_STANDARD_LOOK).
  * @param self The kit; must not be NULL.
  * @param kind The kind.
  * @returns The type id; WIDGET_TYPE_ID_INVALID for a value out of range.
@@ -122,15 +175,33 @@ uint64_t UIKit_GetCapabilityId(const UIKit* self, UIElementCapability capability
 uint64_t UIKit_GetElementType(const UIKit* self, UIElementKind kind);
 
 /**
- * @brief Replaces the widget type an element kind is made with: from now on UIKit_Create* makes it. Its constructor gets the
- *        same arguments as the standard type's (UIButtonArgs, ...), and it must embed the same capability.
+ * @brief Registers a look for a kind: composes a widget type from the kind's behaviour and the look's hooks.
+ *
+ * The look's struct starts with the kind's look base (UIPanelLookBase, UIButtonLookBase, UIToggleLookBase, UISliderLookBase): the
+ * Widget, then the capability, which the kind builds and answers input with. The widget type declares the kind's capability, and the
+ * look capability when the look has GetThemeLook. The label's and the tooltip's looks are not replaceable yet.
+ * @param self The kit; must not be NULL.
+ * @param kind The kind: the panel, the button, the toggle or the slider.
+ * @param lookName The look's name, a namespaced key (written without a namespace it is tbp's); must not be NULL. Copied.
+ * @param structSize The size of the look's struct; at least its kind's look base.
+ * @param look The hooks; must not be NULL, with Render and Measure; static storage (the kit keeps the pointer).
+ * @param outTypeId [out] Receives the widget type's id; may be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if a pointer is NULL or Render or Measure is missing; ErrorCode_ArgumentOutOfRange for
+ *          a kind whose look is not replaceable, a name that is no valid key, or a struct smaller than the kind's look base;
+ *          ErrorCode_InvalidOperation if the kind has a look by that name already; otherwise the factory's error.
+ */
+Error UIKit_RegisterLook(UIKit* self, UIElementKind kind, const unsigned char* lookName, size_t structSize, const UILookVTable* look,
+    uint64_t* outTypeId);
+
+/**
+ * @brief Finds the widget type of a kind's look by name.
  * @param self The kit; must not be NULL.
  * @param kind The kind.
- * @param typeId The registered type.
- * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for an unknown kind;
- *          ErrorCode_InvalidOperation if the type is not registered or lacks the kind's capability.
+ * @param lookName The look's name (written without a namespace it is tbp's); must not be NULL.
+ * @param outTypeId [out] Receives the type id when found; must not be NULL.
+ * @returns true if the kind has a look by that name.
  */
-Error UIKit_SetElementType(UIKit* self, UIElementKind kind, uint64_t typeId);
+bool UIKit_TryGetLookType(const UIKit* self, UIElementKind kind, const unsigned char* lookName, uint64_t* outTypeId);
 
 /**
  * @brief Returns the text components' factory the elements use.
@@ -165,8 +236,9 @@ static inline Logger* UIKit_GetLogger(const UIKit* self)
 
 // Creating elements.
 /*
- * Every UIKit_Create* makes the element, initializes it and adds it to its parent, or as a root of the screen when the parent
- * is WIDGET_ID_INVALID, and gives back its id. On a failure nothing stays behind and the id is WIDGET_ID_INVALID. Each takes:
+ * Every UIKit_Create* makes the element with its look (UIElementOptions.Look, else the screen's theme's for the kind, else the
+ * standard one), initializes it and adds it to its parent, or as a root of the screen when the parent is WIDGET_ID_INVALID, and
+ * gives back its id. On a failure nothing stays behind and the id is WIDGET_ID_INVALID. Each takes:
  *   self: the kit, not NULL; screen: of the kit's factory, not NULL; parentId: an alive widget of the screen, or
  *   WIDGET_ID_INVALID; options: not NULL, read for the call; outId: not NULL.
  * Each returns ErrorCode_IllegalArgument if a pointer is NULL; ErrorCode_InvalidOperation for a parent that is gone; otherwise

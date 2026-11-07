@@ -39,7 +39,7 @@ static bool IsMatch(const Subscription* subscription, const UIEvent* event)
  * value. */
 static bool IsDeliverable(const UIScreen* self, const UIEvent* event)
 {
-    return (event->Kind == UIEventKind_Widget) || (UIScreen_InternalResolve(self, event->WidgetId) != NULL);
+    return (event->Kind == UIEventKind_Widget) || (event->Kind == UIEventKind_Cue) || (UIScreen_InternalResolve(self, event->WidgetId) != NULL);
 }
 
 static void RemoveMarkedSubscriptions(UIScreen* self)
@@ -276,4 +276,53 @@ Error UIScreen_PostWidgetMouseEvent(UIScreen* self, uint64_t widgetId, int32_t w
         return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_PostWidgetMouseEvent: self and mouse must not be NULL.");
     }
     return PostWidgetEvent(self, widgetId, widgetEventId, NULL, mouse);
+}
+
+/* Whether a live subscription asks for cues of a widget: one to it, or one to every widget. */
+static bool IsListeningForCues(UIScreen* self, uint64_t widgetId)
+{
+    for (size_t Index = 0; Index < self->_subscriptions._count; Index++)
+    {
+        const Subscription* Entry = GetSubscriptionAt(self, Index);
+        bool IsForWidget = (Entry->WidgetId == WIDGET_ID_INVALID) || (Entry->WidgetId == widgetId);
+        if (!Entry->IsRemoved && IsForWidget && ((Entry->KindMask & UI_EVENT_KIND_MASK(UIEventKind_Cue)) != 0U))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+Error UIScreen_PostCue(UIScreen* self, uint64_t widgetId, UIElementCue cue)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_PostCue: self must not be NULL.");
+    }
+    Widget* Source = UIScreen_InternalResolve(self, widgetId);
+    if (Source == NULL)
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "UIScreen_PostCue: the widget is not alive.");
+    }
+    if (!IsListeningForCues(self, widgetId))
+    {
+        return Error_CreateSuccess();
+    }
+    UIEvent Event =
+    {
+        .Kind = UIEventKind_Cue,
+        .WidgetId = widgetId,
+        .WidgetTypeId = Widget_GetTypeId(Source),
+        .IsSet = false,
+        .WidgetEventId = (int32_t)cue,
+        .HasValue = false,
+        .Value = UIPropertyValue_FromFloat(0.0f),
+        .HasMouse = false,
+        .Mouse = (UIEventMouse){ .Button = GameKey_Unknown }
+    };
+    if (!UIScreen_InternalPostEvent(self, &Event))
+    {
+        return Error_Construct2(ErrorCode_BufferTooLarge, "UIScreen_PostCue: the notification queue could not grow.");
+    }
+    return Error_CreateSuccess();
 }

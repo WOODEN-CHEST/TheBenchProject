@@ -159,6 +159,27 @@ void UIScreen_InternalStopDyingAnimations(UIScreen* self);
 Error UIScreen_InternalReleaseAnimations(UIScreen* self);
 
 
+// Screen: hover text (UIScreenTooltips.c).
+/** Allocates hover text's table and text (screen construction). */
+void UIScreen_InternalInitializeTooltips(UIScreen* self);
+
+/** Frees them (screen teardown). */
+void UIScreen_InternalReleaseTooltips(UIScreen* self);
+
+/** Works out where the pointer rests after the tick's input: the text there, the rest time, whether it shows; makes the widget that
+ *  shows it the first time one does. */
+Error UIScreen_InternalUpdateTooltip(UIScreen* self, ProgramTime time);
+
+/** Forgets a widget's hover text (it is being torn down, or its text cleared); what shows goes with it when it is the current one. */
+void UIScreen_InternalRemoveWidgetTooltip(UIScreen* self, uint64_t widgetId);
+
+/** Forgets what hover text is current: none until the next update finds where the pointer rests (its widget is dying). */
+void UIScreen_InternalForgetCurrentTooltip(UIScreen* self);
+
+/** The widget whose hover text is current, or WIDGET_ID_INVALID. */
+uint64_t UIScreen_InternalGetCurrentTooltipWidgetId(const UIScreen* self);
+
+
 // Screen: notifications (UIScreenEvents.c).
 /** Allocates the notification module's buffers (screen construction). */
 void UIScreen_InternalInitializeEvents(UIScreen* self);
@@ -192,6 +213,15 @@ void Widget_InternalInitializeBase(Widget* self, const WidgetVTable* vtable, UIS
 
 /** Frees the base's own storage (the child lists). */
 void Widget_InternalReleaseBase(Widget* self);
+
+/** Brings the effective scales of a widget and its subtree in line with its parent's (or the screen's, for a root): each
+ *  one's parent's times its own, kept to the bounds, with the cached measure of each that changed dropped. Called wherever one
+ *  of them can change: a widget's scale, the screen's, and a widget attached anywhere. O(subtree). */
+void Widget_InternalUpdateEffectiveScale(Widget* self, float parentScale);
+
+/** Returns the effective scale a widget's placement offsets and render transform offset count in: its parent's, or the
+ *  screen's for a root or a detached widget. */
+float Widget_InternalGetParentScale(const Widget* self);
 
 /** Runs a dying widget's teardown hooks: the disable hooks and Deinitialize if it was initialized, then OnDeconstruct.
  *  Keeps the first error. */

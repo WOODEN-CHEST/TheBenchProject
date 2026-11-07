@@ -22,6 +22,11 @@ static const WidgetPropertyDescriptor BaseProperties[] =
     { .Id = WidgetBaseProperty_Size, .Type = UIPropertyType_Vector2, .Name = u8"size" },
     { .Id = WidgetBaseProperty_ZLayer, .Type = UIPropertyType_Float, .Name = u8"z_layer" },
     { .Id = WidgetBaseProperty_RenderTint, .Type = UIPropertyType_RenderColor, .Name = u8"render_tint" },
+    { .Id = WidgetBaseProperty_Scale, .Type = UIPropertyType_Float, .Name = u8"scale" },
+    { .Id = WidgetBaseProperty_Rotation, .Type = UIPropertyType_Float, .Name = u8"rotation" },
+    { .Id = WidgetBaseProperty_Pivot, .Type = UIPropertyType_Vector2, .Name = u8"pivot" },
+    { .Id = WidgetBaseProperty_VisualOffset, .Type = UIPropertyType_Vector2, .Name = u8"visual_offset" },
+    { .Id = WidgetBaseProperty_VisualScale, .Type = UIPropertyType_Vector2, .Name = u8"visual_scale" },
 };
 
 
@@ -289,6 +294,10 @@ void Widget_InternalInitializeBase(Widget* self, const WidgetVTable* vtable, UIS
     self->_size = (Vector2){ .x = 0.0f, .y = 0.0f };
     self->_zLayer = 0.0f;
     self->_renderTint = RenderColor_White();
+    self->_scale = 1.0f;
+    self->_effectiveScale = UIScreen_GetScale(screen); // Until it is attached: then its parent's (or the screen's) times its own.
+    self->_hasRenderTransform = false;
+    self->_renderTransform = UIRenderTransform_Create();
 
     self->_isRendered = true;
     self->_isUpdated = true;
@@ -327,6 +336,25 @@ void Widget_InternalReleaseBase(Widget* self)
     Memory_Free(self->_drawOrder._data);
     Memory_Zero(&self->_subWidgets, sizeof(self->_subWidgets));
     Memory_Zero(&self->_drawOrder, sizeof(self->_drawOrder));
+}
+
+void Widget_InternalUpdateEffectiveScale(Widget* self, float parentScale)
+{
+    float Scale = Math_ClampFloat(parentScale * self->_scale, WIDGET_MIN_EFFECTIVE_SCALE, WIDGET_MAX_EFFECTIVE_SCALE);
+    if (Scale != self->_effectiveScale)
+    {
+        self->_effectiveScale = Scale;
+        self->_isMeasureValid = false; // What it answered was in surface pixels of another scale.
+    }
+    for (size_t Index = 0; Index < self->_subWidgets._count; Index++)
+    {
+        Widget_InternalUpdateEffectiveScale(GetChildAt(self, Index), self->_effectiveScale); // Bounded by the tree depth.
+    }
+}
+
+float Widget_InternalGetParentScale(const Widget* self)
+{
+    return (self->_parent != NULL) ? self->_parent->_effectiveScale : UIScreen_GetScale(self->_screen);
 }
 
 Error Widget_InternalRunTeardownHooks(Widget* self)
@@ -436,6 +464,8 @@ Error Widget_InternalEnter(Widget* self, UIEnterCause cause)
 
     self->_isEntered = true;
     PostStateEvent(self, UIEventKind_EnteredChanged, true);
+    Error CueResult = UIScreen_PostCue(self->_screen, self->_id, UIElementCue_Enter); // Best effort, as the notification is.
+    Error_Deconstruct(&CueResult);
     return (self->VTable->OnEnter != NULL) ? self->VTable->OnEnter(self, cause) : Error_CreateSuccess();
 }
 
@@ -448,6 +478,8 @@ Error Widget_InternalLeave(Widget* self, UILeaveReason reason)
 
     self->_isEntered = false;
     PostStateEvent(self, UIEventKind_EnteredChanged, false);
+    Error CueResult = UIScreen_PostCue(self->_screen, self->_id, UIElementCue_Leave); // Best effort, as the notification is.
+    Error_Deconstruct(&CueResult);
     return (self->VTable->OnLeave != NULL) ? self->VTable->OnLeave(self, reason) : Error_CreateSuccess();
 }
 
@@ -495,6 +527,7 @@ bool Widget_InternalLinkToParent(Widget* parent, Widget* child)
         return false;
     }
     child->_parent = parent;
+    Widget_InternalUpdateEffectiveScale(child, parent->_effectiveScale);
     InvalidateBoundsUpTree(parent);
     Widget_InvalidateMeasure(parent);
     UIScreen_InternalInvalidateHitTest(parent->_screen);
@@ -793,11 +826,15 @@ Error Widget_Measure(Widget* self, const UIMeasureContext* context, float availa
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "Widget_Measure: self, context and outSize must not be NULL.");
     }
-    float Width = NormalizeAvailableWidth(availableWidth);
+    // The hook answers in the widget's own UI pixels; the caller asks and hears in its parent's. They differ by the scale the widget
+    // adds in effect: its own, unless the effective scale is kept to its bounds, when the box must still fit what is drawn.
+    float OwnScale = self->_effectiveScale / Widget_InternalGetParentScale(self);
+    float Width = NormalizeAvailableWidth(availableWidth / OwnScale);
     uint64_t Generation = UIScreen_GetMeasureGeneration(self->_screen);
     if (self->_isMeasureValid && (self->_measureGeneration == Generation) && (self->_measuredWidth == Width))
     {
-        *outSize = self->_measuredSize;
+        *outSize = (Vector2){ .x = NormalizeMeasuredLength(self->_measuredSize.x * OwnScale),
+            .y = NormalizeMeasuredLength(self->_measuredSize.y * OwnScale) };
         return Error_CreateSuccess();
     }
 
@@ -816,7 +853,7 @@ Error Widget_Measure(Widget* self, const UIMeasureContext* context, float availa
     self->_measuredWidth = Width;
     self->_measureGeneration = Generation;
     self->_isMeasureValid = true;
-    *outSize = Size;
+    *outSize = (Vector2){ .x = NormalizeMeasuredLength(Size.x * OwnScale), .y = NormalizeMeasuredLength(Size.y * OwnScale) };
     return Error_CreateSuccess();
 }
 
@@ -851,6 +888,82 @@ Error Widget_SetRenderTint(Widget* self, RenderColor tint)
     }
     self->_renderTint = tint;
     return Error_CreateSuccess();
+}
+
+Error Widget_SetScale(Widget* self, float scale)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetScale: self must not be NULL.");
+    }
+    if (!(scale >= WIDGET_MIN_SCALE) || !(scale <= WIDGET_MAX_SCALE))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
+            "Widget_SetScale: the scale must be a number within [WIDGET_MIN_SCALE, WIDGET_MAX_SCALE].");
+    }
+    if (scale == self->_scale)
+    {
+        return Error_CreateSuccess();
+    }
+    self->_scale = scale;
+    Widget_InternalUpdateEffectiveScale(self, Widget_InternalGetParentScale(self));
+    // Its own answers are in another unit now, even where its effective scale stayed (kept to its bounds).
+    Widget_InvalidateMeasure(self);
+    // Visual offsets under it count in the scale: what shows under the pointer can move with no box changing.
+    UIScreen_InternalInvalidateHitTest(self->_screen);
+    return Error_CreateSuccess();
+}
+
+Error Widget_SetRenderTransform(Widget* self, const UIRenderTransform* transform)
+{
+    if ((self == NULL) || (transform == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetRenderTransform: self and transform must not be NULL.");
+    }
+    if (!UIRenderTransform_IsValid(transform))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "Widget_SetRenderTransform: every value must be finite, the offset "
+            "within UI_PLACEMENT_MAX_OFFSET and the visual scale within UI_RENDER_TRANSFORM_MAX_SCALE.");
+    }
+    self->_renderTransform = *transform;
+    self->_hasRenderTransform = true;
+    UIScreen_InternalInvalidateHitTest(self->_screen);
+    return Error_CreateSuccess();
+}
+
+Error Widget_ClearRenderTransform(Widget* self)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_ClearRenderTransform: self must not be NULL.");
+    }
+    if (self->_hasRenderTransform)
+    {
+        self->_hasRenderTransform = false;
+        self->_renderTransform = UIRenderTransform_Create();
+        UIScreen_InternalInvalidateHitTest(self->_screen);
+    }
+    return Error_CreateSuccess();
+}
+
+/* Changes one value of the render transform, giving the widget one when it had none. */
+static Error SetTransformValue(Widget* self, int32_t propertyId, const UIPropertyValue* value)
+{
+    UIRenderTransform Changed = Widget_GetRenderTransform(self);
+    switch ((WidgetBaseProperty)propertyId)
+    {
+        case WidgetBaseProperty_Rotation:     Changed.Rotation = value->Data.FloatValue; break;
+        case WidgetBaseProperty_Pivot:        Changed.Pivot = value->Data.Vector2Value; break;
+        case WidgetBaseProperty_VisualOffset: Changed.Offset = value->Data.Vector2Value; break;
+        case WidgetBaseProperty_VisualScale:  Changed.VisualScale = value->Data.Vector2Value; break;
+        case WidgetBaseProperty_Position:
+        case WidgetBaseProperty_Size:
+        case WidgetBaseProperty_ZLayer:
+        case WidgetBaseProperty_RenderTint:
+        case WidgetBaseProperty_Scale:
+            return Error_Construct2(ErrorCode_InvalidOperation, "Widget_SetProperty: not a property of the render transform.");
+    }
+    return Widget_SetRenderTransform(self, &Changed);
 }
 
 Error Widget_SetIsRendered(Widget* self, bool isRendered)
@@ -1140,6 +1253,15 @@ Error Widget_GetProperty(Widget* self, int32_t propertyId, UIPropertyValue* outV
         case WidgetBaseProperty_Size:       outValue->Data.Vector2Value = self->_size; return Error_CreateSuccess();
         case WidgetBaseProperty_ZLayer:     outValue->Data.FloatValue = self->_zLayer; return Error_CreateSuccess();
         case WidgetBaseProperty_RenderTint: outValue->Data.RenderColorValue = self->_renderTint; return Error_CreateSuccess();
+        case WidgetBaseProperty_Scale:      outValue->Data.FloatValue = self->_scale; return Error_CreateSuccess();
+        case WidgetBaseProperty_Rotation:   outValue->Data.FloatValue = Widget_GetRenderTransform(self).Rotation; return Error_CreateSuccess();
+        case WidgetBaseProperty_Pivot:      outValue->Data.Vector2Value = Widget_GetRenderTransform(self).Pivot; return Error_CreateSuccess();
+        case WidgetBaseProperty_VisualOffset:
+            outValue->Data.Vector2Value = Widget_GetRenderTransform(self).Offset;
+            return Error_CreateSuccess();
+        case WidgetBaseProperty_VisualScale:
+            outValue->Data.Vector2Value = Widget_GetRenderTransform(self).VisualScale;
+            return Error_CreateSuccess();
         default:                            break; // A property the type declares.
     }
     if (self->VTable->GetProperty == NULL)
@@ -1175,6 +1297,12 @@ Error Widget_SetProperty(Widget* self, int32_t propertyId, const UIPropertyValue
         case WidgetBaseProperty_Size:       return Widget_SetSize(self, value->Data.Vector2Value);
         case WidgetBaseProperty_ZLayer:     return Widget_SetZLayer(self, value->Data.FloatValue);
         case WidgetBaseProperty_RenderTint: return Widget_SetRenderTint(self, value->Data.RenderColorValue);
+        case WidgetBaseProperty_Scale:      return Widget_SetScale(self, value->Data.FloatValue);
+        case WidgetBaseProperty_Rotation:
+        case WidgetBaseProperty_Pivot:
+        case WidgetBaseProperty_VisualOffset:
+        case WidgetBaseProperty_VisualScale:
+            return SetTransformValue(self, propertyId, value);
         default:                            break; // A property the type declares.
     }
     if (self->VTable->SetProperty == NULL)

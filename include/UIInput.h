@@ -145,6 +145,22 @@ typedef struct WidgetHoverArgsStruct
 } WidgetHoverArgs;
 
 /**
+ * @brief The information passed to a widget's HitTest callback: a point the screen asks about, and whether it lies in the
+ *        widget's box.
+ */
+typedef struct WidgetHitTestArgsStruct
+{
+    /** @brief The point as the screen was asked about it, normalized [0;1] relative to the whole screen (where the pointer is),
+     *  before any render transform is undone: what a widget standing for a world object casts its ray through. */
+    Vector2 ScreenPosition;
+    /** @brief The same point in the widget's own box, normalized [0;1] when inside it, with the render transforms of the widget
+     *  and its ancestors undone. */
+    Vector2 LocalPosition;
+    /** @brief Whether the point lies in the widget's box (a box of no size holds none): the answer without a HitTest slot. */
+    bool IsInsideBox;
+} WidgetHitTestArgs;
+
+/**
  * @brief The information passed to a widget's OnMouseInput callback.
  *
  * One struct covers presses, releases and drags (see Type). A release and a drag are delivered to the widget the press

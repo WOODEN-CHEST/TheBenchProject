@@ -1,23 +1,355 @@
 #include "UIKit.h"
 #include "LabelWidget.h"
+#include "Logger.h"
+#include "UIKitInternal.h"
 #include "UIScreen.h"
+#include "UIStandardLooks.h"
 #include "UIWidgetFactory.h"
 #include "wr/WRMemory.h"
+#include "wr/WRString.h"
+
+
+// Types.
+/* One registered look: a kind's widget type by name. A kind's standard type the kit does not compose (the label's, the tooltip's)
+ * has no hooks. */
+typedef struct UIKitLookStruct
+{
+    UIElementKind Kind;
+    unsigned char Name[NAMESPACED_KEY_BUFFER_SIZE];
+    uint64_t TypeId;
+    /* The look's hooks and the kind's behaviour; both NULL for a type the kit does not compose. */
+    const UILookVTable* Look;
+    const UIKindBehaviour* Behaviour;
+} UIKitLook;
+
+
+// Static functions: the tables.
+static bool IsKindValid(UIElementKind kind)
+{
+    return ((int32_t)kind >= 0) && ((int32_t)kind < (int32_t)UIElementKind_Count);
+}
+
+/* The behaviour of a kind whose looks the kit composes; NULL for the others. */
+static const UIKindBehaviour* GetBehaviour(UIElementKind kind)
+{
+    switch (kind)
+    {
+        case UIElementKind_Panel:
+            return UIPanel_GetKindBehaviour();
+        case UIElementKind_Button:
+            return UIButton_GetKindBehaviour();
+        case UIElementKind_Toggle:
+            return UIToggle_GetKindBehaviour();
+        case UIElementKind_Slider:
+            return UISlider_GetKindBehaviour();
+        // TODO: the label's and the tooltip's looks are not replaceable: the label is LabelWidget itself, and the tooltip's box is
+        // a plain type the factory names (UIWidgetFactory_SetTooltipType). Each needs a behaviour of its own split out first.
+        case UIElementKind_Label:
+        case UIElementKind_Tooltip:
+        case UIElementKind_Count:
+            return NULL;
+    }
+    return NULL;
+}
+
+static const UIKitLook* GetLookAt(const UIKit* self, size_t index)
+{
+    return GenericBuffer_GetPointerToElement((GenericBuffer*)&self->_looks, index);
+}
+
+/* The full form of a look's name, or false for one that is no valid key. */
+static bool TryMakeFullName(const unsigned char* name, unsigned char* outName)
+{
+    GenericBuffer Name;
+    GenericBuffer_CreateConstant(&Name, outName, NAMESPACED_KEY_BUFFER_SIZE, sizeof(unsigned char), 0U);
+    Error Result = NamespacedKey_Parse(name, StringUTF8_GetByteLength(name), NULL, &Name);
+    bool IsValid = Result.Code == ErrorCode_Success;
+    Error_Deconstruct(&Result);
+    return IsValid;
+}
+
+static bool IsSameName(const unsigned char* a, const unsigned char* b)
+{
+    bool IsSame = false;
+    Error Compare = StringUTF8_EqualsExact(a, b, &IsSame);
+    Error_Deconstruct(&Compare);
+    return IsSame;
+}
+
+/* The look of a kind by its full name, or NULL. */
+static const UIKitLook* FindLookByName(const UIKit* self, UIElementKind kind, const unsigned char* fullName)
+{
+    for (size_t Index = 0; Index < self->_looks._count; Index++)
+    {
+        const UIKitLook* Entry = GetLookAt(self, Index);
+        if ((Entry->Kind == kind) && IsSameName(Entry->Name, fullName))
+        {
+            return Entry;
+        }
+    }
+    return NULL;
+}
+
+/* Records a look under its widget type. False, with nothing recorded, when a table could not grow. */
+static bool AddLook(UIKit* self, UIKitLook* look)
+{
+    size_t TypeIndex = (size_t)(look->TypeId - 1U);
+    uint32_t None = 0U;
+    while (self->_lookByType._count <= TypeIndex)
+    {
+        if (!GenericBuffer_AddLast(&self->_lookByType, &None))
+        {
+            return false;
+        }
+    }
+    if (!GenericBuffer_AddLast(&self->_looks, look))
+    {
+        return false;
+    }
+    uint32_t Index = (uint32_t)self->_looks._count;
+    GenericBuffer_Replace(&self->_lookByType, &Index, TypeIndex);
+    return true;
+}
+
+/* The look a widget of the kit was made with: through its screen's factory's kit and its type. NULL when the kit is gone or the
+ * type is no look of it. */
+static const UIKitLook* FindLookOfWidget(const Widget* widget)
+{
+    const UIKit* Kit = UIWidgetFactory_GetKit(UIScreen_GetFactory(Widget_GetScreen(widget)));
+    uint64_t TypeId = Widget_GetTypeId(widget);
+    if ((Kit == NULL) || (TypeId == WIDGET_TYPE_ID_INVALID) || (TypeId > Kit->_lookByType._count))
+    {
+        return NULL;
+    }
+    uint32_t Index = *(const uint32_t*)GenericBuffer_GetPointerToElement((GenericBuffer*)&Kit->_lookByType, (size_t)(TypeId - 1U));
+    return (Index != 0U) ? GetLookAt(Kit, Index - 1U) : NULL;
+}
+
+static Error KitGone(void)
+{
+    return Error_Construct2(ErrorCode_InvalidOperation, "UIKit: an element's kit is gone (screens go before their kit).");
+}
+
+
+// Static functions: the composed widget type. Every slot finds the widget's look, then calls the kind's hook and the look's. A slot
+// that calls more than one copies the two vtables out first: a hook may register a look, which can move the kit's table.
+static Error Composed_Construct(void* widget, void* args)
+{
+    const UIKitLook* Entry = FindLookOfWidget(widget);
+    if ((Entry == NULL) || (Entry->Behaviour == NULL))
+    {
+        return KitGone();
+    }
+    const UIKindBehaviour* Behaviour = Entry->Behaviour;
+    const UILookVTable* Look = Entry->Look;
+    Error Result = (Behaviour->Construct != NULL) ? Behaviour->Construct(widget, args) : Error_CreateSuccess();
+    if ((Result.Code != ErrorCode_Success) || (Look->Construct == NULL))
+    {
+        return Result;
+    }
+    Result = Look->Construct(widget, args);
+    if ((Result.Code != ErrorCode_Success) && (Behaviour->Deconstruct != NULL))
+    {
+        Error Cleanup = Behaviour->Deconstruct(widget);
+        Error_Deconstruct(&Cleanup);
+    }
+    return Result;
+}
+
+static Error Composed_OnDeconstruct(void* self)
+{
+    const UIKitLook* Entry = FindLookOfWidget(self);
+    if (Entry == NULL)
+    {
+        return KitGone();
+    }
+    const UIKindBehaviour* Behaviour = Entry->Behaviour;
+    const UILookVTable* Look = Entry->Look;
+    Error First = (Look->Deconstruct != NULL) ? Look->Deconstruct(self) : Error_CreateSuccess();
+    Error Second = (Behaviour->Deconstruct != NULL) ? Behaviour->Deconstruct(self) : Error_CreateSuccess();
+    if (First.Code == ErrorCode_Success)
+    {
+        return Second;
+    }
+    Error_Deconstruct(&Second);
+    return First;
+}
+
+static Error Composed_Update(void* self, ProgramTime time)
+{
+    const UIKitLook* Entry = FindLookOfWidget(self);
+    if (Entry == NULL)
+    {
+        return KitGone();
+    }
+    const UILookVTable* Look = Entry->Look;
+    Error Result = (Entry->Behaviour->Update != NULL) ? Entry->Behaviour->Update(self, time) : Error_CreateSuccess();
+    if ((Result.Code != ErrorCode_Success) || (Look->Update == NULL))
+    {
+        return Result;
+    }
+    return Look->Update(self, time);
+}
+
+static Error Composed_Layout(void* self, const UILayoutContext* context)
+{
+    const UIKitLook* Entry = FindLookOfWidget(self);
+    if (Entry == NULL)
+    {
+        return KitGone();
+    }
+    if (Entry->Look->Layout != NULL)
+    {
+        return Entry->Look->Layout(self, context);
+    }
+    return (Entry->Behaviour->Layout != NULL) ? Entry->Behaviour->Layout(self, context) : Error_CreateSuccess();
+}
+
+static Error Composed_Render(void* self, UIRenderContext* context)
+{
+    const UIKitLook* Entry = FindLookOfWidget(self);
+    return (Entry != NULL) ? Entry->Look->Render(self, context) : KitGone();
+}
+
+static Error Composed_Measure(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
+{
+    const UIKitLook* Entry = FindLookOfWidget(self);
+    return (Entry != NULL) ? Entry->Look->Measure(self, context, availableWidth, outSize) : KitGone();
+}
+
+static bool Composed_HitTest(void* self, const WidgetHitTestArgs* args)
+{
+    const UIKitLook* Entry = FindLookOfWidget(self);
+    if ((Entry == NULL) || (Entry->Look->HitTest == NULL))
+    {
+        return args->IsInsideBox;
+    }
+    return Entry->Look->HitTest(self, args);
+}
+
+static Error Composed_OnHoverStart(void* self, const WidgetHoverArgs* args)
+{
+    const UIKitLook* Entry = FindLookOfWidget(self);
+    if (Entry == NULL)
+    {
+        return KitGone();
+    }
+    return (Entry->Behaviour->OnHoverStart != NULL) ? Entry->Behaviour->OnHoverStart(self, args) : Error_CreateSuccess();
+}
+
+static Error Composed_OnMouseInput(void* self, const WidgetMouseInputArgs* args)
+{
+    const UIKitLook* Entry = FindLookOfWidget(self);
+    if (Entry == NULL)
+    {
+        return KitGone();
+    }
+    return (Entry->Behaviour->OnMouseInput != NULL) ? Entry->Behaviour->OnMouseInput(self, args) : Error_CreateSuccess();
+}
+
+static Error Composed_OnPressLost(void* self, GameKey button)
+{
+    const UIKitLook* Entry = FindLookOfWidget(self);
+    if (Entry == NULL)
+    {
+        return KitGone();
+    }
+    return (Entry->Behaviour->OnPressLost != NULL) ? Entry->Behaviour->OnPressLost(self, button) : Error_CreateSuccess();
+}
+
+static Error Composed_OnScrollInput(void* self, const WidgetScrollInputArgs* args, bool* outIsHandled)
+{
+    const UIKitLook* Entry = FindLookOfWidget(self);
+    if (Entry == NULL)
+    {
+        return KitGone();
+    }
+    return (Entry->Behaviour->OnScrollInput != NULL) ? Entry->Behaviour->OnScrollInput(self, args, outIsHandled) : Error_CreateSuccess();
+}
+
+static Error Composed_OnKeyboardInput(void* self, const WidgetKeyboardInputArgs* args, bool* outIsHandled)
+{
+    const UIKitLook* Entry = FindLookOfWidget(self);
+    if (Entry == NULL)
+    {
+        return KitGone();
+    }
+    return (Entry->Behaviour->OnKeyboardInput != NULL) ? Entry->Behaviour->OnKeyboardInput(self, args, outIsHandled)
+        : Error_CreateSuccess();
+}
+
+static Error Composed_OnEnter(void* self, UIEnterCause cause)
+{
+    const UIKitLook* Entry = FindLookOfWidget(self);
+    if (Entry == NULL)
+    {
+        return KitGone();
+    }
+    return (Entry->Behaviour->OnEnter != NULL) ? Entry->Behaviour->OnEnter(self, cause) : Error_CreateSuccess();
+}
+
+static Error Composed_OnLeave(void* self, UILeaveReason reason)
+{
+    const UIKitLook* Entry = FindLookOfWidget(self);
+    if (Entry == NULL)
+    {
+        return KitGone();
+    }
+    return (Entry->Behaviour->OnLeave != NULL) ? Entry->Behaviour->OnLeave(self, reason) : Error_CreateSuccess();
+}
+
+/* The look capability of a composed widget: its look's UIElementLook. Declared only for looks that have GetThemeLook. */
+static void* Composed_ResolveThemeLook(void* widget)
+{
+    const UIKitLook* Entry = FindLookOfWidget(widget);
+    return ((Entry != NULL) && (Entry->Look->GetThemeLook != NULL)) ? Entry->Look->GetThemeLook(widget) : NULL;
+}
 
 
 // Fields.
-/* The capability a widget type replacing a kind's must embed. */
-static const UIElementCapability KindCapabilities[UIElementKind_Count] =
+/* The one vtable of every composed widget type: each slot dispatches through the widget's look. */
+static const WidgetVTable ComposedVTable =
 {
-    [UIElementKind_Panel] = UIElementCapability_Look,
-    [UIElementKind_Label] = UIElementCapability_Label,
-    [UIElementKind_Button] = UIElementCapability_Button,
-    [UIElementKind_Toggle] = UIElementCapability_Toggle,
-    [UIElementKind_Slider] = UIElementCapability_Slider,
+    .OnDeconstruct = Composed_OnDeconstruct,
+    .Update = Composed_Update,
+    .Layout = Composed_Layout,
+    .Render = Composed_Render,
+    .OnHoverStart = Composed_OnHoverStart,
+    .OnMouseInput = Composed_OnMouseInput,
+    .OnPressLost = Composed_OnPressLost,
+    .OnScrollInput = Composed_OnScrollInput,
+    .OnKeyboardInput = Composed_OnKeyboardInput,
+    .OnEnter = Composed_OnEnter,
+    .OnLeave = Composed_OnLeave,
+    .Measure = Composed_Measure,
+    .HitTest = Composed_HitTest
+};
+
+/* The names of the kinds' widget types, for the factory's messages. */
+static const unsigned char* const KindTypeNames[UIElementKind_Count] =
+{
+    [UIElementKind_Panel] = u8"Panel",
+    [UIElementKind_Label] = u8"UILabel",
+    [UIElementKind_Button] = u8"Button",
+    [UIElementKind_Toggle] = u8"Toggle",
+    [UIElementKind_Slider] = u8"Slider",
+    [UIElementKind_Tooltip] = u8"Tooltip",
 };
 
 
-// Static functions.
+// Static functions: construction.
+/* Records a kind's standard type that the kit does not compose under the standard look's name. */
+static Error AddStandardType(UIKit* self, UIElementKind kind, uint64_t typeId)
+{
+    UIKitLook Entry = { .Kind = kind, .TypeId = typeId, .Look = NULL, .Behaviour = NULL };
+    Memory_Copy(UI_KIT_STANDARD_LOOK, Entry.Name, StringUTF8_GetByteLength(UI_KIT_STANDARD_LOOK) + 1U);
+    if (!AddLook(self, &Entry))
+    {
+        return Error_Construct2(ErrorCode_BufferTooLarge, "UIKit: the table of looks could not grow.");
+    }
+    return Error_CreateSuccess();
+}
+
 static Error RegisterEverything(UIKit* self)
 {
     Error Result = Error_CreateSuccess();
@@ -25,36 +357,66 @@ static Error RegisterEverything(UIKit* self)
     {
         Result = UIWidgetFactory_RegisterCapability(self->_factory, &self->_capabilities[Index]);
     }
-    uint64_t Look = self->_capabilities[UIElementCapability_Look];
     if (Result.Code == ErrorCode_Success)
     {
         Result = StackWidget_RegisterType(self->_factory, &self->_stackType);
     }
+    uint64_t LabelType = WIDGET_TYPE_ID_INVALID;
     if (Result.Code == ErrorCode_Success)
     {
-        Result = UIPanel_RegisterType(self->_factory, Look, &self->_types[UIElementKind_Panel]);
+        Result = LabelWidget_RegisterElementType(self->_factory, self->_capabilities[UIElementCapability_Look],
+            self->_capabilities[UIElementCapability_Label], &LabelType);
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = LabelWidget_RegisterElementType(self->_factory, Look, self->_capabilities[UIElementCapability_Label],
-            &self->_types[UIElementKind_Label]);
+        Result = AddStandardType(self, UIElementKind_Label, LabelType);
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = UIButton_RegisterType(self->_factory, Look, self->_capabilities[UIElementCapability_Button],
-            &self->_types[UIElementKind_Button]);
+        Result = UIStandardLooks_Register(self);
+    }
+    uint64_t TooltipType = WIDGET_TYPE_ID_INVALID;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIStandardLooks_RegisterTooltip(self, self->_factory, &TooltipType);
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = UIToggle_RegisterType(self->_factory, Look, self->_capabilities[UIElementCapability_Toggle],
-            &self->_types[UIElementKind_Toggle]);
-    }
-    if (Result.Code == ErrorCode_Success)
-    {
-        Result = UISlider_RegisterType(self->_factory, Look, self->_capabilities[UIElementCapability_Slider],
-            &self->_types[UIElementKind_Slider]);
+        Result = AddStandardType(self, UIElementKind_Tooltip, TooltipType);
     }
     return Result;
+}
+
+/* The widget type an element is made with: the options' look, else the theme's for its kind, else the standard one. A name no
+ * look answers is logged, once per name. */
+static uint64_t ResolveLookType(UIKit* self, const UIScreen* screen, UIElementKind kind, const unsigned char* requested)
+{
+    const unsigned char* Name = (requested != NULL) ? requested : UITheme_GetLookName(UIScreen_GetTheme(screen), kind);
+    uint64_t TypeId = WIDGET_TYPE_ID_INVALID;
+    if ((Name == NULL) || UIKit_TryGetLookType(self, kind, Name, &TypeId))
+    {
+        return (Name == NULL) ? UIKit_GetElementType(self, kind) : TypeId;
+    }
+    unsigned char FullName[NAMESPACED_KEY_BUFFER_SIZE];
+    bool IsValid = TryMakeFullName(Name, FullName);
+    bool IsReported = false;
+    for (size_t Index = 0; IsValid && (Index < self->_reportedLookCount); Index++)
+    {
+        IsReported = IsReported || IsSameName(self->_reportedLooks[Index], FullName);
+    }
+    if (IsValid && !IsReported && (self->_reportedLookCount < UI_KIT_MAX_REPORTED_LOOKS))
+    {
+        Memory_Copy(FullName, self->_reportedLooks[self->_reportedLookCount], sizeof(FullName));
+        self->_reportedLookCount++;
+        if (self->_logger != NULL)
+        {
+            Error LogResult = Logger_LogWarningFormatted(self->_logger,
+                (const unsigned char*)u8"UI kit: no look \"%s\" for the element \"%s\": it gets the standard look.",
+                (const char*)FullName, (const char*)UIElementKind_GetName(kind));
+            Error_Deconstruct(&LogResult);
+        }
+    }
+    return UIKit_GetElementType(self, kind);
 }
 
 /* The shared body of every UIKit_Create*: the type's constructor takes the arguments and applies the options, then the
@@ -100,6 +462,14 @@ static Error CreateElement(UIKit* self, UIScreen* screen, uint64_t parentId, uin
     return Error_CreateSuccess();
 }
 
+static void ReleaseTables(UIKit* self)
+{
+    Memory_Free(self->_looks._data);
+    Memory_Free(self->_lookByType._data);
+    Memory_Zero(&self->_looks, sizeof(self->_looks));
+    Memory_Zero(&self->_lookByType, sizeof(self->_lookByType));
+}
+
 
 // Public functions.
 Error UIKit_Construct(UIKit* self, UIWidgetFactory* factory, TextComponentFactory* textFactory, AssetManager* assets, Logger* logger)
@@ -117,22 +487,38 @@ Error UIKit_Construct(UIKit* self, UIWidgetFactory* factory, TextComponentFactor
     self->_textFactory = textFactory;
     self->_assets = assets;
     self->_logger = logger;
+    GenericBuffer_AllocateVariable(&self->_looks, 8U, sizeof(UIKitLook));
+    GenericBuffer_AllocateVariable(&self->_lookByType, 16U, sizeof(uint32_t));
     Error Result = RegisterEverything(self);
     if (Result.Code != ErrorCode_Success)
     {
+        ReleaseTables(self);
         return Result;
     }
     UIWidgetFactory_SetKit(factory, self);
+    UIWidgetFactory_SetTooltipType(factory, UIKit_GetElementType(self, UIElementKind_Tooltip));
     return Error_CreateSuccess();
 }
 
 Error UIKit_Deconstruct(UIKit* self)
 {
-    if ((self != NULL) && (self->_factory != NULL))
+    if ((self == NULL) || (self->_factory == NULL))
     {
-        UIWidgetFactory_SetKit(self->_factory, NULL);
-        self->_factory = NULL;
+        return Error_CreateSuccess();
     }
+    // A widget of a look's type finds its hooks through the kit's tables: none may outlive them.
+    for (size_t Index = 0; Index < self->_looks._count; Index++)
+    {
+        if (UIWidgetFactory_GetLiveWidgetCount(self->_factory, GetLookAt(self, Index)->TypeId) != 0U)
+        {
+            return Error_Construct2(ErrorCode_InvalidOperation,
+                "UIKit_Deconstruct: widgets of the kit's looks are alive; deconstruct their screens first. The kit is left as it was.");
+        }
+    }
+    UIWidgetFactory_SetKit(self->_factory, NULL);
+    UIWidgetFactory_SetTooltipType(self->_factory, WIDGET_TYPE_ID_INVALID);
+    self->_factory = NULL;
+    ReleaseTables(self);
     return Error_CreateSuccess();
 }
 
@@ -149,28 +535,104 @@ uint64_t UIKit_GetCapabilityId(const UIKit* self, UIElementCapability capability
 
 uint64_t UIKit_GetElementType(const UIKit* self, UIElementKind kind)
 {
-    bool IsValid = ((int32_t)kind >= 0) && ((int32_t)kind < (int32_t)UIElementKind_Count);
-    return IsValid ? self->_types[kind] : WIDGET_TYPE_ID_INVALID;
+    if (!IsKindValid(kind))
+    {
+        return WIDGET_TYPE_ID_INVALID;
+    }
+    const UIKitLook* Standard = FindLookByName(self, kind, UI_KIT_STANDARD_LOOK);
+    return (Standard != NULL) ? Standard->TypeId : WIDGET_TYPE_ID_INVALID;
 }
 
-Error UIKit_SetElementType(UIKit* self, UIElementKind kind, uint64_t typeId)
+Error UIKit_RegisterLook(UIKit* self, UIElementKind kind, const unsigned char* lookName, size_t structSize, const UILookVTable* look,
+    uint64_t* outTypeId)
 {
-    if (self == NULL)
+    if ((self == NULL) || (lookName == NULL) || (look == NULL) || (look->Render == NULL) || (look->Measure == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_SetElementType: self must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument,
+            "UIKit_RegisterLook: self, the name and the look must not be NULL, and a look needs Render and Measure.");
     }
-    if (((int32_t)kind < 0) || ((int32_t)kind >= (int32_t)UIElementKind_Count))
+    if (outTypeId != NULL)
     {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIKit_SetElementType: an unknown element kind.");
+        *outTypeId = WIDGET_TYPE_ID_INVALID;
     }
-    uint64_t Capability = self->_capabilities[KindCapabilities[kind]];
-    if (!UIWidgetFactory_IsCapabilitySupported(self->_factory, typeId, Capability))
+    const UIKindBehaviour* Behaviour = IsKindValid(kind) ? GetBehaviour(kind) : NULL;
+    if (Behaviour == NULL)
     {
-        return Error_Construct2(ErrorCode_InvalidOperation,
-            "UIKit_SetElementType: the type is not registered, or does not embed the kind's capability.");
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
+            "UIKit_RegisterLook: the kind is unknown, or its look is not replaceable (the label, the tooltip).");
     }
-    self->_types[kind] = typeId;
+    if (structSize < Behaviour->BaseSize)
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIKit_RegisterLook: the look's struct must start with its kind's look base.");
+    }
+    UIKitLook Entry = { .Kind = kind, .TypeId = WIDGET_TYPE_ID_INVALID, .Look = look, .Behaviour = Behaviour };
+    if (!TryMakeFullName(lookName, Entry.Name))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIKit_RegisterLook: the look's name is not a valid namespaced key.");
+    }
+    if (FindLookByName(self, kind, Entry.Name) != NULL)
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "UIKit_RegisterLook: the kind has a look by that name already.");
+    }
+
+    WidgetCapabilityEntry Capabilities[2];
+    size_t CapabilityCount = 0U;
+    if (Behaviour->HasCapability)
+    {
+        Capabilities[CapabilityCount++] = (WidgetCapabilityEntry){ .CapabilityId = self->_capabilities[Behaviour->Capability],
+            .Resolver = Behaviour->ResolveCapability };
+    }
+    if (look->GetThemeLook != NULL)
+    {
+        Capabilities[CapabilityCount++] = (WidgetCapabilityEntry){ .CapabilityId = self->_capabilities[UIElementCapability_Look],
+            .Resolver = Composed_ResolveThemeLook };
+    }
+    WidgetTypeDescriptor Descriptor =
+    {
+        .Name = KindTypeNames[kind],
+        .StructSize = structSize,
+        .VTable = &ComposedVTable,
+        .Constructor = Composed_Construct,
+        .Capabilities = Capabilities,
+        .CapabilityCount = CapabilityCount,
+        .Properties = NULL,
+        .PropertyCount = 0U,
+        .IsFocusable = Behaviour->IsFocusable,
+        .NeedsEntering = Behaviour->NeedsEntering,
+        .EntersItself = Behaviour->EntersItself
+    };
+    Error Result = UIWidgetFactory_RegisterType(self->_factory, &Descriptor, &Entry.TypeId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (!AddLook(self, &Entry))
+    {
+        Error Cleanup = UIWidgetFactory_UnregisterType(self->_factory, Entry.TypeId);
+        Error_Deconstruct(&Cleanup);
+        return Error_Construct2(ErrorCode_BufferTooLarge, "UIKit_RegisterLook: the table of looks could not grow.");
+    }
+    if (outTypeId != NULL)
+    {
+        *outTypeId = Entry.TypeId;
+    }
     return Error_CreateSuccess();
+}
+
+bool UIKit_TryGetLookType(const UIKit* self, UIElementKind kind, const unsigned char* lookName, uint64_t* outTypeId)
+{
+    unsigned char FullName[NAMESPACED_KEY_BUFFER_SIZE];
+    if ((self == NULL) || (lookName == NULL) || (outTypeId == NULL) || !IsKindValid(kind) || !TryMakeFullName(lookName, FullName))
+    {
+        return false;
+    }
+    const UIKitLook* Entry = FindLookByName(self, kind, FullName);
+    if (Entry == NULL)
+    {
+        return false;
+    }
+    *outTypeId = Entry->TypeId;
+    return true;
 }
 
 Error UIKit_CreateStack(UIKit* self, UIScreen* screen, uint64_t parentId, const UIStackOptions* options, uint64_t* outId)
@@ -184,18 +646,19 @@ Error UIKit_CreateStack(UIKit* self, UIScreen* screen, uint64_t parentId, const 
 
 Error UIKit_CreatePanel(UIKit* self, UIScreen* screen, uint64_t parentId, const UIPanelOptions* options, uint64_t* outId)
 {
-    if ((self == NULL) || (options == NULL))
+    if ((self == NULL) || (options == NULL) || (screen == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreatePanel: self and options must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreatePanel: self, screen and options must not be NULL.");
     }
-    return CreateElement(self, screen, parentId, self->_types[UIElementKind_Panel], (void*)options, outId);
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Panel, options->Element.Look);
+    return CreateElement(self, screen, parentId, TypeId, (void*)options, outId);
 }
 
 Error UIKit_CreateLabel(UIKit* self, UIScreen* screen, uint64_t parentId, const UILabelOptions* options, uint64_t* outId)
 {
-    if ((self == NULL) || (options == NULL))
+    if ((self == NULL) || (options == NULL) || (screen == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateLabel: self and options must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateLabel: self, screen and options must not be NULL.");
     }
     LabelWidgetArgs Arguments =
     {
@@ -205,35 +668,39 @@ Error UIKit_CreateLabel(UIKit* self, UIScreen* screen, uint64_t parentId, const 
         .Text = NULL,
         .ElementOptions = options
     };
-    return CreateElement(self, screen, parentId, self->_types[UIElementKind_Label], &Arguments, outId);
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Label, options->Element.Look);
+    return CreateElement(self, screen, parentId, TypeId, &Arguments, outId);
 }
 
 Error UIKit_CreateButton(UIKit* self, UIScreen* screen, uint64_t parentId, const UIButtonOptions* options, uint64_t* outId)
 {
-    if ((self == NULL) || (options == NULL))
+    if ((self == NULL) || (options == NULL) || (screen == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateButton: self and options must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateButton: self, screen and options must not be NULL.");
     }
     UIButtonArgs Arguments = { .Kit = self, .Options = options };
-    return CreateElement(self, screen, parentId, self->_types[UIElementKind_Button], &Arguments, outId);
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Button, options->Element.Look);
+    return CreateElement(self, screen, parentId, TypeId, &Arguments, outId);
 }
 
 Error UIKit_CreateToggle(UIKit* self, UIScreen* screen, uint64_t parentId, const UIToggleOptions* options, uint64_t* outId)
 {
-    if ((self == NULL) || (options == NULL))
+    if ((self == NULL) || (options == NULL) || (screen == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateToggle: self and options must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateToggle: self, screen and options must not be NULL.");
     }
     UIToggleArgs Arguments = { .Kit = self, .Options = options };
-    return CreateElement(self, screen, parentId, self->_types[UIElementKind_Toggle], &Arguments, outId);
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Toggle, options->Element.Look);
+    return CreateElement(self, screen, parentId, TypeId, &Arguments, outId);
 }
 
 Error UIKit_CreateSlider(UIKit* self, UIScreen* screen, uint64_t parentId, const UISliderOptions* options, uint64_t* outId)
 {
-    if ((self == NULL) || (options == NULL))
+    if ((self == NULL) || (options == NULL) || (screen == NULL))
     {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateSlider: self and options must not be NULL.");
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateSlider: self, screen and options must not be NULL.");
     }
     UISliderArgs Arguments = { .Kit = self, .Options = options };
-    return CreateElement(self, screen, parentId, self->_types[UIElementKind_Slider], &Arguments, outId);
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Slider, options->Element.Look);
+    return CreateElement(self, screen, parentId, TypeId, &Arguments, outId);
 }

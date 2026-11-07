@@ -41,22 +41,14 @@ typedef struct UILabelOptionsStruct
  */
 typedef struct UILabelCapabilityStruct
 {
-    /** @brief The look; meaningful when _usesTheme. */
-    UIElementLook _look;
     /** @brief The document that owns its text; borrowed, inside the widget. */
     TextDocument* _document;
-    /** @brief Whether its font and colours (and text size, without its own) come from the screen's theme. */
-    bool _usesTheme;
     /** @brief Whether _textSize is its line height. */
     bool _hasTextSize;
     /** @brief The line height in UI pixels. */
     float _textSize;
     /** @brief Whether long lines wrap at the width it is given. */
     bool _isWrapped;
-    /** @brief The screen's theme revision whose font the document has. */
-    uint64_t _appliedThemeRevision;
-    /** @brief Whether _appliedThemeRevision means anything yet. */
-    bool _hasAppliedTheme;
 } UILabelCapability;
 
 

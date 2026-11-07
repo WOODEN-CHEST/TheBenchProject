@@ -50,6 +50,14 @@ static const UIThemePartDescriptor SliderParts[UISliderPart_Count] =
     [UISliderPart_Fill] = BOX_PART("fill"),
     [UISliderPart_Thumb] = BOX_PART("thumb"),
 };
+static const UIThemePartDescriptor TooltipParts[UITooltipPart_Count] =
+{
+    [UITooltipPart_Padding] = VECTOR_PART("padding", 6.0f, 3.0f),
+    [UITooltipPart_Offset] = VECTOR_PART("offset", 12.0f, 18.0f),
+    [UITooltipPart_MaxWidth] = NUMBER_PART("max_width", 320.0f),
+    [UITooltipPart_Background] = BOX_PART("background"),
+    [UITooltipPart_Text] = COLORS_PART("text"),
+};
 
 static const struct
 {
@@ -64,6 +72,7 @@ Kinds[UIElementKind_Count] =
     [UIElementKind_Button] = { u8"button", ButtonParts, UIButtonPart_Count },
     [UIElementKind_Toggle] = { u8"toggle", ToggleParts, UITogglePart_Count },
     [UIElementKind_Slider] = { u8"slider", SliderParts, UISliderPart_Count },
+    [UIElementKind_Tooltip] = { u8"tooltip", TooltipParts, UITooltipPart_Count },
 };
 
 
@@ -88,6 +97,27 @@ static bool IsPartOfKind(UIElementKind kind, int32_t part, UIThemePartKind partK
 {
     const UIThemePartDescriptor* Descriptor = UIElementKind_GetPart(kind, part);
     return (Descriptor != NULL) && (Descriptor->Kind == partKind);
+}
+
+/* The custom value under @p key, when the style has one and it is of that kind. */
+static const UIThemeCustomValue* FindCustomValue(const UIThemeStyle* self, const unsigned char* key, UIThemeCustomKind kind)
+{
+    if ((self == NULL) || (key == NULL))
+    {
+        return NULL;
+    }
+    for (size_t Index = 0U; Index < self->CustomValueCount; Index++)
+    {
+        const UIThemeCustomValue* Value = &self->CustomValues[Index];
+        bool IsSame = false;
+        Error Compare = StringUTF8_EqualsExact(Value->Key, key, &IsSame);
+        Error_Deconstruct(&Compare);
+        if (IsSame)
+        {
+            return (Value->Kind == kind) ? Value : NULL;
+        }
+    }
+    return NULL;
 }
 
 
@@ -131,6 +161,20 @@ float UITheme_GetTextSize(const UITheme* self)
 float UITheme_GetTransitionSeconds(const UITheme* self)
 {
     return (self != NULL) ? self->TransitionSeconds : 0.0f;
+}
+
+float UITheme_GetTooltipDelaySeconds(const UITheme* self)
+{
+    return (self != NULL) ? self->TooltipDelaySeconds : UI_THEME_DEFAULT_TOOLTIP_DELAY_SECONDS;
+}
+
+const unsigned char* UITheme_GetLookName(const UITheme* self, UIElementKind kind)
+{
+    if ((self == NULL) || !IsKindValid(kind) || !self->Elements[kind].IsPresent || !self->Elements[kind].HasLook)
+    {
+        return NULL;
+    }
+    return self->Elements[kind].LookName;
 }
 
 const UIThemeStyle* UITheme_FindStyle(const UITheme* self, UIElementKind kind, const unsigned char* variant)
@@ -186,4 +230,28 @@ float UIThemeStyle_GetNumber(const UIThemeStyle* self, UIElementKind kind, int32
     }
     const UIThemeValue* Value = GetSetValue(self, part, UIThemePartKind_Number);
     return (Value != NULL) ? Value->Data.Number : Kinds[kind].Parts[part].DefaultNumber;
+}
+
+float UIThemeStyle_FindCustomNumber(const UIThemeStyle* self, const unsigned char* key, float defaultValue)
+{
+    const UIThemeCustomValue* Value = FindCustomValue(self, key, UIThemeCustomKind_Number);
+    return (Value != NULL) ? Value->Data.Number : defaultValue;
+}
+
+Vector2 UIThemeStyle_FindCustomVector(const UIThemeStyle* self, const unsigned char* key, Vector2 defaultValue)
+{
+    const UIThemeCustomValue* Value = FindCustomValue(self, key, UIThemeCustomKind_Vector);
+    return (Value != NULL) ? Value->Data.Vector : defaultValue;
+}
+
+Color UIThemeStyle_FindCustomColor(const UIThemeStyle* self, const unsigned char* key, Color defaultValue)
+{
+    const UIThemeCustomValue* Value = FindCustomValue(self, key, UIThemeCustomKind_Color);
+    return (Value != NULL) ? Value->Data.Color : defaultValue;
+}
+
+const UIBoxStyle* UIThemeStyle_FindCustomBox(const UIThemeStyle* self, const unsigned char* key)
+{
+    const UIThemeCustomValue* Value = FindCustomValue(self, key, UIThemeCustomKind_Box);
+    return (Value != NULL) ? &Value->Data.Box : NULL;
 }
