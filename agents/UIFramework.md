@@ -14,8 +14,8 @@ The elements calling code builds a UI from (the kit, panels, buttons, stacks, th
 ## Modules
 
 - **UIInput** (`UIInput.h`, header-only): the argument structs handed to a widget's input hooks
-  (`WidgetHoverArgs`, `WidgetMouseInputArgs`, `WidgetKeyboardInputArgs`). Keys and mouse buttons are `GameKey`s
-  ([GameInput.md](GameInput.md)).
+  (`WidgetHoverArgs`, `WidgetMouseInputArgs`, `WidgetScrollInputArgs`, `WidgetKeyboardInputArgs`), the layers of a screen's roots
+  (`UIScreenLayer`) and the pointer's shapes (`UICursorShape`). Keys and mouse buttons are `GameKey`s ([GameInput.md](GameInput.md)).
 - **UIAnimation** (`UIAnimation.h/.c`): typed property values (`UIPropertyType`, `UIPropertyData`, `UIPropertyValue`
   and its `UIPropertyValue_From*` helpers), easing (`UIInterpolation`), keyframes, `UIAnimation_ValidateKeyframes` and
   `UIAnimation_EvaluateKeyframes`. Pure data and math.
@@ -65,11 +65,15 @@ UIWidgetFactory_Deconstruct(&Factory);
 ```
 
 **Surfaces.** The screen never reads the window. Each tick its host passes a `UIScreenInput`: the tick's `GameInput`
-(may be NULL), whether the pointer is over this screen and where in the screen's own `[0;1]` space, and whether the
-screen has the keyboard. `UIScreenInput_CreateFromWindow` makes the full-window case (mouse position divided by the
-window size; no pointer while the cursor is captured, outside the window, or already claimed by UI above). For a UI on
-a world surface, the host raycasts the pointer onto the surface, passes the hit's UV (or no pointer) and gives the
-keyboard to the surface in use. The host also keeps the `UIViewport` (the surface's size in pixels and the fitted-area
+(may be NULL), where the pointer is in the screen's own space and whether the screen has the keyboard. Two flags say what the
+position means. `IsPointerPresent`: it is over this screen, so it hovers and can start a press. `IsPointerTracked`: it is known
+even off the surface, past `[0;1]` and unclamped, so a held press follows it. With neither, the position is ignored.
+`UIScreenInput_CreateEmpty` is neither, and a hand-built input that sets only `IsPointerPresent` gets no drag off the surface.
+`UIScreenInput_CreateFromWindow` makes the full-window case: the mouse position divided by the window size; tracked unless the
+cursor is captured for mouse look or the window has no size; present only inside the window, with the cursor on it, and not claimed
+by UI above (a drag held below that UI goes on, since it stays tracked). For a UI on a world surface, the host raycasts the pointer
+onto the surface, passes the hit's UV and gives the keyboard to the surface in use. `IsPointerRelative` and `PointerDeltaPixels` carry
+a hidden-cursor drag (below, "Input"). The host also keeps the `UIViewport` (the surface's size in pixels and the fitted-area
 settings) current; the Layout pass converts units with it. A screen in the world has a host of its own:
 `WorldScreenHost` (below, "World screens").
 
@@ -78,7 +82,11 @@ settings) current; the Layout pass converts units with it. A screen in the world
 A screen never reads the window, so something outside it passes it the pointer, the keyboard, its size and its scale each tick. Two hosts do:
 - **`UIWindowHost`**, for a UI that fills the game window: the viewport is the window's, the scale comes from its policy with the window's height and the monitor's, the
   pointer and the keyboard from `UIScreenInput_CreateFromWindow`, then `UIScreen_Update`. It reads everything from `GameInput`, so a test drives it with a sample.
-  `UIWindowHost_SetPolicy` and `UIWindowHost_SetPlayerScale` change what it does from the next update on.
+  `UIWindowHost_SetPolicy` and `UIWindowHost_SetPlayerScale` change what it does from the next update on. After the update it applies what the screen asks of the real
+  cursor, each only when it changes: a hidden-cursor drag (below, "Input") and the pointer's shape. It does so through a `UIWindowHostCursor`: `UIWindowHostCursor_CreateStandard` is
+  the real cursor, and `UIWindowHost_SetCursor` puts another in its place, which is how tests and harnesses watch it. `UIWindowHost_Deconstruct` gives back a cursor it still holds
+  and restores the arrow. Each host keeps to its own screen's shape, so of two hosts over each other the last to change the shape wins, whichever the pointer is over: a stack of them
+  needs one place that decides.
 - **`WorldScreenHost`**, for a UI on a screen in the world (below, "World screens"). Its screen keeps a fixed scale of its own, set once with `UIScreen_SetScale`.
 
 ## Scale policies
@@ -126,7 +134,9 @@ resolution (`WorldScreens_TryGetScreen`) and a `WorldScreenHost` (`include/World
 1. **In Update**, before the game's own controls (the screen reads first, as a UI above the game does): finds where the
    player points (`WorldScreens_Raycast`: the aim from the eyes or the camera, out to the character's reach, the
    player's own body ignored; or the free cursor's ray, `GetScreenToWorldRayEx` through the camera) and calls
-   `WorldScreenHost_Update(host, screen, time, input, &hit or NULL)`.
+   `WorldScreenHost_Update(host, screen, time, input, &hit or NULL)`. While the screen holds a press (`UIScreen_HasHeldPress`) it also asks
+   `WorldScreens_ContinueRay(screens, objectId, origin, direction, &continued)` and calls `WorldScreenHost_UpdateContinued(host, screen, time, input, &hit or NULL,
+   &continued or NULL)`, so the press can follow the ray off the picture.
 2. **In Render, before the world renders**: draws the screen into its render target (`RenderContext_Create` on the
    target with the surface's aspect, `UIScreen_Render`; mipmaps after it keep a small or slanted screen calm), then hands
    it over with `WorldRenderer_SetSurfaceTexture(renderer, objectId, surfaceName, target.texture, true)` (a render
@@ -139,6 +149,10 @@ What the host does each tick:
   picture the glass shows there) is the UI's own [0;1] position, (0, 0) the picture's top-left. Off the picture, at another screen, nowhere, or while
   UI above claimed the pointer (`GameInput_IsPointerConsumed`), there is none. Buttons go to the UI under the pointer; a
   press on the picture that no widget takes is consumed anyway: the game below never sees a click on the screen.
+- **A held press owns the pointer.** While the screen's UI holds one, the screen stays pointed at and focused wherever the ray goes. The position goes on along the
+  continued ray, past [0;1] (a CRT's goes on from where its glass's edge shows), nothing hovers off the picture, and the press hears its drags and its release there. The
+  ray's place is what counts while it still hits this screen's glass; another screen in front of it changes nothing. Where the ray says nothing (no plane, or straight away from it) the
+  last place holds. A drag on a world screen is always absolute: a hidden-cursor capture does nothing here. When the press ends off the picture the screen is let go as usual.
 - **Using it.** The use action (`tbp:use`, E) or a left click on the picture **focuses** the screen: it gets the
   keyboard. The press of use that focuses it is consumed with the tick's typed text, and while its key stays held each
   tick's text is dropped too (the key's repeats), so it neither acts in the game nor types its letter; the click also
@@ -152,7 +166,7 @@ What the host does each tick:
   pause the game); one the UI uses (clearing its focus, ending navigation) does not, and neither does a press in a tick
   whose typed text the UI took (a `pause` bound to a letter types it into a field; an Escape in that same tick needs
   pressing again). A `ui_back` bound to a letter is still the UI's navigation first: a widget that takes text should
-  claim the key presses that type it, or that letter clears its focus. Pointing away from the picture
+  claim the key presses that type it, or that letter clears its focus. Pointing away from the picture with no press held
   releases it too: a screen the player no longer points at gets no input. `WorldScreenHost_Release` lets go at once (the
   object went away).
 
@@ -162,7 +176,7 @@ releases the host when the UI lets go of it (the test frame's monitor does: its 
 above the world that always has the keyboard (the UI test frame) still reads Tab and the arrows first. Tests:
 `tests/WorldScreenTests.c` (a probe screen: the pointer, focus by use or a click, the keyboard taken after the UI read
 it, the use press neither typing nor reaching the UI, keys and clicks left to the game while the screen is not in use,
-letting go by Escape, pause or pointing away).
+letting go by Escape, pause or pointing away, a press held off the picture).
 
 ## Widget lifecycle
 
@@ -179,8 +193,12 @@ letting go by Escape, pause or pointing away).
 - **Add / remove**: `UIScreen_AddWidget` / `UIScreen_RemoveWidget` for roots, `Widget_AddSubWidget` /
   `Widget_RemoveSubWidget` for children. Removing does not destroy; the widget can be added again. A tree is at most
   `WIDGET_MAX_TREE_DEPTH` (64) levels deep, so every walk is bounded.
+- **Move** (`Widget_MoveTo(widget, newParentOrNull)`): to another parent, or to the roots with NULL, at once and whole: it keeps hover, focus, the tabbed state, presses, held
+  keys and animations, unless what the widget lands under takes them away (hidden, say, as hiding does). Both ends must be attached. Cycles and too deep a tree are refused,
+  and room in the new lists is made first, so a failed move changes nothing. It lands on top of its new siblings, and the screen looks up the hover again.
 - **Destroy** (`Widget_Destroy`) is always **deferred** and takes the whole subtree. At once: the subtree is unlinked,
-  its ids stop resolving, and the screen forgets it (hover, focus, navigation, mouse presses, animations); no hook runs.
+  its ids stop resolving, and the screen forgets it (hover, focus, navigation, mouse presses, animations); no hook runs, `OnPressLost` neither, since whoever destroys a
+  widget knows.
   At the end of the screen's next `UIScreen_Update` (or in `UIScreen_Deconstruct`), the subtree is torn down children
   first: each widget's disable hooks and `Deinitialize` (if it was initialized), then `OnDeconstruct`, then its storage
   returns to the pool. A widget may therefore destroy itself or anything else from any hook or notification handler.
@@ -198,23 +216,23 @@ and re-resolve it (the screen itself does this after every hook).
 
 The screen routes, in this order, from its `UIScreenInput`:
 
-1. **Pointer.** When the pointer moved (or the tree or geometry changed), the top-most input-enabled widget under it is
-   looked up again and becomes hovered (`OnHoverStart` / `OnHoverEnd`). While the pointer is over a widget the screen
-   claims it (`GameInput_ConsumePointer`). Pointer movement ends keyboard navigation (focus stays).
+1. **Pointer.** When the pointer moved over the screen (or the tree or geometry changed), the top-most input-enabled widget under it is
+   looked up again and becomes hovered (`OnHoverStart` / `OnHoverEnd`). While the pointer is over a widget, and while a press is held wherever the pointer is, the screen
+   claims it (`GameInput_ConsumePointer`). Pointer movement over the screen ends keyboard navigation (focus stays).
 2. **Mouse buttons.** A press over a widget is **consumed**, focuses the nearest focusable widget under the pointer (or
-   clears focus), raises that widget's root, and reaches the widget; its release and drags go to that widget even
-   outside it, for as long as it stays attached, takes input and shows (a press it stops being there for is over for it: nothing
-   more reaches it). A pointer that moved in the release's tick arrives as a drag first, so a drag ends where the pointer ended.
-   If a focus hook destroys, detaches or disables the widget, the press stays consumed but reaches nobody.
+   clears focus), raises that widget's root if its layer raises (below, "Rendering"), and reaches the widget as a `ButtonPress`.
    A press that hits no widget is a **click outside**: it ends navigation and clears focus, and the game gets it. That
    includes any press while the screen has no pointer (the cursor captured for mouse look, or the pointer over UI of a
-   higher frame), so clicking into the world blurs the UI.
-3. **Wheel.** Wheel movement over a widget is consumed and reaches it.
+   higher frame), so clicking into the world blurs the UI. With another press held it is neither: it is consumed and does nothing. The rest is under "A held press" below.
+3. **Wheel.** Wheel movement over a widget is consumed from the game, whether anything uses it or not. It goes to that widget's `OnScrollInput`, then up through its
+   ancestors that still take input (a hook may have taken one away), until one sets `*outIsHandled`.
 4. **Keys and text** (when the screen has the keyboard). The **focused** widget gets every key first (Tab, arrows, Enter
-   and Escape included), then its input-enabled ancestors, until one sets `*outIsHandled` in `OnKeyboardInput`. A
+   and Escape included), then its ancestors that still take input, until one sets `*outIsHandled` in `OnKeyboardInput`. A key **press** of the reset, copy or paste action
+   (`tbp:ui_reset`, `tbp:ui_copy`, `tbp:ui_paste`) they leave goes on to the **hovered** widget and up its ancestors, with `IsHoverDelivery` set, so a focused widget can
+   hear it twice for two reasons. Nothing else goes this way, no repeat and no typed text. A
    handled key is consumed and **owned** by the widget that handled it until it is released: the key's repeats and
    release go to that widget alone, even after focus moved (and are dropped once it is destroyed, detached or
-   input-disabled). Typed text follows the same path (if any codepoint is handled, the tick's text is consumed).
+   input-disabled). Typed text follows the focused path (if any codepoint is handled, the tick's text is consumed).
 5. **Keyboard navigation** acts on the navigation actions nobody handled (`GameAction_UI*`, rebindable), and consumes
    only what it uses:
    - `ui_next` / `ui_previous` (Tab / Shift+Tab) move focus between the current level's focusable widgets in reading
@@ -236,6 +254,32 @@ The screen routes, in this order, from its `UIScreenInput`:
 Whatever is not consumed reaches the game: the frame's game logic (and frames below) read it through the same
 `GameInput`. Widgets that need more read the input of the running update with `UIScreen_GetInput`.
 
+**A held press.** It owns the pointer. Its `Move`s and its `ButtonRelease` go to the widget that took it, wherever the pointer is, past the surface too (positions past
+`[0;1]`, unclamped), for as long as the widget stays attached, takes input and shows. One `Move` comes per tick the pointer moved or came or went, for every button held; a pointer
+that moved in the release's tick arrives as a `Move` first, so a drag ends where the pointer ended. After the `ButtonRelease`, the top widget under the pointer, if another one, gets a
+`ReleaseOver`: `OnRelease` clicks and press-drag-release menus stand on it. A press that hit no widget has none. `UIScreen_HasHeldPress` tells whether any is held.
+
+**What a mouse input says** (`WidgetMouseInputArgs`): the button, the held `Modifiers`, the pointer's place on the screen and in the widget, the place the press began, how long ago,
+`DeltaPixels` (surface pixels since this press's last `Move`) and `ClickCount`: how many presses of this button on this widget in a row, each within
+`UI_SCREEN_MULTI_CLICK_SECONDS` of the last and `UI_SCREEN_MULTI_CLICK_DISTANCE` UI pixels of its place.
+
+**A press that stops reaching its widget.** The optional `OnPressLost(self, button)` runs at once when that happens: the widget detached, hidden, input-disabled or put in an
+overlay, directly or through an ancestor, or its press handed on. Nothing more of that press reaches it, and the button's release does nothing. A press a focus hook took away
+before it arrived was never the widget's: it stays consumed, reaches nobody and is not told lost. `Widget_Destroy` tells nothing.
+
+**Handing a press on.** `UIScreen_TransferPress(screen, button, newWidgetId)`: its drags and its release now go to another widget, with its start, its time and its count kept; the old
+one gets `OnPressLost`. With `Widget_MoveTo` this is how a drag can tear a tab off into a window of its own, in one tick. From a focus hook, before the press arrives, the new widget
+gets the `ButtonPress` itself.
+
+**A hidden-cursor drag.** `UIScreen_CapturePointer(screen, widgetId)`, legal only while that widget holds a press and no other has the capture, asks for it; it ends with the widget's
+last press, on a transfer, or with `UIScreen_ReleasePointerCapture`. The screen only records it (`UIScreen_IsPointerCaptured`). `UIWindowHost` applies it after the update: the cursor
+hides and its movement is free of the window's edges (`GameInput_CaptureCursor`), and the next input is relative: the pointer's position and hover stand still, and `Move`s carry the raw
+motion in `DeltaPixels`. When it ends the cursor comes back to where it was when the host took it (`GameInput_ReleaseCursor`). A world screen's host does not apply it, so there the
+capture changes nothing and the drag stays absolute: read `DeltaPixels` either way. Hover stands still during it, but what has been hidden meanwhile hears no hover key.
+
+**The pointer's shape.** `Widget_SetCursorShape(widget, shape)`; `UIScreen_GetCursorShape` answers the shape of the widget holding the first held press, or else of the hovered one, or
+else the arrow, and `UIWindowHost` applies it when it changes. `NotAllowed` and the two diagonal resizes need a cursor theme on X11, and without one show the arrow.
+
 **States.** Hovered (pointer), focused (keyboard target; at most one per screen), tabbed (entered by navigation), active
 (hovered or tabbed). Widgets get `IsFocusable` from their type (`Widget_SetIsFocusable` changes it); an input-disabled
 widget is transparent to the pointer and cannot keep focus. A hidden widget (`Widget_SetIsRendered`) is not there for the pointer or the keyboard, with its
@@ -245,7 +289,8 @@ for it. A box of no size holds no point.
 ## Notifications
 
 State changes (`UIEventKind_HoverChanged`, `FocusChanged`, `TabChanged`, `ActiveChanged`) and a widget type's own events
-(`UIScreen_PostWidgetEvent`, `UIEventKind_Widget` with a type-defined id and an optional `UIPropertyValue`) are
+(`UIScreen_PostWidgetEvent`, `UIEventKind_Widget` with a type-defined id and an optional `UIPropertyValue`; `UIScreen_PostWidgetMouseEvent` adds the mouse's data by value,
+`UIEvent.HasMouse` and `UIEvent.Mouse`: button, modifiers, screen position, scroll delta, whether over the widget) are
 **queued** and delivered at one point, at the end of `UIScreen_Update` (after the widget updates and layout), never in
 the middle of input routing. Subscribe with `UIScreen_Subscribe(screen, widgetId or 0 for every widget, kind mask,
 handler, userData, &id)`; a subscription to one widget ends when it is torn down (at the end of the update it was
@@ -272,7 +317,20 @@ update. Render reads state only (the navigation outlines read the bounds without
 
 Each widget has a float `ZLayer` relative to its siblings. Siblings are kept in a **draw order** sorted by (z, insertion)
 and updated only when a z value or the child set changes, so siblings of equal z keep their insertion order and
-`Widget_GetSubWidgetAt` / `UIScreen_GetRootAt` (insertion order) never change meaning. The screen draws roots in draw
+`Widget_GetSubWidgetAt` / `UIScreen_GetRootAt` (insertion order) never change meaning. A root also has a **layer** (`UIScreen_SetRootLayer`, `UIScreenLayer`), which comes before its z,
+for drawing and for hit testing alike:
+
+| Layer | A press raises it | For |
+|---|---|---|
+| `Background` | no | what stays behind everything |
+| `Normal` (the default) | yes, within its layer | the ordinary root |
+| `Floating` | yes, within its layer | movable windows |
+| `Maximized` | no | a window that fills the screen |
+| `Popup` | no | menus and the like |
+| `Overlay` | no, and it takes no input | what only shows: the pointer goes through it, nothing in it can have focus or a press, and navigation passes it and leaves it at once if it becomes one |
+
+A layer belongs to a root: a root moved under a parent stops having one, and gets back its own if it becomes a root again. `UIScreen_BringToTop` and a root's `Widget_SetZLayer` work within the
+layer, and entering a root with `ui_accept` raises it as a press does. The screen draws roots in draw
 order, each widget before its children, and a hidden widget hides its subtree. `AreSubWidgetsCut` clips a subtree (rendering and hit testing) to the widget's
 box through the render context's **clip stack** (`RenderContext_PushClip`), so nested clips intersect and a label's own
 cut nests inside its parent's. While navigating, outlines are drawn on top.
@@ -309,8 +367,9 @@ detaching it does not. `UIScreen_StopAnimation`, `UIScreen_StopWidgetAnimations`
 
 Writing a new widget type (an element of the kit: [UIElements.md](UIElements.md)): embed `Widget` first; give the type a static `WidgetVTable` and a descriptor (declare its
 typed properties there); construct only the concrete part in the constructor; create child widgets in `Initialize`;
-report keys you handle through `outIsHandled` (handle a key's press to get its repeats and release); post your own
-events with `UIScreen_PostWidgetEvent` (they reach subscribers even if the widget is destroyed in the same update);
+report keys you handle through `outIsHandled` (handle a key's press to get its repeats and release), and the wheel the same way in `OnScrollInput`; a press that starts something must
+answer `OnPressLost` as well as the release (Destroy tells nothing: the widget is gone); post your own
+events with `UIScreen_PostWidgetEvent` or `UIScreen_PostWidgetMouseEvent` (they reach subscribers even if the widget is destroyed in the same update);
 never write state in `Render`.
 
 ## Memory ownership

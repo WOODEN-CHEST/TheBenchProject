@@ -89,6 +89,18 @@ static Error UIButtonWidget_OnMouseInputVT(void* self, const WidgetMouseInputArg
     return UIButtonCapability_OnMouseInput(&Button->Button, &Button->Base, args);
 }
 
+static Error UIButtonWidget_OnPressLostVT(void* self, GameKey button)
+{
+    UIButtonCapability_OnPressLost(&((UIButtonWidget*)self)->Button, button);
+    return Error_CreateSuccess();
+}
+
+static Error UIButtonWidget_OnScrollInputVT(void* self, const WidgetScrollInputArgs* args, bool* outIsHandled)
+{
+    UIButtonWidget* Button = self;
+    return UIButtonCapability_OnScrollInput(&Button->Button, &Button->Base, args, outIsHandled);
+}
+
 static Error UIButtonWidget_OnKeyboardInputVT(void* self, const WidgetKeyboardInputArgs* args, bool* outIsHandled)
 {
     UIButtonWidget* Button = self;
@@ -113,6 +125,8 @@ static const WidgetVTable UIButtonWidgetVTable =
     .Update = UIButtonWidget_UpdateVT,
     .Render = UIButtonWidget_RenderVT,
     .OnMouseInput = UIButtonWidget_OnMouseInputVT,
+    .OnPressLost = UIButtonWidget_OnPressLostVT,
+    .OnScrollInput = UIButtonWidget_OnScrollInputVT,
     .OnKeyboardInput = UIButtonWidget_OnKeyboardInputVT,
     .Measure = UIButtonWidget_MeasureVT
 };
@@ -192,11 +206,61 @@ Error UIButton_IsToggled(UIScreen* screen, uint64_t widgetId, bool* outIsToggled
     return Result;
 }
 
+Error UIButton_SetClickMode(UIScreen* screen, uint64_t widgetId, UIClickMode clickMode)
+{
+    Widget* Target = NULL;
+    UIButtonCapability* Button = NULL;
+    Error Result = ResolveButton(screen, widgetId, &Target, &Button);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (!UIPressable_AreSettingsValid(clickMode, Button->_press._activationButtons))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIButton_SetClickMode: an unknown click mode.");
+    }
+    Button->_press._clickMode = clickMode;
+    return Error_CreateSuccess();
+}
+
+Error UIButton_SetActivationButtons(UIScreen* screen, uint64_t widgetId, uint8_t activationButtons)
+{
+    Widget* Target = NULL;
+    UIButtonCapability* Button = NULL;
+    Error Result = ResolveButton(screen, widgetId, &Target, &Button);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (!UIPressable_AreSettingsValid(Button->_press._clickMode, activationButtons))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIButton_SetActivationButtons: a bit that is no mouse button.");
+    }
+    Button->_press._activationButtons = activationButtons;
+    return Error_CreateSuccess();
+}
+
+Error UIButton_SetTakesWheel(UIScreen* screen, uint64_t widgetId, bool takesWheel)
+{
+    Widget* Target = NULL;
+    UIButtonCapability* Button = NULL;
+    Error Result = ResolveButton(screen, widgetId, &Target, &Button);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Button->_takesWheel = takesWheel;
+    }
+    return Result;
+}
+
 
 // Public functions: behaviour helpers.
 Error UIButtonCapability_Construct(UIButtonCapability* self, Widget* widget, const UIButtonArgs* args)
 {
     const UIButtonOptions* Options = args->Options;
+    if (!UIPressable_AreSettingsValid(Options->ClickMode, Options->ActivationButtons))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIButton: an unknown click mode, or a bit that is no mouse button.");
+    }
     Error Result = UIElementLook_Construct(&self->_look, UIElementKind_Button, Options->Element.Variant);
     if (Result.Code == ErrorCode_Success)
     {
@@ -213,8 +277,11 @@ Error UIButtonCapability_Construct(UIButtonCapability* self, Widget* widget, con
         return Result;
     }
     self->_press = UIPressable_Create();
+    self->_press._clickMode = Options->ClickMode;
+    self->_press._activationButtons = Options->ActivationButtons;
     self->_isEnabled = Options->IsEnabled;
     self->_isToggled = Options->IsToggled;
+    self->_takesWheel = Options->TakesWheel;
     if (!Options->IsEnabled)
     {
         Error Focus = Widget_SetIsFocusable(widget, false); // The widget is not alive yet: nothing can fail or run.
@@ -240,10 +307,35 @@ Error UIButtonCapability_Update(UIButtonCapability* self, Widget* widget, Progra
 
 Error UIButtonCapability_OnMouseInput(UIButtonCapability* self, Widget* widget, const WidgetMouseInputArgs* args)
 {
+    Error Result = self->_isEnabled ? UIElement_PostMouseEvents(widget, args) : Error_CreateSuccess();
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
     bool IsActivated = false;
     UIPressable_OnMouseInput(&self->_press, widget, args, self->_isEnabled, &IsActivated);
-    return IsActivated ? UIScreen_PostWidgetEvent(Widget_GetScreen(widget), Widget_GetId(widget), UIElementEvent_Clicked, NULL)
-        : Error_CreateSuccess();
+    return IsActivated ? UIElement_PostActivatedByMouse(widget, args) : Error_CreateSuccess();
+}
+
+void UIButtonCapability_OnPressLost(UIButtonCapability* self, GameKey button)
+{
+    UIPressable_OnPressLost(&self->_press, button);
+}
+
+Error UIButtonCapability_OnScrollInput(UIButtonCapability* self, Widget* widget, const WidgetScrollInputArgs* args, bool* outIsHandled)
+{
+    if (!self->_takesWheel)
+    {
+        return Error_CreateSuccess();
+    }
+    *outIsHandled = true;
+    if (!self->_isEnabled)
+    {
+        return Error_CreateSuccess();
+    }
+    UIEventMouse Mouse = { .Button = GameKey_Unknown, .Modifiers = args->Modifiers, .ScreenPosition = args->ScreenPosition,
+        .ScrollDelta = args->ScrollDelta, .IsOverWidget = true };
+    return UIScreen_PostWidgetMouseEvent(Widget_GetScreen(widget), Widget_GetId(widget), UIElementEvent_Scrolled, &Mouse);
 }
 
 Error UIButtonCapability_OnKeyboardInput(UIButtonCapability* self, Widget* widget, const WidgetKeyboardInputArgs* args,
@@ -251,8 +343,11 @@ Error UIButtonCapability_OnKeyboardInput(UIButtonCapability* self, Widget* widge
 {
     bool IsActivated = false;
     UIPressable_OnKeyboardInput(&self->_press, widget, args, self->_isEnabled, outIsHandled, &IsActivated);
-    return IsActivated ? UIScreen_PostWidgetEvent(Widget_GetScreen(widget), Widget_GetId(widget), UIElementEvent_Clicked, NULL)
-        : Error_CreateSuccess();
+    if (IsActivated)
+    {
+        return UIElement_PostActivatedByKey(widget, args);
+    }
+    return (self->_isEnabled && !*outIsHandled) ? UIElement_OnContextKey(widget, args, outIsHandled) : Error_CreateSuccess();
 }
 
 Error UIButtonCapability_Measure(UIButtonCapability* self, Widget* widget, Vector2* outSize)

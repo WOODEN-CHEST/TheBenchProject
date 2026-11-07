@@ -55,6 +55,19 @@ static bool IsPointedAt(const WorldScreenHost* self, const GameInput* input, con
 }
 
 
+/* Where the ray goes during a held press off the picture: on the screen itself if it still meets it, or else on its plane. */
+static bool TryGetContinuedPointer(const WorldScreenHost* self, const WorldScreenHit* pointed, const WorldScreenHit* continued, Vector2* outPointer)
+{
+    const WorldScreenHit* Hit = ((pointed != NULL) && (pointed->ObjectId == self->_objectId)) ? pointed : continued;
+    if ((Hit == NULL) || (Hit->ObjectId != self->_objectId))
+    {
+        return false;
+    }
+    *outPointer = Hit->Picture;
+    return true;
+}
+
+
 // Public functions.
 void WorldScreenHost_Construct(WorldScreenHost* self, uint64_t objectId)
 {
@@ -70,6 +83,12 @@ void WorldScreenHost_Deconstruct(WorldScreenHost* self)
 Error WorldScreenHost_Update(WorldScreenHost* self, UIScreen* screen, ProgramTime time, GameInput* input,
     const WorldScreenHit* pointed)
 {
+    return WorldScreenHost_UpdateContinued(self, screen, time, input, pointed, NULL);
+}
+
+Error WorldScreenHost_UpdateContinued(WorldScreenHost* self, UIScreen* screen, ProgramTime time, GameInput* input,
+    const WorldScreenHit* pointed, const WorldScreenHit* continued)
+{
     if (input == NULL)
     {
         UIScreenInput Empty = UIScreenInput_CreateEmpty();
@@ -77,10 +96,17 @@ Error WorldScreenHost_Update(WorldScreenHost* self, UIScreen* screen, ProgramTim
         return UIScreen_Update(screen, time, &Empty);
     }
 
-    self->_isPointed = IsPointedAt(self, input, pointed);
-    if (self->_isPointed)
+    // A held press keeps the screen pointed at, wherever the ray goes.
+    bool IsOnPicture = IsPointedAt(self, input, pointed);
+    bool IsPressHeld = UIScreen_HasHeldPress(screen);
+    self->_isPointed = IsOnPicture || IsPressHeld;
+    if (IsOnPicture)
     {
         self->_pointer = pointed->Picture;
+    }
+    else if (IsPressHeld)
+    {
+        TryGetContinuedPointer(self, pointed, continued, &self->_pointer);
     }
     if (self->_isFocused && !self->_isPointed)
     {
@@ -90,7 +116,7 @@ Error WorldScreenHost_Update(WorldScreenHost* self, UIScreen* screen, ProgramTim
     {
         self->_isUseHeld = false;
     }
-    if (!self->_isFocused && self->_isPointed)
+    if (!self->_isFocused && IsOnPicture)
     {
         if (GameInput_IsActionPressed(input, GameAction_Use))
         {
@@ -118,7 +144,7 @@ Error WorldScreenHost_Update(WorldScreenHost* self, UIScreen* screen, ProgramTim
 
     UIScreenInput ScreenInput =
     {
-        .Input = input, .IsPointerPresent = self->_isPointed, .PointerPosition = self->_pointer,
+        .Input = input, .IsPointerPresent = IsOnPicture, .IsPointerTracked = self->_isPointed, .PointerPosition = self->_pointer,
         .HasKeyboardFocus = self->_isFocused
     };
     Error Result = UIScreen_Update(screen, time, &ScreenInput);

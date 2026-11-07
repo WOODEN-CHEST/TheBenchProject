@@ -16,11 +16,31 @@
  * the monitor's, builds the pointer and the keyboard from the tick's GameInput, and runs UIScreen_Update. It reads everything from
  * GameInput, so a test drives it with a sample.
  *
+ * It also applies what the screen asks of the cursor, after the update: a hidden-cursor drag (UIScreen_CapturePointer), giving the
+ * screen the raw motion and putting the cursor back where it began when the drag ends, and the pointer's shape
+ * (UIScreen_GetCursorShape) when it changes. These calls go through a UIWindowHostCursor, which a test or a windowless harness can
+ * replace: the standard one calls raylib, and does nothing with no window.
+ *
  * A plain value type: construct it in place, one per hosted screen; it owns nothing.
  */
 
 
 // Types.
+/**
+ * @brief What a host does to the real cursor, as plain function pointers and a borrowed context handed back to them.
+ */
+typedef struct UIWindowHostCursorStruct
+{
+    /** @brief Hides the cursor and gives raw motion (GameInput_CaptureCursor). */
+    void (*Capture)(void* context, GameInput* input);
+    /** @brief Shows the cursor again at @p position, in window pixels (GameInput_ReleaseCursor). */
+    void (*Release)(void* context, GameInput* input, Vector2 position);
+    /** @brief Shows the pointer as @p shape. */
+    void (*SetShape)(void* context, UICursorShape shape);
+    /** @brief Handed back to the functions; borrowed, may be NULL. */
+    void* Context;
+} UIWindowHostCursor;
+
 /** @brief The host of one full-window screen. Fields are read-only (underscore-prefixed): use the accessors. */
 typedef struct UIWindowHostStruct
 {
@@ -31,6 +51,14 @@ typedef struct UIWindowHostStruct
     /** @brief The fitted area's settings the screen's viewport carries. */
     float _targetAspectRatio;
     Vector2 _targetAreaPosition;
+    /** @brief What it does to the real cursor. */
+    UIWindowHostCursor _cursor;
+    /** @brief The input it captured the cursor through, while it has it; borrowed. */
+    GameInput* _capturedInput;
+    /** @brief Where the cursor was when it captured it, in window pixels. */
+    Vector2 _captureStart;
+    /** @brief The shape it last applied. */
+    UICursorShape _shownShape;
 } UIWindowHost;
 
 
@@ -47,13 +75,27 @@ void UIWindowHost_Construct(UIWindowHost* self, UIScalePolicy policy, float play
     Vector2 targetAreaPosition);
 
 /**
- * @brief Deconstructs a host (it owns nothing).
+ * @brief Deconstructs a host: it owns nothing, and it gives back the cursor if a drag still has it, and the normal shape.
  * @param self The host, or NULL.
  */
 void UIWindowHost_Deconstruct(UIWindowHost* self);
 
 /**
- * @brief One tick of the screen's UI: the viewport and the scale, then UIScreen_Update with the window's pointer and the keyboard.
+ * @brief Returns what the standard host does to the cursor: raylib's calls, none with no window.
+ * @returns The functions.
+ */
+UIWindowHostCursor UIWindowHostCursor_CreateStandard(void);
+
+/**
+ * @brief Replaces what the host does to the cursor (a test's or a harness's).
+ * @param self The host; must not be NULL.
+ * @param cursor The functions; none may be NULL. Copied.
+ */
+void UIWindowHost_SetCursor(UIWindowHost* self, const UIWindowHostCursor* cursor);
+
+/**
+ * @brief One tick of the screen's UI: the viewport and the scale, then UIScreen_Update with the window's pointer and the keyboard,
+ *        then what the screen asks of the cursor.
  *
  * A window of no size leaves the viewport as it was.
  * @param self The host; must not be NULL.

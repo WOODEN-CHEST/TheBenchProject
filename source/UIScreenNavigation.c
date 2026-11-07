@@ -112,7 +112,11 @@ static void GatherCandidates(UIScreen* self, Widget* container)
     {
         for (size_t Index = 0; Index < UIScreen_GetRootCount(self); Index++)
         {
-            CollectCandidates(self, UIScreen_GetRootAt(self, Index));
+            Widget* Root = UIScreen_GetRootAt(self, Index);
+            if (!UIScreen_InternalIsInOverlay(Root))
+            {
+                CollectCandidates(self, Root);
+            }
         }
     }
 
@@ -412,7 +416,7 @@ static Error NavigateAccept(UIScreen* self, bool* outIsActed)
     PathIds[PathCount++] = EnteredId;
     Error Result = SetNavPath(self, PathIds, PathCount);
     Widget* Entered = UIScreen_InternalResolve(self, EnteredId);
-    if ((Result.Code == ErrorCode_Success) && (Entered != NULL) && IsOnNavStack(self, EnteredId))
+    if ((Result.Code == ErrorCode_Success) && (Entered != NULL) && IsOnNavStack(self, EnteredId) && UIScreen_InternalIsRaisedByInput(Entered))
     {
         Result = UIScreen_BringToTop(self, Entered);
     }
@@ -492,21 +496,6 @@ static Error ApplyStep(UIScreen* self, GameActionId action, Error result, bool i
 
 
 // Static functions: held keys.
-/* Whether @p key is one of the keys an action's bindings match this tick (consumed or not). */
-static bool IsActionKey(const GameInput* input, GameActionId action, GameKey key)
-{
-    GameKey Keys[GAME_INPUT_MAX_BINDINGS_PER_ACTION];
-    size_t KeyCount = GameInput_GetActionKeys(input, action, Keys);
-    for (size_t Index = 0; Index < KeyCount; Index++)
-    {
-        if (Keys[Index] == key)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
 /* Follows the keys navigation consumed while they are held: marks the repeating steps whose action one of them
  * auto-repeats this tick (with the modifiers held now), and forgets the keys that are up or pressed anew (a new press
  * is unconsumed, so it is routed as usual). */
@@ -531,7 +520,7 @@ static void FollowNavigationKeys(UIScreen* self, bool isRepeated[NAV_REPEATING_S
         }
         for (size_t StepIndex = 0; StepIndex < NAV_REPEATING_STEP_COUNT; StepIndex++)
         {
-            isRepeated[StepIndex] = isRepeated[StepIndex] || IsActionKey(self->_input, RepeatingSteps[StepIndex].Action, Key);
+            isRepeated[StepIndex] = isRepeated[StepIndex] || UIScreen_InternalIsActionKey(self->_input, RepeatingSteps[StepIndex].Action, Key);
         }
     }
 }
@@ -589,4 +578,29 @@ Error UIScreen_InternalStopNavigation(UIScreen* self)
     self->_isNavigating = false;
     Memory_Zero(self->_navigationKeys, sizeof(self->_navigationKeys));
     return SetNavPath(self, NULL, 0U);
+}
+
+Error UIScreen_InternalOnWidgetMoved(UIScreen* self)
+{
+    if (!self->_isNavigating)
+    {
+        return Error_CreateSuccess();
+    }
+    if (UIScreen_InternalResolve(self, self->_focusedWidgetId) != NULL)
+    {
+        return SyncNavPathToFocus(self);
+    }
+    uint64_t PathIds[WIDGET_MAX_TREE_DEPTH];
+    size_t PathCount = 0;
+    for (; (PathCount < self->_navStack._count) && (PathCount < WIDGET_MAX_TREE_DEPTH); PathCount++)
+    {
+        PathIds[PathCount] = GetNavStackAt(self, PathCount);
+        const Widget* Inner = UIScreen_InternalResolve(self, PathIds[PathCount]);
+        const Widget* Outer = (PathCount > 0U) ? UIScreen_InternalResolve(self, PathIds[PathCount - 1U]) : NULL;
+        if ((Inner == NULL) || UIScreen_InternalIsInOverlay(Inner) || ((PathCount > 0U) && ((Outer == NULL) || !UIScreen_InternalIsInSubtree(Inner, Outer))))
+        {
+            break;
+        }
+    }
+    return SetNavPath(self, PathIds, PathCount);
 }

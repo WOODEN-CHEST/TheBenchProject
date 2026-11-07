@@ -383,6 +383,10 @@ void GameWindowTests_Run(TestRun* run);
  *  (UIWindowHostTests.c). */
 void UIWindowHostTests_Run(TestRun* run);
 
+/** Input routing: a held press past the surface, the mouse arguments, a release over another widget, a lost press, handing a press on,
+ *  moving a widget, the wheel up the tree, layers, the hidden-cursor drag, hover keys, cursor shapes (UIRoutingTests.c). */
+void UIRoutingTests_Run(TestRun* run);
+
 /** @brief UI pixels: placements, the scale, preferred sizes and their cache, stacks and their children's hints, labels in UI
  *  pixels (UILayoutTests.c). */
 void UILayoutTests_Run(TestRun* run);

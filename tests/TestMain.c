@@ -107,6 +107,7 @@ int main(void)
     UIElementTests_Run(&Run);
     UIScalePolicyTests_Run(&Run);
     UIWindowHostTests_Run(&Run);
+    UIRoutingTests_Run(&Run);
     GameWindowStateTests_Run(&Run);
     GameWindowTests_Run(&Run);
     UITestFrameTests_Run(&Run);

@@ -178,9 +178,20 @@ typedef struct WidgetVTableStruct
     Error (*OnHoverStart)(void* self, const WidgetHoverArgs* args);
     /** @brief Called when the widget stops being hovered. Optional. */
     Error (*OnHoverEnd)(void* self);
-    /** @brief Called for a mouse press on the widget, and the release and drags of that press, and a scroll over it.
-     *  A press on an input-enabled widget is always consumed (the game does not see it). Optional. */
+    /** @brief Called for a mouse press on the widget, the drags and the release of that press wherever the pointer goes, and
+     *  a release over the widget of a press another one held (UIMouseInputType_ReleaseOver). A press on an input-enabled
+     *  widget is always consumed (the game does not see it). Optional. */
     Error (*OnMouseInput)(void* self, const WidgetMouseInputArgs* args);
+    /** @brief Called when a press this widget got stops reaching it before its release: it was detached, hidden or disabled
+     *  for input, its root became an overlay, or the press was handed on (UIScreen_TransferPress). It ends what the press was
+     *  doing, at once. Not called for a widget being destroyed: no hook runs then, and whoever destroys it knows. Optional.
+     *  @p button is the press's mouse button. */
+    Error (*OnPressLost)(void* self, GameKey button);
+    /** @brief Called when the wheel moves with the pointer over the widget or over something inside it. Set @p outIsHandled
+     *  to stop it here; otherwise it goes on to the next input-enabled ancestor. @p outIsHandled starts false. The wheel is
+     *  consumed from the game whenever a widget is under the pointer, handled or not. Optional (a NULL slot handles
+     *  nothing). */
+    Error (*OnScrollInput)(void* self, const WidgetScrollInputArgs* args, bool* outIsHandled);
     /** @brief Called with a key event or typed text while the widget is focused or contains the focused widget (the
      *  focused widget first, then its input-enabled ancestors; input-disabled ones are skipped). Set @p outIsHandled to
      *  true to consume it and stop it there; an unhandled key goes on to the next ancestor, then to keyboard
@@ -238,6 +249,10 @@ typedef struct WidgetStruct
     /** @brief When the widget was last added to its parent or the roots (screen-wide counter): orders siblings of equal
      *  z by insertion. */
     uint64_t _sequence;
+    /** @brief The layer it stands in while it is a root (UIScreen_SetRootLayer); it keeps it while it is not one. */
+    UIScreenLayer _rootLayer;
+    /** @brief The shape the pointer shows over it. */
+    UICursorShape _cursorShape;
 
     /** @brief Parent-relative position, normalized [0;1]. */
     Vector2 _position;
@@ -320,7 +335,8 @@ Error Widget_InitializeWidget(Widget* self);
  * @brief Destroys the widget and its whole subtree, deferred.
  *
  * At once: the widget is unlinked from its parent (or the roots), every widget of the subtree stops resolving by id,
- * and the screen forgets them (hover, focus, keyboard navigation, mouse presses, animations); no hook runs. At the end
+ * and the screen forgets them (hover, focus, keyboard navigation, mouse presses, animations); no hook runs, OnPressLost
+ * included: whoever destroys a widget knows, and ends what depended on it. At the end
  * of the screen's next UIScreen_Update (or in UIScreen_Deconstruct), the subtree is torn down children first: each
  * widget's disable hooks and Deinitialize (if it was initialized), then OnDeconstruct, then its storage returns to the
  * factory. Safe to call from any hook or event handler, on the widget being called back included. Destroying a widget
@@ -365,6 +381,23 @@ Error Widget_Render(Widget* self, UIRenderContext* context);
  * @returns The slot's result, or success if there is no OnMouseInput slot.
  */
 Error Widget_OnMouseInput(Widget* self, const WidgetMouseInputArgs* args);
+
+/**
+ * @brief Tells the widget that a press stopped reaching it (calls the OnPressLost slot if present).
+ * @param self The widget; must not be NULL.
+ * @param button The press's mouse button.
+ * @returns The slot's result, or success if there is no OnPressLost slot.
+ */
+Error Widget_OnPressLost(Widget* self, GameKey button);
+
+/**
+ * @brief Delivers wheel movement to the widget (calls the OnScrollInput slot if present).
+ * @param self The widget; must not be NULL.
+ * @param args The arguments; must not be NULL.
+ * @param outIsHandled [out] Receives whether the widget handled it; false without a slot. Must not be NULL.
+ * @returns The slot's result, or success if there is no OnScrollInput slot.
+ */
+Error Widget_OnScrollInput(Widget* self, const WidgetScrollInputArgs* args, bool* outIsHandled);
 
 /**
  * @brief Delivers keyboard input to the widget (calls the OnKeyboardInput slot if present).
@@ -620,7 +653,8 @@ static inline bool Widget_IsRendered(const Widget* self)
 /**
  * @brief Shows or hides the widget with its subtree, firing OnRenderEnable / OnRenderDisable on a change. A hidden widget is
  *        not drawn, the pointer goes through it, it takes no room in a stack, and the keyboard cannot reach it: it and what
- *        it holds lose the focus, navigation passes them, and a press or a held key that began on them is over for them.
+ *        it holds lose the focus, navigation passes them, and a press (OnPressLost) or a held key that began on them is over
+ *        for them.
  * @param self The widget; must not be NULL.
  * @param isRendered The new render flag.
  * @returns Success, or a non-success Error propagated from the fired hook or the focus's hooks.
@@ -659,7 +693,7 @@ static inline bool Widget_IsInputEnabled(const Widget* self)
  * @brief Enables or disables input, firing OnInputEnable / OnInputDisable on a change.
  *
  * A disabled widget receives no input, is transparent to the pointer (whatever is behind it is hit) and cannot keep
- * focus: disabling the focused widget clears the screen's focus.
+ * focus: disabling the focused widget clears the screen's focus. A press it holds is over for it (OnPressLost).
  * @param self The widget; must not be NULL.
  * @param isInputEnabled The new input flag.
  * @returns Success, or a non-success Error propagated from a fired hook.
@@ -719,6 +753,25 @@ static inline bool Widget_IsHovered(const Widget* self)
 }
 
 /**
+ * @brief Returns the shape the pointer shows over the widget.
+ * @param self The widget; must not be NULL.
+ * @returns The shape; UICursorShape_Arrow unless set.
+ */
+static inline UICursorShape Widget_GetCursorShape(const Widget* self)
+{
+    return self->_cursorShape;
+}
+
+/**
+ * @brief Sets the shape the pointer shows over the widget: while it is hovered with no press held, and while it holds a press,
+ *        wherever the pointer is (UIScreen_GetCursorShape).
+ * @param self The widget; must not be NULL.
+ * @param shape The shape.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for an unknown shape.
+ */
+Error Widget_SetCursorShape(Widget* self, UICursorShape shape);
+
+/**
  * @brief Returns whether the widget is its screen's focused widget.
  * @param self The widget; must not be NULL.
  * @returns true if focused.
@@ -769,8 +822,8 @@ Error Widget_AddSubWidget(Widget* self, Widget* child);
  * @brief Removes a subwidget (child) from this widget without destroying it (it can be added again).
  *
  * The screen forgets what pointed into the removed subtree: a hovered widget gets OnHoverEnd, the focused widget loses
- * focus, keyboard navigation leaves it and a mouse press on it ends (its release goes nowhere). Its animations keep
- * running.
+ * focus, keyboard navigation leaves it and a mouse press on it ends (OnPressLost; its release goes nowhere). Its animations
+ * keep running.
  * @param self The widget; must not be NULL.
  * @param child The subwidget to remove; must not be NULL and must be a current child.
  * @returns Success; ErrorCode_IllegalArgument if a widget is NULL; ErrorCode_InvalidOperation if @p child is not a
@@ -778,6 +831,23 @@ Error Widget_AddSubWidget(Widget* self, Widget* child);
  * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
  */
 Error Widget_RemoveSubWidget(Widget* self, Widget* child);
+
+/**
+ * @brief Moves an attached widget, with its subtree, to another parent or to the roots, in one step that keeps what points at
+ *        it: hover, focus, tabbed state, presses, held keys and animations.
+ *
+ * It lands on top of its new siblings of equal z. Its position and size are relative to the new parent from now on (a placement
+ * is applied at the next layout pass); cached bounds and measures and the hit test are invalidated. Keyboard navigation's entered
+ * path follows focus at once. Moved under something hidden it is hidden: it loses the focus and its presses, as hiding does.
+ * @param self The widget; must not be NULL, attached and not being destroyed.
+ * @param newParent The new parent, attached and on the same screen, or NULL for the roots. Where it already is changes nothing.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL, @p newParent belongs to another screen, or is the widget or
+ *          lies inside it; ErrorCode_InvalidOperation if either is being destroyed or not attached; ErrorCode_ArgumentOutOfRange
+ *          if the tree would get too deep; ErrorCode_BufferTooLarge if the new lists could not grow (nothing changed then);
+ *          otherwise the first error from a fired hook.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error Widget_MoveTo(Widget* self, Widget* newParent);
 
 /**
  * @brief Appends the ids of this widget's descendants to a buffer, down to a given depth.

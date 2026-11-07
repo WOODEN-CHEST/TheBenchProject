@@ -206,12 +206,12 @@ static void ForgetDyingReferences(UIScreen* self)
             break;
         }
     }
+    // Destroying stays silent for a press too: no OnPressLost, since whoever destroys a widget knows.
     for (size_t Index = 0; Index < UI_SCREEN_MOUSE_BUTTON_COUNT; Index++)
     {
         if (self->_buttons[Index].IsPressed && IsIdDying(self, self->_buttons[Index].TargetWidgetId))
         {
-            self->_buttons[Index].IsPressed = false;
-            self->_buttons[Index].TargetWidgetId = WIDGET_ID_INVALID;
+            UIScreen_InternalEndPress(self, Index);
         }
     }
     UIScreen_InternalStopDyingAnimations(self);
@@ -678,13 +678,21 @@ Error UIScreen_InternalDetachWidget(UIScreen* self, Widget* widget)
             break;
         }
     }
+    uint64_t LostIds[UI_SCREEN_MOUSE_BUTTON_COUNT];
+    GameKey LostButtons[UI_SCREEN_MOUSE_BUTTON_COUNT];
+    size_t LostCount = 0;
     for (size_t Index = 0; Index < UI_SCREEN_MOUSE_BUTTON_COUNT; Index++)
     {
         Widget* Target = UIScreen_InternalResolve(self, self->_buttons[Index].TargetWidgetId);
         if (self->_buttons[Index].IsPressed && (Target != NULL) && UIScreen_InternalIsInSubtree(Target, widget))
         {
-            self->_buttons[Index].IsPressed = false;
-            self->_buttons[Index].TargetWidgetId = WIDGET_ID_INVALID;
+            if (self->_buttons[Index].HasReachedWidget)
+            {
+                LostIds[LostCount] = self->_buttons[Index].TargetWidgetId;
+                LostButtons[LostCount] = (GameKey)((int32_t)GameKey_MouseLeft + (int32_t)Index);
+                LostCount++;
+            }
+            UIScreen_InternalEndPress(self, Index);
         }
     }
 
@@ -710,7 +718,71 @@ Error UIScreen_InternalDetachWidget(UIScreen* self, Widget* widget)
             KeepFirstError(&FirstError, &Result);
         }
     }
+    for (size_t Index = 0; Index < LostCount; Index++)
+    {
+        Widget* Lost = UIScreen_InternalResolve(self, LostIds[Index]);
+        if (Lost != NULL)
+        {
+            Error Result = Widget_OnPressLost(Lost, LostButtons[Index]);
+            KeepFirstError(&FirstError, &Result);
+        }
+    }
     return FirstError;
+}
+
+/* Adds a widget to the roots. Returns false, with nothing changed, when the lists could not grow. */
+static bool LinkRoot(UIScreen* self, Widget* widget)
+{
+    if (!GenericBuffer_AddLast(&self->_roots, &widget))
+    {
+        return false;
+    }
+    Widget_InternalSetScreenRoot(widget, true, UIScreen_InternalNextSequence(self));
+    if (!Widget_InternalInsertIntoDrawOrder(&self->_rootDrawOrder, widget))
+    {
+        GenericBuffer_RemoveLast(&self->_roots);
+        Widget_InternalSetScreenRoot(widget, false, 0U);
+        return false;
+    }
+    self->_isHitTestDirty = true;
+    return true;
+}
+
+/* After a widget moved, or a root's layer changed: focus and presses that can no longer be go first, and then the entered path, which follows focus. */
+static Error SettleAfterMove(UIScreen* self)
+{
+    Error FirstError = UIScreen_InternalReleaseUnreachable(self);
+    Error PathResult = UIScreen_InternalOnWidgetMoved(self);
+    KeepFirstError(&FirstError, &PathResult);
+    return FirstError;
+}
+
+/* Whether the lists a widget is linked into can take one more. */
+static bool MakeRoomForOneMore(GenericBuffer* list, GenericBuffer* drawOrder)
+{
+    return GenericBuffer_EnsureTotalCapacity(list, list->_count + 1U) && GenericBuffer_EnsureTotalCapacity(drawOrder, drawOrder->_count + 1U);
+}
+
+Error UIScreen_InternalMoveWidget(UIScreen* self, Widget* widget, Widget* newParent)
+{
+    bool HasRoom = (newParent != NULL) ? MakeRoomForOneMore(&newParent->_subWidgets, &newParent->_drawOrder)
+        : MakeRoomForOneMore(&self->_roots, &self->_rootDrawOrder);
+    if (!HasRoom)
+    {
+        return Error_Construct2(ErrorCode_BufferTooLarge, "Widget_MoveTo: the new parent's lists could not grow.");
+    }
+    UnlinkWidget(self, widget);
+    // Neither can fail: the room is there.
+    if (newParent != NULL)
+    {
+        Widget_InternalLinkToParent(newParent, widget);
+    }
+    else
+    {
+        LinkRoot(self, widget);
+    }
+    Widget_InvalidateMeasure(widget);
+    return SettleAfterMove(self);
 }
 
 Error UIScreen_InternalDestroyWidget(UIScreen* self, Widget* widget)
@@ -757,6 +829,16 @@ bool UIScreen_InternalIsAttached(const Widget* widget)
         }
     }
     return false;
+}
+
+bool UIScreen_InternalIsInOverlay(const Widget* widget)
+{
+    const Widget* Root = widget;
+    while (Root->_parent != NULL)
+    {
+        Root = Root->_parent;
+    }
+    return Widget_InternalGetDrawLayer(Root) == UIScreenLayer_Overlay;
 }
 
 bool UIScreen_InternalIsShown(const Widget* widget)
@@ -1058,18 +1140,10 @@ Error UIScreen_AddWidget(UIScreen* self, Widget* widget)
         return Error_Construct2(ErrorCode_InvalidOperation, "UIScreen_AddWidget: the widget is already attached.");
     }
 
-    if (!GenericBuffer_AddLast(&self->_roots, &widget))
+    if (!LinkRoot(self, widget))
     {
         return Error_Construct2(ErrorCode_BufferTooLarge, "UIScreen_AddWidget: the widget could not be stored.");
     }
-    Widget_InternalSetScreenRoot(widget, true, UIScreen_InternalNextSequence(self));
-    if (!Widget_InternalInsertIntoDrawOrder(&self->_rootDrawOrder, widget))
-    {
-        GenericBuffer_RemoveLast(&self->_roots);
-        Widget_InternalSetScreenRoot(widget, false, 0U);
-        return Error_Construct2(ErrorCode_BufferTooLarge, "UIScreen_AddWidget: the widget could not be stored.");
-    }
-    self->_isHitTestDirty = true;
     return Error_CreateSuccess();
 }
 
@@ -1102,7 +1176,34 @@ Widget* UIScreen_GetRootAt(const UIScreen* self, size_t index)
 }
 
 
-// Public functions: z ordering and hit testing.
+// Public functions: layers, z ordering and hit testing.
+Error UIScreen_SetRootLayer(UIScreen* self, Widget* root, UIScreenLayer layer)
+{
+    if ((self == NULL) || (root == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_SetRootLayer: self and root must not be NULL.");
+    }
+    if ((Widget_GetScreen(root) != self) || !root->_isScreenRoot || root->_isDying)
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation,
+            "UIScreen_SetRootLayer: the widget is not a root of this screen, or is being destroyed.");
+    }
+    if (((int32_t)layer < 0) || ((int32_t)layer >= (int32_t)UIScreenLayer_Count))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIScreen_SetRootLayer: an unknown layer.");
+    }
+    root->_rootLayer = layer;
+    Widget_InternalResortInDrawOrder(&self->_rootDrawOrder, root);
+    self->_isHitTestDirty = true;
+    return SettleAfterMove(self);
+}
+
+UIScreenLayer UIScreen_GetRootLayer(const UIScreen* self, const Widget* root)
+{
+    UNUSED(self);
+    return Widget_InternalGetDrawLayer(root);
+}
+
 Error UIScreen_BringToTop(UIScreen* self, Widget* widget)
 {
     if ((self == NULL) || (widget == NULL))
@@ -1115,9 +1216,14 @@ Error UIScreen_BringToTop(UIScreen* self, Widget* widget)
     {
         return Error_CreateSuccess(); // Detached: no siblings.
     }
-    // The draw order is sorted, so the last other widget has the highest z. Already on top: leave the z alone, so
+    // The draw order is sorted, so the last one in its layer has the highest z there. Already on top: leave the z alone, so
     // repeated clicks do not make it grow.
-    Widget* Topmost = (Siblings->_count > 0U) ? Widget_InternalGetDrawOrderAt(Siblings, Siblings->_count - 1U) : NULL;
+    Widget* Topmost = NULL;
+    for (size_t Index = Siblings->_count; (Index-- > 0U) && (Topmost == NULL);)
+    {
+        Widget* Candidate = Widget_InternalGetDrawOrderAt(Siblings, Index);
+        Topmost = (Widget_InternalGetDrawLayer(Candidate) == Widget_InternalGetDrawLayer(widget)) ? Candidate : NULL;
+    }
     if ((Topmost == NULL) || (Topmost == widget))
     {
         return Error_CreateSuccess();
@@ -1136,7 +1242,8 @@ bool UIScreen_TryGetTopmostAt(UIScreen* self, Vector2 screenPosition, Widget** o
     Vector2 RootSize = { .x = 1.0f, .y = 1.0f };
     for (size_t Index = self->_rootDrawOrder._count; Index-- > 0U;)
     {
-        Widget* Hit = HitTestNode(Widget_InternalGetDrawOrderAt(&self->_rootDrawOrder, Index), screenPosition, RootPosition, RootSize);
+        Widget* Root = Widget_InternalGetDrawOrderAt(&self->_rootDrawOrder, Index);
+        Widget* Hit = (Root->_rootLayer != UIScreenLayer_Overlay) ? HitTestNode(Root, screenPosition, RootPosition, RootSize) : NULL;
         if (Hit != NULL)
         {
             *outWidget = Hit;

@@ -16,6 +16,13 @@
 static Error RecordEvent(UIScreen* screen, const UIEvent* event, const UserData* userData)
 {
     TestUIEvents* Events = UserData_GetPointer(userData);
+    bool IsInputEvent = (event->WidgetEventId == (int32_t)UIElementEvent_Pressed) || (event->WidgetEventId == (int32_t)UIElementEvent_Released)
+        || (event->WidgetEventId == (int32_t)UIElementEvent_DoubleClicked) || (event->WidgetEventId == (int32_t)UIElementEvent_Scrolled)
+        || (event->WidgetEventId == (int32_t)UIElementEvent_ContextRequested);
+    if (IsInputEvent && !Events->IsRecordingInputEvents)
+    {
+        return Error_CreateSuccess();
+    }
     if (Events->Count < TEST_UI_MAX_RECORDED_EVENTS)
     {
         Events->Events[Events->Count] = *event;

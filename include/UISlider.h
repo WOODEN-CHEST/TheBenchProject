@@ -9,15 +9,18 @@
 
 /**
  * @file UISlider.h
- * @brief The slider element: a value in a range, by a drag, the arrows or the wheel, with an optional step.
+ * @brief The slider element: a value in a range, by a drag, the arrows or the wheel, with an optional step and an optional default.
  *
  * A press on the track puts the thumb under the pointer; a press on the thumb holds it where it was grabbed, so a click on it
- * changes nothing. Dragging then maps the pointer to the value, clamped when the pointer leaves the box. The arrows step (the
- * ui_left and ui_right actions' keys, repeats following), Home and End jump. The wheel changes it only while it is focused, so scrolling a panel
- * never changes a value by accident. A change posts UIElementEvent_Changed each time the value moves, then
- * UIElementEvent_Committed at the release or the key's release (a wheel notch is a whole change: both at once) unless the
- * value ended where it began; Escape during one puts the first value back and posts UIElementEvent_Cancelled. The events
- * carry the value as a double. Code setting the value posts nothing, and a value that is not a finite number is refused.
+ * changes nothing. Dragging then maps the pointer to the value, clamped when the pointer leaves the box, the screen or the
+ * window: past an end the value is exactly at the limit. The arrows step (the ui_left and ui_right actions' keys, repeats
+ * following), Home and End jump. The wheel changes it only while it is focused or with Ctrl: otherwise it goes on up the tree, so
+ * scrolling a panel never changes a value by accident. The reset action puts it back to its default, also while the pointer is only
+ * over it. A change posts UIElementEvent_Changed each time the value moves, then UIElementEvent_Committed at the release or the
+ * key's release (a wheel notch and a reset are whole changes: both at once) unless the value ended where it began; Escape during
+ * one puts the first value back and posts UIElementEvent_Cancelled. A press that stops reaching it ends the change at once, with its
+ * commit. The events carry the value as a double. Code setting the value posts nothing, and a value that is not a finite number is
+ * refused. It also posts the events every element shares (UIElement_PostMouseEvents).
  *
  * Calling code uses the UISlider_* functions by widget id; widget types of their own embed the capability and call the
  * UISliderCapability_* helpers. The value's arithmetic is pure, at the end of this file.
@@ -44,6 +47,10 @@ typedef struct UISliderOptionsStruct
     double Step;
     /** @brief Whether it takes input. */
     bool IsEnabled;
+    /** @brief Whether it has a value to go back to (the reset action). */
+    bool HasDefault;
+    /** @brief The value to go back to, when HasDefault; finite. Clamped into the range and onto the step when it is used. */
+    double Default;
 } UISliderOptions;
 
 /**
@@ -76,6 +83,10 @@ typedef struct UISliderCapabilityStruct
     double _step;
     /** @brief Whether it takes input. */
     bool _isEnabled;
+    /** @brief Whether it has a value to go back to. */
+    bool _hasDefault;
+    /** @brief The value to go back to. */
+    double _default;
     /** @brief A left press on it is being dragged. */
     bool _isDragging;
     /** @brief The key whose hold is a change in progress, or GameKey_Unknown. */
@@ -91,7 +102,7 @@ typedef struct UISliderCapabilityStruct
 
 // Helpers.
 /**
- * @brief Default options: the range [0, 1] at 0, no step, enabled.
+ * @brief Default options: the range [0, 1] at 0, no step, enabled, no default.
  * @returns The options.
  */
 static inline UISliderOptions UISliderOptions_Create(void)
@@ -104,7 +115,9 @@ static inline UISliderOptions UISliderOptions_Create(void)
         .Value = 0.0,
         .HasStep = false,
         .Step = 0.0,
-        .IsEnabled = true
+        .IsEnabled = true,
+        .HasDefault = false,
+        .Default = 0.0
     };
 }
 
@@ -161,6 +174,17 @@ Error UISlider_SetStep(UIScreen* screen, uint64_t widgetId, bool hasStep, double
  */
 Error UISlider_SetIsEnabled(UIScreen* screen, uint64_t widgetId, bool isEnabled);
 
+/**
+ * @brief Sets the value a slider goes back to on the reset action.
+ * @param screen The slider's screen; must not be NULL.
+ * @param widgetId The slider.
+ * @param hasDefault Whether it has one; without one the reset action goes on to what lies behind it.
+ * @param value The value, when @p hasDefault; finite.
+ * @returns Success; ErrorCode_InvalidOperation for a stale id or a widget that is no slider; ErrorCode_ArgumentOutOfRange for a
+ *          value that is not finite, which changes nothing.
+ */
+Error UISlider_SetDefault(UIScreen* screen, uint64_t widgetId, bool hasDefault, double value);
+
 
 // Behaviour helpers, for widget types embedding the capability.
 /**
@@ -173,7 +197,7 @@ Error UISlider_SetIsEnabled(UIScreen* screen, uint64_t widgetId, bool isEnabled)
 Error UISliderCapability_Construct(UISliderCapability* self, Widget* widget, const UISliderArgs* args);
 
 /**
- * @brief Advances the look, and ends a change whose release cannot reach the slider any more; call it from Update.
+ * @brief Advances the look, and ends a key's change whose release cannot reach the slider any more; call it from Update.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
  * @param time The tick's time.
@@ -189,6 +213,26 @@ Error UISliderCapability_Update(UISliderCapability* self, Widget* widget, Progra
  * @returns Success, or the event queue's error.
  */
 Error UISliderCapability_OnMouseInput(UISliderCapability* self, Widget* widget, const WidgetMouseInputArgs* args);
+
+/**
+ * @brief Ends a drag whose press the screen says is lost: the value stays where it got to, and the change is committed; call it from
+ *        OnPressLost.
+ * @param self The capability; must not be NULL.
+ * @param widget The widget; must not be NULL.
+ * @param button The press's mouse button.
+ * @returns Success, or the event queue's error.
+ */
+Error UISliderCapability_OnPressLost(UISliderCapability* self, Widget* widget, GameKey button);
+
+/**
+ * @brief Interprets the wheel, which it takes only while focused or with Ctrl; call it from OnScrollInput.
+ * @param self The capability; must not be NULL.
+ * @param widget The widget; must not be NULL.
+ * @param args The input; must not be NULL.
+ * @param outIsHandled [out] Set when it takes the wheel. Must not be NULL.
+ * @returns Success, or the event queue's error.
+ */
+Error UISliderCapability_OnScrollInput(UISliderCapability* self, Widget* widget, const WidgetScrollInputArgs* args, bool* outIsHandled);
 
 /**
  * @brief Interprets keyboard input; call it from OnKeyboardInput.

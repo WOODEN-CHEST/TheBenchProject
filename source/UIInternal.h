@@ -44,11 +44,15 @@ uint64_t UIScreen_InternalNextSequence(UIScreen* self);
 /** Marks the hovered widget as needing a new hit test (geometry, flags or the tree changed). */
 void UIScreen_InternalInvalidateHitTest(UIScreen* self);
 
+/** Widget_MoveTo's work, its checks done: links the widget under @p newParent (NULL: the roots), with room for it made first so a
+ *  failure changes nothing, then brings navigation, the focus and the presses in line with where it is now. */
+Error UIScreen_InternalMoveWidget(UIScreen* self, Widget* widget, Widget* newParent);
+
 /** Keeps the draw order of a widget's siblings sorted after its z changed. */
 void UIScreen_InternalOnZChanged(UIScreen* self, Widget* widget);
 
 /** The one detach path for an alive widget (a root or a child): unlinks it, then ends hover, focus, navigation and
- *  mouse presses inside its subtree, running the hooks last with every widget re-resolved by id. */
+ *  mouse presses inside its subtree, running the hooks (OnPressLost among them) last with every widget re-resolved by id. */
 Error UIScreen_InternalDetachWidget(UIScreen* self, Widget* widget);
 
 /** Widget_Destroy's work: unlinks the subtree, marks it dying, forgets every reference into it (no hooks) and queues it
@@ -67,6 +71,9 @@ bool UIScreen_InternalIsAttached(const Widget* widget);
  * @returns true when nothing on its way up is hidden.
  */
 bool UIScreen_InternalIsShown(const Widget* widget);
+
+/** Returns whether a widget stands under a root of the overlay layer, which takes no input. */
+bool UIScreen_InternalIsInOverlay(const Widget* widget);
 
 /** Composes a widget's absolute box (normalized screen coordinates) from its parent chain. */
 void UIScreen_InternalGetAbsoluteBox(const Widget* widget, Vector2* outPosition, Vector2* outSize);
@@ -87,8 +94,24 @@ Error UIScreen_InternalRouteInput(UIScreen* self, ProgramTime time, const UIScre
  *  destroyed, detached or disabled, also by a hook) leaves nothing focused, so focus is never on an ineligible widget. */
 Error UIScreen_InternalSetFocus(UIScreen* self, uint64_t widgetId);
 
-/** Returns whether a widget can take focus now: alive, attached, focusable and input-enabled. */
+/** Returns whether a widget can take focus now: alive, attached, focusable, input-enabled, shown and not in an overlay. */
 bool UIScreen_InternalCanFocus(const Widget* widget);
+
+/** Returns whether a widget a press or a held key began on is still there for what follows: attached, taking input and shown. */
+bool UIScreen_InternalTakesPressedInput(const Widget* widget);
+
+/* Whether a press or entering it brings a widget to the top of its siblings: a root only in the layers made for that. */
+bool UIScreen_InternalIsRaisedByInput(const Widget* widget);
+
+/** Forgets a button's press, and with its holder's last press the hidden-cursor drag it asked for. Runs no hook. */
+void UIScreen_InternalEndPress(UIScreen* self, size_t buttonIndex);
+
+/** After something stopped taking input or showing: takes the focus away from a widget that cannot have it any more, and ends each
+ *  press whose widget cannot take it any more, telling those it had reached (OnPressLost). Keeps the first error. */
+Error UIScreen_InternalReleaseUnreachable(UIScreen* self);
+
+/** Returns whether a key is one of those an action's bindings match this tick, consumed or not. */
+bool UIScreen_InternalIsActionKey(const GameInput* input, GameActionId action, GameKey key);
 
 
 // Screen: keyboard navigation (UIScreenNavigation.c).
@@ -104,6 +127,10 @@ Error UIScreen_InternalRouteNavigation(UIScreen* self);
 /** Ends keyboard navigation (pointer movement or a click): leaves every entered widget and stops following the held
  *  navigation keys; focus stays. */
 Error UIScreen_InternalStopNavigation(UIScreen* self);
+
+/** A widget moved in the tree: the entered path stays a path down it. It follows focus, or with nothing focused what no longer
+ *  follows down the tree is left. Does nothing outside navigation. */
+Error UIScreen_InternalOnWidgetMoved(UIScreen* self);
 
 
 // Screen: animations (UIScreenAnimation.c).
@@ -163,6 +190,13 @@ void Widget_InternalSetScreenRoot(Widget* self, bool isScreenRoot, uint64_t sequ
 
 /** Removes a child from its parent's lists and clears its parent (bounds invalidated up the old parent's chain). */
 void Widget_InternalUnlinkFromParent(Widget* child);
+
+/** Links a detached widget under a parent, on top of its siblings of equal z, invalidating bounds and measures up the chain, and
+ *  the hit test. Returns false, with nothing changed, when the parent's lists could not grow. */
+bool Widget_InternalLinkToParent(Widget* parent, Widget* child);
+
+/** Returns the layer a widget draws in among its siblings: a root's own; every child's is the same. */
+UIScreenLayer Widget_InternalGetDrawLayer(const Widget* self);
 
 /** Inserts a widget into a draw-order list (Widget*, ascending z then sequence) at its place. */
 bool Widget_InternalInsertIntoDrawOrder(GenericBuffer* drawOrder, Widget* widget);

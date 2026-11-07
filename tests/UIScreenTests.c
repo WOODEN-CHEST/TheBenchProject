@@ -229,8 +229,16 @@ static Error Probe_OnMouseInput(void* self, const WidgetMouseInputArgs* args)
         case UIMouseInputType_ButtonPress:   Probe->PressCount++; break;
         case UIMouseInputType_ButtonRelease: Probe->ReleaseCount++; break;
         case UIMouseInputType_Move:          Probe->MoveCount++; break;
-        case UIMouseInputType_Scroll:        Probe->ScrollCount++; break;
+        case UIMouseInputType_ReleaseOver:   break;
     }
+    return Error_CreateSuccess();
+}
+
+static Error Probe_OnScrollInput(void* self, const WidgetScrollInputArgs* args, bool* outIsHandled)
+{
+    UNUSED(args);
+    UNUSED(outIsHandled);
+    ((ProbeWidget*)self)->ScrollCount++;
     return Error_CreateSuccess();
 }
 
@@ -325,6 +333,7 @@ static const WidgetVTable ProbeVTable =
     .OnHoverStart = Probe_OnHoverStart,
     .OnHoverEnd = Probe_OnHoverEnd,
     .OnMouseInput = Probe_OnMouseInput,
+    .OnScrollInput = Probe_OnScrollInput,
     .OnKeyboardInput = Probe_OnKeyboardInput,
     .OnFocusEnable = Probe_OnFocusEnable,
     .OnFocusDisable = Probe_OnFocusDisable,

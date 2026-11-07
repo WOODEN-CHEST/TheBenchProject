@@ -24,6 +24,11 @@
  *   picture, at another screen or hidden, there is no pointer (and none while UI
  *   above claimed the pointer). Buttons go to the UI under the pointer, and a press on the picture is the screen's even
  *   where no widget takes it: the game below never sees it.
+ * - A HELD PRESS owns the pointer: while the UI holds a press the screen stays focused and pointed at, wherever the ray goes. The
+ *   position goes on along the ray on the surface's plane, past the picture, when the caller passes where it continues
+ *   (WorldScreens_ContinueRay, through WorldScreenHost_UpdateContinued; without that it stays where it was last known). While it
+ *   is off the picture nothing hovers and a new press hits nothing. Once the press has ended a screen the player no longer points at
+ *   is let go as usual.
  * - USING IT: the use action (default E) or a click on the picture gives the screen the keyboard (it is FOCUSED). The
  *   press of use that focuses it is consumed with the tick's typed text, and while its key stays held the text of each
  *   tick is dropped too (the key's repeats), so it neither acts in the game nor types.
@@ -52,7 +57,8 @@ typedef struct WorldScreenHostStruct
     bool _isFocused;
     /** @brief Whether the key of the use press that focused the screen is still held (its repeats type nothing). */
     bool _isUseHeld;
-    /** @brief Whether the pointer was on its picture in the last update, and where (the UI's [0;1] space). */
+    /** @brief Whether the pointer was on its picture in the last update or a held press kept it pointed at, and where (the UI's own
+     *  space: past [0;1] off the picture). */
     bool _isPointed;
     Vector2 _pointer;
 } WorldScreenHost;
@@ -88,6 +94,22 @@ Error WorldScreenHost_Update(WorldScreenHost* self, UIScreen* screen, ProgramTim
     const WorldScreenHit* pointed);
 
 /**
+ * @brief WorldScreenHost_Update, with where the ray goes on the plane of the screen's surface while the UI holds a press.
+ *
+ * Ask for it only while UIScreen_HasHeldPress answers true: the rest of the time it means nothing.
+ * @param self The host; must not be NULL.
+ * @param screen The UI shown on the screen; must not be NULL.
+ * @param time The tick's time, for UIScreen_Update.
+ * @param input The tick's input (consumption is recorded in it), or NULL: the screen gets no input this tick.
+ * @param pointed Where the player points this tick (WorldScreens_Raycast's hit), or NULL for nowhere.
+ * @param continued Where the ray goes on the screen's plane (WorldScreens_ContinueRay's hit), or NULL for not known. @p pointed
+ *        counts instead when it lies on this screen.
+ * @returns Success, or the error of UIScreen_Update (a broken invariant: see AGENTS.md rule 7).
+ */
+Error WorldScreenHost_UpdateContinued(WorldScreenHost* self, UIScreen* screen, ProgramTime time, GameInput* input,
+    const WorldScreenHit* pointed, const WorldScreenHit* continued);
+
+/**
  * @brief Lets go of the screen at once: no keyboard from the next update on (the screen's object went away, the player
  *        was moved elsewhere).
  * @param self The host; must not be NULL.
@@ -106,15 +128,15 @@ static inline bool WorldScreenHost_IsFocused(const WorldScreenHost* self)
     return self->_isFocused;
 }
 
-/** @brief Returns whether the pointer was on the screen's picture in the last update. @param self The host; must not be
- *  NULL. */
+/** @brief Returns whether the pointer was on the screen's picture in the last update, or a press held on it kept it pointed at.
+ *  @param self The host; must not be NULL. */
 static inline bool WorldScreenHost_IsPointed(const WorldScreenHost* self)
 {
     return self->_isPointed;
 }
 
-/** @brief Returns where the pointer was on the picture in the last update ([0;1], (0, 0) the top-left; meaningful while
- *  WorldScreenHost_IsPointed). @param self The host; must not be NULL. */
+/** @brief Returns where the pointer was on the picture in the last update ((0, 0) the top-left, (1, 1) the bottom-right, past them
+ *  off the picture during a held press; meaningful while WorldScreenHost_IsPointed). @param self The host; must not be NULL. */
 static inline Vector2 WorldScreenHost_GetPointer(const WorldScreenHost* self)
 {
     return self->_pointer;

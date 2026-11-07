@@ -18,3 +18,9 @@ bool GameInputInternal_TickMonitorWatch(GameInput* self, Vector2 windowPosition,
 
 /** Keeps the answer, with where the window was when it was asked; the next tick's sample carries the size. */
 void GameInputInternal_StoreMonitorSize(GameInput* self, Vector2 monitorSize, Vector2 windowPosition, Vector2 windowSize);
+
+/** Puts right what the device layer says of the cursor, against the last tick's sample: raylib sets its position to (0, 0) each time the cursor
+ *  leaves the window, and with a press held past the edge it leaves again at the release. That is no place, so the last one stands, until it
+ *  says another. That may be long after the cursor is back: GLFW reports no movement when the cursor comes back to the very place it left from. On the
+ *  window with no reset behind it (0, 0) is a real corner. The movement counts from the place that stands, but a captured cursor's stays the device's. */
+void GameInputInternal_KeepCursorPlace(GameInput* self, GameInputSample* sample);

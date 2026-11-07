@@ -344,27 +344,39 @@ void UIPressable_OnMouseInput(UIPressable* self, Widget* widget, const WidgetMou
     bool* outIsActivated)
 {
     *outIsActivated = false;
-    if ((args->Button != GameKey_MouseLeft) || !isEnabled)
-    {
-        return;
-    }
+    uint8_t Bit = UI_BUTTON_BIT(args->Button);
+    bool IsActivating = ((self->_activationButtons & Bit) != 0U) && isEnabled;
     switch (args->Type)
     {
         case UIMouseInputType_ButtonPress:
-            self->_isPointerDown = true;
-            self->_isPointerInside = true;
+            if (IsActivating)
+            {
+                self->_heldButtons |= Bit;
+                self->_isPointerInside = true;
+                *outIsActivated = self->_clickMode == UIClickMode_OnPress;
+            }
             return;
         case UIMouseInputType_Move:
-            self->_isPointerInside = self->_isPointerDown && IsPointerOver(widget, args->ScreenPosition);
+            self->_isPointerInside = IsPointerOver(widget, args->ScreenPosition);
             return;
         case UIMouseInputType_ButtonRelease:
-            *outIsActivated = self->_isPointerDown && IsPointerOver(widget, args->ScreenPosition);
-            self->_isPointerDown = false;
-            self->_isPointerInside = false;
+        {
+            // OnRelease asks nothing of where the press began, so a press handed to it counts. What the press held ends here, whatever changed since.
+            bool IsAsked = (self->_clickMode == UIClickMode_OnRelease)
+                || ((self->_clickMode == UIClickMode_OnPressAndRelease) && ((self->_heldButtons & Bit) != 0U));
+            *outIsActivated = IsActivating && IsAsked && IsPointerOver(widget, args->ScreenPosition);
+            UIPressable_OnPressLost(self, args->Button);
             return;
-        case UIMouseInputType_Scroll:
+        }
+        case UIMouseInputType_ReleaseOver:
+            *outIsActivated = IsActivating && (self->_clickMode == UIClickMode_OnRelease);
             return;
     }
+}
+
+void UIPressable_OnPressLost(UIPressable* self, GameKey button)
+{
+    self->_heldButtons &= (uint8_t)~UI_BUTTON_BIT(button);
 }
 
 void UIPressable_OnKeyboardInput(UIPressable* self, Widget* widget, const WidgetKeyboardInputArgs* args, bool isEnabled,
@@ -404,20 +416,25 @@ void UIPressable_Update(UIPressable* self, const UIScreen* screen)
     {
         return;
     }
-    if (self->_isPointerDown && ((GameInput_GetRawKeyState(Input, GameKey_MouseLeft) & GAME_INPUT_KEY_STATE_DOWN) == 0U))
-    {
-        self->_isPointerDown = false;
-        self->_isPointerInside = false;
-    }
     if ((self->_heldKey != GameKey_Unknown) && ((GameInput_GetRawKeyState(Input, self->_heldKey) & GAME_INPUT_KEY_STATE_DOWN) == 0U))
     {
         self->_heldKey = GameKey_Unknown;
+    }
+    // A button that is up holds nothing, also in a widget type that does not answer OnPressLost.
+    for (int32_t Button = (int32_t)GameKey_MouseLeft; (self->_heldButtons != 0U) && (Button <= (int32_t)GameKey_MouseBack); Button++)
+    {
+        if ((GameInput_GetRawKeyState(Input, (GameKey)Button) & GAME_INPUT_KEY_STATE_DOWN) == 0U)
+        {
+            UIPressable_OnPressLost(self, (GameKey)Button);
+        }
     }
 }
 
 void UIPressable_Cancel(UIPressable* self)
 {
-    *self = UIPressable_Create();
+    self->_heldButtons = 0U;
+    self->_isPointerInside = false;
+    self->_heldKey = GameKey_Unknown;
 }
 
 
@@ -439,6 +456,102 @@ bool UIElement_IsActionKey(const UIScreen* screen, GameActionId action, GameKey 
         }
     }
     return false;
+}
+
+bool UIElement_IsActionPress(const UIScreen* screen, GameActionId action, GameKey key)
+{
+    const GameInput* Input = UIScreen_GetInput(screen);
+    if (Input == NULL)
+    {
+        return false;
+    }
+    GameKey Keys[GAME_INPUT_MAX_BINDINGS_PER_ACTION];
+    size_t KeyCount = GameInput_GetActionKeys(Input, action, Keys);
+    for (size_t Index = 0U; Index < KeyCount; Index++)
+    {
+        if (Keys[Index] == key)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* The mouse data of a mouse input. */
+static UIEventMouse MakeEventMouse(const WidgetMouseInputArgs* args, bool isOverWidget)
+{
+    return (UIEventMouse){ .Button = args->Button, .Modifiers = args->Modifiers, .ScreenPosition = args->ScreenPosition,
+        .ScrollDelta = { .x = 0.0f, .y = 0.0f }, .IsOverWidget = isOverWidget };
+}
+
+/* The mouse data of what a key did: the middle of the widget. */
+static UIEventMouse MakeEventMouseFromKey(Widget* widget, const WidgetKeyboardInputArgs* args)
+{
+    return (UIEventMouse){ .Button = args->Key, .Modifiers = args->Modifiers,
+        .ScreenPosition = UIScreen_WidgetToScreen(Widget_GetScreen(widget), widget, (Vector2){ .x = 0.5f, .y = 0.5f }),
+        .ScrollDelta = { .x = 0.0f, .y = 0.0f }, .IsOverWidget = false };
+}
+
+Error UIElement_PostMouseEvents(Widget* widget, const WidgetMouseInputArgs* args)
+{
+    UIScreen* Screen = Widget_GetScreen(widget);
+    uint64_t Id = Widget_GetId(widget);
+    switch (args->Type)
+    {
+        case UIMouseInputType_ButtonPress:
+        {
+            UIEventMouse Mouse = MakeEventMouse(args, true);
+            Error Result = UIScreen_PostWidgetMouseEvent(Screen, Id, UIElementEvent_Pressed, &Mouse);
+            if ((Result.Code != ErrorCode_Success) || (args->ClickCount != 2U))
+            {
+                return Result;
+            }
+            return UIScreen_PostWidgetMouseEvent(Screen, Id, UIElementEvent_DoubleClicked, &Mouse);
+        }
+        case UIMouseInputType_ButtonRelease:
+        {
+            bool IsOver = IsPointerOver(widget, args->ScreenPosition);
+            UIEventMouse Mouse = MakeEventMouse(args, IsOver);
+            Error Result = UIScreen_PostWidgetMouseEvent(Screen, Id, UIElementEvent_Released, &Mouse);
+            if ((Result.Code != ErrorCode_Success) || (args->Button != GameKey_MouseRight) || !IsOver)
+            {
+                return Result;
+            }
+            return UIScreen_PostWidgetMouseEvent(Screen, Id, UIElementEvent_ContextRequested, &Mouse);
+        }
+        case UIMouseInputType_ReleaseOver:
+        {
+            UIEventMouse Mouse = MakeEventMouse(args, true);
+            return UIScreen_PostWidgetMouseEvent(Screen, Id, UIElementEvent_Released, &Mouse);
+        }
+        case UIMouseInputType_Move:
+            return Error_CreateSuccess();
+    }
+    return Error_CreateSuccess();
+}
+
+Error UIElement_PostActivatedByMouse(Widget* widget, const WidgetMouseInputArgs* args)
+{
+    UIEventMouse Mouse = MakeEventMouse(args, IsPointerOver(widget, args->ScreenPosition));
+    return UIScreen_PostWidgetMouseEvent(Widget_GetScreen(widget), Widget_GetId(widget), UIElementEvent_Activated, &Mouse);
+}
+
+Error UIElement_PostActivatedByKey(Widget* widget, const WidgetKeyboardInputArgs* args)
+{
+    UIEventMouse Mouse = MakeEventMouseFromKey(widget, args);
+    return UIScreen_PostWidgetMouseEvent(Widget_GetScreen(widget), Widget_GetId(widget), UIElementEvent_Activated, &Mouse);
+}
+
+Error UIElement_OnContextKey(Widget* widget, const WidgetKeyboardInputArgs* args, bool* outIsHandled)
+{
+    UIScreen* Screen = Widget_GetScreen(widget);
+    if ((args->Type != UIKeyboardInputType_KeyPress) || !UIElement_IsActionPress(Screen, GameAction_UIContextMenu, args->Key))
+    {
+        return Error_CreateSuccess();
+    }
+    *outIsHandled = true;
+    UIEventMouse Mouse = MakeEventMouseFromKey(widget, args);
+    return UIScreen_PostWidgetMouseEvent(Screen, Widget_GetId(widget), UIElementEvent_ContextRequested, &Mouse);
 }
 
 Error UIElement_ApplyOptions(Widget* widget, const UIElementOptions* options)

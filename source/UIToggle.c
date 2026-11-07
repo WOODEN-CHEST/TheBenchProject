@@ -148,6 +148,12 @@ static Error UIToggleWidget_OnMouseInputVT(void* self, const WidgetMouseInputArg
     return UIToggleCapability_OnMouseInput(&Toggle->Toggle, &Toggle->Base, args);
 }
 
+static Error UIToggleWidget_OnPressLostVT(void* self, GameKey button)
+{
+    UIToggleCapability_OnPressLost(&((UIToggleWidget*)self)->Toggle, button);
+    return Error_CreateSuccess();
+}
+
 static Error UIToggleWidget_OnKeyboardInputVT(void* self, const WidgetKeyboardInputArgs* args, bool* outIsHandled)
 {
     UIToggleWidget* Toggle = self;
@@ -172,6 +178,7 @@ static const WidgetVTable UIToggleWidgetVTable =
     .Update = UIToggleWidget_UpdateVT,
     .Render = UIToggleWidget_RenderVT,
     .OnMouseInput = UIToggleWidget_OnMouseInputVT,
+    .OnPressLost = UIToggleWidget_OnPressLostVT,
     .OnKeyboardInput = UIToggleWidget_OnKeyboardInputVT,
     .Measure = UIToggleWidget_MeasureVT
 };
@@ -232,14 +239,48 @@ Error UIToggle_SetIsEnabled(UIScreen* screen, uint64_t widgetId, bool isEnabled)
     return Widget_SetIsFocusable(Target, isEnabled);
 }
 
+Error UIToggle_SetClickMode(UIScreen* screen, uint64_t widgetId, UIClickMode clickMode)
+{
+    Widget* Target = NULL;
+    UIToggleCapability* Toggle = NULL;
+    Error Result = ResolveToggle(screen, widgetId, &Target, &Toggle);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (!UIPressable_AreSettingsValid(clickMode, Toggle->_press._activationButtons))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIToggle_SetClickMode: an unknown click mode.");
+    }
+    Toggle->_press._clickMode = clickMode;
+    return Error_CreateSuccess();
+}
+
+Error UIToggle_SetActivationButtons(UIScreen* screen, uint64_t widgetId, uint8_t activationButtons)
+{
+    Widget* Target = NULL;
+    UIToggleCapability* Toggle = NULL;
+    Error Result = ResolveToggle(screen, widgetId, &Target, &Toggle);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (!UIPressable_AreSettingsValid(Toggle->_press._clickMode, activationButtons))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIToggle_SetActivationButtons: a bit that is no mouse button.");
+    }
+    Toggle->_press._activationButtons = activationButtons;
+    return Error_CreateSuccess();
+}
+
 
 // Public functions: behaviour helpers.
 Error UIToggleCapability_Construct(UIToggleCapability* self, Widget* widget, const UIToggleArgs* args)
 {
     const UIToggleOptions* Options = args->Options;
-    if (!IsStateValid(Options->State))
+    if (!IsStateValid(Options->State) || !UIPressable_AreSettingsValid(Options->ClickMode, Options->ActivationButtons))
     {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIToggle: an unknown state.");
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIToggle: an unknown state or click mode, or a bit that is no mouse button.");
     }
     Error Result = UIElementLook_Construct(&self->_look, UIElementKind_Toggle, Options->Element.Variant);
     if (Result.Code == ErrorCode_Success)
@@ -257,6 +298,8 @@ Error UIToggleCapability_Construct(UIToggleCapability* self, Widget* widget, con
         return Result;
     }
     self->_press = UIPressable_Create();
+    self->_press._clickMode = Options->ClickMode;
+    self->_press._activationButtons = Options->ActivationButtons;
     self->_state = Options->State;
     self->_isEnabled = Options->IsEnabled;
     if (!Options->IsEnabled)
@@ -284,9 +327,19 @@ Error UIToggleCapability_Update(UIToggleCapability* self, Widget* widget, Progra
 
 Error UIToggleCapability_OnMouseInput(UIToggleCapability* self, Widget* widget, const WidgetMouseInputArgs* args)
 {
+    Error Result = self->_isEnabled ? UIElement_PostMouseEvents(widget, args) : Error_CreateSuccess();
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
     bool IsActivated = false;
     UIPressable_OnMouseInput(&self->_press, widget, args, self->_isEnabled, &IsActivated);
     return IsActivated ? Activate(self, widget) : Error_CreateSuccess();
+}
+
+void UIToggleCapability_OnPressLost(UIToggleCapability* self, GameKey button)
+{
+    UIPressable_OnPressLost(&self->_press, button);
 }
 
 Error UIToggleCapability_OnKeyboardInput(UIToggleCapability* self, Widget* widget, const WidgetKeyboardInputArgs* args,
@@ -294,7 +347,11 @@ Error UIToggleCapability_OnKeyboardInput(UIToggleCapability* self, Widget* widge
 {
     bool IsActivated = false;
     UIPressable_OnKeyboardInput(&self->_press, widget, args, self->_isEnabled, outIsHandled, &IsActivated);
-    return IsActivated ? Activate(self, widget) : Error_CreateSuccess();
+    if (IsActivated)
+    {
+        return Activate(self, widget);
+    }
+    return (self->_isEnabled && !*outIsHandled) ? UIElement_OnContextKey(widget, args, outIsHandled) : Error_CreateSuccess();
 }
 
 Error UIToggleCapability_Measure(UIToggleCapability* self, Widget* widget, Vector2* outSize)

@@ -493,7 +493,9 @@ position: (0, 0) the picture's top-left; a CRT's through its curvature, `WorldMo
 whether that lies on the picture, the point and the distance. With a collision world, a collider of another object
 between the ray's origin and the screen (more than `WORLD_SCREENS_OCCLUSION_TOLERANCE`, 1 cm, in front of it) hides it;
 the screen's own colliders never do (a monitor's box encloses its glass), and the filter's ignored object (the one
-pointing) never does. Pointers it returns are valid until the next sync; it borrows the world and holds the world models
+pointing) never does. `WorldScreens_ContinueRay(objectId, origin, direction, &hit)` is for a press held on one screen: where the ray goes on that screen's plane, whatever it hits and whatever is in
+front of it (`WorldModelSurface_ContinueRay`, "Surfaces" in [WorldModels.md](WorldModels.md)), a CRT's through its curvature on the glass and on from its edge past it, `IsOnPicture` saying whether that is on the picture, and false when it has
+no screen, no surface or no answer. Pointers it returns are valid until the next sync; it borrows the world and holds the world models
 under its own asset user until it is destroyed.
 
 ## World

@@ -207,9 +207,15 @@ static size_t GetSubtreeHeight(const Widget* widget)
     return Highest + 1U;
 }
 
-/* Whether @p a is drawn before @p b among siblings: lower z first, then earlier insertion. */
+/* Whether @p a is drawn before @p b among siblings: the lower layer first, then lower z, then earlier insertion. */
 static bool IsDrawnBefore(const Widget* a, const Widget* b)
 {
+    UIScreenLayer LayerA = Widget_InternalGetDrawLayer(a);
+    UIScreenLayer LayerB = Widget_InternalGetDrawLayer(b);
+    if (LayerA != LayerB)
+    {
+        return (int32_t)LayerA < (int32_t)LayerB;
+    }
     if (a->_zLayer < b->_zLayer)
     {
         return true;
@@ -265,17 +271,6 @@ static Error ReleaseFocusIfIneligible(Widget* self)
     return UIScreen_InternalSetFocus(self->_screen, WIDGET_ID_INVALID);
 }
 
-/* What was just hidden may hold the focused widget at any depth. */
-static Error ReleaseFocusOfHidden(const Widget* self)
-{
-    const Widget* Focused = UIScreen_InternalResolve(self->_screen, UIScreen_GetFocusedWidgetId(self->_screen));
-    if ((Focused == NULL) || UIScreen_InternalCanFocus(Focused))
-    {
-        return Error_CreateSuccess();
-    }
-    return UIScreen_InternalSetFocus(self->_screen, WIDGET_ID_INVALID);
-}
-
 
 // Internal functions (declared in UIInternal.h).
 void Widget_InternalInitializeBase(Widget* self, const WidgetVTable* vtable, UIScreen* screen, uint64_t typeId,
@@ -287,6 +282,8 @@ void Widget_InternalInitializeBase(Widget* self, const WidgetVTable* vtable, UIS
     self->_id = WIDGET_ID_INVALID;
     self->_typeId = typeId;
     self->_sequence = 0;
+    self->_rootLayer = UIScreenLayer_Normal;
+    self->_cursorShape = UICursorShape_Arrow;
 
     self->_position = (Vector2){ .x = 0.0f, .y = 0.0f };
     self->_size = (Vector2){ .x = 0.0f, .y = 0.0f };
@@ -457,6 +454,30 @@ void Widget_InternalUnlinkFromParent(Widget* child)
     Widget_InvalidateMeasure(Parent);
 }
 
+bool Widget_InternalLinkToParent(Widget* parent, Widget* child)
+{
+    if (!GenericBuffer_AddLast(&parent->_subWidgets, &child))
+    {
+        return false;
+    }
+    child->_sequence = UIScreen_InternalNextSequence(parent->_screen);
+    if (!Widget_InternalInsertIntoDrawOrder(&parent->_drawOrder, child))
+    {
+        GenericBuffer_RemoveLast(&parent->_subWidgets);
+        return false;
+    }
+    child->_parent = parent;
+    InvalidateBoundsUpTree(parent);
+    Widget_InvalidateMeasure(parent);
+    UIScreen_InternalInvalidateHitTest(parent->_screen);
+    return true;
+}
+
+UIScreenLayer Widget_InternalGetDrawLayer(const Widget* self)
+{
+    return self->_isScreenRoot ? self->_rootLayer : UIScreenLayer_Normal;
+}
+
 bool Widget_InternalInsertIntoDrawOrder(GenericBuffer* drawOrder, Widget* widget)
 {
     // Binary search for the first widget drawn after this one, so the list stays sorted without re-sorting.
@@ -611,6 +632,25 @@ Error Widget_OnMouseInput(Widget* self, const WidgetMouseInputArgs* args)
         return Error_Construct2(ErrorCode_IllegalArgument, "Widget_OnMouseInput: self and args must not be NULL.");
     }
     return (self->VTable->OnMouseInput != NULL) ? self->VTable->OnMouseInput(self, args) : Error_CreateSuccess();
+}
+
+Error Widget_OnPressLost(Widget* self, GameKey button)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_OnPressLost: self must not be NULL.");
+    }
+    return (self->VTable->OnPressLost != NULL) ? self->VTable->OnPressLost(self, button) : Error_CreateSuccess();
+}
+
+Error Widget_OnScrollInput(Widget* self, const WidgetScrollInputArgs* args, bool* outIsHandled)
+{
+    if ((self == NULL) || (args == NULL) || (outIsHandled == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_OnScrollInput: self, args and outIsHandled must not be NULL.");
+    }
+    *outIsHandled = false;
+    return (self->VTable->OnScrollInput != NULL) ? self->VTable->OnScrollInput(self, args, outIsHandled) : Error_CreateSuccess();
 }
 
 Error Widget_OnKeyboardInput(Widget* self, const WidgetKeyboardInputArgs* args, bool* outIsHandled)
@@ -803,7 +843,7 @@ Error Widget_SetIsRendered(Widget* self, bool isRendered)
     {
         return HookResult;
     }
-    return isRendered ? Error_CreateSuccess() : ReleaseFocusOfHidden(self);
+    return isRendered ? Error_CreateSuccess() : UIScreen_InternalReleaseUnreachable(self->_screen);
 }
 
 Error Widget_SetIsUpdated(Widget* self, bool isUpdated)
@@ -837,7 +877,7 @@ Error Widget_SetIsInputEnabled(Widget* self, bool isInputEnabled)
     {
         return HookResult;
     }
-    return ReleaseFocusIfIneligible(self);
+    return isInputEnabled ? Error_CreateSuccess() : UIScreen_InternalReleaseUnreachable(self->_screen);
 }
 
 Error Widget_SetAreSubWidgetsCut(Widget* self, bool areSubWidgetsCut)
@@ -848,6 +888,20 @@ Error Widget_SetAreSubWidgetsCut(Widget* self, bool areSubWidgetsCut)
     }
     self->_areSubWidgetsCut = areSubWidgetsCut;
     UIScreen_InternalInvalidateHitTest(self->_screen);
+    return Error_CreateSuccess();
+}
+
+Error Widget_SetCursorShape(Widget* self, UICursorShape shape)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetCursorShape: self must not be NULL.");
+    }
+    if (((int32_t)shape < 0) || ((int32_t)shape >= (int32_t)UICursorShape_Count))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "Widget_SetCursorShape: an unknown shape.");
+    }
+    self->_cursorShape = shape;
     return Error_CreateSuccess();
 }
 
@@ -892,21 +946,43 @@ Error Widget_AddSubWidget(Widget* self, Widget* child)
             PRIu64 " levels.", (uint64_t)WIDGET_MAX_TREE_DEPTH);
     }
 
-    if (!GenericBuffer_AddLast(&self->_subWidgets, &child))
+    if (!Widget_InternalLinkToParent(self, child))
     {
         return Error_Construct2(ErrorCode_BufferTooLarge, "Widget_AddSubWidget: subwidget could not be stored.");
     }
-    child->_sequence = UIScreen_InternalNextSequence(self->_screen);
-    if (!Widget_InternalInsertIntoDrawOrder(&self->_drawOrder, child))
-    {
-        GenericBuffer_RemoveLast(&self->_subWidgets);
-        return Error_Construct2(ErrorCode_BufferTooLarge, "Widget_AddSubWidget: subwidget could not be stored.");
-    }
-    child->_parent = self;
-    InvalidateBoundsUpTree(self);
-    Widget_InvalidateMeasure(self);
-    UIScreen_InternalInvalidateHitTest(self->_screen);
     return Error_CreateSuccess();
+}
+
+Error Widget_MoveTo(Widget* self, Widget* newParent)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_MoveTo: self must not be NULL.");
+    }
+    if ((newParent != NULL) && (newParent->_screen != self->_screen))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_MoveTo: the new parent must belong to the same screen.");
+    }
+    // A widget being destroyed is unlinked already, or lies under one that is: neither is attached.
+    if (!UIScreen_InternalIsAttached(self) || ((newParent != NULL) && !UIScreen_InternalIsAttached(newParent)))
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation,
+            "Widget_MoveTo: the widget and the new parent must be attached and not being destroyed.");
+    }
+    if ((newParent == NULL) ? self->_isScreenRoot : (self->_parent == newParent))
+    {
+        return Error_CreateSuccess();
+    }
+    if ((newParent != NULL) && IsSelfOrAncestor(self, newParent))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_MoveTo: a widget cannot move into itself or what it holds.");
+    }
+    if ((newParent != NULL) && ((GetDepth(newParent) + GetSubtreeHeight(self)) > WIDGET_MAX_TREE_DEPTH))
+    {
+        return Error_Construct4(ErrorCode_ArgumentOutOfRange, "Widget_MoveTo: the widget tree would be deeper than %"
+            PRIu64 " levels.", (uint64_t)WIDGET_MAX_TREE_DEPTH);
+    }
+    return UIScreen_InternalMoveWidget(self->_screen, self, newParent);
 }
 
 Error Widget_RemoveSubWidget(Widget* self, Widget* child)

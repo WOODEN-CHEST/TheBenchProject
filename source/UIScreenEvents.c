@@ -35,7 +35,7 @@ static bool IsMatch(const Subscription* subscription, const UIEvent* event)
 }
 
 /* A state change describes a widget that exists: once the widget is destroyed it is dropped. A widget's own event (a
- * button's "clicked") is delivered even if the widget was destroyed after posting it, since it carries everything by
+ * button's "activated") is delivered even if the widget was destroyed after posting it, since it carries everything by
  * value. */
 static bool IsDeliverable(const UIScreen* self, const UIEvent* event)
 {
@@ -232,12 +232,9 @@ Error UIScreen_Unsubscribe(UIScreen* self, uint64_t subscriptionId)
     return Error_Construct2(ErrorCode_InvalidOperation, "UIScreen_Unsubscribe: no such subscription.");
 }
 
-Error UIScreen_PostWidgetEvent(UIScreen* self, uint64_t widgetId, int32_t widgetEventId, const UIPropertyValue* value)
+/* Queues a widget type's own event, with what it carries. */
+static Error PostWidgetEvent(UIScreen* self, uint64_t widgetId, int32_t widgetEventId, const UIPropertyValue* value, const UIEventMouse* mouse)
 {
-    if (self == NULL)
-    {
-        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_PostWidgetEvent: self must not be NULL.");
-    }
     Widget* Source = UIScreen_InternalResolve(self, widgetId);
     if (Source == NULL)
     {
@@ -252,11 +249,31 @@ Error UIScreen_PostWidgetEvent(UIScreen* self, uint64_t widgetId, int32_t widget
         .IsSet = false,
         .WidgetEventId = widgetEventId,
         .HasValue = (value != NULL),
-        .Value = (value != NULL) ? *value : UIPropertyValue_FromFloat(0.0f)
+        .Value = (value != NULL) ? *value : UIPropertyValue_FromFloat(0.0f),
+        .HasMouse = (mouse != NULL),
+        .Mouse = (mouse != NULL) ? *mouse : (UIEventMouse){ .Button = GameKey_Unknown }
     };
     if (!UIScreen_InternalPostEvent(self, &Event))
     {
         return Error_Construct2(ErrorCode_BufferTooLarge, "UIScreen_PostWidgetEvent: the notification queue could not grow.");
     }
     return Error_CreateSuccess();
+}
+
+Error UIScreen_PostWidgetEvent(UIScreen* self, uint64_t widgetId, int32_t widgetEventId, const UIPropertyValue* value)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_PostWidgetEvent: self must not be NULL.");
+    }
+    return PostWidgetEvent(self, widgetId, widgetEventId, value, NULL);
+}
+
+Error UIScreen_PostWidgetMouseEvent(UIScreen* self, uint64_t widgetId, int32_t widgetEventId, const UIEventMouse* mouse)
+{
+    if ((self == NULL) || (mouse == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_PostWidgetMouseEvent: self and mouse must not be NULL.");
+    }
+    return PostWidgetEvent(self, widgetId, widgetEventId, NULL, mouse);
 }

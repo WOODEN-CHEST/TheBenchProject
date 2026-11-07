@@ -14,10 +14,12 @@
  * Widgets never read raylib (or GameInput) to react to input: the screen routes the tick's input and calls the
  * widget's hooks with these structs. Keys and mouse buttons are GameKeys (GameKey.h), the game-wide key identity.
  * Grouping each callback's data into a struct means fields can be added later without touching every widget. All
- * positions are normalized [0;1]: screen positions relative to the whole screen (the screen's own surface), widget
- * positions relative to the target widget's box.
+ * positions are normalized: screen positions relative to the whole screen (the screen's own surface), widget positions
+ * relative to the target widget's box. They are in [0;1] while the pointer is inside; a press held keeps being told where
+ * the pointer goes, and then they run past [0;1], also past the game window's edges.
  *
- * These are plain value types that own nothing; the screen builds them on the stack for one callback.
+ * These are plain value types that own nothing; the screen builds them on the stack for one callback. The file also
+ * holds the two small enums every part of the UI names: a root's layer and the pointer's shape.
  */
 
 
@@ -33,8 +35,10 @@ typedef enum UIMouseInputTypeEnum
     UIMouseInputType_ButtonRelease,
     /** @brief The pointer moved while a button that was pressed on the widget is held (a drag). */
     UIMouseInputType_Move,
-    /** @brief The wheel scrolled over the widget (ScrollDelta is set). */
-    UIMouseInputType_Scroll
+    /** @brief A press some other widget of the screen held came up this tick with the pointer over this one: the top widget
+     *  there gets this, right after the press's widget got its ButtonRelease. ClickStart* and DurationSeconds describe that
+     *  press. What a press-drag-release menu and a click that activates on the release stand on. */
+    UIMouseInputType_ReleaseOver
 } UIMouseInputType;
 
 /**
@@ -53,6 +57,55 @@ typedef enum UIKeyboardInputTypeEnum
 } UIKeyboardInputType;
 
 /**
+ * @brief Where a root of a screen stands among the others (UIScreen_SetRootLayer): drawing and hit testing go by layer, then by
+ *        z, then by insertion. From the bottom up.
+ */
+typedef enum UIScreenLayerEnum
+{
+    /** @brief Under everything: a dock's root and the bars. A press does not raise it. */
+    UIScreenLayer_Background,
+    /** @brief The default. A press raises the root above the others of this layer. */
+    UIScreenLayer_Normal,
+    /** @brief Floating windows: a press raises the root above the others of this layer. */
+    UIScreenLayer_Floating,
+    /** @brief A maximized window. A press does not raise it. */
+    UIScreenLayer_Maximized,
+    /** @brief Popups, above every window. A press does not raise it. */
+    UIScreenLayer_Popup,
+    /** @brief Tooltips and a drag's preview: on top of everything, taking no input at all. */
+    UIScreenLayer_Overlay,
+    /** @brief The number of layers. Not a layer. */
+    UIScreenLayer_Count
+} UIScreenLayer;
+
+/**
+ * @brief The shape the pointer shows over a widget (Widget_SetCursorShape).
+ */
+typedef enum UICursorShapeEnum
+{
+    /** @brief The normal arrow. */
+    UICursorShape_Arrow,
+    /** @brief An I-beam: text can be typed or selected here. */
+    UICursorShape_IBeam,
+    /** @brief Resizing across: a vertical edge. */
+    UICursorShape_ResizeHorizontal,
+    /** @brief Resizing up and down: a horizontal edge. */
+    UICursorShape_ResizeVertical,
+    /** @brief Resizing along the diagonal from the top-left to the bottom-right: those two corners. */
+    UICursorShape_ResizeDiagonalDown,
+    /** @brief Resizing along the diagonal from the bottom-left to the top-right: those two corners. */
+    UICursorShape_ResizeDiagonalUp,
+    /** @brief Moving in every direction. */
+    UICursorShape_Move,
+    /** @brief A pointing hand: this can be clicked. */
+    UICursorShape_Hand,
+    /** @brief This cannot be done here. */
+    UICursorShape_NotAllowed,
+    /** @brief The number of shapes. Not a shape. */
+    UICursorShape_Count
+} UICursorShape;
+
+/**
  * @brief The information passed to a widget's OnHoverStart callback.
  *
  * Describes where the pointer is, both relative to the whole screen and relative to the hovered widget's own box.
@@ -68,38 +121,61 @@ typedef struct WidgetHoverArgsStruct
 /**
  * @brief The information passed to a widget's OnMouseInput callback.
  *
- * One struct covers presses, releases, drags and scrolls (see Type). A release and a drag are delivered to the widget
- * the press STARTED on (so a drag out of the widget still ends there), for as long as it stays attached, takes input and
- * shows; a pointer that moved in the release's tick arrives as a drag first. ClickStart* / DurationSeconds describe that
- * press.
+ * One struct covers presses, releases and drags (see Type). A release and a drag are delivered to the widget the press
+ * STARTED on or was handed to (UIScreen_TransferPress), wherever the pointer goes, for as long as it stays attached, takes
+ * input and shows; a pointer that moved in the release's tick arrives as a drag first. ClickStart*, DurationSeconds and
+ * ClickCount describe that press.
  */
 typedef struct WidgetMouseInputArgsStruct
 {
     /** @brief Which kind of mouse action this is. */
     UIMouseInputType Type;
-    /** @brief The mouse button involved (a GameKey for which GameKey_IsMouseButton is true); GameKey_Unknown for a
-     *  scroll. */
+    /** @brief The mouse button involved (a GameKey for which GameKey_IsMouseButton is true). */
     GameKey Button;
-    /** @brief Current pointer position, normalized [0;1] relative to the whole screen. */
+    /** @brief The GAME_KEY_MODIFIER_* flags held this tick. */
+    uint8_t Modifiers;
+    /** @brief Current pointer position relative to the whole screen; past [0;1] when a held press's pointer left it. */
     Vector2 ScreenPosition;
-    /** @brief Current pointer position, normalized [0;1] relative to the target widget's box. */
+    /** @brief Current pointer position relative to the target widget's box. */
     Vector2 WidgetPosition;
-    /** @brief Where the press began, normalized [0;1] relative to the screen; equals ScreenPosition for a press. */
+    /** @brief Where the press began, relative to the screen; equals ScreenPosition for a press. */
     Vector2 ClickStartScreenPosition;
-    /** @brief Where the press began, normalized [0;1] relative to the target widget's box. */
+    /** @brief Where the press began, relative to the target widget's box. */
     Vector2 ClickStartWidgetPosition;
     /** @brief Seconds since the press began; 0 for a press. */
     double DurationSeconds;
-    /** @brief Wheel movement (x, y) for a scroll; zero otherwise. */
-    Vector2 ScrollDelta;
+    /** @brief How far the pointer moved since the last delivery of this press, in surface pixels; zero for a press. During a
+     *  hidden-cursor drag (UIScreen_CapturePointer) this is the raw motion, and the positions stand still. */
+    Vector2 DeltaPixels;
+    /** @brief How many presses of this one button on this one widget came in a row, each soon after the last and near it: 1
+     *  for a single one, 2 for a double click. */
+    uint32_t ClickCount;
 } WidgetMouseInputArgs;
+
+/**
+ * @brief The information passed to a widget's OnScrollInput callback.
+ *
+ * The wheel goes to the widget under the pointer, then up through its ancestors, until one handles it.
+ */
+typedef struct WidgetScrollInputArgsStruct
+{
+    /** @brief Wheel movement (x: horizontal, y: vertical), in notches. */
+    Vector2 ScrollDelta;
+    /** @brief The GAME_KEY_MODIFIER_* flags held this tick. */
+    uint8_t Modifiers;
+    /** @brief Pointer position relative to the whole screen. */
+    Vector2 ScreenPosition;
+    /** @brief Pointer position relative to the target widget's box. */
+    Vector2 WidgetPosition;
+} WidgetScrollInputArgs;
 
 /**
  * @brief The information passed to a widget's OnKeyboardInput callback.
  *
  * Covers key state changes (press / release / repeat, in Key) and text entry (a Unicode codepoint, in Codepoint);
  * Type says which fields are meaningful. The focused widget gets every key first, then its ancestors, until one
- * reports it handled.
+ * reports it handled; a press of the reset, copy or paste action that nobody handled then goes to the hovered widget and
+ * its ancestors (IsHoverDelivery).
  */
 typedef struct WidgetKeyboardInputArgsStruct
 {
@@ -111,4 +187,6 @@ typedef struct WidgetKeyboardInputArgsStruct
     uint8_t Modifiers;
     /** @brief The typed Unicode codepoint; meaningful for a Text action. */
     uint32_t Codepoint;
+    /** @brief Whether this press reaches the widget because the pointer is over it, not because it has the focus. */
+    bool IsHoverDelivery;
 } WidgetKeyboardInputArgs;

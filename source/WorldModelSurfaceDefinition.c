@@ -630,13 +630,14 @@ static bool TryGetCenterOnTriangle(const Vector3* corners, const Vector2* uvs, f
     return true;
 }
 
-/* The glass's frame for its light, from its triangles and their texture coordinates: the point at the coordinates'
- * centre (on the triangle that holds it; without one, the triangles' centre by area), the way the front faces (the
- * triangles' counter-clockwise normals by area) and how far a step of 1 in u and in v goes (each triangle's, by area). */
+/* The glass's frame for its light and for a ray continued past it, from its triangles and their texture coordinates: the point at the
+ * coordinates' centre (on the triangle that holds it; without one, the triangles' centre by area, with its coordinates), the way the front
+ * faces (the triangles' counter-clockwise normals by area) and how far a step of 1 in u and in v goes (each triangle's, by area). */
 static void BuildLightFrame(const CollisionMesh* mesh, const Vector2* uvs, WorldModelSurface* surface)
 {
     Vector3 NormalSum = { 0.0f, 0.0f, 0.0f };
     Vector3 CentroidSum = { 0.0f, 0.0f, 0.0f };
+    Vector2 CentroidUvSum = { 0.0f, 0.0f };
     Vector3 AxisUSum = { 0.0f, 0.0f, 0.0f };
     Vector3 AxisVSum = { 0.0f, 0.0f, 0.0f };
     float AreaSum = 0.0f;
@@ -657,6 +658,8 @@ static void BuildLightFrame(const CollisionMesh* mesh, const Vector2* uvs, World
         NormalSum = Vector3Add(NormalSum, Cross);
         Vector3 Centroid = Vector3Scale(Vector3Add(Vector3Add(Corners[0], Corners[1]), Corners[2]), 1.0f / 3.0f);
         CentroidSum = Vector3Add(CentroidSum, Vector3Scale(Centroid, Area));
+        Vector2 CentroidUv = Vector2Scale(Vector2Add(Vector2Add(Uvs[0], Uvs[1]), Uvs[2]), 1.0f / 3.0f);
+        CentroidUvSum = Vector2Add(CentroidUvSum, Vector2Scale(CentroidUv, Area));
         AreaSum += Area;
         Vector2 Step1 = Vector2Subtract(Uvs[1], Uvs[0]);
         Vector2 Step2 = Vector2Subtract(Uvs[2], Uvs[0]);
@@ -681,9 +684,11 @@ static void BuildLightFrame(const CollisionMesh* mesh, const Vector2* uvs, World
     float NormalLength = Vector3Length(NormalSum);
     surface->_normal = (NormalLength > 0.0f) ? Vector3Scale(NormalSum, 1.0f / NormalLength)
         : (Vector3){ 0.0f, 0.0f, 1.0f };
+    surface->_centerUv = (Vector2){ 0.5f, 0.5f };
     if (!HasCenter)
     {
         surface->_center = (AreaSum > 0.0f) ? Vector3Scale(CentroidSum, 1.0f / AreaSum) : mesh->_vertices[0];
+        surface->_centerUv = (AreaSum > 0.0f) ? Vector2Scale(CentroidUvSum, 1.0f / AreaSum) : surface->_centerUv;
     }
     surface->_axisU = (MappedAreaSum > 0.0f) ? Vector3Scale(AxisUSum, 1.0f / MappedAreaSum)
         : (Vector3){ 0.0f, 0.0f, 0.0f };

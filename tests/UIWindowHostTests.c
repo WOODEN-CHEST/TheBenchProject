@@ -7,6 +7,7 @@
 #include "UIKit.h"
 #include "UIWidgetFactory.h"
 #include "UIWindowHost.h"
+#include "wr/WRMemory.h"
 #include <math.h>
 
 
@@ -96,6 +97,88 @@ static Rectangle GetButtonPixels(HostFixture* self)
 static bool IsClose(float a, float b)
 {
     return fabsf(a - b) < 0.01f;
+}
+
+/* A widget over the whole surface that keeps the raw motion a drag brought it. */
+typedef struct MotionProbeStruct
+{
+    Widget Base;
+    Vector2 LastDelta;
+    int MoveCount;
+} MotionProbe;
+
+static Error MotionProbe_OnMouseInput(void* self, const WidgetMouseInputArgs* args)
+{
+    MotionProbe* Probe = self;
+    if (args->Type == UIMouseInputType_Move)
+    {
+        Probe->LastDelta = args->DeltaPixels;
+        Probe->MoveCount++;
+    }
+    return Error_CreateSuccess();
+}
+
+static const WidgetVTable MotionProbeVTable = { .OnMouseInput = MotionProbe_OnMouseInput };
+
+/* What a host asked of the cursor, in place of the real one. */
+typedef struct CursorRecordStruct
+{
+    int CaptureCount;
+    int ReleaseCount;
+    int ShapeCount;
+    Vector2 ReleasedAt;
+    UICursorShape Shape;
+    GameInput* Input;
+} CursorRecord;
+
+static void RecordCapture(void* context, GameInput* input)
+{
+    CursorRecord* Record = context;
+    Record->CaptureCount++;
+    Record->Input = input;
+}
+
+static void RecordRelease(void* context, GameInput* input, Vector2 position)
+{
+    CursorRecord* Record = context;
+    Record->ReleaseCount++;
+    Record->ReleasedAt = position;
+    Record->Input = input;
+}
+
+static void RecordShape(void* context, UICursorShape shape)
+{
+    CursorRecord* Record = context;
+    Record->ShapeCount++;
+    Record->Shape = shape;
+}
+
+/* Replaces the fixture's cursor with one that records. */
+static void RecordCursor(HostFixture* self, CursorRecord* record)
+{
+    Memory_Zero(record, sizeof(*record));
+    UIWindowHostCursor Cursor = { .Capture = RecordCapture, .Release = RecordRelease, .SetShape = RecordShape, .Context = record };
+    UIWindowHost_SetCursor(&self->Host, &Cursor);
+}
+
+/* One tick of a 1000 x 500 window, its pointer at a place in window pixels; then this tick's presses become holds and its releases end. */
+static void PointerTick(TestRun* run, HostFixture* self, float x, float y)
+{
+    self->Sample.MousePosition = (Vector2){ .x = x, .y = y };
+    Tick(run, self, 1000.0f, 500.0f, 1080.0f);
+    for (int32_t Index = 0; Index < (int32_t)GameKey_Count; Index++)
+    {
+        uint8_t State = self->Sample.KeyStates[Index];
+        self->Sample.KeyStates[Index] = ((State & GAME_INPUT_KEY_STATE_RELEASED) != 0) ? 0U : (uint8_t)(State & GAME_INPUT_KEY_STATE_DOWN);
+    }
+}
+
+/* The screen's panel stretches over the whole window: what the pointer lands on at (10, 10) is it. The button stands at (10, 20). */
+static Widget* GetWidget(HostFixture* self, uint64_t id)
+{
+    Widget* Found = NULL;
+    UIScreen_TryGetWidgetById(&self->Screen, id, &Found);
+    return Found;
 }
 
 
@@ -254,6 +337,198 @@ static void ThePointerAndTheKeysAreTheWindows(TestRun* run)
 
 
 // Public functions.
+// The host's pointer comes from the window: a drag held past the window's edge goes on, and the press hears where it is.
+static void TheHostsPointerFollowsAPressPastTheWindow(TestRun* run)
+{
+    HostFixture Fixture;
+    if (Fixture_Construct(run, &Fixture, UIScalePolicy_Fixed(1.0f), 1.0f))
+    {
+        PointerTick(run, &Fixture, 50.0f, 30.0f); // Placed.
+        PointerTick(run, &Fixture, 50.0f, 30.0f);
+        TEST_CHECK(run, Widget_IsHovered(GetWidget(&Fixture, Fixture.ButtonId)));
+        Fixture.Sample.KeyStates[GameKey_MouseLeft] = GAME_INPUT_KEY_STATE_DOWN | GAME_INPUT_KEY_STATE_PRESSED;
+        PointerTick(run, &Fixture, 50.0f, 30.0f);
+        TEST_CHECK(run, UIScreen_HasHeldPress(&Fixture.Screen));
+        PointerTick(run, &Fixture, -400.0f, 2000.0f);
+        TEST_CHECK(run, !UIScreen_IsPointerPresent(&Fixture.Screen) && IsClose(UIScreen_GetPointerPosition(&Fixture.Screen).x, -0.4f)
+            && IsClose(UIScreen_GetPointerPosition(&Fixture.Screen).y, 4.0f));
+        TEST_CHECK(run, !Widget_IsHovered(GetWidget(&Fixture, Fixture.ButtonId)) && UIScreen_HasHeldPress(&Fixture.Screen));
+        Fixture.Sample.KeyStates[GameKey_MouseLeft] = GAME_INPUT_KEY_STATE_RELEASED;
+        PointerTick(run, &Fixture, -400.0f, 2000.0f);
+        TEST_CHECK(run, !UIScreen_HasHeldPress(&Fixture.Screen));
+
+        // A stale place just inside the edge, the cursor having left: nothing hovers.
+        Fixture.Sample.IsCursorOnWindow = false;
+        PointerTick(run, &Fixture, 50.0f, 30.0f);
+        TEST_CHECK(run, !UIScreen_IsPointerPresent(&Fixture.Screen) && !Widget_IsHovered(GetWidget(&Fixture, Fixture.ButtonId)));
+        Fixture.Sample.IsCursorOnWindow = true;
+        PointerTick(run, &Fixture, 50.0f, 30.0f);
+        TEST_CHECK(run, Widget_IsHovered(GetWidget(&Fixture, Fixture.ButtonId)));
+    }
+    Fixture_Deconstruct(run, &Fixture);
+}
+
+// A hidden-cursor drag: asked for in one tick, applied after it; raw motion from the next on, the position standing still; and the cursor
+// put back where it began when the press ends, once.
+static void TheHostAppliesAHiddenCursorDrag(TestRun* run)
+{
+    HostFixture Fixture;
+    CursorRecord Record;
+    if (Fixture_Construct(run, &Fixture, UIScalePolicy_Fixed(1.0f), 1.0f))
+    {
+        RecordCursor(&Fixture, &Record);
+        PointerTick(run, &Fixture, 50.0f, 30.0f); // Placed.
+        PointerTick(run, &Fixture, 50.0f, 30.0f);
+        Fixture.Sample.KeyStates[GameKey_MouseLeft] = GAME_INPUT_KEY_STATE_DOWN | GAME_INPUT_KEY_STATE_PRESSED;
+        PointerTick(run, &Fixture, 50.0f, 30.0f);
+        TEST_CHECK(run, Record.CaptureCount == 0);
+        PointerTick(run, &Fixture, 52.0f, 30.0f);
+        TEST_CHECK(run, Record.CaptureCount == 0);
+
+        TEST_CHECK_SUCCESS(run, UIScreen_CapturePointer(&Fixture.Screen, Fixture.ButtonId));
+        PointerTick(run, &Fixture, 54.0f, 30.0f);
+        TEST_CHECK(run, (Record.CaptureCount == 1) && (Record.Input == &Fixture.Input) && (Record.ReleaseCount == 0));
+
+        // As the real cursor would be: hidden, at the window's centre, with raw motion. The screen does not see any of that move.
+        Fixture.Sample.IsCursorCaptured = true;
+        Fixture.Sample.MouseDelta = (Vector2){ .x = 11.0f, .y = 3.0f };
+        PointerTick(run, &Fixture, 500.0f, 250.0f);
+        TEST_CHECK(run, IsClose(UIScreen_GetPointerPosition(&Fixture.Screen).x, 0.054f) && UIScreen_IsPointerPresent(&Fixture.Screen));
+        TEST_CHECK(run, Widget_IsHovered(GetWidget(&Fixture, Fixture.ButtonId)));
+        TEST_CHECK(run, GameInput_IsPointerConsumed(&Fixture.Input));
+        Fixture.Sample.MouseDelta = (Vector2){ .x = 0.0f, .y = 0.0f };
+        PointerTick(run, &Fixture, 500.0f, 250.0f);
+        TEST_CHECK(run, (Record.CaptureCount == 1) && (Record.ReleaseCount == 0)); // Once, not per tick.
+
+        // The press ends: back where it began.
+        Fixture.Sample.KeyStates[GameKey_MouseLeft] = GAME_INPUT_KEY_STATE_RELEASED;
+        PointerTick(run, &Fixture, 500.0f, 250.0f);
+        TEST_CHECK(run, (Record.ReleaseCount == 1) && (Record.ReleasedAt.x == 54.0f) && (Record.ReleasedAt.y == 30.0f));
+        TEST_CHECK(run, !UIScreen_IsPointerCaptured(&Fixture.Screen));
+        Fixture.Sample.IsCursorCaptured = false;
+        PointerTick(run, &Fixture, 54.0f, 30.0f);
+        TEST_CHECK(run, (Record.ReleaseCount == 1) && (Record.CaptureCount == 1));
+        TEST_CHECK(run, UIScreen_IsPointerPresent(&Fixture.Screen) && Widget_IsHovered(GetWidget(&Fixture, Fixture.ButtonId)));
+    }
+    Fixture_Deconstruct(run, &Fixture);
+}
+
+// The hidden cursor's raw motion is what the widget hears, past the position's reach; with the capture asked for and no input yet, nothing happens to the cursor.
+static void TheHostHandsOnTheRawMotion(TestRun* run)
+{
+    HostFixture Fixture;
+    CursorRecord Record;
+    if (Fixture_Construct(run, &Fixture, UIScalePolicy_Fixed(1.0f), 1.0f))
+    {
+        RecordCursor(&Fixture, &Record);
+        WidgetTypeDescriptor Descriptor = { .Name = u8"MotionProbe", .StructSize = sizeof(MotionProbe), .VTable = &MotionProbeVTable };
+        uint64_t ProbeType = 0U;
+        Widget* Created = NULL;
+        TEST_CHECK_SUCCESS(run, UIWidgetFactory_RegisterType(&Fixture.Factory, &Descriptor, &ProbeType));
+        TEST_CHECK_SUCCESS(run, UIWidgetFactory_CreateWidget(&Fixture.Factory, &Fixture.Screen, ProbeType, NULL, &Created));
+        TEST_CHECK_SUCCESS(run, Widget_SetSize(Created, (Vector2){ .x = 1.0f, .y = 1.0f }));
+        TEST_CHECK_SUCCESS(run, Widget_InitializeWidget(Created));
+        TEST_CHECK_SUCCESS(run, UIScreen_AddWidget(&Fixture.Screen, Created));
+        MotionProbe* Probe = (MotionProbe*)Created;
+
+        PointerTick(run, &Fixture, 500.0f, 250.0f); // Placed.
+        Fixture.Sample.KeyStates[GameKey_MouseLeft] = GAME_INPUT_KEY_STATE_DOWN | GAME_INPUT_KEY_STATE_PRESSED;
+        PointerTick(run, &Fixture, 500.0f, 250.0f);
+        Fixture.Sample.KeyStates[GameKey_MouseLeft] = GAME_INPUT_KEY_STATE_DOWN;
+
+        // Asked for between two ticks, with the next one having no input to take the cursor from: it waits.
+        TEST_CHECK_SUCCESS(run, UIScreen_CapturePointer(&Fixture.Screen, Widget_GetId(Created)));
+        TEST_CHECK_SUCCESS(run, UIWindowHost_Update(&Fixture.Host, &Fixture.Screen, ProgramTime_Create(Fixture.Time, HOST_TEST_TICK), NULL));
+        TEST_CHECK(run, Record.CaptureCount == 0);
+
+        PointerTick(run, &Fixture, 500.0f, 250.0f);
+        TEST_CHECK(run, Record.CaptureCount == 1);
+        Fixture.Sample.IsCursorCaptured = true;
+        Fixture.Sample.MouseDelta = (Vector2){ .x = 11.0f, .y = 3.0f };
+        int MovesBefore = Probe->MoveCount;
+        PointerTick(run, &Fixture, 500.0f, 250.0f);
+        TEST_CHECK(run, (Probe->MoveCount == (MovesBefore + 1)) && (Probe->LastDelta.x == 11.0f) && (Probe->LastDelta.y == 3.0f));
+    }
+    Fixture_Deconstruct(run, &Fixture);
+}
+
+// A drag asked for and ended within a tick asks nothing of the cursor. The host going away with one running gives the cursor back.
+static void TheHostGivesTheCursorBack(TestRun* run)
+{
+    HostFixture Fixture;
+    CursorRecord Record;
+    if (Fixture_Construct(run, &Fixture, UIScalePolicy_Fixed(1.0f), 1.0f))
+    {
+        RecordCursor(&Fixture, &Record);
+        PointerTick(run, &Fixture, 50.0f, 30.0f); // Placed.
+        PointerTick(run, &Fixture, 50.0f, 30.0f);
+        Fixture.Sample.KeyStates[GameKey_MouseLeft] = GAME_INPUT_KEY_STATE_DOWN | GAME_INPUT_KEY_STATE_PRESSED;
+        PointerTick(run, &Fixture, 50.0f, 30.0f);
+        TEST_CHECK_SUCCESS(run, UIScreen_CapturePointer(&Fixture.Screen, Fixture.ButtonId));
+        UIScreen_ReleasePointerCapture(&Fixture.Screen);
+        PointerTick(run, &Fixture, 50.0f, 30.0f);
+        TEST_CHECK(run, (Record.CaptureCount == 0) && (Record.ReleaseCount == 0));
+
+        TEST_CHECK_SUCCESS(run, UIScreen_CapturePointer(&Fixture.Screen, Fixture.ButtonId));
+        PointerTick(run, &Fixture, 50.0f, 30.0f);
+        TEST_CHECK(run, Record.CaptureCount == 1);
+
+        // A tick with no input changes nothing about it.
+        TEST_CHECK_SUCCESS(run, UIWindowHost_Update(&Fixture.Host, &Fixture.Screen, ProgramTime_Create(Fixture.Time, HOST_TEST_TICK), NULL));
+        TEST_CHECK(run, (Record.CaptureCount == 1) && (Record.ReleaseCount == 0));
+
+        // Going away with it running.
+        UIWindowHost_Deconstruct(&Fixture.Host);
+        TEST_CHECK(run, (Record.ReleaseCount == 1) && (Record.ReleasedAt.x == 50.0f));
+        UIWindowHost_Deconstruct(&Fixture.Host);
+        TEST_CHECK(run, Record.ReleaseCount == 1);
+    }
+    Fixture_Deconstruct(run, &Fixture);
+    UIWindowHost_Deconstruct(NULL);
+}
+
+// The pointer's shape: applied when it changes, not per tick, and the arrow again when the host goes.
+static void TheHostAppliesThePointersShape(TestRun* run)
+{
+    HostFixture Fixture;
+    CursorRecord Record;
+    if (Fixture_Construct(run, &Fixture, UIScalePolicy_Fixed(1.0f), 1.0f))
+    {
+        RecordCursor(&Fixture, &Record);
+        TEST_CHECK_SUCCESS(run, Widget_SetCursorShape(GetWidget(&Fixture, Fixture.ButtonId), UICursorShape_Hand));
+        PointerTick(run, &Fixture, 500.0f, 250.0f); // Placed.
+        PointerTick(run, &Fixture, 500.0f, 250.0f);
+        TEST_CHECK(run, Record.ShapeCount == 0); // The arrow it starts with.
+        PointerTick(run, &Fixture, 50.0f, 30.0f);
+        TEST_CHECK(run, (Record.ShapeCount == 1) && (Record.Shape == UICursorShape_Hand));
+        PointerTick(run, &Fixture, 50.0f, 30.0f);
+        PointerTick(run, &Fixture, 51.0f, 31.0f);
+        TEST_CHECK(run, Record.ShapeCount == 1);
+        PointerTick(run, &Fixture, 500.0f, 250.0f);
+        TEST_CHECK(run, (Record.ShapeCount == 2) && (Record.Shape == UICursorShape_Arrow));
+        PointerTick(run, &Fixture, 50.0f, 30.0f);
+        TEST_CHECK(run, (Record.ShapeCount == 3) && (Record.Shape == UICursorShape_Hand));
+        UIWindowHost_Deconstruct(&Fixture.Host);
+        TEST_CHECK(run, (Record.ShapeCount == 4) && (Record.Shape == UICursorShape_Arrow));
+        UIWindowHost_Deconstruct(&Fixture.Host);
+        TEST_CHECK(run, Record.ShapeCount == 4);
+    }
+    Fixture_Deconstruct(run, &Fixture);
+}
+
+// The standard cursor, with no window: every call does nothing, so a test or a windowless harness that reaches it is safe.
+static void TheStandardCursorIsSafeWithNoWindow(TestRun* run)
+{
+    UIWindowHostCursor Cursor = UIWindowHostCursor_CreateStandard();
+    TEST_CHECK(run, (Cursor.Capture != NULL) && (Cursor.Release != NULL) && (Cursor.SetShape != NULL));
+    Cursor.Capture(Cursor.Context, NULL);
+    Cursor.Release(Cursor.Context, NULL, (Vector2){ .x = 1.0f, .y = 1.0f });
+    for (int32_t Shape = 0; Shape <= (int32_t)UICursorShape_Count; Shape++)
+    {
+        Cursor.SetShape(Cursor.Context, (UICursorShape)Shape);
+    }
+}
+
 void UIWindowHostTests_Run(TestRun* run)
 {
     static const TestCase Cases[] =
@@ -264,6 +539,12 @@ void UIWindowHostTests_Run(TestRun* run)
         { "the_policy_and_the_players_scale_can_change", ThePolicyAndThePlayersScaleCanChange },
         { "with_nothing_to_go_by_the_players_scale_stands", WithNothingToGoByThePlayersScaleStands },
         { "the_pointer_and_the_keys_are_the_windows", ThePointerAndTheKeysAreTheWindows },
+        { "the_hosts_pointer_follows_a_press_past_the_window", TheHostsPointerFollowsAPressPastTheWindow },
+        { "the_host_applies_a_hidden_cursor_drag", TheHostAppliesAHiddenCursorDrag },
+        { "the_host_hands_on_the_raw_motion", TheHostHandsOnTheRawMotion },
+        { "the_host_gives_the_cursor_back", TheHostGivesTheCursorBack },
+        { "the_host_applies_the_pointers_shape", TheHostAppliesThePointersShape },
+        { "the_standard_cursor_is_safe_with_no_window", TheStandardCursorIsSafeWithNoWindow },
     };
     TestRun_RunSuite(run, "UIWindowHost", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

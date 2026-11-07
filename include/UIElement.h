@@ -32,6 +32,15 @@
  */
 
 
+// Macros.
+/** @brief The bit of a mouse button in a mask of buttons. */
+#define UI_BUTTON_BIT(button) ((uint8_t)(1U << (uint32_t)((int32_t)(button) - (int32_t)GameKey_MouseLeft)))
+/** @brief The mask of buttons an element activates by unless it says otherwise: the left one. */
+#define UI_BUTTONS_LEFT UI_BUTTON_BIT(GameKey_MouseLeft)
+/** @brief Every mouse button. */
+#define UI_BUTTONS_ALL ((uint8_t)((1U << (uint32_t)((int32_t)GameKey_MouseBack - (int32_t)GameKey_MouseLeft + 1)) - 1U))
+
+
 // Forward declarations.
 /** @brief The kit; full type in UIKit.h. */
 typedef struct UIKitStruct UIKit;
@@ -41,22 +50,50 @@ typedef struct TextComponentFactoryStruct TextComponentFactory;
 
 // Types.
 /**
- * @brief The events elements post (UIScreen_PostWidgetEvent), the same ids for every kind: a UIEvent's WidgetEventId.
+ * @brief The events elements post, the same ids for every kind: a UIEvent's WidgetEventId. They are the one mechanism for what an
+ *        input does.
  *
  * Value elements distinguish three: Changed during a drag or while typing, for a live preview; Committed at the release or
- * the key's release, which is what an undo history records; Cancelled when Escape put the first value back.
+ * the key's release, which is what an undo history records; Cancelled when Escape put the first value back. A disabled element
+ * posts none of them.
  */
 typedef enum UIElementEventEnum
 {
-    /** @brief A button was clicked. No value. */
-    UIElementEvent_Clicked,
+    /** @brief The element did what it is for: its click mode says so, or the keyboard does. The event's mouse data tells the
+     *  button or the key, and the modifiers. A button posts it; a toggle's click is Changed and Committed. */
+    UIElementEvent_Activated,
     /** @brief The value changed and the change may go on. The value is in the event: a bool or a double. */
     UIElementEvent_Changed,
     /** @brief The change is done. The value is in the event. Not posted when the value ends where it started. */
     UIElementEvent_Committed,
     /** @brief The change was cancelled and the value at its start is back. That value is in the event. */
-    UIElementEvent_Cancelled
+    UIElementEvent_Cancelled,
+    /** @brief Any mouse button went down on it. The mouse data tells the button, the modifiers and the position. */
+    UIElementEvent_Pressed,
+    /** @brief A button of a press on it came up, or one held elsewhere came up over it. The mouse data tells the button, the modifiers,
+     *  the position and whether the pointer is over it. */
+    UIElementEvent_Released,
+    /** @brief A second press of one button came soon after the first, in the same place. The mouse data tells the button and the
+     *  modifiers. A third in the row does not post it again. */
+    UIElementEvent_DoubleClicked,
+    /** @brief The wheel moved over an element that takes it. The mouse data tells the delta and the modifiers. */
+    UIElementEvent_Scrolled,
+    /** @brief A right press and release on it, or the context menu's key while it is focused. The mouse data tells the position. */
+    UIElementEvent_ContextRequested
 } UIElementEvent;
+
+/**
+ * @brief When a pressable element activates.
+ */
+typedef enum UIClickModeEnum
+{
+    /** @brief When a button goes down on it: for what should happen in a hurry. */
+    UIClickMode_OnPress,
+    /** @brief When a button comes up on it, wherever the press began: for press-drag-release menus. */
+    UIClickMode_OnRelease,
+    /** @brief When a press on it comes up on it: dragging off takes an accidental click back. The default. */
+    UIClickMode_OnPressAndRelease
+} UIClickMode;
 
 /**
  * @brief What every element is created with. A plain value; build one with UIElementOptions_Create.
@@ -111,13 +148,17 @@ typedef struct UIElementTextStruct
 } UIElementText;
 
 /**
- * @brief The press behaviour a button and a toggle share: a press and a release on it, or Enter or Space while focused.
+ * @brief The press behaviour a button and a toggle share: per button, a click mode, and Enter or Space while focused.
  */
 typedef struct UIPressableStruct
 {
-    /** @brief A left press on it is held. */
-    bool _isPointerDown;
-    /** @brief The pointer is over it during that press. */
+    /** @brief When it activates. */
+    UIClickMode _clickMode;
+    /** @brief The buttons that activate it (UI_BUTTON_BIT). */
+    uint8_t _activationButtons;
+    /** @brief The buttons among those whose press on it is held. */
+    uint8_t _heldButtons;
+    /** @brief The pointer is over it during such a press. */
     bool _isPointerInside;
     /** @brief The key whose press activated it and is still down, or GameKey_Unknown. */
     GameKey _heldKey;
@@ -286,34 +327,49 @@ Error UIElementText_Draw(const UIElementText* self, UIRenderContext* context, fl
 // The press behaviour.
 /**
  * @brief Returns the behaviour's starting state.
- * @returns The state: nothing held.
+ * @returns The state: nothing held, activating by the left button, on a press and a release on it.
  */
 static inline UIPressable UIPressable_Create(void)
 {
-    return (UIPressable){ ._isPointerDown = false, ._isPointerInside = false, ._heldKey = GameKey_Unknown };
+    return (UIPressable){ ._clickMode = UIClickMode_OnPressAndRelease, ._activationButtons = UI_BUTTONS_LEFT, ._heldButtons = 0U,
+        ._isPointerInside = false, ._heldKey = GameKey_Unknown };
 }
 
 /**
- * @brief Returns whether it should look pressed: a press held with the pointer over it, or its key held.
+ * @brief Returns whether a click mode and a mask of buttons make sense.
+ * @param clickMode The click mode.
+ * @param activationButtons The mask; UI_BUTTON_BIT values ORed together. No bit at all leaves the keyboard alone to activate it.
+ * @returns true if they do.
+ */
+static inline bool UIPressable_AreSettingsValid(UIClickMode clickMode, uint8_t activationButtons)
+{
+    return ((int32_t)clickMode >= (int32_t)UIClickMode_OnPress) && ((int32_t)clickMode <= (int32_t)UIClickMode_OnPressAndRelease)
+        && ((activationButtons & (uint8_t)~UI_BUTTONS_ALL) == 0U);
+}
+
+/**
+ * @brief Returns whether it should look pressed: a press of a button that activates it held with the pointer over it, or its key
+ *        held.
  * @param self The behaviour; must not be NULL.
  * @returns true if pressed.
  */
 static inline bool UIPressable_IsPressed(const UIPressable* self)
 {
-    return (self->_isPointerDown && self->_isPointerInside) || (self->_heldKey != GameKey_Unknown);
+    return ((self->_heldButtons != 0U) && self->_isPointerInside) || (self->_heldKey != GameKey_Unknown);
 }
 
 /**
  * @brief Interprets mouse input from the widget's OnMouseInput hook.
  *
- * A click is a left press and a release on it: *outIsActivated is set by a release over it (nothing covering it there). A
- * release elsewhere does nothing. A disabled element swallows it all: the screen already consumed the press, so it does not
- * reach what lies behind.
+ * *outIsActivated is set by what the click mode says, for a button that activates it: OnPress at the press; OnRelease at a release
+ * over it, wherever the press began (UIMouseInputType_ReleaseOver); OnPressAndRelease at the release of a press on it, over it
+ * (nothing covering it there). Other buttons do nothing here. A disabled element swallows it all: the screen already consumed the
+ * press, so it does not reach what lies behind.
  * @param self The behaviour; must not be NULL.
  * @param widget The element's widget; must not be NULL.
  * @param args The input; must not be NULL.
  * @param isEnabled Whether the element is enabled.
- * @param outIsActivated [out] Set when it was clicked; must not be NULL.
+ * @param outIsActivated [out] Set when it was activated; must not be NULL.
  */
 void UIPressable_OnMouseInput(UIPressable* self, Widget* widget, const WidgetMouseInputArgs* args, bool isEnabled,
     bool* outIsActivated);
@@ -321,8 +377,8 @@ void UIPressable_OnMouseInput(UIPressable* self, Widget* widget, const WidgetMou
 /**
  * @brief Interprets keyboard input from the widget's OnKeyboardInput hook.
  *
- * Enter (the accept action's keys) or Space while focused activates it at the press. Handling the press owns the key, so
- * its repeats do not click again; the space that key press types is swallowed too.
+ * Enter (the accept action's keys) or Space while focused activates it at the press, in every click mode. Handling the press owns
+ * the key, so its repeats do not activate it again; the space that key press types is swallowed too.
  * @param self The behaviour; must not be NULL.
  * @param widget The element's widget; must not be NULL.
  * @param args The input; must not be NULL.
@@ -334,15 +390,22 @@ void UIPressable_OnKeyboardInput(UIPressable* self, Widget* widget, const Widget
     bool* outIsHandled, bool* outIsActivated);
 
 /**
- * @brief Lets go of a press whose release cannot reach the element any more (it was detached, or disabled for input while
- *        held). Call it from the element's Update.
+ * @brief Forgets a press the screen says is lost; call it from the element's OnPressLost hook.
+ * @param self The behaviour; must not be NULL.
+ * @param button The press's mouse button.
+ */
+void UIPressable_OnPressLost(UIPressable* self, GameKey button);
+
+/**
+ * @brief Lets go of a key whose release cannot reach the element any more (it was detached, or disabled for input while held).
+ *        Call it from the element's Update.
  * @param self The behaviour; must not be NULL.
  * @param screen The element's screen; must not be NULL.
  */
 void UIPressable_Update(UIPressable* self, const UIScreen* screen);
 
 /**
- * @brief Forgets a press in progress: the release that follows does nothing.
+ * @brief Forgets every press in progress: the release that follows does nothing. The click mode and the buttons stay.
  * @param self The behaviour; must not be NULL.
  */
 void UIPressable_Cancel(UIPressable* self);
@@ -368,6 +431,52 @@ static inline bool UIElement_IsBoxEmpty(Rectangle box)
  * @returns true if bound; false with no input.
  */
 bool UIElement_IsActionKey(const UIScreen* screen, GameActionId action, GameKey key);
+
+/**
+ * @brief Returns whether a key that is down this tick is one of an action's, its modifiers counted: Backspace for reset, the C of
+ *        Ctrl+C for copy, and not a plain C. How an element answers a rebindable shortcut, asked of a key's press.
+ * @param screen The element's screen; must not be NULL. Its running update's input is read.
+ * @param action The action.
+ * @param key The key.
+ * @returns true if it is; false with no input.
+ */
+bool UIElement_IsActionPress(const UIScreen* screen, GameActionId action, GameKey key);
+
+/**
+ * @brief Posts the events every element with input shares for a mouse input: Pressed and, on the second press in a row, DoubleClicked
+ *        at a press; Released at a release, its own or one over it; ContextRequested at a right press and release on it. Call it from
+ *        OnMouseInput while enabled, before what the element itself does: a disabled element reports nothing.
+ * @param widget The element's widget; must not be NULL.
+ * @param args The input; must not be NULL.
+ * @returns Success, or the event queue's error.
+ */
+Error UIElement_PostMouseEvents(Widget* widget, const WidgetMouseInputArgs* args);
+
+/**
+ * @brief Posts UIElementEvent_Activated for a mouse input.
+ * @param widget The element's widget; must not be NULL.
+ * @param args The input; must not be NULL.
+ * @returns Success, or the event queue's error.
+ */
+Error UIElement_PostActivatedByMouse(Widget* widget, const WidgetMouseInputArgs* args);
+
+/**
+ * @brief Posts UIElementEvent_Activated for a key, its position the middle of the widget.
+ * @param widget The element's widget; must not be NULL.
+ * @param args The input; must not be NULL.
+ * @returns Success, or the event queue's error.
+ */
+Error UIElement_PostActivatedByKey(Widget* widget, const WidgetKeyboardInputArgs* args);
+
+/**
+ * @brief Answers the context menu's key: its press posts UIElementEvent_ContextRequested and is handled. Call it from OnKeyboardInput
+ *        while enabled.
+ * @param widget The element's widget; must not be NULL.
+ * @param args The input; must not be NULL.
+ * @param outIsHandled [out] Set when it was that key; must not be NULL.
+ * @returns Success, or the event queue's error.
+ */
+Error UIElement_OnContextKey(Widget* widget, const WidgetKeyboardInputArgs* args, bool* outIsHandled);
 
 /**
  * @brief Applies an element's creation options to its widget: its placement and its hint. Call it from the constructor.

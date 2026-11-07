@@ -6,6 +6,7 @@
 #include "WorldModel.h"
 #include "CollisionGeometry.h"
 #include "GameMath.h"
+#include "wr/WRMath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
 
@@ -77,6 +78,21 @@ bool WorldModelSurface_GetPicturePosition(const WorldModelSurface* self, Vector2
     return (Picture.x >= 0.0f) && (Picture.x <= 1.0f) && (Picture.y >= 0.0f) && (Picture.y <= 1.0f);
 }
 
+bool WorldModelSurface_GetContinuedPicturePosition(const WorldModelSurface* self, Vector2 uv, Vector2* outPicture)
+{
+    Vector2 OnGlass = { Math_ClampFloat(uv.x, 0.0f, 1.0f), Math_ClampFloat(uv.y, 0.0f, 1.0f) };
+    bool IsOnGlass = (OnGlass.x == uv.x) && (OnGlass.y == uv.y);
+    if (IsOnGlass || (self->_kind != WorldModelSurfaceKind_Crt))
+    {
+        return WorldModelSurface_GetPicturePosition(self, uv, outPicture);
+    }
+    // The curvature grows with the distance from the middle, and would run the other axis away: past the glass it stays as its edge has it.
+    Vector2 AtEdge;
+    WorldModelSurface_GetPicturePosition(self, OnGlass, &AtEdge);
+    *outPicture = (Vector2){ AtEdge.x + (uv.x - OnGlass.x), AtEdge.y + (uv.y - OnGlass.y) };
+    return false;
+}
+
 bool WorldModelSurface_Raycast(const WorldModelSurface* self, const Matrix4Double* objectToWorld, Vector3Double origin,
     Vector3 direction, float maxDistance, WorldModelSurfaceHit* outHit)
 {
@@ -117,4 +133,41 @@ const unsigned char* WorldModelSurfaceKind_GetName(WorldModelSurfaceKind kind)
 {
     return (((int32_t)kind >= 0) && ((int32_t)kind < (int32_t)WorldModelSurfaceKind_Count))
         ? SurfaceKindNames[kind] : NULL;
+}
+
+bool WorldModelSurface_ContinueRay(const WorldModelSurface* self, const Matrix4Double* objectToWorld, Vector3Double origin,
+    Vector3 direction, Vector2* outUv, Vector3Double* outPoint)
+{
+    Vector3Double Center = Matrix4Double_TransformPoint(objectToWorld, GameMath_FromVector3(self->_center));
+    Vector3Double AxisU = Matrix4Double_TransformDirection(objectToWorld, GameMath_FromVector3(self->_axisU));
+    Vector3Double AxisV = Matrix4Double_TransformDirection(objectToWorld, GameMath_FromVector3(self->_axisV));
+    Vector3Double Normal = Vector3Double_Cross(AxisU, AxisV);
+    Vector3Double Direction = GameMath_FromVector3(direction);
+    double NormalSquared = Vector3Double_LengthSquared(Normal);
+    if (!(NormalSquared > 0.0) || !isfinite(NormalSquared) || !Vector3Double_IsFinite(Direction) || !Vector3Double_IsFinite(origin))
+    {
+        return false;
+    }
+
+    // From the centre to where the ray meets the plane, or, when it never does in front of it, along where it points.
+    double Facing = Vector3Double_Dot(Direction, Normal);
+    double Distance = Vector3Double_Dot(Vector3Double_Subtract(Center, origin), Normal) / Facing; // Infinite or no number when it runs along the plane.
+    bool IsMet = (Distance > 0.0) && isfinite(Distance);
+    Vector3Double Offset = IsMet ? Vector3Double_Subtract(Vector3Double_AddScaled(origin, Direction, Distance), Center) : Direction;
+    // On the plane's two axes, which need not be square to each other (their dual basis).
+    double U = Vector3Double_Dot(Offset, Vector3Double_Cross(AxisV, Normal)) / NormalSquared;
+    double V = Vector3Double_Dot(Offset, Vector3Double_Cross(Normal, AxisU)) / NormalSquared;
+    double Largest = fmax(fabs(U), fabs(V));
+    if (!IsMet && !(Largest > 0.0))
+    {
+        return false;
+    }
+    if (!IsMet || (Largest > WORLD_MODEL_SURFACE_MAX_CONTINUED_REACH))
+    {
+        U *= WORLD_MODEL_SURFACE_MAX_CONTINUED_REACH / Largest;
+        V *= WORLD_MODEL_SURFACE_MAX_CONTINUED_REACH / Largest;
+    }
+    *outUv = (Vector2){ (float)(U + (double)self->_centerUv.x), (float)(V + (double)self->_centerUv.y) };
+    *outPoint = Vector3Double_AddScaled(Vector3Double_AddScaled(Center, AxisU, U), AxisV, V);
+    return true;
 }

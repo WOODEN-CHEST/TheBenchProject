@@ -261,6 +261,189 @@ static void ConsumedKeysStayConsumedWhileHeld(TestRun* run)
     Fixture_Deconstruct(run, &Fixture);
 }
 
+/* A cleared sample has the cursor on the window, which the input reads back; a sample is what it says. The wrappers around raylib's cursor do
+ * nothing with no window. */
+static void TheCursorIsOnTheWindowUnlessASampleSaysOtherwise(TestRun* run)
+{
+    KeyRegistry Keys;
+    TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys));
+    GameInput Input;
+    if (TEST_CHECK_SUCCESS(run, GameInput_Construct(&Input, &Keys, NULL, NULL)))
+    {
+        GameInputSample Sample;
+        GameInputSample_Clear(&Sample);
+        TEST_CHECK(run, Sample.IsCursorOnWindow);
+        GameInput_BeginTick(&Input, &Sample);
+        TEST_CHECK(run, GameInput_IsCursorOnWindow(&Input));
+        Sample.IsCursorOnWindow = false;
+        GameInput_BeginTick(&Input, &Sample);
+        TEST_CHECK(run, !GameInput_IsCursorOnWindow(&Input));
+
+        GameInput_CaptureCursor(&Input);
+        GameInput_ReleaseCursor(&Input, (Vector2){ .x = 10.0f, .y = 10.0f });
+        TEST_CHECK(run, !GameInput_IsCursorCaptured(&Input));
+        TEST_CHECK_SUCCESS(run, GameInput_Deconstruct(&Input));
+    }
+    KeyRegistry_Deconstruct(&Keys);
+}
+
+/* What the input takes in from what raylib says of the cursor: the tick's place and movement, after the correction. */
+static GameInputSample KeepPlace(GameInput* input, bool isOnWindow, float x, float y, float deltaX, float deltaY)
+{
+    GameInputSample Sample;
+    GameInputSample_Clear(&Sample);
+    Sample.IsCursorOnWindow = isOnWindow;
+    Sample.MousePosition = (Vector2){ .x = x, .y = y };
+    Sample.MouseDelta = (Vector2){ .x = deltaX, .y = deltaY };
+    GameInputInternal_KeepCursorPlace(input, &Sample);
+    GameInput_BeginTick(input, &Sample);
+    return Sample;
+}
+
+static bool IsPlace(const GameInputSample* sample, float x, float y, float deltaX, float deltaY)
+{
+    return (sample->MousePosition.x == x) && (sample->MousePosition.y == y) && (sample->MouseDelta.x == deltaX) && (sample->MouseDelta.y == deltaY);
+}
+
+/* raylib's (0, 0) at the cursor leaving the window is no place: the last one stands until it says another, also on the window. A real corner stands.
+ * Its movement counts from the place that stands. */
+static void AResetPositionKeepsTheLastPlace(TestRun* run)
+{
+    KeyRegistry Keys;
+    TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys));
+    GameInput Input;
+    if (TEST_CHECK_SUCCESS(run, GameInput_Construct(&Input, &Keys, NULL, NULL)))
+    {
+        // On the window its answers stand, also the corner.
+        GameInputSample Sample = KeepPlace(&Input, true, 1270.0f, 40.0f, 7.0f, 8.0f);
+        TEST_CHECK(run, IsPlace(&Sample, 1270.0f, 40.0f, 7.0f, 8.0f));
+        Sample = KeepPlace(&Input, true, 0.0f, 0.0f, 3.0f, 4.0f);
+        TEST_CHECK(run, IsPlace(&Sample, 0.0f, 0.0f, 3.0f, 4.0f));
+        Sample = KeepPlace(&Input, true, 1270.0f, 40.0f, 7.0f, 8.0f);
+
+        // The cursor left, and raylib said (0, 0): with a press held this is the release's tick.
+        Sample = KeepPlace(&Input, false, 0.0f, 0.0f, -1270.0f, -40.0f);
+        TEST_CHECK(run, IsPlace(&Sample, 1270.0f, 40.0f, 0.0f, 0.0f));
+        Sample = KeepPlace(&Input, false, 0.0f, 0.0f, 0.0f, 0.0f);
+        TEST_CHECK(run, IsPlace(&Sample, 1270.0f, 40.0f, 0.0f, 0.0f));
+
+        // Back at the very place it left from GLFW reports no movement: (0, 0) on the window, and the last place still stands.
+        Sample = KeepPlace(&Input, true, 0.0f, 0.0f, 0.0f, 0.0f);
+        TEST_CHECK(run, IsPlace(&Sample, 1270.0f, 40.0f, 0.0f, 0.0f));
+        Sample = KeepPlace(&Input, true, 0.0f, 0.0f, 0.0f, 0.0f);
+        TEST_CHECK(run, IsPlace(&Sample, 1270.0f, 40.0f, 0.0f, 0.0f));
+        // The next movement is real, though raylib counts it from its (0, 0); and from then on a corner is a corner.
+        Sample = KeepPlace(&Input, true, 1271.0f, 41.0f, 1271.0f, 41.0f);
+        TEST_CHECK(run, IsPlace(&Sample, 1271.0f, 41.0f, 1.0f, 1.0f));
+        Sample = KeepPlace(&Input, true, 1272.0f, 41.0f, 1.0f, 0.0f);
+        TEST_CHECK(run, IsPlace(&Sample, 1272.0f, 41.0f, 1.0f, 0.0f));
+        Sample = KeepPlace(&Input, true, 0.0f, 0.0f, 9.0f, 9.0f);
+        TEST_CHECK(run, IsPlace(&Sample, 0.0f, 0.0f, 9.0f, 9.0f));
+
+        // Past the edge with the motion a press keeps: real places, with their real movement; only (0, 0) on both axes is the reset.
+        Sample = KeepPlace(&Input, false, 1500.0f, -20.0f, 1500.0f, -20.0f);
+        TEST_CHECK(run, IsPlace(&Sample, 1500.0f, -20.0f, 1500.0f, -20.0f));
+        Sample = KeepPlace(&Input, false, 0.0f, -3.0f, 1.0f, 1.0f);
+        TEST_CHECK(run, IsPlace(&Sample, 0.0f, -3.0f, -1500.0f, 17.0f));
+        Sample = KeepPlace(&Input, false, -3.0f, 0.0f, 1.0f, 1.0f);
+        TEST_CHECK(run, IsPlace(&Sample, -3.0f, 0.0f, -3.0f, 3.0f));
+
+        // The first tick back on the window counts from the last place too.
+        Sample = KeepPlace(&Input, true, 5.0f, 6.0f, 99.0f, 99.0f);
+        TEST_CHECK(run, IsPlace(&Sample, 5.0f, 6.0f, 8.0f, 6.0f));
+        TEST_CHECK_SUCCESS(run, GameInput_Deconstruct(&Input));
+    }
+    KeyRegistry_Deconstruct(&Keys);
+}
+
+/* What raylib says of a captured cursor is the device's own. Captured from off the window, its warp to the window's centre is no motion, whether the last place was lost or past the
+ * edge; let go, neither is the warp back. */
+static void ACapturedCursorsMotionStaysTheDevices(TestRun* run)
+{
+    const struct { Vector2 Off; } Cases[] = { { { .x = 0.0f, .y = 0.0f } }, { { .x = 1400.0f, .y = 40.0f } } };
+    for (size_t Index = 0U; Index < (sizeof(Cases) / sizeof(Cases[0])); Index++)
+    {
+        KeyRegistry Keys;
+        GameInput Input;
+        TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys));
+        if (TEST_CHECK_SUCCESS(run, GameInput_Construct(&Input, &Keys, NULL, NULL)))
+        {
+            GameInputSample Sample;
+            GameInputSample_Clear(&Sample);
+            Sample.MousePosition = (Vector2){ .x = 1270.0f, .y = 40.0f };
+            GameInputInternal_KeepCursorPlace(&Input, &Sample);
+            GameInput_BeginTick(&Input, &Sample);
+
+            Sample.IsCursorOnWindow = false;
+            Sample.MousePosition = Cases[Index].Off;
+            GameInputInternal_KeepCursorPlace(&Input, &Sample);
+            GameInput_BeginTick(&Input, &Sample);
+
+            // Captured: raylib puts it at the centre and says no motion; then raw motion, whatever its position does.
+            Sample.IsCursorCaptured = true;
+            Sample.IsCursorOnWindow = true;
+            Sample.MousePosition = (Vector2){ .x = 640.0f, .y = 360.0f };
+            Sample.MouseDelta = (Vector2){ .x = 0.0f, .y = 0.0f };
+            GameInputInternal_KeepCursorPlace(&Input, &Sample);
+            TEST_CHECK(run, (Sample.MouseDelta.x == 0.0f) && (Sample.MouseDelta.y == 0.0f));
+            GameInput_BeginTick(&Input, &Sample);
+            Sample.MouseDelta = (Vector2){ .x = 10.0f, .y = -3.0f };
+            Sample.IsCursorOnWindow = false;
+            GameInputInternal_KeepCursorPlace(&Input, &Sample);
+            TEST_CHECK(run, (Sample.MouseDelta.x == 10.0f) && (Sample.MouseDelta.y == -3.0f));
+            GameInput_BeginTick(&Input, &Sample);
+
+            // Let go past the edge: raylib puts it there and says no motion. Only from then on does the place count again.
+            Sample.IsCursorCaptured = false;
+            Sample.MousePosition = (Vector2){ .x = 1400.0f, .y = 40.0f };
+            Sample.MouseDelta = (Vector2){ .x = 0.0f, .y = 0.0f };
+            GameInputInternal_KeepCursorPlace(&Input, &Sample);
+            TEST_CHECK(run, (Sample.MouseDelta.x == 0.0f) && (Sample.MouseDelta.y == 0.0f));
+            GameInput_BeginTick(&Input, &Sample);
+            Sample.MousePosition = (Vector2){ .x = 1410.0f, .y = 40.0f };
+            Sample.MouseDelta = (Vector2){ .x = 0.0f, .y = 0.0f };
+            GameInputInternal_KeepCursorPlace(&Input, &Sample);
+            TEST_CHECK(run, Sample.MouseDelta.x == 10.0f);
+        }
+        TEST_CHECK_SUCCESS(run, GameInput_Deconstruct(&Input));
+        KeyRegistry_Deconstruct(&Keys);
+    }
+}
+
+/* The engine's actions for values under the pointer: their keys and modifiers, and how they fire. */
+static void TheValueActionsHaveTheirDefaults(TestRun* run)
+{
+    KeyRegistry Keys;
+    TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys));
+    GameInput Input;
+    if (TEST_CHECK_SUCCESS(run, GameInput_Construct(&Input, &Keys, NULL, NULL)))
+    {
+        const struct { GameActionId Action; GameKey Key; uint8_t Modifiers; } Cases[] =
+        {
+            { GameAction_UIReset, GameKey_Backspace, GAME_KEY_MODIFIER_NONE },
+            { GameAction_UICopy, GameKey_C, GAME_KEY_MODIFIER_CONTROL },
+            { GameAction_UIPaste, GameKey_V, GAME_KEY_MODIFIER_CONTROL },
+            { GameAction_UIContextMenu, GameKey_Menu, GAME_KEY_MODIFIER_NONE },
+        };
+        for (size_t Index = 0U; Index < (sizeof(Cases) / sizeof(Cases[0])); Index++)
+        {
+            GameInputBinding Binding;
+            TEST_CHECK(run, (GameInput_GetBindingCount(&Input, Cases[Index].Action) == 1U) && GameInput_TryGetBinding(&Input, Cases[Index].Action, 0U, &Binding));
+            TEST_CHECK(run, (Binding.Key == Cases[Index].Key) && (Binding.Modifiers == Cases[Index].Modifiers));
+        }
+        GameInputSample Sample;
+        GameInputSample_Clear(&Sample);
+        Sample.KeyStates[GameKey_C] = GAME_INPUT_KEY_STATE_DOWN | GAME_INPUT_KEY_STATE_PRESSED;
+        GameInput_BeginTick(&Input, &Sample);
+        TEST_CHECK(run, !GameInput_IsActionPressed(&Input, GameAction_UICopy));
+        Sample.KeyStates[GameKey_RightControl] = GAME_INPUT_KEY_STATE_DOWN;
+        GameInput_BeginTick(&Input, &Sample);
+        TEST_CHECK(run, GameInput_IsActionPressed(&Input, GameAction_UICopy));
+        TEST_CHECK_SUCCESS(run, GameInput_Deconstruct(&Input));
+    }
+    KeyRegistry_Deconstruct(&Keys);
+}
+
 static void WheelTextAndPointerAreConsumedForOneTick(TestRun* run)
 {
     InputFixture Fixture;
@@ -468,6 +651,10 @@ static void TheEngineActionsGetTheirEnumValues(TestRun* run)
         { GameAction_Use, "tbp:use", GameActionCategory_Character },
         { GameAction_Pause, "tbp:pause", GameActionCategory_General },
         { GameAction_ToggleFullscreen, "tbp:toggle_fullscreen", GameActionCategory_General },
+        { GameAction_UIReset, "tbp:ui_reset", GameActionCategory_Interface },
+        { GameAction_UICopy, "tbp:ui_copy", GameActionCategory_Interface },
+        { GameAction_UIPaste, "tbp:ui_paste", GameActionCategory_Interface },
+        { GameAction_UIContextMenu, "tbp:ui_context_menu", GameActionCategory_Interface },
     };
     static const struct
     {
@@ -1063,7 +1250,7 @@ static void TheListingShowsEveryAction(TestRun* run)
         GameInput_WithdrawSource(Input, Pack);
         GameInput_LogActions(Input);
         Fixture_CloseLog(run, &Fixture);
-        TEST_CHECK(run, CountInLog(run, &Fixture, "22 actions in 5 categories:") == 1U);
+        TEST_CHECK(run, CountInLog(run, &Fixture, "26 actions in 5 categories:") == 1U);
         TEST_CHECK(run, CountInLog(run, &Fixture, "Movement (tbp:movement, order 100):") == 2U);
         TEST_CHECK(run, CountInLog(run, &Fixture, "Tools (mymod:tools, order 500, from mymod:pack):") == 1U);
         TEST_CHECK(run, CountInLog(run, &Fixture, "tbp:move_forward \"Move Forward\": up, control+w (set by the player)") == 2U);
@@ -1071,7 +1258,7 @@ static void TheListingShowsEveryAction(TestRun* run)
         TEST_CHECK(run, CountInLog(run, &Fixture, "mymod:hammer \"Hammer\": f, from mymod:pack") == 1U);
         TEST_CHECK(run, CountInLog(run, &Fixture, "other:chisel \"Hammer\": unbound, from other:pack") == 2U);
         TEST_CHECK(run, CountInLog(run, &Fixture, "Without a category:") == 1U);
-        TEST_CHECK(run, CountInLog(run, &Fixture, "21 actions in 4 categories:") == 1U);
+        TEST_CHECK(run, CountInLog(run, &Fixture, "25 actions in 4 categories:") == 1U);
     }
     Fixture_Deconstruct(run, &Fixture);
 }
@@ -1375,6 +1562,10 @@ void GameInputTests_Run(TestRun* run)
         { "key_ids_are_unique_and_parse_back", KeyIdsAreUniqueAndParseBack },
         { "consumed_keys_stay_consumed_while_held", ConsumedKeysStayConsumedWhileHeld },
         { "wheel_text_and_pointer_are_consumed_for_one_tick", WheelTextAndPointerAreConsumedForOneTick },
+        { "the_cursor_is_on_the_window_unless_a_sample_says_otherwise", TheCursorIsOnTheWindowUnlessASampleSaysOtherwise },
+        { "a_reset_position_keeps_the_last_place", AResetPositionKeepsTheLastPlace },
+        { "a_captured_cursors_motion_stays_the_devices", ACapturedCursorsMotionStaysTheDevices },
+        { "the_value_actions_have_their_defaults", TheValueActionsHaveTheirDefaults },
         { "actions_follow_their_bindings_and_modifiers", ActionsFollowTheirBindingsAndModifiers },
         { "the_most_specific_binding_wins", TheMostSpecificBindingWins },
         { "binding_text_round_trips", BindingTextRoundTrips },

@@ -8,8 +8,11 @@
 #include "Renderer.h"
 #include "Services.h"
 #include "TextComponentFactory.h"
+#include "GameKey.h"
+#include "StackWidget.h"
 #include "UIKit.h"
 #include "UIScreen.h"
+#include "UIWidget.h"
 #include "UIWidgetFactory.h"
 #include "UIWindowHost.h"
 #include "raylib/raylib.h"
@@ -26,13 +29,15 @@
 /** The scales the + and - keys go through. */
 #define SCALE_COUNT ((size_t)6)
 /** How many elements are named in the log. */
-#define MAX_NAMED_ELEMENTS ((size_t)32)
+#define MAX_NAMED_ELEMENTS ((size_t)48)
 /** Room for a status line. */
 #define STATUS_CAPACITY ((size_t)160)
 /** The background behind everything, opaque: the gallery has no world under it. */
 #define BACKGROUND_COLOR ((Color){ 18, 19, 22, 255 })
 /** Seconds between two logged Changed events: a drag posts one per tick at most, and the log is not per tick. */
 #define CHANGED_LOG_PERIOD_SECONDS 0.25
+/** The test row's box that asks for a hidden-cursor drag: how far the pointer goes before it does. */
+#define SCRUB_START_PIXELS 3.0f
 
 
 // Types.
@@ -66,12 +71,33 @@ typedef struct UIGalleryFrameStruct
     size_t _themeIndex;
     size_t _scaleIndex;
     bool _isEventLogEnabled;
+    uint64_t _wheelStackType;
+    uint64_t _scrubBoxType;
     uint64_t _statusId;
     double _time;
     double _lastChangedLogTime;
     NamedElement _names[MAX_NAMED_ELEMENTS];
     size_t _nameCount;
 } UIGalleryFrame;
+
+/* A stack that takes the wheel, as a scroll area does: its children's wheel comes up to it. */
+typedef struct WheelStackWidgetStruct
+{
+    Widget Base;
+    UIStackLayout Layout;
+} WheelStackWidget;
+
+/* A box to drag: it asks for a hidden-cursor drag once the pointer has gone a few pixels, and shows how far the raw motion went.
+ * The property box's scrub stands on the same request. */
+typedef struct ScrubBoxWidgetStruct
+{
+    Widget Base;
+    UIGalleryFrame* Frame;
+    /* The left button holds a press on it, how far it moved before asking, and the raw motion since. */
+    bool IsHeld;
+    float MovedPixels;
+    float ScrubbedPixels;
+} ScrubBoxWidget;
 
 /* What building the page carries along; the first failure stops the rest. */
 typedef struct GalleryBuildStruct
@@ -183,9 +209,214 @@ static void AddSlider(GalleryBuild* build, uint64_t parent, const char* name, do
         Options.HasStep = hasStep;
         Options.Step = step;
         Options.IsEnabled = isEnabled;
+        Options.HasDefault = true;
+        Options.Default = value;
         uint64_t Id = WIDGET_ID_INVALID;
         build->Result = UIKit_CreateSlider(&build->Frame->_kit, &build->Frame->_screen, parent, &Options, &Id);
         Remember(build, Id, name);
+    }
+}
+
+/* Sets a status line and logs it. */
+static void ReportScrub(UIGalleryFrame* frame, const char* what, float pixels)
+{
+    char Status[STATUS_CAPACITY];
+    snprintf(Status, sizeof(Status), "the scrub box %s: %.0f pixels", what, (double)pixels);
+    Error Result = UILabel_SetText(&frame->_screen, frame->_statusId, (const unsigned char*)Status);
+    Error_Deconstruct(&Result);
+    if ((frame->_services->Logger != NULL) && frame->_isEventLogEnabled)
+    {
+        Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger, (const unsigned char*)u8"UIGallery: %s", Status);
+        Error_Deconstruct(&LogResult);
+    }
+}
+
+static Error WheelStack_Layout(void* self, const UILayoutContext* context)
+{
+    WheelStackWidget* Stack = self;
+    return UIStackLayout_Arrange(&Stack->Layout, &Stack->Base, context);
+}
+
+static Error WheelStack_Measure(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
+{
+    WheelStackWidget* Stack = self;
+    return UIStackLayout_Measure(&Stack->Layout, &Stack->Base, context, availableWidth, outSize);
+}
+
+/* It takes every wheel that reaches it, and reports it as an element does. */
+static Error WheelStack_OnScrollInput(void* self, const WidgetScrollInputArgs* args, bool* outIsHandled)
+{
+    WheelStackWidget* Stack = self;
+    *outIsHandled = true;
+    UIEventMouse Mouse = { .Button = GameKey_Unknown, .Modifiers = args->Modifiers, .ScreenPosition = args->ScreenPosition,
+        .ScrollDelta = args->ScrollDelta, .IsOverWidget = true };
+    return UIScreen_PostWidgetMouseEvent(Widget_GetScreen(&Stack->Base), Widget_GetId(&Stack->Base), UIElementEvent_Scrolled, &Mouse);
+}
+
+static Error WheelStack_Construct(void* widget, void* args)
+{
+    WheelStackWidget* Stack = widget;
+    Stack->Layout = *(const UIStackLayout*)args;
+    return Error_CreateSuccess();
+}
+
+static const WidgetVTable WheelStackVTable =
+{
+    .Layout = WheelStack_Layout,
+    .Measure = WheelStack_Measure,
+    .OnScrollInput = WheelStack_OnScrollInput
+};
+
+static Error ScrubBox_Construct(void* widget, void* args)
+{
+    ScrubBoxWidget* Box = widget;
+    Box->Frame = args;
+    return Error_CreateSuccess();
+}
+
+static Error ScrubBox_Render(void* self, UIRenderContext* context)
+{
+    const ScrubBoxWidget* Box = self;
+    Rectangle Pixels = UIRenderContext_GetPixelBox(context);
+    UIRenderContext_RenderPixelRectangle(context, Pixels, Box->IsHeld ? (Color){ 96, 120, 170, 255 } : (Color){ 70, 74, 84, 255 });
+    return Error_CreateSuccess();
+}
+
+static Error ScrubBox_OnMouseInput(void* self, const WidgetMouseInputArgs* args)
+{
+    ScrubBoxWidget* Box = self;
+    if (args->Button != GameKey_MouseLeft)
+    {
+        return Error_CreateSuccess();
+    }
+    UIScreen* Screen = Widget_GetScreen(&Box->Base);
+    switch (args->Type)
+    {
+        case UIMouseInputType_ButtonPress:
+            Box->IsHeld = true;
+            Box->MovedPixels = 0.0f;
+            Box->ScrubbedPixels = 0.0f;
+            return Error_CreateSuccess();
+        case UIMouseInputType_Move:
+            if (UIScreen_IsPointerCaptured(Screen))
+            {
+                Box->ScrubbedPixels += args->DeltaPixels.x;
+                return Error_CreateSuccess();
+            }
+            Box->MovedPixels += args->DeltaPixels.x;
+            return ((Box->MovedPixels >= SCRUB_START_PIXELS) || (Box->MovedPixels <= -SCRUB_START_PIXELS))
+                ? UIScreen_CapturePointer(Screen, Widget_GetId(&Box->Base)) : Error_CreateSuccess();
+        case UIMouseInputType_ButtonRelease:
+            Box->IsHeld = false;
+            ReportScrub(Box->Frame, "went", Box->ScrubbedPixels);
+            return Error_CreateSuccess();
+        case UIMouseInputType_ReleaseOver:
+            return Error_CreateSuccess();
+    }
+    return Error_CreateSuccess();
+}
+
+static Error ScrubBox_OnPressLost(void* self, GameKey button)
+{
+    ScrubBoxWidget* Box = self;
+    Box->IsHeld = Box->IsHeld && (button != GameKey_MouseLeft);
+    return Error_CreateSuccess();
+}
+
+static const WidgetVTable ScrubBoxVTable =
+{
+    .Render = ScrubBox_Render,
+    .OnMouseInput = ScrubBox_OnMouseInput,
+    .OnPressLost = ScrubBox_OnPressLost
+};
+
+/* A widget of the gallery's own, made whole and added. */
+static uint64_t AddOwnWidget(GalleryBuild* build, uint64_t parent, uint64_t type, void* args, UIStackHint hint)
+{
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (HasFailed(build))
+    {
+        return Id;
+    }
+    UIScreen* Screen = &build->Frame->_screen;
+    Widget* Created = NULL;
+    Widget* Parent = NULL;
+    build->Result = UIWidgetFactory_CreateWidget(&build->Frame->_widgetFactory, Screen, type, args, &Created);
+    if (HasFailed(build))
+    {
+        return Id;
+    }
+    Id = Widget_GetId(Created);
+    build->Result = Widget_SetStackHint(Created, &hint);
+    if (!HasFailed(build))
+    {
+        build->Result = Widget_InitializeWidget(Created);
+    }
+    if (!HasFailed(build) && UIScreen_TryGetWidgetById(Screen, parent, &Parent))
+    {
+        build->Result = Widget_AddSubWidget(Parent, Created);
+    }
+    return Id;
+}
+
+/* A button for one click mode. */
+static uint64_t AddClickModeButton(GalleryBuild* build, uint64_t parent, const unsigned char* text, const char* name, UIClickMode mode)
+{
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIButtonOptions Options = UIButtonOptions_Create(text);
+        Options.ClickMode = mode;
+        Options.ActivationButtons = UI_BUTTON_BIT(GameKey_MouseLeft) | UI_BUTTON_BIT(GameKey_MouseMiddle);
+        build->Result = UIKit_CreateButton(&build->Frame->_kit, &build->Frame->_screen, parent, &Options, &Id);
+        Remember(build, Id, name);
+    }
+    return Id;
+}
+
+/* The routing's own row: a button per click mode, the wheel going up the tree, and a box per pointer shape. */
+static void BuildRouting(GalleryBuild* build, uint64_t panel)
+{
+    AddLabel(build, panel, u8"Click modes: press and drag off, press elsewhere and release on it", u8"heading");
+    uint64_t Modes = AddRow(build, panel, 6.0f);
+    AddClickModeButton(build, Modes, u8"On press", "the on press button", UIClickMode_OnPress);
+    AddClickModeButton(build, Modes, u8"On release", "the on release button", UIClickMode_OnRelease);
+    AddClickModeButton(build, Modes, u8"Press and release", "the press and release button", UIClickMode_OnPressAndRelease);
+
+    AddLabel(build, panel, u8"The wheel: this row takes it, the last button takes its own", u8"heading");
+    UIStackLayout WheelLayout = { .Direction = UIStackDirection_Row, .Padding = UIInsets_All(0.0f), .Spacing = 6.0f };
+    uint64_t Wheel = AddOwnWidget(build, panel, build->Frame->_wheelStackType, &WheelLayout, UIStackHint_Content());
+    Remember(build, Wheel, "the wheel stack");
+    AddButton(build, Wheel, u8"In the stack", "a button in the stack", true, false, NULL, UIStackHint_Content());
+    AddButton(build, Wheel, u8"In it too", "a second button in the stack", true, false, NULL, UIStackHint_Content());
+    if (!HasFailed(build))
+    {
+        UIButtonOptions Options = UIButtonOptions_Create(u8"Takes the wheel");
+        Options.TakesWheel = true;
+        uint64_t Id = WIDGET_ID_INVALID;
+        build->Result = UIKit_CreateButton(&build->Frame->_kit, &build->Frame->_screen, Wheel, &Options, &Id);
+        Remember(build, Id, "the button taking the wheel");
+    }
+
+    AddLabel(build, panel, u8"Pointer shapes, and a box to drag with the cursor hidden", u8"heading");
+    uint64_t Shapes = AddRow(build, panel, 4.0f);
+    const UICursorShape ShapeList[] = { UICursorShape_IBeam, UICursorShape_ResizeHorizontal, UICursorShape_ResizeVertical, UICursorShape_ResizeDiagonalDown,
+        UICursorShape_ResizeDiagonalUp, UICursorShape_Move, UICursorShape_Hand, UICursorShape_NotAllowed };
+    const unsigned char* const ShapeNames[] = { u8"I", u8"< >", u8"^ v", u8"\\", u8"/", u8"+", u8"Hand", u8"No" };
+    for (size_t Index = 0U; (Index < (sizeof(ShapeList) / sizeof(ShapeList[0]))) && !HasFailed(build); Index++)
+    {
+        uint64_t Id = AddButton(build, Shapes, ShapeNames[Index], NULL, true, false, NULL, UIStackHint_Content());
+        Widget* Base = NULL;
+        if (!HasFailed(build) && UIScreen_TryGetWidgetById(&build->Frame->_screen, Id, &Base))
+        {
+            build->Result = Widget_SetCursorShape(Base, ShapeList[Index]);
+        }
+    }
+    uint64_t Scrub = AddOwnWidget(build, Shapes, build->Frame->_scrubBoxType, build->Frame, UIStackHint_Fill(1.0f));
+    Widget* ScrubBase = NULL;
+    if (!HasFailed(build) && UIScreen_TryGetWidgetById(&build->Frame->_screen, Scrub, &ScrubBase))
+    {
+        build->Result = Widget_SetCursorShape(ScrubBase, UICursorShape_ResizeHorizontal);
     }
 }
 
@@ -211,12 +442,14 @@ static void BuildElements(GalleryBuild* build, uint64_t page)
     AddToggle(build, Toggles, u8"Mixed", "the mixed toggle", UIToggleState_Mixed, true);
     AddToggle(build, Toggles, u8"Disabled", "the disabled toggle", UIToggleState_On, false);
 
-    AddLabel(build, Panel, u8"Sliders: free, in steps of 10, disabled", u8"heading");
+    AddLabel(build, Panel, u8"Sliders: free, in steps of 10, disabled. Backspace over one: back to its default", u8"heading");
     AddSlider(build, Panel, "the free slider", 35.0, false, 0.0, true);
     AddSlider(build, Panel, "the stepped slider", 60.0, true, 10.0, true);
     AddSlider(build, Panel, "the disabled slider", 80.0, false, 0.0, false);
 
-    AddLabel(build, Panel, u8"Tab moves, the arrows too, Enter or Space clicks; the wheel moves a focused slider.", u8"hint");
+    BuildRouting(build, Panel);
+
+    AddLabel(build, Panel, u8"Tab moves, the arrows too, Enter or Space clicks; the wheel moves a slider while focused or with Ctrl.", u8"hint");
 }
 
 /* The right panel: how stacks size and align their children, and text at small sizes. */
@@ -311,13 +544,30 @@ static const char* GetElementName(const UIGalleryFrame* frame, uint64_t id)
     return "an element";
 }
 
+/* What a mouse event says, in words. */
+static void DescribeMouse(const UIEvent* event, char* outText, size_t capacity)
+{
+    const UIEventMouse* Mouse = &event->Mouse;
+    uint8_t Modifiers = Mouse->Modifiers;
+    if (Mouse->Button == GameKey_Unknown)
+    {
+        snprintf(outText, capacity, ": %.0f notches at %.2f, %.2f%s%s%s", (double)Mouse->ScrollDelta.y, (double)Mouse->ScreenPosition.x, (double)Mouse->ScreenPosition.y,
+            ((Modifiers & GAME_KEY_MODIFIER_SHIFT) != 0U) ? ", Shift" : "", ((Modifiers & GAME_KEY_MODIFIER_CONTROL) != 0U) ? ", Ctrl" : "",
+            ((Modifiers & GAME_KEY_MODIFIER_ALT) != 0U) ? ", Alt" : "");
+        return;
+    }
+    snprintf(outText, capacity, ": %s at %.2f, %.2f%s%s%s%s", (const char*)GameKey_GetDisplayName(Mouse->Button), (double)Mouse->ScreenPosition.x,
+        (double)Mouse->ScreenPosition.y, Mouse->IsOverWidget ? ", over it" : ", off it", ((Modifiers & GAME_KEY_MODIFIER_SHIFT) != 0U) ? ", Shift" : "",
+        ((Modifiers & GAME_KEY_MODIFIER_CONTROL) != 0U) ? ", Ctrl" : "", ((Modifiers & GAME_KEY_MODIFIER_ALT) != 0U) ? ", Alt" : "");
+}
+
 /* Shows each event in the status line, and logs it (a drag's Changed events at most a few times a second). */
 static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserData* userData)
 {
     UIGalleryFrame* Frame = UserData_GetPointer(userData);
-    static const char* const EventNames[] = { "clicked", "changed", "committed", "cancelled" };
+    static const char* const EventNames[] = { "activated", "changed", "committed", "cancelled", "pressed", "released", "double clicked", "scrolled", "context requested" };
     bool IsKnown = (event->WidgetEventId >= 0) && ((size_t)event->WidgetEventId < (sizeof(EventNames) / sizeof(EventNames[0])));
-    char Value[32] = "";
+    char Value[96] = "";
     if (event->HasValue && (event->Value.Type == UIPropertyType_Double))
     {
         snprintf(Value, sizeof(Value), ": %.3f", event->Value.Data.DoubleValue);
@@ -325,6 +575,10 @@ static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserDa
     else if (event->HasValue && (event->Value.Type == UIPropertyType_Bool))
     {
         snprintf(Value, sizeof(Value), ": %s", event->Value.Data.BoolValue ? "on" : "off");
+    }
+    else if (event->HasMouse)
+    {
+        DescribeMouse(event, Value, sizeof(Value));
     }
     char Status[STATUS_CAPACITY];
     snprintf(Status, sizeof(Status), "%s %s%s", GetElementName(Frame, event->WidgetId), IsKnown ? EventNames[event->WidgetEventId] : "posted", Value);
@@ -539,6 +793,18 @@ static Error BuildFrameContents(UIGalleryFrame* frame)
     {
         Result = UIWidgetFactory_Construct(&frame->_widgetFactory);
         frame->_isWidgetFactoryConstructed = (Result.Code == ErrorCode_Success);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        WidgetTypeDescriptor Descriptor = { .Name = u8"GalleryWheelStack", .StructSize = sizeof(WheelStackWidget), .VTable = &WheelStackVTable,
+            .Constructor = WheelStack_Construct, .IsFocusable = false };
+        Result = UIWidgetFactory_RegisterType(&frame->_widgetFactory, &Descriptor, &frame->_wheelStackType);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        WidgetTypeDescriptor Descriptor = { .Name = u8"GalleryScrubBox", .StructSize = sizeof(ScrubBoxWidget), .VTable = &ScrubBoxVTable,
+            .Constructor = ScrubBox_Construct, .IsFocusable = false };
+        Result = UIWidgetFactory_RegisterType(&frame->_widgetFactory, &Descriptor, &frame->_scrubBoxType);
     }
     if (Result.Code == ErrorCode_Success)
     {

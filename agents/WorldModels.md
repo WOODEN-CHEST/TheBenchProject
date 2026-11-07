@@ -340,6 +340,12 @@ computer is the first: its content is a `UIScreen` the code that owns it draws e
   weighted), where on the picture that is (`Picture`, through a CRT's curvature) and whether it lies on the picture. The
   screens system runs it for every screen of a world ([WorldData.md](WorldData.md), "Screen component";
   `include/WorldScreens.h`).
+- **Where a ray goes once it left** (pure, tested): `WorldModelSurface_ContinueRay(surface, objectToWorld, origin, direction, &uv, &point)` continues a ray on the plane of the surface's frame (its
+  centre and two axes, at the placement), past the glass in any direction and from either side: the texture coordinates are those of the frame's centre there and grow on past `[0;1]`, so they
+  agree with the glass where the glass is flat, also when its coordinates do not reach the middle. A ray along the plane or pointing away from it, and one meeting it farther than
+  `WORLD_MODEL_SURFACE_MAX_CONTINUED_REACH` surface lengths out, stands at that reach the way it points, so a drag at a slant does not run off. Straight away from the plane, with no direction, no plane or
+  a number that is not finite it answers false. On a curved surface the plane may lie a little off the triangles. `WorldModelSurface_GetContinuedPicturePosition` is the picture there: a CRT's curvature on
+  the glass, and past it on from where the glass's edge shows, since the curvature itself would run the other axis away.
 - **The renderer** puts the picture handed over for a placement's surface into that slot's per-draw material copy
   ([WorldRuntime.md](WorldRuntime.md), "Surfaces' pictures"), never into the asset; a CRT's slot draws with the CRT
   program, and every glowing surface lights its surroundings ("CRT screens", "Screen light" there).

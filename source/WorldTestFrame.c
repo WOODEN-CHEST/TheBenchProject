@@ -1752,13 +1752,15 @@ static void SetCursorCaptured(WorldTestFrame* frame, bool isCaptured)
     {
         return;
     }
+    GameInput* Input = frame->_services->Input;
     if (isCaptured)
     {
-        DisableCursor();
+        GameInput_CaptureCursor(Input);
     }
     else
     {
-        EnableCursor();
+        Vector2 WindowSize = GameInput_GetWindowSize(Input);
+        GameInput_ReleaseCursor(Input, (Vector2){ .x = WindowSize.x * 0.5f, .y = WindowSize.y * 0.5f });
     }
     frame->_cursorCaptured = isCaptured;
 }

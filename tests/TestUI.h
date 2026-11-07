@@ -52,6 +52,9 @@ typedef struct TestUIEventsStruct
     size_t Count;
     /** @brief Destroy the widget of the first event delivered, from inside its handler. */
     bool IsDestroyingTheWidget;
+    /** @brief Also keep the events that only tell of the input (pressed, released, double clicked, scrolled, context requested): the
+     *  tests of those events set it, and the others count only what an element did. */
+    bool IsRecordingInputEvents;
 } TestUIEvents;
 
 

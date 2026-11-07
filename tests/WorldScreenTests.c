@@ -90,6 +90,9 @@ typedef struct HostProbeStruct
     bool IsHandlingKeys;
     bool IsHandlingText;
     int PressCount;
+    int MoveCount;
+    int ReleaseCount;
+    WidgetMouseInputArgs LastMouse;
     int KeyCount;
     int TextCount;
     GameKey LastKey;
@@ -1222,9 +1225,18 @@ static void ScreensFollowTheirComponents(TestRun* run)
 static Error HostProbe_OnMouseInput(void* self, const WidgetMouseInputArgs* args)
 {
     HostProbe* Probe = self;
+    Probe->LastMouse = *args;
     if (args->Type == UIMouseInputType_ButtonPress)
     {
         Probe->PressCount++;
+    }
+    else if (args->Type == UIMouseInputType_Move)
+    {
+        Probe->MoveCount++;
+    }
+    else if (args->Type == UIMouseInputType_ButtonRelease)
+    {
+        Probe->ReleaseCount++;
     }
     return Error_CreateSuccess();
 }
@@ -2330,6 +2342,338 @@ static void PointingAtACrtLandsWhereItsCurvedPictureShows(TestRun* run)
     HostFixture_Deconstruct(run, &Host);
 }
 
+/* Where a ray goes on a surface's plane, past the surface: straight and slanted, past each edge, as far as it may; the same coordinates
+ * as on the surface while it meets it. */
+static void TheRayContinuesOnTheSurfacesPlane(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    const WorldModelSurface* Surface = LoadScreenBox(run, &Fixture, &User);
+    if (Surface != NULL)
+    {
+        Matrix4Double Identity = Matrix4Double_Identity();
+        Vector2 Uv;
+        Vector3Double Point;
+
+        // On it: what the surface says. The glass is 1 x 0.8 at z = 0.01, its v running down.
+        WorldModelSurfaceHit Hit;
+        Vector3Double Origin = Vector3Double_Create(0.3, 0.2, 3.0);
+        Vector3 Straight = { 0.0f, 0.0f, -2.0f };
+        TEST_CHECK(run, WorldModelSurface_Raycast(Surface, &Identity, Origin, Straight, 10.0f, &Hit));
+        TEST_CHECK(run, WorldModelSurface_ContinueRay(Surface, &Identity, Origin, Straight, &Uv, &Point));
+        TEST_CHECK(run, IsNear(Uv.x, Hit.Uv.x) && IsNear(Uv.y, Hit.Uv.y));
+        TEST_CHECK(run, (fabs(Point.X - 0.3) < 1e-5) && (fabs(Point.Y - 0.2) < 1e-5) && (fabs(Point.Z - 0.01) < 1e-5));
+
+        // Past each edge, each coordinate grows on as the plane says.
+        TEST_CHECK(run, WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(1.5, 0.0, 3.0), Straight, &Uv, &Point));
+        TEST_CHECK(run, IsNear(Uv.x, 2.0f) && IsNear(Uv.y, 0.5f));
+        TEST_CHECK(run, WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(-1.5, 0.0, 3.0), Straight, &Uv, &Point));
+        TEST_CHECK(run, IsNear(Uv.x, -1.0f) && IsNear(Uv.y, 0.5f));
+        TEST_CHECK(run, WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(0.0, 0.8, 3.0), Straight, &Uv, &Point));
+        TEST_CHECK(run, IsNear(Uv.x, 0.5f) && IsNear(Uv.y, -0.5f));
+        TEST_CHECK(run, WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(0.0, -0.8, 3.0), Straight, &Uv, &Point));
+        TEST_CHECK(run, IsNear(Uv.x, 0.5f) && IsNear(Uv.y, 1.5f));
+
+        // A slanted ray meets the plane further along; the length of the direction does not matter.
+        TEST_CHECK(run, WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(0.0, 0.0, 1.01), (Vector3){ 4.0f, 0.0f, -2.0f }, &Uv, &Point));
+        TEST_CHECK(run, IsNear(Uv.x, 2.5f) && IsNear(Uv.y, 0.5f));
+
+        // From behind the plane too: a ray going through it is the same plane.
+        TEST_CHECK(run, WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(0.3, 0.0, -2.0), (Vector3){ 0.0f, 0.0f, 1.0f }, &Uv, &Point));
+        TEST_CHECK(run, IsNear(Uv.x, 0.8f));
+
+        // Along the plane, or pointing away from it: as far as it may, the way it points.
+        const float Far = (float)WORLD_MODEL_SURFACE_MAX_CONTINUED_REACH;
+        TEST_CHECK(run, WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(0.0, 0.0, 2.0), (Vector3){ 1.0f, 0.0f, 0.0f }, &Uv, &Point));
+        TEST_CHECK(run, IsNear(Uv.x, 0.5f + Far) && IsNear(Uv.y, 0.5f));
+        TEST_CHECK(run, WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(0.0, 0.0, 2.0), (Vector3){ -1.0f, 0.0f, 0.5f }, &Uv, &Point));
+        TEST_CHECK(run, IsNear(Uv.x, 0.5f - Far) && IsNear(Uv.y, 0.5f));
+        TEST_CHECK(run, WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(0.0, 0.0, 2.0), (Vector3){ 0.0f, 1.0f, 0.5f }, &Uv, &Point));
+        TEST_CHECK(run, IsNear(Uv.x, 0.5f) && IsNear(Uv.y, 0.5f - Far));
+        // Nearly along it: met, far out, and no farther than that, the same way.
+        TEST_CHECK(run, WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(0.0, 0.0, 2.0), (Vector3){ 1.0f, 0.5f, -1e-5f }, &Uv, &Point));
+        TEST_CHECK(run, IsNear(Uv.x, 0.5f + Far));
+        TEST_CHECK(run, (Uv.y < 0.0f) && (Uv.y > (0.5f - Far)));
+
+        // Straight away from the plane it points nowhere on it; the same with no direction, or none to count.
+        Vector2 Untouched = { 7.0f, 7.0f };
+        Vector3Double UntouchedPoint = Vector3Double_Create(9.0, 9.0, 9.0);
+        Uv = Untouched;
+        Point = UntouchedPoint;
+        TEST_CHECK(run, !WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(0.0, 0.0, 2.0), (Vector3){ 0.0f, 0.0f, 1.0f }, &Uv, &Point));
+        TEST_CHECK(run, !WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(0.0, 0.0, 2.0), (Vector3){ 0.0f, 0.0f, 0.0f }, &Uv, &Point));
+        TEST_CHECK(run, !WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(0.0, 0.0, 2.0), (Vector3){ NAN, 0.0f, -1.0f }, &Uv, &Point));
+        TEST_CHECK(run, !WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(0.0, NAN, 2.0), (Vector3){ 0.0f, 0.0f, -1.0f }, &Uv, &Point));
+        // One bad number among good ones, which alone would still point somewhere: nothing.
+        TEST_CHECK(run, !WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(0.0, 0.0, 2.0), (Vector3){ NAN, 0.5f, -1.0f }, &Uv, &Point));
+        TEST_CHECK(run, !WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(0.0, NAN, 2.0), (Vector3){ 1.0f, 0.5f, -1.0f }, &Uv, &Point));
+        TEST_CHECK(run, !WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(INFINITY, 0.0, 2.0), (Vector3){ 1.0f, 0.5f, -1.0f }, &Uv, &Point));
+        TEST_CHECK(run, (Uv.x == 7.0f) && (Point.X == 9.0));
+        // Along the plane from either side of it: never met, however its sums come out.
+        TEST_CHECK(run, WorldModelSurface_ContinueRay(Surface, &Identity, Vector3Double_Create(0.0, 0.0, -2.0), (Vector3){ 1.0f, 0.0f, 0.0f }, &Uv, &Point));
+        TEST_CHECK(run, IsNear(Uv.x, 0.5f + Far) && IsNear(Uv.y, 0.5f));
+        Uv = Untouched;
+        Point = UntouchedPoint;
+
+        // A zero scale leaves no plane, and one too large for its sums no answer.
+        Matrix4Double Flat = Matrix4Double_FromScale(Vector3Double_Create(0.0, 1.0, 1.0));
+        TEST_CHECK(run, !WorldModelSurface_ContinueRay(Surface, &Flat, Vector3Double_Create(0.0, 0.0, 2.0), Straight, &Uv, &Point));
+        Matrix4Double Huge = Matrix4Double_FromScale(Vector3Double_Create(1e100, 1e100, 1.0));
+        TEST_CHECK(run, !WorldModelSurface_ContinueRay(Surface, &Huge, Vector3Double_Create(0.0, 0.0, 2.0), Straight, &Uv, &Point));
+
+        // Turned, stretched and far from the origin it lands where the surface's own ray lands.
+        Matrix4Double Rotation = Matrix4Double_FromRotationY(0.7);
+        Matrix4Double Scale = Matrix4Double_FromScale(Vector3Double_Create(2.0, 3.0, 1.0));
+        Matrix4Double Turned = Matrix4Double_Multiply(&Scale, &Rotation);
+        Matrix4Double_SetTranslation(&Turned, Vector3Double_Create(9000000.0, -40.0, 12000000.0));
+        Vector3Double Front = Matrix4Double_TransformPoint(&Turned, Vector3Double_Create(0.2, 0.1, 2.0));
+        Vector3Double Onto = Matrix4Double_TransformPoint(&Turned, Vector3Double_Create(0.2, 0.1, 0.01));
+        Vector3Double Way = Vector3Double_Subtract(Onto, Front);
+        Vector3 Direction = { (float)Way.X, (float)Way.Y, (float)Way.Z };
+        TEST_CHECK(run, WorldModelSurface_Raycast(Surface, &Turned, Front, Direction, 10.0f, &Hit));
+        TEST_CHECK(run, WorldModelSurface_ContinueRay(Surface, &Turned, Front, Direction, &Uv, &Point));
+        TEST_CHECK(run, IsNear(Uv.x, Hit.Uv.x) && IsNear(Uv.y, Hit.Uv.y));
+        TEST_CHECK(run, Vector3Double_Distance(Point, Onto) < 1e-3);
+
+        // There an endless direction would come out as no number at all.
+        TEST_CHECK(run, !WorldModelSurface_ContinueRay(Surface, &Turned, Front, (Vector3){ INFINITY, 0.5f, -1.0f }, &Uv, &Point));
+    }
+    TestAssetFixture_Deconstruct(run, &Fixture);
+}
+
+/* The screens' way to it: the one object asked for, whatever is in front and whatever it is hidden behind; a CRT's picture comes through
+ * its curvature, past the picture too. */
+static void ScreensContinueARayOnOneScreensPlane(TestRun* run)
+{
+    ScreensFixture Fixture;
+    if (ScreensFixture_Construct(run, &Fixture, NULL))
+    {
+        uint64_t Crt = AddObject(run, &Fixture, "crt_box", (Vector3){ 0.0f, 0.0f, 0.0f }, true);
+        uint64_t Plain = AddObject(run, &Fixture, "screen_box", (Vector3){ 3.0f, 0.0f, 0.0f }, true);
+        uint64_t NoScreen = AddObject(run, &Fixture, "screen_box", (Vector3){ -3.0f, 0.0f, 0.0f }, false);
+        uint64_t Misnamed = AddObject(run, &Fixture, "screen_box", (Vector3){ -6.0f, 0.0f, 0.0f }, true);
+        WorldComponent* MisnamedScreen = NULL;
+        TEST_CHECK(run, World_TryGetComponent(&Fixture.World, Misnamed, WorldComponentType_Screen, &MisnamedScreen));
+        TEST_CHECK_SUCCESS(run, WorldScreenComponent_SetSurface(WorldScreenComponent_FromComponent(MisnamedScreen), (const unsigned char*)u8"scren"));
+        ScreensFixture_Sync(&Fixture);
+        const float Aspect = (float)TEST_PICTURE_WIDTH / (float)TEST_PICTURE_HEIGHT;
+        Vector3 Straight = { 0.0f, 0.0f, -1.0f };
+
+        // Pointing past the plain screen's right edge: the raycast gives nothing, this goes on, off the picture.
+        WorldScreenHit Hit;
+        Vector3Double Past = TestWorld_At((Vector3){ 4.5f, 0.0f, 2.0f });
+        TEST_CHECK(run, !WorldScreens_Raycast(Fixture.Screens, Past, Straight, 10.0f, NULL, NULL, &Hit));
+        TEST_CHECK(run, WorldScreens_ContinueRay(Fixture.Screens, Plain, Past, Straight, &Hit));
+        TEST_CHECK(run, (Hit.ObjectId == Plain) && (Hit.Surface != NULL) && !Hit.IsOnPicture && IsNear(Hit.Uv.x, 2.0f) && IsNear(Hit.Uv.y, 0.5f));
+        TEST_CHECK(run, (Hit.Picture.x == Hit.Uv.x) && (Hit.Picture.y == Hit.Uv.y));
+        TEST_CHECK(run, IsNear(Hit.Distance, 1.99f));
+
+        // Over another screen in front of the ray: this asks for the one it names.
+        Vector3Double OverCrt = TestWorld_At((Vector3){ 0.1f, 0.0f, 2.0f });
+        TEST_CHECK(run, WorldScreens_ContinueRay(Fixture.Screens, Plain, OverCrt, Straight, &Hit));
+        TEST_CHECK(run, (Hit.ObjectId == Plain) && (Hit.Uv.x < -1.0f));
+
+        // A CRT: the picture through its curvature, on and past the glass; on it, it says so.
+        TEST_CHECK(run, WorldScreens_ContinueRay(Fixture.Screens, Crt, TestWorld_At((Vector3){ 0.1f, 0.1f, 2.0f }), Straight, &Hit));
+        Vector2 Expected = CrtScreen_Distort(Hit.Uv, CRT_SCREEN_DEFAULT_CURVATURE, Aspect);
+        TEST_CHECK(run, (Hit.Picture.x == Expected.x) && (Hit.Picture.y == Expected.y) && Hit.IsOnPicture);
+        TEST_CHECK(run, WorldScreens_ContinueRay(Fixture.Screens, Crt, TestWorld_At((Vector3){ 0.9f, 0.0f, 2.0f }), Straight, &Hit));
+        TEST_CHECK(run, !Hit.IsOnPicture && (Hit.Picture.x > 1.0f) && IsNear(Hit.Uv.x, 1.4f));
+
+        // What has no screen, none at all, or was removed since the sync, gives nothing.
+        TEST_CHECK(run, !WorldScreens_ContinueRay(Fixture.Screens, NoScreen, Past, Straight, &Hit));
+        TEST_CHECK(run, !WorldScreens_ContinueRay(Fixture.Screens, Misnamed, Past, Straight, &Hit));
+        TEST_CHECK(run, !WorldScreens_ContinueRay(Fixture.Screens, 0U, Past, Straight, &Hit));
+        // A ray no plane answers: straight away from it.
+        TEST_CHECK(run, !WorldScreens_ContinueRay(Fixture.Screens, Plain, Past, (Vector3){ 0.0f, 0.0f, 1.0f }, &Hit));
+        TEST_CHECK_SUCCESS(run, World_RemoveObject(&Fixture.World, Plain));
+        TEST_CHECK(run, !WorldScreens_ContinueRay(Fixture.Screens, Plain, Past, Straight, &Hit));
+    }
+    ScreensFixture_Deconstruct(run, &Fixture);
+}
+
+/* Past a CRT's glass the picture goes on from where the glass's edge shows: an aim far past one edge does not run the other axis away, as the curvature itself would. */
+static void AimingPastACrtDoesNotRunTheOtherAxisAway(TestRun* run)
+{
+    ScreensFixture Fixture;
+    if (ScreensFixture_Construct(run, &Fixture, NULL))
+    {
+        uint64_t Crt = AddObject(run, &Fixture, "crt_box", (Vector3){ 0.0f, 0.0f, 0.0f }, true);
+        ScreensFixture_Sync(&Fixture);
+        Vector3 Straight = { 0.0f, 0.0f, -1.0f };
+        WorldScreenHit Edge;
+        WorldScreenHit Far;
+        const WorldModelSurface* Surface = NULL;
+
+        // Over the same place across, at the glass's bottom edge and far below it.
+        TEST_CHECK(run, WorldScreens_ContinueRay(Fixture.Screens, Crt, TestWorld_At((Vector3){ -0.1f, -0.4f, 2.0f }), Straight, &Edge));
+        TEST_CHECK(run, WorldScreens_ContinueRay(Fixture.Screens, Crt, TestWorld_At((Vector3){ -0.1f, -4.0f, 2.0f }), Straight, &Far));
+        Surface = Edge.Surface;
+        TEST_CHECK(run, fabsf(Far.Picture.x - Edge.Picture.x) < 1e-4f);
+        TEST_CHECK(run, !Far.IsOnPicture && (Far.Picture.y > 1.0f));
+        // By what lies past the edge: a metre is 1.25 of the glass's 0.8 m height.
+        TEST_CHECK(run, fabsf((Far.Picture.y - Edge.Picture.y) - (3.6f / 0.8f)) < 1e-3f);
+
+        // And to the side.
+        TEST_CHECK(run, WorldScreens_ContinueRay(Fixture.Screens, Crt, TestWorld_At((Vector3){ 0.5f, 0.2f, 2.0f }), Straight, &Edge));
+        TEST_CHECK(run, WorldScreens_ContinueRay(Fixture.Screens, Crt, TestWorld_At((Vector3){ 6.0f, 0.2f, 2.0f }), Straight, &Far));
+        TEST_CHECK(run, fabsf(Far.Picture.y - Edge.Picture.y) < 1e-4f);
+        TEST_CHECK(run, fabsf((Far.Picture.x - Edge.Picture.x) - 5.5f) < 1e-3f);
+
+        // It goes on smoothly: just past the edge it is where the edge has it, and on the glass it is what the curvature says.
+        TEST_CHECK(run, WorldScreens_ContinueRay(Fixture.Screens, Crt, TestWorld_At((Vector3){ 0.501f, 0.2f, 2.0f }), Straight, &Far));
+        TEST_CHECK(run, fabsf(Far.Picture.x - Edge.Picture.x) < 2e-3f);
+        Vector2 Picture;
+        TEST_CHECK(run, !WorldModelSurface_GetContinuedPicturePosition(Surface, (Vector2){ -3.0f, 0.5f }, &Picture));
+        Vector2 OnGlass;
+        bool IsOn = WorldModelSurface_GetPicturePosition(Surface, (Vector2){ 0.5f, 0.25f }, &OnGlass);
+        TEST_CHECK(run, WorldModelSurface_GetContinuedPicturePosition(Surface, (Vector2){ 0.5f, 0.25f }, &Picture) == IsOn);
+        TEST_CHECK(run, (Picture.x == OnGlass.x) && (Picture.y == OnGlass.y));
+    }
+    ScreensFixture_Deconstruct(run, &Fixture);
+}
+
+/* A screen whose coordinates do not reach the middle (a part of an atlas): the plane goes on from what its own glass says, so the ray does not jump as it leaves it. */
+static void TheContinuedRayGoesOnFromItsOwnCoordinates(TestRun* run)
+{
+    static const float CornerTexcoords[] = { 0.0f, 0.4f, 0.4f, 0.4f, 0.4f, 0.0f, 0.0f, 0.0f };
+    ScreensFixture Fixture;
+    if (ScreensFixture_Construct(run, &Fixture, NULL))
+    {
+        TEST_CHECK(run, AddScreenModel(run, &Fixture.Assets, "corner_box", MatrixIdentity(), CornerTexcoords));
+        TEST_CHECK(run, TestAssets_AddWorldModel(run, &Fixture.Assets, "{\"name\": \"corner_box\", \"lods\": [{\"model\": \"corner_box\", \"max_distance\": 40}], "
+            "\"collision\": \"bounds\", \"surfaces\": [{\"name\": \"screen\", \"material_slot\": 1, \"resolution\": [320, 240]}]}"));
+        uint64_t Id = AddObject(run, &Fixture, "corner_box", (Vector3){ 0.0f, 0.0f, 0.0f }, true);
+        ScreensFixture_Sync(&Fixture);
+        Vector3 Straight = { 0.0f, 0.0f, -1.0f };
+        const Vector3 Places[] = { { 0.25f, 0.2f, 2.0f }, { -0.45f, -0.35f, 2.0f }, { 0.0f, 0.0f, 2.0f } };
+        for (size_t Index = 0U; Index < (sizeof(Places) / sizeof(Places[0])); Index++)
+        {
+            WorldScreenHit Hit;
+            WorldScreenHit Continued;
+            TEST_CHECK(run, PointFrom(&Fixture, Places[Index], false, &Hit));
+            TEST_CHECK(run, WorldScreens_ContinueRay(Fixture.Screens, Id, TestWorld_At(Places[Index]), Straight, &Continued));
+            TEST_CHECK(run, (fabsf(Hit.Uv.x - Continued.Uv.x) < 1e-3f) && (fabsf(Hit.Uv.y - Continued.Uv.y) < 1e-3f));
+        }
+    }
+    ScreensFixture_Deconstruct(run, &Fixture);
+}
+
+/* A press held on a screen's picture owns the pointer: off the picture the screen stays focused and pointed at, the position goes on along the
+ * ray, nothing hovers and the press hears it; when it ends off the picture the screen is let go as usual. */
+static void AHeldPressKeepsTheScreenAndFollowsTheRay(TestRun* run)
+{
+    HostFixture Fixture;
+    if (HostFixture_Construct(run, &Fixture, 7U))
+    {
+        HostProbe* Probe = AddProbe(run, &Fixture, (Rectangle){ 0.0f, 0.0f, 1.0f, 1.0f });
+        WorldScreenHit OnIt = HitAt(7U, (Vector2){ 0.5f, 0.5f }, true);
+        HostTick(run, &Fixture, &OnIt);
+        Press(&Fixture, GameKey_MouseLeft);
+        HostTick(run, &Fixture, &OnIt);
+        TEST_CHECK(run, WorldScreenHost_IsFocused(&Fixture.Host) && (Probe->PressCount == 1) && UIScreen_HasHeldPress(&Fixture.Screen));
+
+        // The ray leaves the picture and the object: nowhere to point, but it goes on along the plane.
+        WorldScreenHit Past = HitAt(7U, (Vector2){ 1.6f, 0.4f }, false);
+        BeginTick(&Fixture);
+        Fixture.Time += HOST_TICK_SECONDS;
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_UpdateContinued(&Fixture.Host, &Fixture.Screen, ProgramTime_Create(Fixture.Time, HOST_TICK_SECONDS), &Fixture.Input, NULL, &Past));
+        TEST_CHECK(run, WorldScreenHost_IsFocused(&Fixture.Host) && WorldScreenHost_IsPointed(&Fixture.Host));
+        TEST_CHECK(run, IsNear(WorldScreenHost_GetPointer(&Fixture.Host).x, 1.6f));
+        TEST_CHECK(run, !UIScreen_IsPointerPresent(&Fixture.Screen) && IsNear(UIScreen_GetPointerPosition(&Fixture.Screen).x, 1.6f));
+        TEST_CHECK(run, (Probe->MoveCount == 1) && IsNear(Probe->LastMouse.ScreenPosition.x, 1.6f) && !Widget_IsHovered(&Probe->Base));
+        // The press is still the screen's.
+        TEST_CHECK(run, GameInput_IsKeyConsumed(&Fixture.Input, GameKey_MouseLeft));
+        EndTick(&Fixture);
+
+        // Nothing known about the ray: where it was last known, still.
+        BeginTick(&Fixture);
+        Fixture.Time += HOST_TICK_SECONDS;
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_Update(&Fixture.Host, &Fixture.Screen, ProgramTime_Create(Fixture.Time, HOST_TICK_SECONDS), &Fixture.Input, NULL));
+        TEST_CHECK(run, WorldScreenHost_IsFocused(&Fixture.Host) && IsNear(WorldScreenHost_GetPointer(&Fixture.Host).x, 1.6f) && (Probe->MoveCount == 1));
+        EndTick(&Fixture);
+
+        // Another object's continuation means nothing; a hit on the glass off the picture is this screen's own and wins over it.
+        WorldScreenHit Other = HitAt(8U, (Vector2){ 5.0f, 5.0f }, false);
+        BeginTick(&Fixture);
+        Fixture.Time += HOST_TICK_SECONDS;
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_UpdateContinued(&Fixture.Host, &Fixture.Screen, ProgramTime_Create(Fixture.Time, HOST_TICK_SECONDS), &Fixture.Input, &Other, &Other));
+        TEST_CHECK(run, IsNear(WorldScreenHost_GetPointer(&Fixture.Host).x, 1.6f));
+        EndTick(&Fixture);
+        // The ray landing on another screen in front of this one: its own plane still says where it goes.
+        WorldScreenHit PastAgain = HitAt(7U, (Vector2){ 1.7f, 0.4f }, false);
+        BeginTick(&Fixture);
+        Fixture.Time += HOST_TICK_SECONDS;
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_UpdateContinued(&Fixture.Host, &Fixture.Screen, ProgramTime_Create(Fixture.Time, HOST_TICK_SECONDS), &Fixture.Input, &Other, &PastAgain));
+        TEST_CHECK(run, IsNear(WorldScreenHost_GetPointer(&Fixture.Host).x, 1.7f));
+        EndTick(&Fixture);
+        WorldScreenHit OnGlass = HitAt(7U, (Vector2){ 1.05f, 0.5f }, false);
+        BeginTick(&Fixture);
+        Fixture.Time += HOST_TICK_SECONDS;
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_UpdateContinued(&Fixture.Host, &Fixture.Screen, ProgramTime_Create(Fixture.Time, HOST_TICK_SECONDS), &Fixture.Input, &OnGlass, &Past));
+        TEST_CHECK(run, IsNear(WorldScreenHost_GetPointer(&Fixture.Host).x, 1.05f) && !UIScreen_IsPointerPresent(&Fixture.Screen));
+        EndTick(&Fixture);
+
+        // Back on the picture: over the screen again, and hovering.
+        HostTick(run, &Fixture, &OnIt);
+        TEST_CHECK(run, UIScreen_IsPointerPresent(&Fixture.Screen) && Widget_IsHovered(&Probe->Base) && UIScreen_HasHeldPress(&Fixture.Screen));
+
+        // Off it again and let go there: the release reaches it where the ray went, in that tick still pointed at; then it is over.
+        BeginTick(&Fixture);
+        Fixture.Time += HOST_TICK_SECONDS;
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_UpdateContinued(&Fixture.Host, &Fixture.Screen, ProgramTime_Create(Fixture.Time, HOST_TICK_SECONDS), &Fixture.Input, NULL, &Past));
+        EndTick(&Fixture);
+        Fixture.Sample.KeyStates[GameKey_MouseLeft] = GAME_INPUT_KEY_STATE_RELEASED;
+        BeginTick(&Fixture);
+        Fixture.Time += HOST_TICK_SECONDS;
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_UpdateContinued(&Fixture.Host, &Fixture.Screen, ProgramTime_Create(Fixture.Time, HOST_TICK_SECONDS), &Fixture.Input, NULL, &Past));
+        TEST_CHECK(run, (Probe->ReleaseCount == 1) && IsNear(Probe->LastMouse.ScreenPosition.x, 1.6f) && !UIScreen_HasHeldPress(&Fixture.Screen));
+        TEST_CHECK(run, WorldScreenHost_IsFocused(&Fixture.Host));
+        EndTick(&Fixture);
+        HostTick(run, &Fixture, NULL);
+        TEST_CHECK(run, !WorldScreenHost_IsFocused(&Fixture.Host) && !WorldScreenHost_IsPointed(&Fixture.Host));
+    }
+    HostFixture_Deconstruct(run, &Fixture);
+}
+
+/* Without a press off the picture changes nothing: no pointer, no focus. A press off the picture that nothing holds focuses nothing; the use
+ * key does not focus a screen while the ray is off its picture, though a press held elsewhere on it keeps it pointed at. */
+static void OnlyAHeldPressKeepsAScreen(TestRun* run)
+{
+    HostFixture Fixture;
+    if (HostFixture_Construct(run, &Fixture, 7U))
+    {
+        AddProbe(run, &Fixture, (Rectangle){ 0.0f, 0.0f, 1.0f, 1.0f });
+        WorldScreenHit OnIt = HitAt(7U, (Vector2){ 0.5f, 0.5f }, true);
+        WorldScreenHit Past = HitAt(7U, (Vector2){ 1.6f, 0.4f }, false);
+        Press(&Fixture, GameKey_E);
+        HostTick(run, &Fixture, &OnIt);
+        TEST_CHECK(run, WorldScreenHost_IsFocused(&Fixture.Host));
+
+        BeginTick(&Fixture);
+        Fixture.Time += HOST_TICK_SECONDS;
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_UpdateContinued(&Fixture.Host, &Fixture.Screen, ProgramTime_Create(Fixture.Time, HOST_TICK_SECONDS), &Fixture.Input, NULL, &Past));
+        TEST_CHECK(run, !WorldScreenHost_IsFocused(&Fixture.Host) && !WorldScreenHost_IsPointed(&Fixture.Host) && !UIScreen_IsPointerPresent(&Fixture.Screen));
+        EndTick(&Fixture);
+        Fixture.Sample.KeyStates[GameKey_E] = GAME_INPUT_KEY_STATE_RELEASED;
+        HostTick(run, &Fixture, NULL);
+
+        // Held, let go of by Escape, off the picture: the use key does not take the screen back from there.
+        Press(&Fixture, GameKey_MouseLeft);
+        HostTick(run, &Fixture, &OnIt);
+        TEST_CHECK(run, WorldScreenHost_IsFocused(&Fixture.Host) && UIScreen_HasHeldPress(&Fixture.Screen));
+        WorldScreenHost_Release(&Fixture.Host);
+        Press(&Fixture, GameKey_E);
+        BeginTick(&Fixture);
+        Fixture.Time += HOST_TICK_SECONDS;
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_UpdateContinued(&Fixture.Host, &Fixture.Screen, ProgramTime_Create(Fixture.Time, HOST_TICK_SECONDS), &Fixture.Input, NULL, &Past));
+        TEST_CHECK(run, !WorldScreenHost_IsFocused(&Fixture.Host) && WorldScreenHost_IsPointed(&Fixture.Host));
+        TEST_CHECK(run, GameInput_IsActionPressed(&Fixture.Input, GameAction_Use));
+        EndTick(&Fixture);
+    }
+    HostFixture_Deconstruct(run, &Fixture);
+}
+
 /* The screens move each screen's power transition toward its power state: a CRT's over its power-on and power-off times,
  * a plain screen's (and one on no surface) at once; a screen met for the first time starts settled, and one removed
  * between syncs is left alone. */
@@ -2633,6 +2977,12 @@ void WorldScreenTests_Run(TestRun* run)
         { "crt_rules_are_refused_with_clear_messages", CrtRulesAreRefusedWithClearMessages },
         { "the_shipped_mask_tile_keeps_the_pictures_light", TheShippedMaskTileKeepsThePicturesLight },
         { "pointing_at_a_crt_lands_where_its_curved_picture_shows", PointingAtACrtLandsWhereItsCurvedPictureShows },
+        { "the_ray_continues_on_the_surfaces_plane", TheRayContinuesOnTheSurfacesPlane },
+        { "screens_continue_a_ray_on_one_screens_plane", ScreensContinueARayOnOneScreensPlane },
+        { "aiming_past_a_crt_does_not_run_the_other_axis_away", AimingPastACrtDoesNotRunTheOtherAxisAway },
+        { "the_continued_ray_goes_on_from_its_own_coordinates", TheContinuedRayGoesOnFromItsOwnCoordinates },
+        { "a_held_press_keeps_the_screen_and_follows_the_ray", AHeldPressKeepsTheScreenAndFollowsTheRay },
+        { "only_a_held_press_keeps_a_screen", OnlyAHeldPressKeepsAScreen },
         { "screens_turn_on_and_off_over_their_times", ScreensTurnOnAndOffOverTheirTimes },
         { "a_crts_picture_shows_while_it_turns_off", ACrtsPictureShowsWhileItTurnsOff },
         { "screens_light_what_is_in_front_of_them", ScreensLightWhatIsInFrontOfThem },

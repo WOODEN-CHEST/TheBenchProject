@@ -5,6 +5,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include "wr/WRChar.h"
+#include "wr/WRCompile.h"
 #include "wr/WRFileSystem.h"
 #include "wr/WRJSON.h"
 #include "wr/WRMemory.h"
@@ -225,6 +226,18 @@ static const BuiltInAction BuiltInActions[GameAction_Count] =
         .Description = u8"Switches between the window and the whole screen.", .Category = GameActionCategory_General,
         .Defaults = { BINDING(GameKey_Enter, GAME_KEY_MODIFIER_ALT), BINDING(GameKey_F11, GAME_KEY_MODIFIER_NONE) },
         .DefaultCount = 2 },
+    [GameAction_UIReset] = { .Key = u8"tbp:ui_reset", .DisplayName = u8"Reset Value",
+        .Description = u8"Puts the value under the pointer back to its default.", .Category = GameActionCategory_Interface,
+        .Defaults = { BINDING(GameKey_Backspace, GAME_KEY_MODIFIER_NONE) }, .DefaultCount = 1 },
+    [GameAction_UICopy] = { .Key = u8"tbp:ui_copy", .DisplayName = u8"Copy Value",
+        .Description = u8"Copies the value under the pointer.", .Category = GameActionCategory_Interface,
+        .Defaults = { BINDING(GameKey_C, GAME_KEY_MODIFIER_CONTROL) }, .DefaultCount = 1 },
+    [GameAction_UIPaste] = { .Key = u8"tbp:ui_paste", .DisplayName = u8"Paste Value",
+        .Description = u8"Pastes into the value under the pointer.", .Category = GameActionCategory_Interface,
+        .Defaults = { BINDING(GameKey_V, GAME_KEY_MODIFIER_CONTROL) }, .DefaultCount = 1 },
+    [GameAction_UIContextMenu] = { .Key = u8"tbp:ui_context_menu", .DisplayName = u8"Context Menu",
+        .Description = u8"Asks for the focused item's context menu.", .Category = GameActionCategory_Interface,
+        .Defaults = { BINDING(GameKey_Menu, GAME_KEY_MODIFIER_NONE) }, .DefaultCount = 1 },
 };
 
 /* The modifiers in the order a binding's text form lists them. */
@@ -1319,6 +1332,7 @@ Error GameInput_Deconstruct(GameInput* self)
 void GameInputSample_Clear(GameInputSample* self)
 {
     Memory_Zero(self, sizeof(*self));
+    self->IsCursorOnWindow = true;
 }
 void GameInput_SampleDevices(GameInputSample* outSample)
 {
@@ -1333,6 +1347,7 @@ void GameInput_SampleDevices(GameInputSample* outSample)
     outSample->WheelDelta = GetMouseWheelMoveV();
     outSample->WindowSize = (Vector2){ .x = (float)GetScreenWidth(), .y = (float)GetScreenHeight() };
     outSample->IsCursorCaptured = IsCursorHidden();
+    outSample->IsCursorOnWindow = IsCursorOnScreen();
 
     // Drain the whole queue even when it holds more than fits, so nothing is left for a later reader.
     int Codepoint = GetCharPressed();
@@ -1413,10 +1428,29 @@ static void RefreshMonitorSize(GameInput* self, Vector2 windowSize)
     }
 }
 
+void GameInputInternal_KeepCursorPlace(GameInput* self, GameInputSample* sample)
+{
+    const GameInputSample* Last = &self->_sample;
+    bool WasLost = self->_isCursorPlaceLost;
+    bool IsAtZero = (sample->MousePosition.x == 0.0f) && (sample->MousePosition.y == 0.0f);
+    self->_isCursorPlaceLost = IsAtZero && (WasLost || !sample->IsCursorOnWindow);
+    if (self->_isCursorPlaceLost)
+    {
+        sample->MousePosition = Last->MousePosition;
+    }
+    // While the cursor is captured, and in the ticks it is captured and let go, raylib's delta is the device's own: raw motion, or none across its own warps.
+    bool IsFree = !sample->IsCursorCaptured && !Last->IsCursorCaptured;
+    if (IsFree && (WasLost || !sample->IsCursorOnWindow || !Last->IsCursorOnWindow))
+    {
+        sample->MouseDelta = (Vector2){ .x = sample->MousePosition.x - Last->MousePosition.x, .y = sample->MousePosition.y - Last->MousePosition.y };
+    }
+}
+
 void GameInput_Poll(GameInput* self)
 {
     GameInputSample Sample;
     GameInput_SampleDevices(&Sample);
+    GameInputInternal_KeepCursorPlace(self, &Sample);
     RefreshMonitorSize(self, Sample.WindowSize);
     Sample.MonitorSize = self->_monitorSize;
     GameInput_BeginTick(self, &Sample);
@@ -1509,6 +1543,30 @@ Vector2 GameInput_GetMonitorSize(const GameInput* self)
 bool GameInput_IsCursorCaptured(const GameInput* self)
 {
     return self->_sample.IsCursorCaptured;
+}
+
+bool GameInput_IsCursorOnWindow(const GameInput* self)
+{
+    return self->_sample.IsCursorOnWindow;
+}
+
+void GameInput_CaptureCursor(GameInput* self)
+{
+    UNUSED(self);
+    if (IsWindowReady())
+    {
+        DisableCursor();
+    }
+}
+
+void GameInput_ReleaseCursor(GameInput* self, Vector2 position)
+{
+    UNUSED(self);
+    if (IsWindowReady())
+    {
+        EnableCursor();
+        SetMousePosition((int)position.x, (int)position.y);
+    }
 }
 
 Vector2 GameInput_GetWheelDelta(const GameInput* self)

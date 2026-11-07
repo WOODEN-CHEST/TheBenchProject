@@ -95,7 +95,7 @@ Current module list:
   and reach), a CRT's look (its "crt" block: CrtScreen.h, a texture mask loaded as a dependency), with LOD 0's triangles
   of the slot and their texture coordinates, which the pure WorldModelSurface_Raycast meets a ray on, giving where on the
   picture it points (WorldModelSurface_GetPicturePosition: through a CRT's curvature), and the glass's frame for its
-  light (its centre, its front, its width and height). Its water (the section in source/WorldModelWaterDefinition.c)
+  light (its centre, its front, its width and height), on whose plane WorldModelSurface_ContinueRay carries a ray that left it. Its water (the section in source/WorldModelWaterDefinition.c)
   names material slots drawn as water, never with their own materials, each with a water material loaded as a
   dependency, which a variant may swap (one basin, a clear and a murky fountain); a slot is a surface or water.
   * CrtScreen - A CRT screen's look as pure maths (include/CrtScreen.h, source/CrtScreen.c): the settings of a world
@@ -310,7 +310,7 @@ Current module list:
 * Input (GameInput.md) - How the game reads input. Covers two modules:
   * GameKey - The game-wide key identity (keyboard keys and mouse buttons, room for gamepad buttons) with stable id
     strings for binding files and display names; the raylib codes stay private to the input layer.
-  * GameInput - The per-tick input snapshot (keys, mouse, wheel, typed text drained once, the window's and the monitor's sizes), polled by the frame manager
+  * GameInput - The per-tick input snapshot (keys, mouse with its place kept through raylib's resets, wheel, typed text drained once, the window's and the monitor's sizes), the cursor's capture, polled by the frame manager
     right after PollInputEvents, with consumption (a consumed key reads as not pressed while held) and the action layer:
     actions and their categories in two registries (`tbp:input_action`, `tbp:input_category`; the engine's are the
     GameAction enum, each value its id), registered by the engine, by packs' `input_actions` assets (InputActions:
@@ -389,8 +389,8 @@ Current module list:
     settled at its power state when read from a file) (WorldData.md, "Screen component").
   * WorldScreens - The screens system: every screen component's surface resolved on its object's world model (under its
     own asset user, failures logged once), synced once a tick, the ray that finds the nearest screen a player points at
-    and where on its picture (a CRT's through its curvature), hidden by other objects' colliders in front of it, and each
-    screen's power transition moved toward its power state once a tick (a CRT's over its power times)
+    and where on its picture (a CRT's through its curvature), hidden by other objects' colliders in front of it, the ray continued on one screen's plane
+    for a held press, and each screen's power transition moved toward its power state once a tick (a CRT's over its power times)
     (WorldData.md, "Screen component").
   * WorldAmbientZoneComponent - Component type 8 (`ambient_zone`): a box or a sphere around its object that sets a
     room's own light (its colour and intensity, the sky's share inside, the eye's exposure bias, its priority where
@@ -694,19 +694,19 @@ Current module list:
   past the cap.
 * UI framework (UIFramework.md) - The in-game UI, on any surface (the window or a texture in the world: the host passes
   the pointer, the keyboard and the viewport). A screen holds a tree of widgets with slot + generation ids, routes the
-  tick's GameInput (the focused widget gets every key first, consumed input does not reach the game), drives keyboard
+  tick's GameInput (a held press owns the pointer past the surface, the focused widget gets every key first, consumed input does not reach the game), drives keyboard
   navigation through actions, runs typed property animations, queues notifications to the end of its update, lays
   widgets out in update and draws them with nested clipping. Widget_Destroy is deferred and takes the whole subtree.
   Covers these modules (UIScreen is split by job behind the private source/UIInternal.h):
-  * UIInput - The argument structs handed to a widget's input hooks (keys and buttons are GameKeys).
+  * UIInput - The argument structs handed to a widget's input hooks (keys and buttons are GameKeys), the layers of a screen's roots and the pointer's shapes.
   * UIAnimation - Typed property values (UIPropertyValue), easing methods, keyframes, keyframe validation and
     evaluation. Pure data + math.
   * UIRenderContext - The widget-local drawing device: wraps the renderer's RenderContext with the widget's absolute box + accumulated tint, and maps widget-local [0;1] draws onto the screen.
   * UIWidgetFactory - Registers capabilities and widget types (a descriptor: struct size, vtable, constructor,
     capabilities, typed properties, focusability), owns per-type pools, creates widgets (base first, id reserved,
     constructor, then alive: a failed constructor leaves nothing) and counts live widgets. One per program.
-  * UIWidget - The abstract widget base (vtable incl. Layout and keyboard first refusal, geometry/flags/state, subwidgets
-    with a separate draw order, capabilities, typed properties, deferred destroy); concrete widgets embed it first.
+  * UIWidget - The abstract widget base (vtable incl. Layout, keyboard first refusal, a lost press and the wheel, geometry/flags/state, subwidgets
+    with a separate draw order, moving whole to another parent, capabilities, typed properties, deferred destroy); concrete widgets embed it first.
   * UIScreen - The context: id registry, roots, focus, input routing, keyboard navigation + outlines, animations,
     notifications (subscriptions; queued, delivered at the end of UIScreen_Update), layout pass and rendering.
   * UIPlacement - Where a widget sits in UI pixels: placements (anchors and offsets), insets and a stack's hints, with their pure arithmetic, each edge a whole
@@ -714,12 +714,12 @@ Current module list:
   * UIScalePolicy - How a screen's scale follows the window and the monitor, pure: a fixed value; constant pixels (from the monitor's height in quarters, times the player's
     scale: resizing gives more room); following the window's height against 1080, times the player's scale (resizing scales the UI).
   * UIWindowHost - The host of a UI that fills the game window: each tick the viewport and the scale from its policy, the pointer and the keyboard from GameInput, then
-    UIScreen_Update (UIFramework.md, "Hosts").
+    UIScreen_Update, then what the screen asks of the cursor (a hidden-cursor drag, the pointer's shape), through something a test can replace (UIFramework.md, "Hosts").
   * UITestFrame - A debug game frame over the world test that exercises the UI and the input sharing.
   * WorldScreenHost - The host of a UI shown on a screen in the world: its pointer where the player points (the aim or
     the free cursor, through WorldScreens), the keyboard while the player uses the screen (the use action or a click
     focuses it; the screen reads first, then the host takes the whole keyboard), letting go on an unused Escape or when
-    the player points away (UIFramework.md, "World screens").
+    the player points away; a held press keeps the screen and follows the ray along its plane (UIFramework.md, "World screens").
   * LabelWidget - The first concrete widget: displays a (possibly multi-line) rich text with per-line alignment and bound handling (cut/wrap/resize/wrap-then-resize/wrap-then-cut). Embeds a TextDocument and a TextLayout (TextDocument.md), lays out in Update, draws in Render. Auto-fits its widget box to the rendered text.
   Also adds 2D rectangle/outline/line primitives to the Renderer module.
 * UI elements (UIElements.md) - What calling code builds a UI from, sized in UI pixels, its looks data: the same elements in flat boxes or nine-slice art with no
@@ -728,17 +728,17 @@ Current module list:
   * UITheme - The ui_theme asset type (a standard type, JSON in ui_themes/; include/UITheme.h, source/UITheme.c, source/UIThemeDefinition.c, private source/UIThemeInternal.h): a
     font, a text size, a transition time and per element kind its metrics and parts, with named variants that change only what they name; unknown keys refused, every rule checked
     when read; its textures and font loaded as dependencies. A screen holds one (UIScreen_SetTheme).
-  * UIElement - What every element kind shares: its look (a kind, a variant, the state shown, eased from state to state), its text, its press behaviour, its options, its events
-    (clicked, changed, committed, cancelled).
+  * UIElement - What every element kind shares: its look (a kind, a variant, the state shown, eased from state to state), its text, its press behaviour (click modes, per button), its options,
+    its events (activated, changed, committed, cancelled, pressed, released, double clicked, scrolled, context requested; the mouse's data by value).
   * UIKit - The one way to make elements, over one widget factory: registers the capabilities and standard widget types, holds the table from element kind to widget type (replaceable:
     a look with another structure), and UIKit_Create* makes an element and gives its id. Calling code uses a kind's functions by id, never a widget type or a look.
   * StackWidget - Children in a row or a column, with padding and spacing: fixed, content or filling, aligned across; its arithmetic (UIStackLayout) shared with the panel.
   * UIPanel - A background and padding for what it holds.
   * UILabel - LabelWidget as an element of the kit: its text size in UI pixels, its font and colours from the theme.
-  * UIButton - A click, Enter or Space; an enabled flag (a disabled button swallows the click); an optional toggled look.
-  * UIToggle - A checkbox: on, off or mixed.
-  * UISlider - A value in a range, by a drag, the arrows or the wheel (only while focused), with an optional step; changed, committed, cancelled.
-  * UIGalleryFrame - A game frame showing every element in every state, started with --ui-gallery: T the theme, + and - the scale, P the scale policy, L the event log.
+  * UIButton - Activates by its click mode and buttons, or Enter or Space; an enabled flag (a disabled button swallows the click); an optional toggled look; it can take the wheel.
+  * UIToggle - A checkbox: on, off or mixed, with the same click modes.
+  * UISlider - A value in a range, by a drag that goes past the window to its limit, the arrows or the wheel (only while focused or with Ctrl), with an optional step and default (the reset action); changed, committed, cancelled.
+  * UIGalleryFrame - A game frame showing every element in every state and trying the routing, started with --ui-gallery: T the theme, + and - the scale, P the scale policy, L the event log.
 * Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text as a STRICT TREE: a parent owns
   its children, a tree has at most 64 levels, components own copies of their strings, and fonts and sprite animations
   are named, never held. Every change gives the component and its ancestors a new revision. Covers three modules (plus

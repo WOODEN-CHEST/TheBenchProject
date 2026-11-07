@@ -8,13 +8,15 @@
 
 /**
  * @file UIButton.h
- * @brief The button element: a click, Enter or Space; an enabled flag; an optional toggled look.
+ * @brief The button element: a click by its click mode, Enter or Space; an enabled flag; an optional toggled look.
  *
  * Calling code keeps a widget id and uses the UIButton_* functions, which resolve the id and the capability: a stale id is
- * refused, never a crash, and any widget type embedding the capability answers. A click posts UIElementEvent_Clicked.
+ * refused, never a crash, and any widget type embedding the capability answers. It posts UIElementEvent_Activated when its click
+ * mode says so, or at a key's press, and the events every element shares (UIElement_PostMouseEvents). Made with TakesWheel it also
+ * takes the wheel and posts UIElementEvent_Scrolled; otherwise the wheel goes on up the tree.
  *
  * Disabled is the capability's state, not the input flag: an input-disabled widget is transparent to the pointer, and a
- * click on a disabled button must not reach what lies behind it. A disabled button swallows the click and reports nothing.
+ * click on a disabled button must not reach what lies behind it. A disabled button swallows everything and reports nothing.
  *
  * The UIButtonCapability_* helpers are for widget types of their own: embed the capability, call them from the hooks and
  * draw differently. Calling code does not change.
@@ -35,6 +37,12 @@ typedef struct UIButtonOptionsStruct
     bool IsEnabled;
     /** @brief Whether it shows its selected look. */
     bool IsToggled;
+    /** @brief When it activates. */
+    UIClickMode ClickMode;
+    /** @brief The buttons that activate it (UI_BUTTON_BIT values ORed together). */
+    uint8_t ActivationButtons;
+    /** @brief Whether it takes the wheel, posting UIElementEvent_Scrolled, in place of letting it go on up the tree. */
+    bool TakesWheel;
 } UIButtonOptions;
 
 /**
@@ -65,18 +73,21 @@ typedef struct UIButtonCapabilityStruct
     bool _isEnabled;
     /** @brief Whether it shows its selected look. */
     bool _isToggled;
+    /** @brief Whether it takes the wheel. */
+    bool _takesWheel;
 } UIButtonCapability;
 
 
 // Helpers.
 /**
- * @brief Default options: enabled, not toggled.
+ * @brief Default options: enabled, not toggled, activating by the left button on a press and a release on it, not taking the wheel.
  * @param text The text as UTF-8, or NULL.
  * @returns The options.
  */
 static inline UIButtonOptions UIButtonOptions_Create(const unsigned char* text)
 {
-    return (UIButtonOptions){ .Element = UIElementOptions_Create(), .Text = text, .IsEnabled = true, .IsToggled = false };
+    return (UIButtonOptions){ .Element = UIElementOptions_Create(), .Text = text, .IsEnabled = true, .IsToggled = false,
+        .ClickMode = UIClickMode_OnPressAndRelease, .ActivationButtons = UI_BUTTONS_LEFT, .TakesWheel = false };
 }
 
 
@@ -135,6 +146,35 @@ Error UIButton_SetIsToggled(UIScreen* screen, uint64_t widgetId, bool isToggled)
  */
 Error UIButton_IsToggled(UIScreen* screen, uint64_t widgetId, bool* outIsToggled);
 
+/**
+ * @brief Sets when a button activates.
+ * @param screen The button's screen; must not be NULL.
+ * @param widgetId The button.
+ * @param clickMode The click mode.
+ * @returns Success; ErrorCode_InvalidOperation for a stale id or a widget that is no button; ErrorCode_ArgumentOutOfRange for an
+ *          unknown mode.
+ */
+Error UIButton_SetClickMode(UIScreen* screen, uint64_t widgetId, UIClickMode clickMode);
+
+/**
+ * @brief Sets the mouse buttons that activate a button.
+ * @param screen The button's screen; must not be NULL.
+ * @param widgetId The button.
+ * @param activationButtons UI_BUTTON_BIT values ORed together; none leaves the keyboard alone to activate it.
+ * @returns Success; ErrorCode_InvalidOperation for a stale id or a widget that is no button; ErrorCode_ArgumentOutOfRange for a bit
+ *          that is no mouse button.
+ */
+Error UIButton_SetActivationButtons(UIScreen* screen, uint64_t widgetId, uint8_t activationButtons);
+
+/**
+ * @brief Sets whether a button takes the wheel, posting UIElementEvent_Scrolled, in place of letting it go on up the tree.
+ * @param screen The button's screen; must not be NULL.
+ * @param widgetId The button.
+ * @param takesWheel Whether it does.
+ * @returns Success; ErrorCode_InvalidOperation for a stale id or a widget that is no button.
+ */
+Error UIButton_SetTakesWheel(UIScreen* screen, uint64_t widgetId, bool takesWheel);
+
 
 // Behaviour helpers, for widget types embedding the capability.
 /**
@@ -142,7 +182,8 @@ Error UIButton_IsToggled(UIScreen* screen, uint64_t widgetId, bool* outIsToggled
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
  * @param args The constructor's arguments; must not be NULL.
- * @returns Success; otherwise the look's or the text's error, with nothing left to release.
+ * @returns Success; ErrorCode_ArgumentOutOfRange for an unknown click mode or a bit that is no mouse button; otherwise the look's or
+ *          the text's error, with nothing left to release.
  */
 Error UIButtonCapability_Construct(UIButtonCapability* self, Widget* widget, const UIButtonArgs* args);
 
@@ -170,6 +211,23 @@ Error UIButtonCapability_Update(UIButtonCapability* self, Widget* widget, Progra
  * @returns Success, or the event queue's error.
  */
 Error UIButtonCapability_OnMouseInput(UIButtonCapability* self, Widget* widget, const WidgetMouseInputArgs* args);
+
+/**
+ * @brief Lets go of a press the screen says is lost; call it from OnPressLost.
+ * @param self The capability; must not be NULL.
+ * @param button The press's mouse button.
+ */
+void UIButtonCapability_OnPressLost(UIButtonCapability* self, GameKey button);
+
+/**
+ * @brief Interprets the wheel; call it from OnScrollInput.
+ * @param self The capability; must not be NULL.
+ * @param widget The widget; must not be NULL.
+ * @param args The input; must not be NULL.
+ * @param outIsHandled [out] Set when it takes the wheel. Must not be NULL.
+ * @returns Success, or the event queue's error.
+ */
+Error UIButtonCapability_OnScrollInput(UIButtonCapability* self, Widget* widget, const WidgetScrollInputArgs* args, bool* outIsHandled);
 
 /**
  * @brief Interprets keyboard input; call it from OnKeyboardInput.

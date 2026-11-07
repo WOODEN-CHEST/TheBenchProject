@@ -93,37 +93,61 @@ options (`UILabel_SetTextSize`). It takes no input. With `IsWrapped` it answers 
 wrapped to its box; its preferred width rounds up to a whole surface pixel, and it wraps with half a pixel to spare, so a box made for its text keeps the text
 on the lines it was measured with. The rest of `LabelWidget.h` stays there for rich text.
 
-**Button** (`UIButton.h`). A click is a left press and a release on it (nothing covering it there); a release elsewhere does nothing.
-Enter (the `ui_accept` action's keys) or Space while focused clicks at the press: handling the press owns the key, so its repeats do not
-click again, and the space that key types goes nowhere. An optional toggled look (`selected`). **Disabled is the capability's state,
+**Button** (`UIButton.h`). Activates by its click mode (below). Enter (the `ui_accept` action's keys) or Space while focused activates at the
+press in every mode: handling the press owns the key, so its repeats do not activate again, and the space that key types goes nowhere. An optional toggled look (`selected`).
+With `TakesWheel` (`UIButton_SetTakesWheel`) it posts `Scrolled` and stops the wheel; without it the wheel goes on up the tree. **Disabled is the capability's state,
 not the input flag:** an input-disabled widget is transparent to the pointer, and a click on a disabled button must not reach what
-lies behind it, so a disabled button takes the click and reports nothing. It is not focusable while disabled.
+lies behind it, so a disabled button takes the click and reports nothing, nor the wheel if it takes that. It is not focusable while disabled.
 
-**Toggle** (`UIToggle.h`). On, off or mixed; a click from mixed turns it on. Click, Enter or Space.
+**Toggle** (`UIToggle.h`). On, off or mixed; an activation from mixed turns it on. The same click modes and activation buttons, Enter or Space. Disabled, it is as a disabled button.
 
-**Slider** (`UISlider.h`). A value in a range, as a double, with an optional step. A press on the track brings the thumb under the
-pointer; a press on the thumb holds it where it was grabbed, so a click on it changes nothing. Dragging follows the pointer, clamped
-when it leaves the box. The arrows step (the `ui_left` and `ui_right` actions' keys; repeats follow), Home and End jump. Up and down are
-left to navigation. The wheel changes it only while it is focused, so scrolling a panel never changes a value by accident. A range
-that is no whole number of steps keeps its upper end reachable: the end counts as a step.
+**Slider** (`UISlider.h`). A value in a range, as a double, with an optional step. A left press on the track brings the thumb under the
+pointer; a press on the thumb holds it where it was grabbed, so a click on it changes nothing. Dragging follows the pointer wherever it goes, past the box and past the window: past an
+end the value is that end. The arrows step (the `ui_left` and `ui_right` actions' keys; repeats follow), Home and End jump. Up and down are
+left to navigation. The wheel is the slider's only while it is focused or with Ctrl: otherwise it goes on up the tree, so scrolling a panel never changes a value by accident. With
+`HasDefault` and `Default` (`UISlider_SetDefault`), the reset action (`tbp:ui_reset`, Backspace), focused or only hovered, puts it back, a whole change; during a change it is used and does
+nothing. A range that is no whole number of steps keeps its upper end reachable: the end counts as a step.
+
+### Click modes
+
+Button and toggle options have `ClickMode` and `ActivationButtons` (`UIButton_SetClickMode`, `UIButton_SetActivationButtons`, and the toggle's).
+
+| `UIClickMode` | Activates at | So |
+|---|---|---|
+| `OnPressAndRelease` (the default) | its own press let go on it, nothing covering it there | a slip forgives: press, drag off, let go, and nothing happens |
+| `OnPress` | the press | at once, and what follows does nothing |
+| `OnRelease` | a release on it, wherever on this screen the press began, a press handed to it too | press-drag-release menus |
+
+`ActivationButtons` is a mask of mouse buttons, `UI_BUTTON_BIT(GameKey_MouseMiddle)` and so on, up to `UI_BUTTONS_ALL`; `UI_BUTTONS_LEFT` is the default. Each button is held
+on its own, and another button's press does nothing to it. A press that is lost (`OnPressLost`) activates nothing, and a release ends what its press held even if its button stopped
+activating meanwhile. An element's own type wires `UIPressable_OnMouseInput`, `UIPressable_OnPressLost`, `UIPressable_OnKeyboardInput` and `UIPressable_Update` as the standard ones do;
+one that leaves out the loss still lets go at its next update once the button is up.
 
 ## Events
 
-Elements post through `UIScreen_PostWidgetEvent`, delivered at the end of the update, never in the middle of routing. `UIEvent.WidgetEventId`
-is a `UIElementEvent`:
+Elements post through `UIScreen_PostWidgetEvent`, or `UIScreen_PostWidgetMouseEvent` when there is mouse data, delivered at the end of the update, never in the middle of routing.
+`UIEvent.WidgetEventId` is a `UIElementEvent`:
 
-| Event | Posted | Value |
+| Event | Posted | Carries |
 |---|---|---|
-| `Clicked` | a button's click | none |
+| `Activated` | a button's click, by its click mode, or its key | mouse data |
 | `Changed` | the value moved and may go on: during a drag, at each key step | bool or double |
-| `Committed` | the change is done: the release, the key's release; what an undo history records. Not posted when the value ends where it began | bool or double |
+| `Committed` | the change is done: the release, the key's release, the press lost; what an undo history records. Not posted when the value ends where it began | bool or double |
 | `Cancelled` | Escape (the `ui_back` action's keys) during a change, or disabling it: the value at its start is back | double |
+| `Pressed` | a press of any button reached the element | mouse data |
+| `Released` | that press's release, or another's let go over it (`ReleaseOver`) | mouse data; `IsOverWidget` says whether it was over the element |
+| `DoubleClicked` | after `Pressed`, at the second press in a row (`ClickCount` 2, not 3) | mouse data |
+| `Scrolled` | a button with `TakesWheel` | mouse data with `ScrollDelta` |
+| `ContextRequested` | a right press let go on the element, or the context menu action's key (`tbp:ui_context_menu`): then `Button` is the key, the place the element's middle, and `IsOverWidget` false | mouse data |
 
-A toggle's click and a wheel notch are whole changes: `Changed` then `Committed` in one update. Code setting a value posts nothing, and
-a value that is not a finite number is refused. A slider that stops taking input or showing during a change stops following it: the value stays where it
-got to, and the commit comes when the button or the key comes up. A slider off the screen hears nothing and gets no update: a change that lost it ends, with its
-commit, when it is back on the screen and sees the button or the key up, and destroyed it posts nothing more. After a cancel the key that made the change does
-nothing until it is pressed anew.
+The mouse data is in the event by value (`UIEvent.HasMouse`, `UIEvent.Mouse`: button, modifiers, screen position, scroll delta, whether over the element), so a handler needs no
+widget. For a key's activation `Button` is the key. A disabled element posts none of these, and a toggle and a slider tell the input events as a button does.
+
+A toggle's activation, a wheel notch and a reset are whole changes: `Changed` then `Committed` in one update. Code setting a value posts nothing, and
+a value that is not a finite number is refused. A slider that loses its press (detached, hidden, input-disabled, or its press handed on) ends the drag there, with its commit if the
+value moved. A key's change stops following when the slider stops taking input or showing: the value stays where it got to and the commit comes when the key comes up; off the screen
+the slider hears nothing and gets no update, so that commit waits until it is back and sees the key up. A slider destroyed posts nothing more. After a cancel the key that made the
+change does nothing until it is pressed anew.
 
 ## Themes
 
@@ -168,12 +192,16 @@ UI is scaled, and at 28 both go away while 14 pixels stays sharp enough to read 
 in stacks that show content, fixed and filling sizes, over a plain background. It keeps its pixels (`UIScalePolicy_ConstantPixels`): drag the window's edges, and the controls keep their size with more room around them. P switches to following the
 window's height and back, to compare them. T switches the theme (`tbp:test_flat`, `tbp:test_nine_slice`, whose art
 `asset_source/scripts/placeholder_ui.py` generates), + and - the player's scale, L the event log, Escape quits. Each event shows in its status line and
-in the log (a drag's `Changed` events a few times a second).
+in the log, with its button, modifiers and place (a drag's `Changed` events a few times a second). A row tries the routing: a button per click mode (left and middle activate), a stack
+that takes the wheel holding two buttons that leave it, a button made with `TakesWheel`, a row with each pointer shape, and a box whose drag hides the cursor and reads the raw motion. Every
+slider has a default, so Backspace over one puts it back.
 
 ## Rules for a new element
 
-- Input only through the hooks; `UIScreen_GetInput` for an action's keys (`UIElement_IsActionKey`) and held state. A key a player could rebind is
+- Input only through the hooks; `UIScreen_GetInput` for an action's keys (`UIElement_IsActionKey`, `UIElement_IsActionPress` with its modifiers counted) and held state. A key a player could rebind is
   an action's.
+- A press that starts something answers `OnPressLost` as well as the release, and what stops the wheel says so in `OnScrollInput`. `UIElement_PostMouseEvents` tells the input events,
+  `UIElement_OnContextKey` the menu key.
 - Render reads state, never writes it: state changes in the hooks and in Update. Report a missing part from Update, not Render.
 - Draw in whole surface pixels: `UIRenderContext_GetPixelBox`, then the `UIRenderContext_RenderPixel*` calls.
 - Answer `Measure` in UI pixels, and call `Widget_InvalidateMeasure` from whatever changes the answer. Answer without changing what you draw: a width you are

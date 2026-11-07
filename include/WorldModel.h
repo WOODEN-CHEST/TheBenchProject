@@ -130,6 +130,9 @@ typedef struct WaterMaterialStruct WaterMaterial;
 #define WORLD_MODEL_MAX_WATERS ((size_t)16)
 /** @brief The most bytes a surface's name may have ([a-z][a-z0-9_.-]*, without the terminator). */
 #define WORLD_MODEL_SURFACE_NAME_MAX_LENGTH ((size_t)64)
+/** @brief How far from a surface's centre a ray continued on its plane goes at most, in the surface's own lengths: far past any of its
+ *  ends, and a number that stays exact in texture coordinates (WorldModelSurface_ContinueRay). */
+#define WORLD_MODEL_SURFACE_MAX_CONTINUED_REACH 64.0
 /** @brief The smallest side of a surface's picture, in pixels. */
 #define WORLD_MODEL_SURFACE_MIN_RESOLUTION 16
 /** @brief The largest side of a surface's picture, in pixels. */
@@ -387,6 +390,8 @@ typedef struct WorldModelSurfaceStruct
      *  (u and v 0.5), the way its front faces (unit), and how far a step of 1 in u and in v goes across it (its width
      *  and its height with their directions; v runs down the picture). */
     Vector3 _center;
+    /** @brief The texture coordinates at that point. */
+    Vector2 _centerUv;
     Vector3 _normal;
     Vector3 _axisU;
     Vector3 _axisV;
@@ -1016,6 +1021,17 @@ static inline Vector3 WorldModelSurface_GetAxisV(const WorldModelSurface* self)
 bool WorldModelSurface_GetPicturePosition(const WorldModelSurface* self, Vector2 uv, Vector2* outPicture);
 
 /**
+ * @brief Where on a surface's picture a point of the plane of its glass is, past the glass too (WorldModelSurface_ContinueRay). On the glass it
+ *        is WorldModelSurface_GetPicturePosition. Past a CRT's glass it goes on from where the glass's edge shows, each axis by what is past the
+ *        edge: the curvature grows with the distance from the middle, and through it a point far past one edge would run the other axis away.
+ * @param self The surface; must not be NULL.
+ * @param uv The point: its texture coordinates, any number.
+ * @param outPicture [out] Receives where on the picture, past [0, 1] too. Must not be NULL.
+ * @returns Whether that lies on the picture: never past the glass.
+ */
+bool WorldModelSurface_GetContinuedPicturePosition(const WorldModelSurface* self, Vector2 uv, Vector2* outPicture);
+
+/**
  * @brief Returns the triangles a ray finds a surface by: LOD 0's of its slot, in the object's own space.
  * @param self The surface; must not be NULL.
  * @returns The mesh (valid while the world model is loaded).
@@ -1063,6 +1079,26 @@ bool WorldModelSurface_Raycast(const WorldModelSurface* self, const Matrix4Doubl
  * @returns The name (static), or NULL for a value that is not a kind.
  */
 const unsigned char* WorldModelSurfaceKind_GetName(WorldModelSurfaceKind kind);
+
+/**
+ * @brief Where a ray goes on the plane of a placed surface's frame (its centre and its axes), past its triangles too: what a drag
+ *        held on a screen follows when the ray leaves the surface.
+ *
+ * A ray that never meets the plane in front of it (it runs along it, or points away) goes on as far as it may in the direction it
+ * points along the plane, so looking far past a screen's edge still means past that edge. No answer is farther than
+ * WORLD_MODEL_SURFACE_MAX_CONTINUED_REACH of the surface's own lengths from its centre. In double, so a placement far from the
+ * world's origin keeps its precision. On a curved surface the plane is its frame's, so it may lie a little off the triangles.
+ * @param self The surface; must not be NULL.
+ * @param objectToWorld The placement of the object; must not be NULL.
+ * @param origin Where the ray starts, in the world.
+ * @param direction Its direction (any length but 0).
+ * @param outUv [out] Receives the surface's texture coordinates there, past [0, 1] off the surface. Must not be NULL.
+ * @param outPoint [out] Receives the point on the plane, in the world. Must not be NULL.
+ * @returns false, with nothing written, for a surface of no area, a direction of no length or not finite, or a ray along the
+ *          plane's normal pointing away from it.
+ */
+bool WorldModelSurface_ContinueRay(const WorldModelSurface* self, const Matrix4Double* objectToWorld, Vector3Double origin,
+    Vector3 direction, Vector2* outUv, Vector3Double* outPoint);
 
 /** @brief Returns how many water slots the world model has. @param self The world model; must not be NULL. */
 static inline uint32_t WorldModel_GetWaterCount(const WorldModel* self)

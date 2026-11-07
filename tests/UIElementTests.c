@@ -219,7 +219,7 @@ static void AButtonClicksOnAPressAndAReleaseOnIt(TestRun* run)
 
         TestUI_Release(&Fixture, GameKey_MouseLeft);
         TestUI_Tick(run, &Fixture);
-        TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Clicked) && !Events.Events[0].HasValue);
+        TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Activated) && !Events.Events[0].HasValue);
         TEST_CHECK(run, GetState(&Fixture, Id) == UIElementState_Hovered);
 
         // It took the focus: the pointer leaving shows it.
@@ -349,7 +349,7 @@ static void ADisabledButtonSwallowsTheClickAndReportsNothing(TestRun* run)
         TEST_CHECK(run, !IsEnabled);
         TEST_CHECK_SUCCESS(run, UIButton_SetIsEnabled(&Fixture.Screen, Id, true));
         TestUI_Click(run, &Fixture, 150.0f, 120.0f);
-        TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Clicked));
+        TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Activated));
     }
     TestUI_Deconstruct(run, &Fixture);
 }
@@ -390,7 +390,7 @@ static void EnterOrSpaceClicksAndAHeldKeyDoesNotClickAgain(TestRun* run)
             TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Base));
             TestUI_Press(&Fixture, GameKey_Enter);
             TestUI_Tick(run, &Fixture);
-            TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Clicked));
+            TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Activated));
             TEST_CHECK(run, !GameInput_IsKeyPressed(&Fixture.Input, GameKey_Enter)); // Consumed.
             TEST_CHECK(run, GetState(&Fixture, Id) == UIElementState_Pressed);
 
@@ -410,7 +410,7 @@ static void EnterOrSpaceClicksAndAHeldKeyDoesNotClickAgain(TestRun* run)
             Fixture.Sample.TextCodepoints[0] = (uint32_t)' ';
             Fixture.Sample.TextCodepointCount = 1U;
             TestUI_Tick(run, &Fixture);
-            TEST_CHECK(run, (Events.Count == 2U) && IsEvent(&Events, 1U, Id, UIElementEvent_Clicked));
+            TEST_CHECK(run, (Events.Count == 2U) && IsEvent(&Events, 1U, Id, UIElementEvent_Activated));
             TEST_CHECK(run, GameInput_GetTextCodepointCount(&Fixture.Input) == 0U);
             TestUI_Release(&Fixture, GameKey_Space);
             TestUI_Tick(run, &Fixture);
@@ -460,7 +460,7 @@ static void AHandlerMayDestroyTheButton(TestRun* run)
         uint64_t Id = AddButton(run, &Fixture, u8"go");
         Events.IsDestroyingTheWidget = true;
         TestUI_Click(run, &Fixture, 150.0f, 120.0f);
-        TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Clicked));
+        TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Activated));
         TEST_CHECK(run, !UIScreen_IsWidgetAlive(&Fixture.Screen, Id));
         TestUI_Tick(run, &Fixture);
 
@@ -670,6 +670,16 @@ static void ThePressHelperAnswersForKeys(TestRun* run)
             Args = (WidgetKeyboardInputArgs){ .Type = UIKeyboardInputType_KeyRelease, .Key = GameKey_Space };
             UIPressable_OnKeyboardInput(&Press, Base, &Args, true, &IsHandled, &IsActivated);
             TEST_CHECK(run, IsHandled && !UIPressable_IsPressed(&Press));
+
+            // Cancelled with the key still down: nothing is held, and the next press of it counts as new.
+            Args = (WidgetKeyboardInputArgs){ .Type = UIKeyboardInputType_KeyPress, .Key = GameKey_Space };
+            UIPressable_OnKeyboardInput(&Press, Base, &Args, true, &IsHandled, &IsActivated);
+            TEST_CHECK(run, UIPressable_IsPressed(&Press));
+            UIPressable_Cancel(&Press);
+            TEST_CHECK(run, !UIPressable_IsPressed(&Press));
+            IsActivated = false;
+            UIPressable_OnKeyboardInput(&Press, Base, &Args, true, &IsHandled, &IsActivated);
+            TEST_CHECK(run, IsActivated);
         }
     }
     TestUI_Deconstruct(run, &Fixture);
@@ -1537,7 +1547,8 @@ static void DisablingCancelsADragAndSwallowsInput(TestRun* run)
 }
 
 /* A slider off the screen hears nothing: a drag that lost it ends when it is back and sees the button up, and commits then. */
-static void ADetachedDragEndsOnceItIsBack(TestRun* run)
+/* A drag whose slider is taken out of the tree ends at once, with its commit, and it stays ended when the slider comes back. */
+static void ADetachedDragCommitsAtOnce(TestRun* run)
 {
     TestUIFixture Fixture;
     TestUIEvents Events;
@@ -1553,13 +1564,13 @@ static void ADetachedDragEndsOnceItIsBack(TestRun* run)
             size_t Count = Events.Count;
             TEST_CHECK_SUCCESS(run, UIScreen_RemoveWidget(&Fixture.Screen, Base));
             TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, (Events.Count == (Count + 1U)) && IsDoubleEvent(&Events, Count, Id, UIElementEvent_Committed, 5.0));
             TestUI_Release(&Fixture, GameKey_MouseLeft);
             TestUI_Ticks(run, &Fixture, 3U);
-            TEST_CHECK(run, Events.Count == Count);
             TEST_CHECK_SUCCESS(run, UIScreen_AddWidget(&Fixture.Screen, Base));
             TestUI_Ticks(run, &Fixture, 2U);
             TEST_CHECK(run, GetState(&Fixture, Id) != UIElementState_Pressed);
-            TEST_CHECK(run, IsDoubleEvent(&Events, Events.Count - 1U, Id, UIElementEvent_Committed, 5.0));
+            TEST_CHECK(run, Events.Count == (Count + 1U));
         }
     }
     TestUI_Deconstruct(run, &Fixture);
@@ -1737,6 +1748,1184 @@ static void TheSlidersHelpersAnswerForTheirInput(TestRun* run)
     TestUI_Deconstruct(run, &Fixture);
 }
 
+/* A left press's drag past the window's edges reaches the limit, in every direction and at any speed, through the window's own
+ * pointer: the drag follows the mouse's position as it is, and the release still ends it. */
+static void ADragPastTheWindowReachesTheLimit(TestRun* run)
+{
+    const struct { float X; float Y; double Expected; } Cases[] =
+    {
+        { -300.0f, 110.0f, 0.0 }, { 1400.0f, 110.0f, 10.0 }, { -1.0f, 110.0f, 0.0 }, { 1001.0f, 110.0f, 10.0 },
+        { -5000.0f, -5000.0f, 0.0 }, { 9000.0f, 9000.0f, 10.0 }, { 2000.0f, -40.0f, 10.0 }, { -2000.0f, 540.0f, 0.0 },
+        { SLIDER_THUMB_START + (SLIDER_TRAVEL * 0.25f), -40.0f, 2.5 }, { SLIDER_THUMB_START + (SLIDER_TRAVEL * 0.25f), 800.0f, 2.5 }
+    };
+    for (size_t Index = 0U; Index < (sizeof(Cases) / sizeof(Cases[0])); Index++)
+    {
+        TestUIFixture Fixture;
+        TestUIEvents Events;
+        if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+        {
+            uint64_t Id = AddSlider(run, &Fixture, 5.0, false, 0.0);
+            GameInput* Input = &Fixture.Input;
+            Fixture.Sample.WindowSize = (Vector2){ .x = TEST_UI_SURFACE_WIDTH, .y = TEST_UI_SURFACE_HEIGHT };
+            const Vector2 Path[] = { { SliderPointerFor(5.0), 110.0f }, { SliderPointerFor(5.0), 110.0f }, { Cases[Index].X, Cases[Index].Y } };
+            for (size_t Step = 0U; Step < (sizeof(Path) / sizeof(Path[0])); Step++)
+            {
+                Fixture.Sample.MousePosition = Path[Step];
+                if (Step == 1U)
+                {
+                    TestUI_Press(&Fixture, GameKey_MouseLeft);
+                }
+                GameInput_BeginTick(Input, &Fixture.Sample);
+                Fixture.ScreenInput = UIScreenInput_CreateFromWindow(Input);
+                TestUI_Tick(run, &Fixture);
+            }
+            // Exactly at a limit, past it: there is no rounding to forgive.
+            double Value = GetSliderValue(run, &Fixture, Id);
+            TEST_CHECK(run, (Cases[Index].Expected == 2.5) ? IsNearDouble(Value, 2.5) : (Value == Cases[Index].Expected));
+            TEST_CHECK(run, GetState(&Fixture, Id) == UIElementState_Pressed);
+
+            // The release comes off the window: it ends the change.
+            TestUI_Release(&Fixture, GameKey_MouseLeft);
+            GameInput_BeginTick(Input, &Fixture.Sample);
+            Fixture.ScreenInput = UIScreenInput_CreateFromWindow(Input);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, IsDoubleEvent(&Events, Events.Count - 1U, Id, UIElementEvent_Committed, Cases[Index].Expected));
+            TEST_CHECK(run, GetState(&Fixture, Id) != UIElementState_Pressed);
+        }
+        TestUI_Deconstruct(run, &Fixture);
+    }
+}
+
+/* Coming back onto the window the slider follows again from where the pointer is, and a stepped one keeps to its steps past the ends. */
+static void ADragComesBackFromPastTheWindow(TestRun* run)
+{
+    TestUIFixture Fixture;
+    if (Construct(run, &Fixture))
+    {
+        uint64_t Id = AddSlider(run, &Fixture, 5.0, true, 3.0);
+        TestUI_MovePointer(&Fixture, SliderPointerFor(6.0), 110.0f);
+        Fixture.ScreenInput.IsPointerTracked = true;
+        TestUI_Press(&Fixture, GameKey_MouseLeft);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 6.0);
+        Fixture.ScreenInput.IsPointerPresent = false;
+        Fixture.ScreenInput.PointerPosition = (Vector2){ .x = 4.0f, .y = 0.2f };
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 10.0);
+        TestUI_MovePointer(&Fixture, SliderPointerFor(3.0), 110.0f);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 3.0);
+        TestUI_Release(&Fixture, GameKey_MouseLeft);
+        TestUI_Tick(run, &Fixture);
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+/* Each click mode: what a press and a release on it and off it do. */
+static void TheClickModesActivateWhenTheySay(TestRun* run)
+{
+    const struct { UIClickMode Mode; bool ByPress; bool ByReleaseOn; bool ByPressOffRelease; bool ByReleaseOnlyOn; } Cases[] =
+    {
+        { UIClickMode_OnPress, true, true, true, false },
+        { UIClickMode_OnRelease, false, true, false, true },
+        { UIClickMode_OnPressAndRelease, false, true, false, false }
+    };
+    for (size_t Index = 0U; Index < (sizeof(Cases) / sizeof(Cases[0])); Index++)
+    {
+        TestUIFixture Fixture;
+        TestUIEvents Events;
+        if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+        {
+            uint64_t Id = AddButton(run, &Fixture, u8"go");
+            TEST_CHECK_SUCCESS(run, UIButton_SetClickMode(&Fixture.Screen, Id, Cases[Index].Mode));
+
+            // A press on it.
+            TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+            TestUI_Press(&Fixture, GameKey_MouseLeft);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, GetState(&Fixture, Id) == UIElementState_Pressed);
+            TEST_CHECK(run, (Events.Count == 1U) == Cases[Index].ByPress);
+            // ... and its release on it.
+            TestUI_Release(&Fixture, GameKey_MouseLeft);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, Events.Count == 1U);
+            TEST_CHECK(run, IsEvent(&Events, 0U, Id, UIElementEvent_Activated));
+            Events.Count = 0U;
+
+            // A press on it, dragged off and let go.
+            TestUI_Press(&Fixture, GameKey_MouseLeft);
+            TestUI_Tick(run, &Fixture);
+            TestUI_MovePointer(&Fixture, 700.0f, 300.0f);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, GetState(&Fixture, Id) != UIElementState_Pressed);
+            TestUI_Release(&Fixture, GameKey_MouseLeft);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, (Events.Count == 1U) == Cases[Index].ByPressOffRelease);
+            Events.Count = 0U;
+
+            // A press elsewhere, on a widget that takes it, and a release on it.
+            UIPanelOptions Panel = UIPanelOptions_Create();
+            Panel.Element.HasPlacement = true;
+            Panel.Element.Placement = PlaceAt(600.0f, 200.0f, 200.0f, 200.0f);
+            uint64_t PanelId = WIDGET_ID_INVALID;
+            TEST_CHECK_SUCCESS(run, UIKit_CreatePanel(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &Panel, &PanelId));
+            TestUI_Tick(run, &Fixture);
+            TestUI_MovePointer(&Fixture, 700.0f, 300.0f);
+            TestUI_Press(&Fixture, GameKey_MouseLeft);
+            TestUI_Tick(run, &Fixture);
+            TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+            TestUI_Tick(run, &Fixture);
+            TestUI_Release(&Fixture, GameKey_MouseLeft);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, (Events.Count == 1U) == Cases[Index].ByReleaseOnlyOn);
+            Events.Count = 0U;
+
+            // A press on nothing and a release on it: that press was the game's.
+            TestUI_MovePointer(&Fixture, 950.0f, 20.0f);
+            TestUI_Press(&Fixture, GameKey_MouseLeft);
+            TestUI_Tick(run, &Fixture);
+            TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+            TestUI_Release(&Fixture, GameKey_MouseLeft);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, Events.Count == 0U);
+
+            // The keyboard activates at the key's press in every mode, and once.
+            Widget* Base = NULL;
+            TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base));
+            TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Base));
+            TestUI_Press(&Fixture, GameKey_Enter);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Activated));
+            TestUI_Release(&Fixture, GameKey_Enter);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, Events.Count == 1U);
+        }
+        TestUI_Deconstruct(run, &Fixture);
+    }
+}
+
+/* Modes and buttons from the options, and what is no mode or no button is refused. */
+static void ClickSettingsAreChecked(TestRun* run)
+{
+    TestUIFixture Fixture;
+    TestUIEvents Events;
+    if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+    {
+        UIScreen* Screen = &Fixture.Screen;
+        UIButtonOptions Options = UIButtonOptions_Create(u8"go");
+        TEST_CHECK(run, (Options.ClickMode == UIClickMode_OnPressAndRelease) && (Options.ActivationButtons == UI_BUTTON_BIT(GameKey_MouseLeft)) && !Options.TakesWheel);
+        Options.Element.HasPlacement = true;
+        Options.Element.Placement = PlaceAt(BUTTON_X, BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT);
+        uint64_t Id = WIDGET_ID_INVALID;
+        Options.ClickMode = (UIClickMode)7;
+        TEST_CHECK_ERROR(run, UIKit_CreateButton(&Fixture.Kit, Screen, WIDGET_ID_INVALID, &Options, &Id), ErrorCode_ArgumentOutOfRange);
+        Options.ClickMode = UIClickMode_OnPress;
+        Options.ActivationButtons = 0x80U;
+        TEST_CHECK_ERROR(run, UIKit_CreateButton(&Fixture.Kit, Screen, WIDGET_ID_INVALID, &Options, &Id), ErrorCode_ArgumentOutOfRange);
+        Options.ActivationButtons = UI_BUTTON_BIT(GameKey_MouseRight);
+        TEST_CHECK_SUCCESS(run, UIKit_CreateButton(&Fixture.Kit, Screen, WIDGET_ID_INVALID, &Options, &Id));
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK_ERROR(run, UIButton_SetClickMode(Screen, Id, (UIClickMode)-1), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIButton_SetClickMode(Screen, Id, (UIClickMode)3), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIButton_SetActivationButtons(Screen, Id, 0xFFU), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIButton_SetClickMode(Screen, WIDGET_ID_INVALID, UIClickMode_OnPress), ErrorCode_InvalidOperation);
+        TEST_CHECK_ERROR(run, UIButton_SetActivationButtons(Screen, WIDGET_ID_INVALID, UI_BUTTONS_LEFT), ErrorCode_InvalidOperation);
+        TEST_CHECK_ERROR(run, UIButton_SetTakesWheel(Screen, WIDGET_ID_INVALID, true), ErrorCode_InvalidOperation);
+
+        // What the options said holds until changed: the right button at its press, not the left.
+        TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+        TestUI_Tap(run, &Fixture, GameKey_MouseLeft);
+        TEST_CHECK(run, Events.Count == 0U);
+        TestUI_Press(&Fixture, GameKey_MouseRight);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, Events.Count == 1U);
+        TEST_CHECK(run, Events.Events[0].HasMouse && (Events.Events[0].Mouse.Button == GameKey_MouseRight));
+        TestUI_Release(&Fixture, GameKey_MouseRight);
+        TestUI_Tick(run, &Fixture);
+
+        // Every button; none leaves the keyboard alone.
+        Events.Count = 0U;
+        TEST_CHECK_SUCCESS(run, UIButton_SetActivationButtons(Screen, Id, UI_BUTTONS_ALL));
+        for (int32_t Button = (int32_t)GameKey_MouseLeft; Button <= (int32_t)GameKey_MouseBack; Button++)
+        {
+            TestUI_Tap(run, &Fixture, (GameKey)Button);
+        }
+        TEST_CHECK(run, Events.Count == ((size_t)GameKey_MouseBack - (size_t)GameKey_MouseLeft + 1U));
+        Events.Count = 0U;
+        TEST_CHECK_SUCCESS(run, UIButton_SetActivationButtons(Screen, Id, 0U));
+        TestUI_Tap(run, &Fixture, GameKey_MouseLeft);
+        TEST_CHECK(run, Events.Count == 0U);
+        TestUI_Tap(run, &Fixture, GameKey_Space);
+        TEST_CHECK(run, Events.Count == 1U);
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+/* A press on it looks pressed for the buttons that activate it, and a held press of another does not end that; each button is its own. */
+static void EachActivationButtonIsItsOwn(TestRun* run)
+{
+    TestUIFixture Fixture;
+    TestUIEvents Events;
+    if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+    {
+        uint64_t Id = AddButton(run, &Fixture, u8"go");
+        TEST_CHECK_SUCCESS(run, UIButton_SetActivationButtons(&Fixture.Screen, Id, UI_BUTTON_BIT(GameKey_MouseLeft) | UI_BUTTON_BIT(GameKey_MouseMiddle)));
+        TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+        TestUI_Press(&Fixture, GameKey_MouseLeft);
+        TestUI_Tick(run, &Fixture);
+        TestUI_Press(&Fixture, GameKey_MouseMiddle);
+        TestUI_Tick(run, &Fixture);
+        TestUI_Release(&Fixture, GameKey_MouseMiddle);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, (Events.Count == 1U) && (Events.Events[0].Mouse.Button == GameKey_MouseMiddle));
+        TEST_CHECK(run, GetState(&Fixture, Id) == UIElementState_Pressed); // The left one still holds it.
+        TestUI_Release(&Fixture, GameKey_MouseLeft);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, (Events.Count == 2U) && (Events.Events[1].Mouse.Button == GameKey_MouseLeft));
+        TEST_CHECK(run, GetState(&Fixture, Id) == UIElementState_Hovered);
+
+        // Off it and back during two presses: a move of one tells it for both.
+        TestUI_Press(&Fixture, GameKey_MouseLeft);
+        TestUI_Tick(run, &Fixture);
+        TestUI_MovePointer(&Fixture, 700.0f, 300.0f);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, GetState(&Fixture, Id) != UIElementState_Pressed);
+        TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, GetState(&Fixture, Id) == UIElementState_Pressed);
+
+        // Cancelling keeps the mode and the buttons; the press in progress is forgotten.
+        TEST_CHECK_SUCCESS(run, UIButton_SetIsEnabled(&Fixture.Screen, Id, false));
+        TEST_CHECK_SUCCESS(run, UIButton_SetIsEnabled(&Fixture.Screen, Id, true));
+        Events.Count = 0U;
+        TestUI_Release(&Fixture, GameKey_MouseLeft);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, Events.Count == 0U);
+        TestUI_Tap(run, &Fixture, GameKey_MouseMiddle);
+        TEST_CHECK(run, Events.Count == 1U);
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+/* Hidden or disabled during a press in each mode: the press is over, and nothing activates by it. A disabled one swallows all. */
+static void APressLostOrDisabledActivatesNothing(TestRun* run)
+{
+    const UIClickMode Modes[] = { UIClickMode_OnRelease, UIClickMode_OnPressAndRelease };
+    for (size_t ModeIndex = 0U; ModeIndex < (sizeof(Modes) / sizeof(Modes[0])); ModeIndex++)
+    {
+        for (int Case = 0; Case < 3; Case++)
+        {
+            TestUIFixture Fixture;
+            TestUIEvents Events;
+            if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+            {
+                uint64_t Id = AddButton(run, &Fixture, u8"go");
+                Events.IsRecordingInputEvents = true;
+                TEST_CHECK_SUCCESS(run, UIButton_SetClickMode(&Fixture.Screen, Id, Modes[ModeIndex]));
+                Widget* Base = NULL;
+                if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
+                {
+                    TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+                    TestUI_Press(&Fixture, GameKey_MouseLeft);
+                    TestUI_Tick(run, &Fixture);
+                    TEST_CHECK(run, GetState(&Fixture, Id) == UIElementState_Pressed);
+                    Events.Count = 0U;
+                    switch (Case)
+                    {
+                        case 0: TEST_CHECK_SUCCESS(run, Widget_SetIsRendered(Base, false)); break;
+                        case 1: TEST_CHECK_SUCCESS(run, Widget_SetIsInputEnabled(Base, false)); break;
+                        default: TEST_CHECK_SUCCESS(run, UIButton_SetIsEnabled(&Fixture.Screen, Id, false)); break;
+                    }
+                    TestUI_Tick(run, &Fixture);
+                    TestUI_Release(&Fixture, GameKey_MouseLeft);
+                    TestUI_Tick(run, &Fixture);
+                    TEST_CHECK(run, Events.Count == 0U);
+                    switch (Case)
+                    {
+                        case 0: TEST_CHECK_SUCCESS(run, Widget_SetIsRendered(Base, true)); break;
+                        case 1: TEST_CHECK_SUCCESS(run, Widget_SetIsInputEnabled(Base, true)); break;
+                        default: TEST_CHECK_SUCCESS(run, UIButton_SetIsEnabled(&Fixture.Screen, Id, true)); break;
+                    }
+                    TestUI_Tick(run, &Fixture);
+                    TEST_CHECK(run, GetState(&Fixture, Id) != UIElementState_Pressed);
+                }
+            }
+            TestUI_Deconstruct(run, &Fixture);
+        }
+    }
+}
+
+/* A disabled element reports nothing, at any button, in any mode, and still swallows the press from what lies behind it. */
+static void ADisabledElementReportsNothing(TestRun* run)
+{
+    TestUIFixture Fixture;
+    TestUIEvents Events;
+    if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+    {
+        Events.IsRecordingInputEvents = true;
+        uint64_t Id = AddButton(run, &Fixture, u8"go");
+        TEST_CHECK_SUCCESS(run, UIButton_SetClickMode(&Fixture.Screen, Id, UIClickMode_OnPress));
+        TEST_CHECK_SUCCESS(run, UIButton_SetTakesWheel(&Fixture.Screen, Id, true));
+        TEST_CHECK_SUCCESS(run, UIButton_SetActivationButtons(&Fixture.Screen, Id, UI_BUTTONS_ALL));
+        TEST_CHECK_SUCCESS(run, UIButton_SetIsEnabled(&Fixture.Screen, Id, false));
+        TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+        for (int32_t Button = (int32_t)GameKey_MouseLeft; Button <= (int32_t)GameKey_MouseBack; Button++)
+        {
+            TestUI_Press(&Fixture, (GameKey)Button);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, GameInput_IsKeyConsumed(&Fixture.Input, (GameKey)Button));
+            TestUI_Release(&Fixture, (GameKey)Button);
+            TestUI_Tick(run, &Fixture);
+        }
+        TestUI_Wheel(&Fixture, 1.0f);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, Events.Count == 0U);
+        TEST_CHECK(run, GetState(&Fixture, Id) == UIElementState_Disabled);
+
+        // The menu key coming up from a focused child passes a disabled button or toggle by: neither asks, nor uses it.
+        uint64_t ToggleId = AddToggle(run, &Fixture, UIToggleState_Off);
+        TEST_CHECK_SUCCESS(run, UIToggle_SetIsEnabled(&Fixture.Screen, ToggleId, false));
+        const uint64_t Holders[] = { Id, ToggleId };
+        for (size_t Index = 0U; Index < (sizeof(Holders) / sizeof(Holders[0])); Index++)
+        {
+            uint64_t ChildId = WIDGET_ID_INVALID;
+            UIPanelOptions ChildOptions = UIPanelOptions_Create();
+            Widget* Child = NULL;
+            TEST_CHECK_SUCCESS(run, UIKit_CreatePanel(&Fixture.Kit, &Fixture.Screen, Holders[Index], &ChildOptions, &ChildId));
+            if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, ChildId, &Child)))
+            {
+                TEST_CHECK_SUCCESS(run, Widget_SetIsFocusable(Child, true));
+                TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Child));
+                TestUI_Tick(run, &Fixture);
+                TestUI_Press(&Fixture, GameKey_Menu);
+                TestUI_Tick(run, &Fixture);
+                TEST_CHECK(run, (Events.Count == 0U) && !GameInput_IsKeyConsumed(&Fixture.Input, GameKey_Menu));
+                TestUI_Release(&Fixture, GameKey_Menu);
+                TestUI_Tick(run, &Fixture);
+                TEST_CHECK_SUCCESS(run, Widget_Destroy(Child));
+            }
+        }
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+/* What a press held ends with its release, whatever changed since: taking its button away from the activating ones leaves no element pressed, and activates nothing. */
+static void ChangingTheButtonsDuringAPressLeavesNoStuckPress(TestRun* run)
+{
+    for (int Kind = 0; Kind < 2; Kind++)
+    {
+        TestUIFixture Fixture;
+        TestUIEvents Events;
+        if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+        {
+            uint64_t Id = (Kind == 0) ? AddButton(run, &Fixture, u8"go") : AddToggle(run, &Fixture, UIToggleState_Off);
+            TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+            TestUI_Tick(run, &Fixture);
+            TestUI_Press(&Fixture, GameKey_MouseLeft);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, GetState(&Fixture, Id) == UIElementState_Pressed);
+            if (Kind == 0)
+            {
+                TEST_CHECK_SUCCESS(run, UIButton_SetActivationButtons(&Fixture.Screen, Id, UI_BUTTON_BIT(GameKey_MouseRight)));
+            }
+            else
+            {
+                TEST_CHECK_SUCCESS(run, UIToggle_SetActivationButtons(&Fixture.Screen, Id, 0U));
+            }
+            TestUI_Release(&Fixture, GameKey_MouseLeft);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, GetState(&Fixture, Id) != UIElementState_Pressed);
+            TEST_CHECK(run, Events.Count == 0U);
+            TestUI_MovePointer(&Fixture, 600.0f, 400.0f);
+            TestUI_Ticks(run, &Fixture, 2U);
+            TEST_CHECK(run, GetState(&Fixture, Id) != UIElementState_Pressed);
+        }
+        TestUI_Deconstruct(run, &Fixture);
+    }
+}
+
+/* A lost press is over at once: shown again with the button still down, nothing shows it pressed. */
+static void ALostPressShowsNothingWhileTheButtonStaysDown(TestRun* run)
+{
+    for (int Kind = 0; Kind < 2; Kind++)
+    {
+        for (int Case = 0; Case < 2; Case++)
+        {
+            TestUIFixture Fixture;
+            if (Construct(run, &Fixture))
+            {
+                uint64_t Id = (Kind == 0) ? AddButton(run, &Fixture, u8"go") : AddToggle(run, &Fixture, UIToggleState_Off);
+                Widget* Base = NULL;
+                if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
+                {
+                    TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+                    TestUI_Tick(run, &Fixture);
+                    TestUI_Press(&Fixture, GameKey_MouseLeft);
+                    TestUI_Tick(run, &Fixture);
+                    TEST_CHECK(run, GetState(&Fixture, Id) == UIElementState_Pressed);
+                    TEST_CHECK_SUCCESS(run, (Case == 0) ? Widget_SetIsRendered(Base, false) : Widget_SetIsInputEnabled(Base, false));
+                    TestUI_Tick(run, &Fixture);
+                    TEST_CHECK_SUCCESS(run, (Case == 0) ? Widget_SetIsRendered(Base, true) : Widget_SetIsInputEnabled(Base, true));
+                    TestUI_Ticks(run, &Fixture, 2U);
+                    TEST_CHECK(run, GetState(&Fixture, Id) != UIElementState_Pressed);
+                    TestUI_Release(&Fixture, GameKey_MouseLeft);
+                    TestUI_Tick(run, &Fixture);
+                }
+            }
+            TestUI_Deconstruct(run, &Fixture);
+        }
+    }
+}
+
+/* A release over an OnRelease element activates it only if that button activates it, and only while it is enabled. */
+static void AReleaseOverActivatesOnlyWhatIsAsked(TestRun* run)
+{
+    for (int Case = 0; Case < 3; Case++)
+    {
+        TestUIFixture Fixture;
+        TestUIEvents Events;
+        if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+        {
+            UIButtonOptions FromOptions = UIButtonOptions_Create(u8"from");
+            FromOptions.Element.HasPlacement = true;
+            FromOptions.Element.Placement = PlaceAt(100.0f, 100.0f, 100.0f, 40.0f);
+            UIButtonOptions ToOptions = UIButtonOptions_Create(u8"to");
+            ToOptions.Element.HasPlacement = true;
+            ToOptions.Element.Placement = PlaceAt(300.0f, 100.0f, 100.0f, 40.0f);
+            ToOptions.ClickMode = UIClickMode_OnRelease;
+            uint64_t From = WIDGET_ID_INVALID;
+            uint64_t To = WIDGET_ID_INVALID;
+            TEST_CHECK_SUCCESS(run, UIKit_CreateButton(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &FromOptions, &From));
+            TEST_CHECK_SUCCESS(run, UIKit_CreateButton(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &ToOptions, &To));
+            TestUI_Tick(run, &Fixture);
+            if (Case == 2)
+            {
+                TEST_CHECK_SUCCESS(run, UIButton_SetIsEnabled(&Fixture.Screen, To, false));
+            }
+            GameKey Button = (Case == 1) ? GameKey_MouseRight : GameKey_MouseLeft;
+            TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+            TestUI_Tick(run, &Fixture);
+            TestUI_Press(&Fixture, Button);
+            TestUI_Tick(run, &Fixture);
+            TestUI_MovePointer(&Fixture, 350.0f, 120.0f);
+            TestUI_Tick(run, &Fixture);
+            TestUI_Release(&Fixture, Button);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, (Events.Count == 1U) == (Case == 0));
+            TEST_CHECK(run, (Case != 0) || IsEvent(&Events, 0U, To, UIElementEvent_Activated));
+        }
+        TestUI_Deconstruct(run, &Fixture);
+    }
+}
+
+/* A press handed to an element is one that began elsewhere: it activates one that asks only for a release on it, and no other. */
+static void AHandedPressActivatesOnlyAnOnReleaseElement(TestRun* run)
+{
+    const struct { UIClickMode Mode; bool IsActivated; } Cases[] =
+    {
+        { UIClickMode_OnRelease, true }, { UIClickMode_OnPressAndRelease, false }, { UIClickMode_OnPress, false }
+    };
+    for (size_t Index = 0U; Index < (sizeof(Cases) / sizeof(Cases[0])); Index++)
+    {
+        for (int IsOver = 0; IsOver < 2; IsOver++)
+        {
+            TestUIFixture Fixture;
+            TestUIEvents Events;
+            if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+            {
+                UIButtonOptions FromOptions = UIButtonOptions_Create(u8"from");
+                FromOptions.Element.HasPlacement = true;
+                FromOptions.Element.Placement = PlaceAt(100.0f, 100.0f, 100.0f, 40.0f);
+                UIButtonOptions ToOptions = UIButtonOptions_Create(u8"to");
+                ToOptions.Element.HasPlacement = true;
+                ToOptions.Element.Placement = PlaceAt(300.0f, 100.0f, 100.0f, 40.0f);
+                ToOptions.ClickMode = Cases[Index].Mode;
+                uint64_t From = WIDGET_ID_INVALID;
+                uint64_t To = WIDGET_ID_INVALID;
+                TEST_CHECK_SUCCESS(run, UIKit_CreateButton(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &FromOptions, &From));
+                TEST_CHECK_SUCCESS(run, UIKit_CreateButton(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &ToOptions, &To));
+                TestUI_Tick(run, &Fixture);
+                TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+                TestUI_Tick(run, &Fixture);
+                TestUI_Press(&Fixture, GameKey_MouseLeft);
+                TestUI_Tick(run, &Fixture);
+                TEST_CHECK_SUCCESS(run, UIScreen_TransferPress(&Fixture.Screen, GameKey_MouseLeft, To));
+                TestUI_MovePointer(&Fixture, (IsOver != 0) ? 350.0f : 700.0f, 120.0f);
+                TestUI_Tick(run, &Fixture);
+                TestUI_Release(&Fixture, GameKey_MouseLeft);
+                TestUI_Tick(run, &Fixture);
+                bool IsExpected = Cases[Index].IsActivated && (IsOver != 0);
+                TEST_CHECK(run, (Events.Count == 1U) == IsExpected);
+                TEST_CHECK(run, !IsExpected || IsEvent(&Events, 0U, To, UIElementEvent_Activated));
+            }
+            TestUI_Deconstruct(run, &Fixture);
+        }
+    }
+}
+
+/* A widget type that embeds an element's capability and does not answer OnPressLost does not stay pressed: a button that is up holds nothing. */
+static void AnElementWithoutTheLossHookStillLetsGo(TestRun* run)
+{
+    TestUIFixture Fixture;
+    TestUIEvents Events;
+    if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+    {
+        // The press, as such a type has it once its press was lost: held, with nothing more to come.
+        UIPressable Press = UIPressable_Create();
+        uint64_t Id = AddButton(run, &Fixture, u8"go");
+        Widget* Base = NULL;
+        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
+        {
+            WidgetMouseInputArgs Args = { .Type = UIMouseInputType_ButtonPress, .Button = GameKey_MouseMiddle };
+            bool IsActivated = false;
+            Press._activationButtons = UI_BUTTONS_ALL;
+            UIPressable_OnMouseInput(&Press, Base, &Args, true, &IsActivated);
+            Args.Button = GameKey_MouseRight;
+            UIPressable_OnMouseInput(&Press, Base, &Args, true, &IsActivated);
+            TEST_CHECK(run, UIPressable_IsPressed(&Press));
+
+            // A release ends what its own press held at once, with no update to help.
+            Args.Type = UIMouseInputType_ButtonRelease;
+            UIPressable_OnMouseInput(&Press, Base, &Args, true, &IsActivated);
+            Args.Button = GameKey_MouseMiddle;
+            UIPressable_OnMouseInput(&Press, Base, &Args, true, &IsActivated);
+            TEST_CHECK(run, !UIPressable_IsPressed(&Press));
+            Args.Type = UIMouseInputType_ButtonPress;
+            UIPressable_OnMouseInput(&Press, Base, &Args, true, &IsActivated);
+            Args.Button = GameKey_MouseRight;
+            UIPressable_OnMouseInput(&Press, Base, &Args, true, &IsActivated);
+            TEST_CHECK(run, UIPressable_IsPressed(&Press));
+
+            // Inside an update, as an element's own Update is: the one up goes, the one down stays.
+            Fixture.Sample.KeyStates[GameKey_MouseRight] = GAME_INPUT_KEY_STATE_DOWN;
+            GameInput_BeginTick(&Fixture.Input, &Fixture.Sample);
+            Fixture.Screen._input = &Fixture.Input;
+            UIPressable_Update(&Press, &Fixture.Screen);
+            TEST_CHECK(run, UIPressable_IsPressed(&Press));
+            TEST_CHECK(run, (Press._heldButtons & UI_BUTTON_BIT(GameKey_MouseMiddle)) == 0U);
+            Fixture.Sample.KeyStates[GameKey_MouseRight] = 0U;
+            GameInput_BeginTick(&Fixture.Input, &Fixture.Sample);
+            UIPressable_Update(&Press, &Fixture.Screen);
+            TEST_CHECK(run, !UIPressable_IsPressed(&Press));
+            Fixture.Screen._input = NULL;
+        }
+
+        // A slider's drag that heard no end ends the same way, with its commit.
+        uint64_t SliderId = AddSlider(run, &Fixture, 2.0, false, 0.0);
+        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, SliderId, &Base)))
+        {
+            UISliderCapability* Slider = Widget_GetCapability(Base, UIKit_GetCapabilityId(&Fixture.Kit, UIElementCapability_Slider));
+            Slider->_isDragging = true;
+            Slider->_sessionStartValue = 7.0;
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, !Slider->_isDragging && (Events.Count == 1U) && IsDoubleEvent(&Events, 0U, SliderId, UIElementEvent_Committed, 2.0));
+        }
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+/* A toggle has the click modes and the same buttons; a whole change at the moment its mode says. */
+static void AToggleTakesTheClickModes(TestRun* run)
+{
+    TestUIFixture Fixture;
+    TestUIEvents Events;
+    if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+    {
+        uint64_t Id = AddToggle(run, &Fixture, UIToggleState_Off);
+        UIToggleState State = UIToggleState_Off;
+        TEST_CHECK_ERROR(run, UIToggle_SetClickMode(&Fixture.Screen, Id, (UIClickMode)9), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIToggle_SetActivationButtons(&Fixture.Screen, Id, 0x80U), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIToggle_SetClickMode(&Fixture.Screen, WIDGET_ID_INVALID, UIClickMode_OnPress), ErrorCode_InvalidOperation);
+        TEST_CHECK_ERROR(run, UIToggle_SetActivationButtons(&Fixture.Screen, WIDGET_ID_INVALID, UI_BUTTONS_LEFT), ErrorCode_InvalidOperation);
+
+        TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+        TEST_CHECK_SUCCESS(run, UIToggle_SetClickMode(&Fixture.Screen, Id, UIClickMode_OnPress));
+        TestUI_Press(&Fixture, GameKey_MouseLeft);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, (Events.Count == 2U) && IsBoolEvent(&Events, 0U, Id, UIElementEvent_Changed, true) && IsBoolEvent(&Events, 1U, Id, UIElementEvent_Committed, true));
+        TestUI_Release(&Fixture, GameKey_MouseLeft);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, Events.Count == 2U);
+
+        // Its options say the same.
+        UIToggleOptions MadeWith = UIToggleOptions_Create(u8"own");
+        MadeWith.ClickMode = UIClickMode_OnPress;
+        MadeWith.ActivationButtons = UI_BUTTON_BIT(GameKey_MouseMiddle);
+        MadeWith.Element.HasPlacement = true;
+        MadeWith.Element.Placement = PlaceAt(500.0f, 100.0f, 50.0f, 24.0f);
+        uint64_t Made = WIDGET_ID_INVALID;
+        TEST_CHECK_SUCCESS(run, UIKit_CreateToggle(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &MadeWith, &Made));
+        TestUI_Tick(run, &Fixture);
+        TestUI_MovePointer(&Fixture, 510.0f, 110.0f);
+        TestUI_Tick(run, &Fixture);
+        Events.Count = 0U;
+        TestUI_Tap(run, &Fixture, GameKey_MouseLeft);
+        TEST_CHECK(run, Events.Count == 0U);
+        TestUI_Press(&Fixture, GameKey_MouseMiddle);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, (Events.Count == 2U) && IsBoolEvent(&Events, 1U, Made, UIElementEvent_Committed, true));
+        TestUI_Release(&Fixture, GameKey_MouseMiddle);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, Events.Count == 2U);
+        TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+        TestUI_Tick(run, &Fixture);
+
+        // The right button only: the left one does nothing now.
+        Events.Count = 0U;
+        TEST_CHECK_SUCCESS(run, UIToggle_SetClickMode(&Fixture.Screen, Id, UIClickMode_OnRelease));
+        TEST_CHECK_SUCCESS(run, UIToggle_SetActivationButtons(&Fixture.Screen, Id, UI_BUTTON_BIT(GameKey_MouseRight)));
+        TestUI_Tap(run, &Fixture, GameKey_MouseLeft);
+        TEST_CHECK(run, Events.Count == 0U);
+        TestUI_Tap(run, &Fixture, GameKey_MouseRight);
+        TEST_CHECK(run, Events.Count == 2U);
+        TEST_CHECK_SUCCESS(run, UIToggle_GetState(&Fixture.Screen, Id, &State));
+        TEST_CHECK(run, State == UIToggleState_Off);
+
+        // The press lost during a hold does nothing at its release.
+        Events.Count = 0U;
+        Widget* Base = NULL;
+        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
+        {
+            TestUI_Press(&Fixture, GameKey_MouseRight);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, GetState(&Fixture, Id) == UIElementState_Pressed);
+            TEST_CHECK_SUCCESS(run, Widget_SetIsInputEnabled(Base, false));
+            TestUI_Release(&Fixture, GameKey_MouseRight);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK_SUCCESS(run, Widget_SetIsInputEnabled(Base, true));
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, (Events.Count == 0U) && (GetState(&Fixture, Id) != UIElementState_Pressed));
+        }
+
+        // Its options.
+        UIToggleOptions Options = UIToggleOptions_Create(u8"x");
+        TEST_CHECK(run, (Options.ClickMode == UIClickMode_OnPressAndRelease) && (Options.ActivationButtons == UI_BUTTONS_LEFT));
+        uint64_t Other = WIDGET_ID_INVALID;
+        Options.ActivationButtons = 0x80U;
+        TEST_CHECK_ERROR(run, UIKit_CreateToggle(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &Options, &Other), ErrorCode_ArgumentOutOfRange);
+        Options.ActivationButtons = UI_BUTTONS_LEFT;
+        Options.ClickMode = (UIClickMode)5;
+        TEST_CHECK_ERROR(run, UIKit_CreateToggle(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &Options, &Other), ErrorCode_ArgumentOutOfRange);
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+/* What every element tells: the press, the release with whether it is over it, a double click, and what they carry by value, so a handler
+ * needs no widget. */
+static void AnElementTellsItsMouseEvents(TestRun* run)
+{
+    TestUIFixture Fixture;
+    TestUIEvents Events;
+    if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+    {
+        Events.IsRecordingInputEvents = true;
+        uint64_t Id = AddButton(run, &Fixture, u8"go");
+        TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+        TestUI_Tick(run, &Fixture);
+        Fixture.Sample.KeyStates[GameKey_LeftShift] = GAME_INPUT_KEY_STATE_DOWN;
+        TestUI_Press(&Fixture, GameKey_MouseMiddle);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Pressed));
+        const UIEvent* Pressed = &Events.Events[0];
+        TEST_CHECK(run, Pressed->HasMouse && !Pressed->HasValue && (Pressed->Mouse.Button == GameKey_MouseMiddle) && (Pressed->Mouse.Modifiers == GAME_KEY_MODIFIER_SHIFT));
+        TEST_CHECK(run, (fabsf(Pressed->Mouse.ScreenPosition.x - 0.15f) < 1e-4f) && (fabsf(Pressed->Mouse.ScreenPosition.y - 0.24f) < 1e-4f) && Pressed->Mouse.IsOverWidget);
+        TEST_CHECK(run, (Pressed->Mouse.ScrollDelta.x == 0.0f) && (Pressed->Mouse.ScrollDelta.y == 0.0f));
+        Fixture.Sample.KeyStates[GameKey_LeftShift] = 0U;
+
+        // The middle button activates nothing here, and it comes up off the button: the release says so.
+        TestUI_MovePointer(&Fixture, 700.0f, 300.0f);
+        TestUI_Tick(run, &Fixture);
+        TestUI_Release(&Fixture, GameKey_MouseMiddle);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, (Events.Count == 2U) && IsEvent(&Events, 1U, Id, UIElementEvent_Released));
+        TEST_CHECK(run, Events.Events[1].HasMouse && !Events.Events[1].Mouse.IsOverWidget && (Events.Events[1].Mouse.Button == GameKey_MouseMiddle));
+
+        // A click: pressed, then released and activated, over it. Quickly again: a double click right after the press.
+        Events.Count = 0U;
+        TestUI_Click(run, &Fixture, 150.0f, 120.0f);
+        TEST_CHECK(run, (Events.Count == 3U) && IsEvent(&Events, 0U, Id, UIElementEvent_Pressed) && IsEvent(&Events, 1U, Id, UIElementEvent_Released)
+            && IsEvent(&Events, 2U, Id, UIElementEvent_Activated));
+        TEST_CHECK(run, Events.Events[1].Mouse.IsOverWidget && Events.Events[2].HasMouse && (Events.Events[2].Mouse.Button == GameKey_MouseLeft) && Events.Events[2].Mouse.IsOverWidget);
+        Events.Count = 0U;
+        TestUI_Click(run, &Fixture, 150.0f, 120.0f);
+        TEST_CHECK(run, (Events.Count == 4U) && IsEvent(&Events, 0U, Id, UIElementEvent_Pressed) && IsEvent(&Events, 1U, Id, UIElementEvent_DoubleClicked)
+            && (Events.Events[1].Mouse.Button == GameKey_MouseLeft));
+        // A third in the row is no second double click.
+        Events.Count = 0U;
+        TestUI_Click(run, &Fixture, 150.0f, 120.0f);
+        TEST_CHECK(run, Events.Count == 3U);
+
+        // A release over it of a press elsewhere is told too.
+        UIPanelOptions Panel = UIPanelOptions_Create();
+        Panel.Element.HasPlacement = true;
+        Panel.Element.Placement = PlaceAt(600.0f, 200.0f, 200.0f, 200.0f);
+        uint64_t PanelId = WIDGET_ID_INVALID;
+        TEST_CHECK_SUCCESS(run, UIKit_CreatePanel(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &Panel, &PanelId));
+        TestUI_Tick(run, &Fixture);
+        TestUI_MovePointer(&Fixture, 700.0f, 300.0f);
+        TestUI_Press(&Fixture, GameKey_MouseLeft);
+        TestUI_Tick(run, &Fixture);
+        TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+        Events.Count = 0U;
+        TestUI_Release(&Fixture, GameKey_MouseLeft);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Released) && Events.Events[0].Mouse.IsOverWidget);
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+/* A right press and release on it asks for its context menu, at the pointer; off it, or by the keyboard's key when focused, as its rules say. */
+static void AnElementAsksForItsContextMenu(TestRun* run)
+{
+    TestUIFixture Fixture;
+    TestUIEvents Events;
+    if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+    {
+        Events.IsRecordingInputEvents = true;
+        uint64_t ButtonId = AddButton(run, &Fixture, u8"go");
+        uint64_t SliderId = AddSlider(run, &Fixture, 5.0, false, 0.0);
+        TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+        TestUI_Tick(run, &Fixture);
+        // The slider lies over the button's place in this fixture: the pointer finds it first.
+        uint64_t Id = SliderId;
+        TestUI_Tap(run, &Fixture, GameKey_MouseRight);
+        TEST_CHECK(run, (Events.Count == 3U) && IsEvent(&Events, 0U, Id, UIElementEvent_Pressed) && IsEvent(&Events, 1U, Id, UIElementEvent_Released)
+            && IsEvent(&Events, 2U, Id, UIElementEvent_ContextRequested));
+        TEST_CHECK(run, Events.Events[2].HasMouse && (fabsf(Events.Events[2].Mouse.ScreenPosition.x - 0.15f) < 1e-4f) && Events.Events[2].Mouse.IsOverWidget);
+
+        // Dragged off: no menu.
+        Events.Count = 0U;
+        Fixture.Time += 1.0; // No double click.
+        TestUI_Press(&Fixture, GameKey_MouseRight);
+        TestUI_Tick(run, &Fixture);
+        TestUI_MovePointer(&Fixture, 700.0f, 300.0f);
+        TestUI_Release(&Fixture, GameKey_MouseRight);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, (Events.Count == 2U) && IsEvent(&Events, 1U, Id, UIElementEvent_Released) && !Events.Events[1].Mouse.IsOverWidget);
+
+        // Pressed elsewhere and let go over it: no menu either.
+        Events.Count = 0U;
+        TestUI_Press(&Fixture, GameKey_MouseRight);
+        TestUI_Tick(run, &Fixture);
+        TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+        TestUI_Release(&Fixture, GameKey_MouseRight);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, Events.Count == 0U);
+
+        // Another button is no menu.
+        TestUI_Tap(run, &Fixture, GameKey_MouseMiddle);
+        TEST_CHECK(run, (Events.Count == 2U) && IsEvent(&Events, 1U, Id, UIElementEvent_Released));
+
+        // The menu key on what is focused: it tells the middle of the widget, handled at its press.
+        Widget* Slider = NULL;
+        Widget* Button = NULL;
+        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, SliderId, &Slider) && UIScreen_TryGetWidgetById(&Fixture.Screen, ButtonId, &Button)))
+        {
+            TestUI_RemovePointer(&Fixture);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Slider));
+            Events.Count = 0U;
+            TestUI_Press(&Fixture, GameKey_Menu);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, SliderId, UIElementEvent_ContextRequested) && GameInput_IsKeyConsumed(&Fixture.Input, GameKey_Menu));
+            TEST_CHECK(run, Events.Events[0].HasMouse && (Events.Events[0].Mouse.Button == GameKey_Menu) && !Events.Events[0].Mouse.IsOverWidget);
+            TEST_CHECK(run, fabsf(Events.Events[0].Mouse.ScreenPosition.x - (SLIDER_X + (SLIDER_WIDTH * 0.5f)) / 1000.0f) < 1e-3f);
+            TestUI_Repeat(&Fixture, GameKey_Menu);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, Events.Count == 1U);
+            TestUI_Release(&Fixture, GameKey_Menu);
+            TestUI_Tick(run, &Fixture);
+
+            TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Button));
+            Events.Count = 0U;
+            TestUI_Tap(run, &Fixture, GameKey_Menu);
+            TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, ButtonId, UIElementEvent_ContextRequested));
+
+            // The action's key, rebound: the old key does nothing, and with its modifier only.
+            GameInputBinding Rebound = { .Key = GameKey_M, .Modifiers = GAME_KEY_MODIFIER_CONTROL };
+            TEST_CHECK_SUCCESS(run, GameInput_SetBindings(&Fixture.Input, GameAction_UIContextMenu, &Rebound, 1U));
+            Events.Count = 0U;
+            TestUI_Tap(run, &Fixture, GameKey_Menu);
+            TestUI_Tap(run, &Fixture, GameKey_M);
+            TEST_CHECK(run, Events.Count == 0U);
+            Fixture.Sample.KeyStates[GameKey_LeftControl] = GAME_INPUT_KEY_STATE_DOWN;
+            TestUI_Tap(run, &Fixture, GameKey_M);
+            TEST_CHECK(run, (Events.Count == 1U) && (Events.Events[0].Mouse.Modifiers == GAME_KEY_MODIFIER_CONTROL));
+        }
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+/* A toggle and a slider tell the same. */
+static void EveryElementTellsTheSameMouseEvents(TestRun* run)
+{
+    TestUIFixture Fixture;
+    TestUIEvents Events;
+    if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+    {
+        Events.IsRecordingInputEvents = true;
+        uint64_t Toggle = AddToggle(run, &Fixture, UIToggleState_Off);
+        TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+        TestUI_Tap(run, &Fixture, GameKey_MouseRight);
+        TEST_CHECK(run, (Events.Count == 3U) && IsEvent(&Events, 0U, Toggle, UIElementEvent_Pressed) && IsEvent(&Events, 2U, Toggle, UIElementEvent_ContextRequested));
+        Events.Count = 0U;
+        TestUI_Click(run, &Fixture, 150.0f, 120.0f);
+        TEST_CHECK(run, (Events.Count == 4U) && IsEvent(&Events, 0U, Toggle, UIElementEvent_Pressed) && IsEvent(&Events, 1U, Toggle, UIElementEvent_Released)
+            && IsEvent(&Events, 2U, Toggle, UIElementEvent_Changed) && IsEvent(&Events, 3U, Toggle, UIElementEvent_Committed));
+        Events.Count = 0U;
+        TestUI_Click(run, &Fixture, 150.0f, 120.0f);
+        TEST_CHECK(run, IsEvent(&Events, 1U, Toggle, UIElementEvent_DoubleClicked));
+        Widget* Base = NULL;
+        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Toggle, &Base)))
+        {
+            TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Base));
+            Events.Count = 0U;
+            TestUI_Tap(run, &Fixture, GameKey_Menu);
+            TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Toggle, UIElementEvent_ContextRequested));
+            TEST_CHECK_SUCCESS(run, UIToggle_SetIsEnabled(&Fixture.Screen, Toggle, false));
+            Events.Count = 0U;
+            TestUI_Tap(run, &Fixture, GameKey_MouseRight);
+            TEST_CHECK(run, Events.Count == 0U);
+            TEST_CHECK_SUCCESS(run, Widget_Destroy(Base));
+        }
+
+        uint64_t Slider = AddSlider(run, &Fixture, 5.0, false, 0.0);
+        Events.Count = 0U;
+        TestUI_MovePointer(&Fixture, SliderPointerFor(5.0), 110.0f);
+        TestUI_Tick(run, &Fixture);
+        TestUI_Tap(run, &Fixture, GameKey_MouseLeft);
+        TEST_CHECK(run, (Events.Count == 2U) && IsEvent(&Events, 0U, Slider, UIElementEvent_Pressed) && IsEvent(&Events, 1U, Slider, UIElementEvent_Released));
+        TEST_CHECK_SUCCESS(run, UISlider_SetIsEnabled(&Fixture.Screen, Slider, false));
+        Events.Count = 0U;
+        TestUI_Tap(run, &Fixture, GameKey_MouseRight);
+        TEST_CHECK(run, Events.Count == 0U);
+        TEST_CHECK_SUCCESS(run, UISlider_SetIsEnabled(&Fixture.Screen, Slider, true));
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+/* A button made to take the wheel posts it, with the delta and the modifiers, and stops it; otherwise it goes on up the tree. */
+static void AButtonTakesTheWheelOnlyWhenMadeTo(TestRun* run)
+{
+    TestUIFixture Fixture;
+    TestUIEvents Events;
+    if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+    {
+        Events.IsRecordingInputEvents = true;
+        uint64_t Id = AddButton(run, &Fixture, u8"go");
+        TestUI_MovePointer(&Fixture, 150.0f, 120.0f);
+        TestUI_Tick(run, &Fixture);
+        TestUI_Wheel(&Fixture, 2.0f);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, Events.Count == 0U);
+        TEST_CHECK(run, GameInput_GetWheelDelta(&Fixture.Input).y == 0.0f); // Still the UI's: a widget is under the pointer.
+
+        // It says so to what holds it: without taking the wheel it leaves it to them, taking it it stops it, enabled or not.
+        Widget* Base = NULL;
+        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
+        {
+            UIButtonCapability* Button = Widget_GetCapability(Base, UIKit_GetCapabilityId(&Fixture.Kit, UIElementCapability_Button));
+            WidgetScrollInputArgs Wheel = { .ScrollDelta = { .x = 0.0f, .y = 1.0f } };
+            bool IsHandled = false;
+            TEST_CHECK_SUCCESS(run, UIButtonCapability_OnScrollInput(Button, Base, &Wheel, &IsHandled));
+            TEST_CHECK(run, !IsHandled);
+            TEST_CHECK_SUCCESS(run, UIButton_SetTakesWheel(&Fixture.Screen, Id, true));
+            TEST_CHECK_SUCCESS(run, UIButtonCapability_OnScrollInput(Button, Base, &Wheel, &IsHandled));
+            TEST_CHECK(run, IsHandled);
+            Events.Count = 0U;
+            TestUI_Tick(run, &Fixture);
+            Events.Count = 0U;
+            IsHandled = false;
+            TEST_CHECK_SUCCESS(run, UIButton_SetIsEnabled(&Fixture.Screen, Id, false));
+            TEST_CHECK_SUCCESS(run, UIButtonCapability_OnScrollInput(Button, Base, &Wheel, &IsHandled));
+            TEST_CHECK(run, IsHandled);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, Events.Count == 0U);
+            TEST_CHECK_SUCCESS(run, UIButton_SetIsEnabled(&Fixture.Screen, Id, true));
+        }
+
+        TEST_CHECK_SUCCESS(run, UIButton_SetTakesWheel(&Fixture.Screen, Id, true));
+        Fixture.Sample.KeyStates[GameKey_LeftControl] = GAME_INPUT_KEY_STATE_DOWN;
+        Fixture.Sample.WheelDelta = (Vector2){ .x = 1.0f, .y = -3.0f };
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Scrolled) && Events.Events[0].HasMouse);
+        const UIEventMouse* Mouse = &Events.Events[0].Mouse;
+        TEST_CHECK(run, (Mouse->ScrollDelta.x == 1.0f) && (Mouse->ScrollDelta.y == -3.0f) && (Mouse->Modifiers == GAME_KEY_MODIFIER_CONTROL));
+        TEST_CHECK(run, (Mouse->Button == GameKey_Unknown) && Mouse->IsOverWidget && (fabsf(Mouse->ScreenPosition.x - 0.15f) < 1e-4f));
+
+        // Its options say the same.
+        UIButtonOptions Options = UIButtonOptions_Create(u8"own");
+        Options.TakesWheel = true;
+        Options.Element.HasPlacement = true;
+        Options.Element.Placement = PlaceAt(500.0f, 100.0f, 50.0f, 24.0f);
+        uint64_t Other = WIDGET_ID_INVALID;
+        TEST_CHECK_SUCCESS(run, UIKit_CreateButton(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &Options, &Other));
+        TestUI_Tick(run, &Fixture);
+        TestUI_MovePointer(&Fixture, 510.0f, 110.0f);
+        TestUI_Tick(run, &Fixture);
+        Events.Count = 0U;
+        TestUI_Wheel(&Fixture, 1.0f);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Other, UIElementEvent_Scrolled));
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+/* The wheel over a slider: only focused or with Ctrl it is the slider's; otherwise it goes on up the tree to what holds it. */
+static void ASliderTakesTheWheelWhenFocusedOrWithControl(TestRun* run)
+{
+    TestUIFixture Fixture;
+    TestUIEvents Events;
+    if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+    {
+        uint64_t Id = AddSlider(run, &Fixture, 5.0, true, 1.0);
+        TestUI_MovePointer(&Fixture, 150.0f, 110.0f);
+        TestUI_Tick(run, &Fixture);
+        Widget* Base = NULL;
+        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
+        {
+            // Plain: nothing here, and the screen consumes it anyway.
+            TestUI_Wheel(&Fixture, 1.0f);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, (GetSliderValue(run, &Fixture, Id) == 5.0) && (Events.Count == 0U));
+
+            // It says so to what holds it: left to them plain, stopped when focused or with Ctrl, in a change or disabled too.
+            UISliderCapability* Slider = Widget_GetCapability(Base, UIKit_GetCapabilityId(&Fixture.Kit, UIElementCapability_Slider));
+            WidgetScrollInputArgs Wheel = { .ScrollDelta = { .x = 0.0f, .y = 0.0f }, .Modifiers = 0U };
+            bool IsHandled = false;
+            TEST_CHECK_SUCCESS(run, UISliderCapability_OnScrollInput(Slider, Base, &Wheel, &IsHandled));
+            TEST_CHECK(run, !IsHandled);
+            Wheel.Modifiers = GAME_KEY_MODIFIER_CONTROL;
+            TEST_CHECK_SUCCESS(run, UISliderCapability_OnScrollInput(Slider, Base, &Wheel, &IsHandled));
+            TEST_CHECK(run, IsHandled);
+
+            // With Ctrl, unfocused: a whole change at once, and it did not take the focus.
+            Fixture.Sample.KeyStates[GameKey_RightControl] = GAME_INPUT_KEY_STATE_DOWN;
+            TestUI_Wheel(&Fixture, 2.0f);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 7.0);
+            TEST_CHECK(run, (Events.Count == 2U) && IsDoubleEvent(&Events, 0U, Id, UIElementEvent_Changed, 7.0) && IsDoubleEvent(&Events, 1U, Id, UIElementEvent_Committed, 7.0));
+            TEST_CHECK(run, UIScreen_GetFocusedWidgetId(&Fixture.Screen) == WIDGET_ID_INVALID);
+            Fixture.Sample.KeyStates[GameKey_RightControl] = 0U;
+
+            // During a change nothing else moves it: the wheel stops there.
+            Events.Count = 0U;
+            TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Base));
+            TestUI_Press(&Fixture, GameKey_Right);
+            TestUI_Tick(run, &Fixture);
+            TestUI_Wheel(&Fixture, 1.0f);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 8.0);
+            TestUI_Release(&Fixture, GameKey_Right);
+            TestUI_Tick(run, &Fixture);
+
+            // Disabled: with Ctrl it stops there and moves nothing.
+            TEST_CHECK_SUCCESS(run, UISlider_SetIsEnabled(&Fixture.Screen, Id, false));
+            Fixture.Sample.KeyStates[GameKey_LeftControl] = GAME_INPUT_KEY_STATE_DOWN;
+            TestUI_Wheel(&Fixture, 1.0f);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 8.0);
+        }
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+/* The reset action on a slider with a default: focused or only hovered, a whole change; without one it goes on; other keys and modifiers
+ * do nothing. */
+static void TheResetActionPutsASliderBack(TestRun* run)
+{
+    TestUIFixture Fixture;
+    TestUIEvents Events;
+    if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+    {
+        UIScreen* Screen = &Fixture.Screen;
+        UISliderOptions Options = UISliderOptions_Create();
+        TEST_CHECK(run, !Options.HasDefault);
+        Options.Maximum = 10.0;
+        Options.Value = 5.0;
+        Options.HasDefault = true;
+        Options.Default = 2.5;
+        Options.HasStep = true;
+        Options.Step = 1.0;
+        Options.Element.HasPlacement = true;
+        Options.Element.Placement = PlaceAt(SLIDER_X, SLIDER_Y, SLIDER_WIDTH, SLIDER_HEIGHT);
+        uint64_t Id = WIDGET_ID_INVALID;
+        TEST_CHECK_SUCCESS(run, UIKit_CreateSlider(&Fixture.Kit, Screen, WIDGET_ID_INVALID, &Options, &Id));
+        TestUI_Tick(run, &Fixture);
+
+        // Hovered only: the value goes to the default, on its step; one change, whole; the key is used.
+        TestUI_MovePointer(&Fixture, 150.0f, 110.0f);
+        TestUI_Tick(run, &Fixture);
+        TestUI_Press(&Fixture, GameKey_Backspace);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 3.0);
+        TEST_CHECK(run, (Events.Count == 2U) && IsDoubleEvent(&Events, 0U, Id, UIElementEvent_Changed, 3.0) && IsDoubleEvent(&Events, 1U, Id, UIElementEvent_Committed, 3.0));
+        TEST_CHECK(run, GameInput_IsKeyConsumed(&Fixture.Input, GameKey_Backspace));
+        // Its repeat and release do nothing more; at the default already nothing is told, though it is used.
+        TEST_CHECK_SUCCESS(run, UISlider_SetValue(Screen, Id, 8.0));
+        TestUI_Repeat(&Fixture, GameKey_Backspace);
+        TestUI_Tick(run, &Fixture);
+        TestUI_Release(&Fixture, GameKey_Backspace);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 8.0);
+        TEST_CHECK_SUCCESS(run, UISlider_SetValue(Screen, Id, 3.0));
+        Events.Count = 0U;
+        TestUI_Press(&Fixture, GameKey_Backspace);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, (Events.Count == 0U) && GameInput_IsKeyConsumed(&Fixture.Input, GameKey_Backspace));
+        TestUI_Release(&Fixture, GameKey_Backspace);
+        TestUI_Tick(run, &Fixture);
+
+        // Focused with the pointer elsewhere: the same.
+        Widget* Base = NULL;
+        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(Screen, Id, &Base)))
+        {
+            TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(Screen, Base));
+            TEST_CHECK_SUCCESS(run, UISlider_SetValue(Screen, Id, 8.0));
+            TestUI_RemovePointer(&Fixture);
+            TestUI_Tick(run, &Fixture);
+
+            // Another key pressed while the action's key is down is not the action.
+            TestUI_Press(&Fixture, GameKey_Backspace);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 3.0);
+            TEST_CHECK_SUCCESS(run, UISlider_SetValue(Screen, Id, 8.0));
+            TestUI_Press(&Fixture, GameKey_Left);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 7.0);
+            TestUI_Release(&Fixture, GameKey_Left);
+            TestUI_Release(&Fixture, GameKey_Backspace);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK_SUCCESS(run, UISlider_SetValue(Screen, Id, 8.0));
+
+            TestUI_Tap(run, &Fixture, GameKey_Backspace);
+            TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 3.0);
+
+            // During a change it does nothing, but it is used.
+            TEST_CHECK_SUCCESS(run, UISlider_SetValue(Screen, Id, 8.0));
+            TestUI_Press(&Fixture, GameKey_Left);
+            TestUI_Tick(run, &Fixture);
+            TestUI_Press(&Fixture, GameKey_Backspace);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, (GetSliderValue(run, &Fixture, Id) == 7.0) && GameInput_IsKeyConsumed(&Fixture.Input, GameKey_Backspace));
+            TestUI_Release(&Fixture, GameKey_Backspace);
+            TestUI_Release(&Fixture, GameKey_Left);
+            TestUI_Tick(run, &Fixture);
+        }
+
+        // The action, not the key: rebound with a modifier, a plain press is nothing and the old key is nothing.
+        GameInputBinding Rebound = { .Key = GameKey_R, .Modifiers = GAME_KEY_MODIFIER_CONTROL };
+        TEST_CHECK_SUCCESS(run, GameInput_SetBindings(&Fixture.Input, GameAction_UIReset, &Rebound, 1U));
+        TestUI_Tap(run, &Fixture, GameKey_Backspace);
+        TestUI_Tap(run, &Fixture, GameKey_R);
+        TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 7.0);
+        Fixture.Sample.KeyStates[GameKey_LeftControl] = GAME_INPUT_KEY_STATE_DOWN;
+        TestUI_Tap(run, &Fixture, GameKey_R);
+        TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 3.0);
+        Fixture.Sample.KeyStates[GameKey_LeftControl] = 0U;
+        TEST_CHECK_SUCCESS(run, GameInput_ResetActionBindings(&Fixture.Input, GameAction_UIReset));
+
+        // No default: it goes on, to the game.
+        TEST_CHECK_SUCCESS(run, UISlider_SetDefault(Screen, Id, false, 0.0));
+        TEST_CHECK_SUCCESS(run, UISlider_SetValue(Screen, Id, 8.0));
+        TestUI_Press(&Fixture, GameKey_Backspace);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, (GetSliderValue(run, &Fixture, Id) == 8.0) && !GameInput_IsKeyConsumed(&Fixture.Input, GameKey_Backspace));
+        TestUI_Release(&Fixture, GameKey_Backspace);
+        TestUI_Tick(run, &Fixture);
+
+        // A default past the range is clamped when it is used; what is not a number is refused.
+        TEST_CHECK_SUCCESS(run, UISlider_SetDefault(Screen, Id, true, 99.0));
+        TestUI_Tap(run, &Fixture, GameKey_Backspace);
+        TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 10.0);
+        TEST_CHECK_ERROR(run, UISlider_SetDefault(Screen, Id, true, NAN), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UISlider_SetDefault(Screen, Id, true, INFINITY), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UISlider_SetDefault(Screen, WIDGET_ID_INVALID, true, 1.0), ErrorCode_InvalidOperation);
+        TEST_CHECK_SUCCESS(run, UISlider_SetDefault(Screen, Id, false, NAN)); // With no default the value means nothing.
+
+        // Its options check it too.
+        UISliderOptions Bad = UISliderOptions_Create();
+        Bad.HasDefault = true;
+        Bad.Default = NAN;
+        uint64_t Other = WIDGET_ID_INVALID;
+        TEST_CHECK_ERROR(run, UIKit_CreateSlider(&Fixture.Kit, Screen, WIDGET_ID_INVALID, &Bad, &Other), ErrorCode_ArgumentOutOfRange);
+        Bad.HasDefault = false;
+        TEST_CHECK_SUCCESS(run, UIKit_CreateSlider(&Fixture.Kit, Screen, WIDGET_ID_INVALID, &Bad, &Other));
+
+        // Disabled: it hears nothing of it.
+        TEST_CHECK_SUCCESS(run, UISlider_SetDefault(Screen, Id, true, 1.0));
+        TEST_CHECK_SUCCESS(run, UISlider_SetIsEnabled(Screen, Id, false));
+        TestUI_MovePointer(&Fixture, 150.0f, 110.0f);
+        TestUI_Tick(run, &Fixture);
+        TestUI_Press(&Fixture, GameKey_Backspace);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, (GetSliderValue(run, &Fixture, Id) == 10.0) && !GameInput_IsKeyConsumed(&Fixture.Input, GameKey_Backspace));
+        TestUI_Release(&Fixture, GameKey_Backspace);
+        TestUI_Tick(run, &Fixture);
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+/* A press taken away from another button than the drag's leaves the drag alone; a loss of nothing changes nothing. */
+static void OnlyTheDragsOwnPressEndsTheDrag(TestRun* run)
+{
+    TestUIFixture Fixture;
+    TestUIEvents Events;
+    if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
+    {
+        uint64_t Id = AddSlider(run, &Fixture, 2.0, false, 0.0);
+        Widget* Base = NULL;
+        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
+        {
+            UISliderCapability* Slider = Widget_GetCapability(Base, UIKit_GetCapabilityId(&Fixture.Kit, UIElementCapability_Slider));
+            TEST_CHECK_SUCCESS(run, UISliderCapability_OnPressLost(Slider, Base, GameKey_MouseLeft));
+            TEST_CHECK(run, Events.Count == 0U);
+
+            TestUI_MovePointer(&Fixture, SliderPointerFor(5.0), 110.0f);
+            TestUI_Press(&Fixture, GameKey_MouseLeft);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK_SUCCESS(run, UISliderCapability_OnPressLost(Slider, Base, GameKey_MouseRight));
+            TEST_CHECK(run, Slider->_isDragging);
+            TEST_CHECK_SUCCESS(run, UISliderCapability_OnPressLost(Slider, Base, GameKey_MouseLeft));
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, !Slider->_isDragging && IsDoubleEvent(&Events, Events.Count - 1U, Id, UIElementEvent_Committed, 5.0));
+            TestUI_Release(&Fixture, GameKey_MouseLeft);
+            TestUI_Tick(run, &Fixture);
+
+            // A left press lost while a key's change runs was never a drag: the change goes on until its key comes up.
+            Events.Count = 0U;
+            TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Base));
+            TestUI_Press(&Fixture, GameKey_Right);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, Slider->_sessionKey == GameKey_Right);
+            size_t EventsBefore = Events.Count;
+            TEST_CHECK_SUCCESS(run, UISliderCapability_OnPressLost(Slider, Base, GameKey_MouseLeft));
+            TEST_CHECK(run, Slider->_sessionKey == GameKey_Right);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, Events.Count == EventsBefore);
+            TestUI_Release(&Fixture, GameKey_Right);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, Slider->_sessionKey == GameKey_Unknown);
+
+            // A drag ending where it began tells no commit, lost or not.
+            Events.Count = 0U;
+            TEST_CHECK_SUCCESS(run, UISlider_SetValue(&Fixture.Screen, Id, 5.0));
+            TestUI_Tick(run, &Fixture);
+            Events.Count = 0U;
+            TestUI_MovePointer(&Fixture, SliderPointerFor(5.0), 110.0f);
+            TestUI_Press(&Fixture, GameKey_MouseLeft);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK_SUCCESS(run, Widget_SetIsRendered(Base, false));
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, Events.Count == 0U);
+            TestUI_Release(&Fixture, GameKey_MouseLeft);
+            TestUI_Tick(run, &Fixture);
+        }
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+
 /* The back action cancels, whichever key it is bound to. */
 static void TheBackActionsKeyCancels(TestRun* run)
 {
@@ -1818,10 +3007,10 @@ static void ASliderThatStopsTakingInputStopsFollowing(TestRun* run)
                 TestUI_MovePointer(&Fixture, SliderPointerFor(8.0), 110.0f);
                 TestUI_Tick(run, &Fixture);
                 TEST_CHECK(run, IsNearDouble(GetSliderValue(run, &Fixture, Id), 5.0));
-                TEST_CHECK(run, Events.Count == 1U);
+                TEST_CHECK(run, (Events.Count == 2U) && IsDoubleEvent(&Events, 1U, Id, UIElementEvent_Committed, 5.0));
                 TestUI_Release(&Fixture, GameKey_MouseLeft);
                 TestUI_Tick(run, &Fixture);
-                TEST_CHECK(run, (Events.Count == 2U) && IsDoubleEvent(&Events, 1U, Id, UIElementEvent_Committed, 5.0));
+                TEST_CHECK(run, Events.Count == 2U);
 
                 // Back, it is whole again.
                 TEST_CHECK_SUCCESS(run, (Case == 0) ? Widget_SetIsInputEnabled(Base, true) : Widget_SetIsRendered(Base, true));
@@ -2039,7 +3228,7 @@ static void AKitLabelLetsThePointerThrough(TestRun* run)
         TEST_CHECK_SUCCESS(run, UIKit_CreateLabel(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &Options, &Label));
         TestUI_Tick(run, &Fixture);
         TestUI_Click(run, &Fixture, 150.0f, 120.0f);
-        TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Clicked));
+        TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Activated));
 
         // The label's own text, its capability on the wrong widget, a bad size or variant name.
         TEST_CHECK_SUCCESS(run, UILabel_SetText(&Fixture.Screen, Label, u8"new text"));
@@ -2071,7 +3260,7 @@ static void ElementsWorkWithoutATheme(TestRun* run)
     {
         uint64_t Id = AddButton(run, &Fixture, u8"go");
         TestUI_Click(run, &Fixture, 150.0f, 120.0f);
-        TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Clicked));
+        TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Activated));
         uint64_t Slider = WIDGET_ID_INVALID;
         UISliderOptions Options = UISliderOptions_Create();
         Options.Maximum = 10.0;
@@ -2174,7 +3363,7 @@ static void ASecondTypeStandsBehindACapability(TestRun* run)
             TEST_CHECK_SUCCESS(run, UIButton_GetText(&Fixture.Screen, Id, &Text));
             TEST_CHECK(run, strcmp((const char*)Text, "other") == 0);
             TestUI_Click(run, &Fixture, 150.0f, 120.0f);
-            TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Clicked));
+            TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Activated));
             TEST_CHECK_SUCCESS(run, UIButton_SetIsEnabled(&Fixture.Screen, Id, false));
             TestUI_Click(run, &Fixture, 150.0f, 120.0f);
             TEST_CHECK(run, Events.Count == 1U);
@@ -2366,7 +3555,7 @@ void UIElementTests_Run(TestRun* run)
         { "the_wheel_changes_it_only_while_focused", TheWheelChangesItOnlyWhileFocused },
         { "bad_values_and_ranges_are_refused", BadValuesAndRangesAreRefused },
         { "disabling_cancels_a_drag_and_swallows_input", DisablingCancelsADragAndSwallowsInput },
-        { "a_detached_drag_ends_once_it_is_back", ADetachedDragEndsOnceItIsBack },
+        { "a_detached_drag_commits_at_once", ADetachedDragCommitsAtOnce },
         { "only_the_left_button_drags", OnlyTheLeftButtonDrags },
         { "nothing_else_moves_a_slider_during_a_change", NothingElseMovesASliderDuringAChange },
         { "a_repeat_of_a_jump_does_not_jump_again", ARepeatOfAJumpDoesNotJumpAgain },
@@ -2375,6 +3564,26 @@ void UIElementTests_Run(TestRun* run)
         { "the_back_actions_key_cancels", TheBackActionsKeyCancels },
         { "new_limits_keep_the_values_inside", NewLimitsKeepTheValuesInside },
         { "a_slider_that_stops_taking_input_stops_following", ASliderThatStopsTakingInputStopsFollowing },
+        { "a_drag_past_the_window_reaches_the_limit", ADragPastTheWindowReachesTheLimit },
+        { "a_drag_comes_back_from_past_the_window", ADragComesBackFromPastTheWindow },
+        { "the_click_modes_activate_when_they_say", TheClickModesActivateWhenTheySay },
+        { "click_settings_are_checked", ClickSettingsAreChecked },
+        { "each_activation_button_is_its_own", EachActivationButtonIsItsOwn },
+        { "a_press_lost_or_disabled_activates_nothing", APressLostOrDisabledActivatesNothing },
+        { "a_disabled_element_reports_nothing", ADisabledElementReportsNothing },
+        { "changing_the_buttons_during_a_press_leaves_no_stuck_press", ChangingTheButtonsDuringAPressLeavesNoStuckPress },
+        { "a_lost_press_shows_nothing_while_the_button_stays_down", ALostPressShowsNothingWhileTheButtonStaysDown },
+        { "a_release_over_activates_only_what_is_asked", AReleaseOverActivatesOnlyWhatIsAsked },
+        { "a_handed_press_activates_only_an_on_release_element", AHandedPressActivatesOnlyAnOnReleaseElement },
+        { "an_element_without_the_loss_hook_still_lets_go", AnElementWithoutTheLossHookStillLetsGo },
+        { "a_toggle_takes_the_click_modes", AToggleTakesTheClickModes },
+        { "an_element_tells_its_mouse_events", AnElementTellsItsMouseEvents },
+        { "an_element_asks_for_its_context_menu", AnElementAsksForItsContextMenu },
+        { "every_element_tells_the_same_mouse_events", EveryElementTellsTheSameMouseEvents },
+        { "a_button_takes_the_wheel_only_when_made_to", AButtonTakesTheWheelOnlyWhenMadeTo },
+        { "a_slider_takes_the_wheel_when_focused_or_with_control", ASliderTakesTheWheelWhenFocusedOrWithControl },
+        { "the_reset_action_puts_a_slider_back", TheResetActionPutsASliderBack },
+        { "only_the_drags_own_press_ends_the_drag", OnlyTheDragsOwnPressEndsTheDrag },
         { "a_hidden_sliders_held_key_does_nothing_more", AHiddenSlidersHeldKeyDoesNothingMore },
         { "the_last_move_of_a_drag_counts_at_its_release", TheLastMoveOfADragCountsAtItsRelease },
         { "a_cancel_is_final_while_its_key_stays_down", ACancelIsFinalWhileItsKeyStaysDown },

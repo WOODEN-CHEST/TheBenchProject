@@ -2513,7 +2513,7 @@ pointing ray is the camera's aim as last shown (walk mode: from the eyes, out to
 body ignored; fly mode: 4 m, `WORLD_TEST_SCREEN_FLY_REACH`) or, while the mouse is free (M), the cursor's ray through the
 camera; then its `WorldScreenHost` (E or a click on the picture uses the monitor; Escape or pointing away lets go;
 while it is in use the whole keyboard is the monitor's, so W does not walk and E types, and the mouse still turns the
-view). While it is in use the desk keeps the UI's focus, and the UI letting go of it (Escape) lets go of the monitor:
+view). While its UI holds a press the ray goes on along the monitor's plane (`WorldScreens_ContinueRay`), so a drag of its slider follows off the picture and back. While it is in use the desk keeps the UI's focus, and the UI letting go of it (Escape) lets go of the monitor:
 one Escape gives control back. The use starting and ending is logged (`WorldTest: the monitor is in use: ...`,
 `WorldTest: let go of the monitor: ...`). `Render` draws the UI into the monitor's render target (made on the first
 render, at the surface's resolution, with mipmaps and trilinear filtering), then hands it to the renderer before the

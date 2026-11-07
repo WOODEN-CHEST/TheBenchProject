@@ -252,7 +252,7 @@ static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserDa
 {
     (void)screen;
     WorldTestScreens* Self = UserData_GetPointer(userData);
-    if ((event->WidgetId == Self->_clearButtonId) && (event->WidgetEventId == (int32_t)UIElementEvent_Clicked))
+    if ((event->WidgetId == Self->_clearButtonId) && (event->WidgetEventId == (int32_t)UIElementEvent_Activated))
     {
         Self->_clickCount = 0U;
         Self->_typedByteCount = 0U;
@@ -494,10 +494,26 @@ static Error ConstructUi(WorldTestScreens* self)
 
 
 // Static functions: the tick.
-/* Where the player points at a screen: the camera's aim (or the free cursor's ray), out to the walking player's reach
- * (its own body left out) or the flycam's. */
-static bool Point(WorldTestScreens* self, GameInput* input, const GameCamera* camera, uint64_t playerId,
-    bool isCursorCaptured, WorldScreenHit* outHit)
+/* The way the player points: the camera's aim, or the free cursor's ray. Returns false in a window of no size. */
+static bool GetPointingDirection(GameInput* input, const GameCamera* camera, bool isCursorCaptured, Vector3* outDirection)
+{
+    *outDirection = GameCamera_GetForward(camera);
+    if (isCursorCaptured)
+    {
+        return true;
+    }
+    Vector2 Window = GameInput_GetWindowSize(input);
+    if (!(Window.x >= 1.0f) || !(Window.y >= 1.0f))
+    {
+        return false;
+    }
+    Ray CursorRay = GetScreenToWorldRayEx(GameInput_GetMousePosition(input), GameCamera_ToRenderCamera(camera), (int)Window.x, (int)Window.y);
+    *outDirection = CursorRay.direction;
+    return true;
+}
+
+/* Where the player points at a screen along that way, out to the walking player's reach (its own body left out) or the flycam's. */
+static bool Point(WorldTestScreens* self, const GameCamera* camera, uint64_t playerId, Vector3 direction, WorldScreenHit* outHit)
 {
     float Reach = WORLD_TEST_SCREEN_FLY_REACH;
     uint32_t Layers = COLLISION_LAYER_MASK_ALL;
@@ -512,19 +528,7 @@ static bool Point(WorldTestScreens* self, GameInput* input, const GameCamera* ca
         WorldCollisionTriggerMode_Ignore);
     Filter.IgnoredObjectId = playerId;
     Filter.IsIgnoredSubtree = true;
-    Vector3 Direction = GameCamera_GetForward(camera);
-    if (!isCursorCaptured)
-    {
-        Vector2 Window = GameInput_GetWindowSize(input);
-        if (!(Window.x >= 1.0f) || !(Window.y >= 1.0f))
-        {
-            return false;
-        }
-        Ray CursorRay = GetScreenToWorldRayEx(GameInput_GetMousePosition(input), GameCamera_ToRenderCamera(camera),
-            (int)Window.x, (int)Window.y);
-        Direction = CursorRay.direction;
-    }
-    return WorldScreens_Raycast(self->_screens, camera->Position, Direction, Reach, self->_collision, &Filter, outHit);
+    return WorldScreens_Raycast(self->_screens, camera->Position, direction, Reach, self->_collision, &Filter, outHit);
 }
 
 /* Whether the desk or an element on it has the UI's focus. */
@@ -707,9 +711,16 @@ Error WorldTestScreens_Update(WorldTestScreens* self, ProgramTime time, const Ga
         return Error_CreateSuccess();
     }
     GameInput* Input = self->_services->Input;
+    Vector3 Direction = { 0.0f, 0.0f, 0.0f };
+    bool HasDirection = (Input != NULL) && GetPointingDirection(Input, camera, isCursorCaptured, &Direction);
     WorldScreenHit Hit;
-    bool IsPointing = (Input != NULL) && Point(self, Input, camera, playerId, isCursorCaptured, &Hit);
-    Error Result = WorldScreenHost_Update(&self->_host, &self->_screen, time, Input, IsPointing ? &Hit : NULL);
+    bool IsPointing = HasDirection && Point(self, camera, playerId, Direction, &Hit);
+    // A press held on the picture goes on along the ray, past the picture.
+    WorldScreenHit Continued;
+    bool IsContinued = HasDirection && UIScreen_HasHeldPress(&self->_screen)
+        && WorldScreens_ContinueRay(self->_screens, self->_monitorId, camera->Position, Direction, &Continued);
+    Error Result = WorldScreenHost_UpdateContinued(&self->_host, &self->_screen, time, Input, IsPointing ? &Hit : NULL,
+        IsContinued ? &Continued : NULL);
     bool WasInUse = self->_wasInUse;
     if (Result.Code == ErrorCode_Success)
     {

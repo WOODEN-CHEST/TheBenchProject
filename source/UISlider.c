@@ -74,6 +74,18 @@ static Error MoveTo(UISliderCapability* self, Widget* widget, double value)
     return PostValue(widget, UIElementEvent_Changed, Next);
 }
 
+/* A change that is whole at once: a wheel notch, a reset. */
+static Error MoveWholeChange(UISliderCapability* self, Widget* widget, double value)
+{
+    double Before = self->_value;
+    Error Result = MoveTo(self, widget, value);
+    if ((Result.Code != ErrorCode_Success) || (self->_value == Before))
+    {
+        return Result;
+    }
+    return PostValue(widget, UIElementEvent_Committed, self->_value);
+}
+
 /* The change in progress ends: committed unless the value ended where it began. */
 static Error EndSession(UISliderCapability* self, Widget* widget)
 {
@@ -250,6 +262,18 @@ static Error UISliderWidget_OnMouseInputVT(void* self, const WidgetMouseInputArg
     return UISliderCapability_OnMouseInput(&Slider->Slider, &Slider->Base, args);
 }
 
+static Error UISliderWidget_OnPressLostVT(void* self, GameKey button)
+{
+    UISliderWidget* Slider = self;
+    return UISliderCapability_OnPressLost(&Slider->Slider, &Slider->Base, button);
+}
+
+static Error UISliderWidget_OnScrollInputVT(void* self, const WidgetScrollInputArgs* args, bool* outIsHandled)
+{
+    UISliderWidget* Slider = self;
+    return UISliderCapability_OnScrollInput(&Slider->Slider, &Slider->Base, args, outIsHandled);
+}
+
 static Error UISliderWidget_OnKeyboardInputVT(void* self, const WidgetKeyboardInputArgs* args, bool* outIsHandled)
 {
     UISliderWidget* Slider = self;
@@ -273,6 +297,8 @@ static const WidgetVTable UISliderWidgetVTable =
     .Update = UISliderWidget_UpdateVT,
     .Render = UISliderWidget_RenderVT,
     .OnMouseInput = UISliderWidget_OnMouseInputVT,
+    .OnPressLost = UISliderWidget_OnPressLostVT,
+    .OnScrollInput = UISliderWidget_OnScrollInputVT,
     .OnKeyboardInput = UISliderWidget_OnKeyboardInputVT,
     .Measure = UISliderWidget_MeasureVT
 };
@@ -370,15 +396,34 @@ Error UISlider_SetIsEnabled(UIScreen* screen, uint64_t widgetId, bool isEnabled)
     return Widget_SetIsFocusable(Target, isEnabled);
 }
 
+Error UISlider_SetDefault(UIScreen* screen, uint64_t widgetId, bool hasDefault, double value)
+{
+    Widget* Target = NULL;
+    UISliderCapability* Slider = NULL;
+    Error Result = ResolveSlider(screen, widgetId, &Target, &Slider);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (hasDefault && !IsDoubleFinite(value))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UISlider_SetDefault: the default must be a finite number.");
+    }
+    Slider->_hasDefault = hasDefault;
+    Slider->_default = value;
+    return Error_CreateSuccess();
+}
+
 
 // Public functions: behaviour helpers.
 Error UISliderCapability_Construct(UISliderCapability* self, Widget* widget, const UISliderArgs* args)
 {
     const UISliderOptions* Options = args->Options;
     if (!IsRangeValid(Options->Minimum, Options->Maximum) || !IsDoubleFinite(Options->Value)
-        || (Options->HasStep && (!IsDoubleFinite(Options->Step) || !(Options->Step > 0.0))))
+        || (Options->HasStep && (!IsDoubleFinite(Options->Step) || !(Options->Step > 0.0)))
+        || (Options->HasDefault && !IsDoubleFinite(Options->Default)))
     {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UISlider: the range, the value or the step is not valid.");
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UISlider: the range, the value, the step or the default is not valid.");
     }
     Error Result = UIElementLook_Construct(&self->_look, UIElementKind_Slider, Options->Element.Variant);
     if (Result.Code == ErrorCode_Success)
@@ -395,6 +440,8 @@ Error UISliderCapability_Construct(UISliderCapability* self, Widget* widget, con
     self->_step = Options->Step;
     self->_value = UISlider_ClampAndSnap(Options->Value, Options->Minimum, Options->Maximum, Options->HasStep, Options->Step);
     self->_isEnabled = Options->IsEnabled;
+    self->_hasDefault = Options->HasDefault;
+    self->_default = Options->Default;
     self->_isDragging = false;
     self->_sessionKey = GameKey_Unknown;
     self->_cancelledKey = GameKey_Unknown;
@@ -411,7 +458,8 @@ Error UISliderCapability_Construct(UISliderCapability* self, Widget* widget, con
 Error UISliderCapability_Update(UISliderCapability* self, Widget* widget, ProgramTime time)
 {
     UIScreen* Screen = Widget_GetScreen(widget);
-    // A release that cannot reach the slider any more (it was detached or disabled for input meanwhile) still ends the change.
+    // A key's release that cannot reach the slider any more (it was detached or disabled for input meanwhile) still ends the change, and so
+    // does a button that is up, in a widget type that does not answer OnPressLost.
     const GameInput* Input = UIScreen_GetInput(Screen);
     Error Result = Error_CreateSuccess();
     if (Input != NULL)
@@ -436,6 +484,11 @@ Error UISliderCapability_OnMouseInput(UISliderCapability* self, Widget* widget, 
     {
         return Error_CreateSuccess();
     }
+    Error EventResult = UIElement_PostMouseEvents(widget, args);
+    if (EventResult.Code != ErrorCode_Success)
+    {
+        return EventResult;
+    }
     switch (args->Type)
     {
         case UIMouseInputType_ButtonPress:
@@ -449,23 +502,30 @@ Error UISliderCapability_OnMouseInput(UISliderCapability* self, Widget* widget, 
                 : Error_CreateSuccess();
         case UIMouseInputType_ButtonRelease:
             return ((args->Button == GameKey_MouseLeft) && self->_isDragging) ? EndSession(self, widget) : Error_CreateSuccess();
-        case UIMouseInputType_Scroll:
-        {
-            if (!Widget_IsFocused(widget) || IsInSession(self))
-            {
-                return Error_CreateSuccess();
-            }
-            double Before = self->_value;
-            Error Result = MoveTo(self, widget, UISlider_GetStepped(Before, self->_minimum, self->_maximum, self->_hasStep, self->_step,
-                (double)args->ScrollDelta.y));
-            if ((Result.Code != ErrorCode_Success) || (self->_value == Before))
-            {
-                return Result;
-            }
-            return PostValue(widget, UIElementEvent_Committed, self->_value);
-        }
+        case UIMouseInputType_ReleaseOver:
+            return Error_CreateSuccess();
     }
     return Error_CreateSuccess();
+}
+
+Error UISliderCapability_OnPressLost(UISliderCapability* self, Widget* widget, GameKey button)
+{
+    return ((button == GameKey_MouseLeft) && self->_isDragging) ? EndSession(self, widget) : Error_CreateSuccess();
+}
+
+Error UISliderCapability_OnScrollInput(UISliderCapability* self, Widget* widget, const WidgetScrollInputArgs* args, bool* outIsHandled)
+{
+    if (!Widget_IsFocused(widget) && ((args->Modifiers & GAME_KEY_MODIFIER_CONTROL) == 0U))
+    {
+        return Error_CreateSuccess();
+    }
+    *outIsHandled = true;
+    if (!self->_isEnabled || IsInSession(self))
+    {
+        return Error_CreateSuccess();
+    }
+    double Target = UISlider_GetStepped(self->_value, self->_minimum, self->_maximum, self->_hasStep, self->_step, (double)args->ScrollDelta.y);
+    return MoveWholeChange(self, widget, Target);
 }
 
 Error UISliderCapability_OnKeyboardInput(UISliderCapability* self, Widget* widget, const WidgetKeyboardInputArgs* args,
@@ -499,12 +559,17 @@ Error UISliderCapability_OnKeyboardInput(UISliderCapability* self, Widget* widge
         *outIsHandled = true;
         return CancelSession(self, widget);
     }
+    if ((args->Type == UIKeyboardInputType_KeyPress) && self->_hasDefault && UIElement_IsActionPress(Screen, GameAction_UIReset, args->Key))
+    {
+        *outIsHandled = true;
+        return IsInSession(self) ? Error_CreateSuccess() : MoveWholeChange(self, widget, self->_default);
+    }
 
     bool IsRepeatable = false;
     double Target = 0.0;
     if (!TryGetKeyTarget(self, Screen, args->Key, &IsRepeatable, &Target))
     {
-        return Error_CreateSuccess();
+        return UIElement_OnContextKey(widget, args, outIsHandled);
     }
     *outIsHandled = true;
     if (self->_isDragging || ((args->Type == UIKeyboardInputType_KeyRepeat) && !IsRepeatable))

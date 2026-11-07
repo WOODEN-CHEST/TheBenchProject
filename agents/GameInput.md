@@ -47,15 +47,16 @@ NULL for the root and the logger.
 
 `GameInput_SampleDevices` reads every key's state (down / pressed / released / auto-repeated), the mouse position and
 movement, the wheel, the window's size, whether the cursor is hidden (`IsCursorHidden`: captured for mouse look, or hidden
-with `HideCursor`; either way there is no pointer for the UI), and drains raylib's typed-text queue once (so no
-reader can starve another). `GameInput_Poll` adds the size of the monitor the window is on, which it asks for only every so often and soon after the window moved or
+with `HideCursor`; either way there is no pointer for the UI), whether it is on the window (`IsCursorOnScreen`), and drains raylib's typed-text queue once (so no
+reader can starve another). `GameInput_Poll` then keeps the cursor's place through what raylib does to it (below, "Pitfalls") and adds the size of the monitor the window is on, which it asks for only every so often and soon after the window moved or
 changed size (`GetCurrentMonitor` walks the monitors, each a trip to the display server); it is (0, 0) with no window. Tests build a `GameInputSample` themselves (`GameInputSample_Clear`, then set fields) and
 call `GameInput_BeginTick` directly: everything but the sampling runs headless.
 
 Reading keys: `GameInput_IsKeyDown` / `IsKeyPressed` / `IsKeyReleased` / `IsKeyPressedOrRepeated`, or the raw flags
 (`GameInput_GetKeyState`, `GAME_INPUT_KEY_STATE_*`). Held modifiers: `GameInput_GetHeldModifiers` (ignores
-consumption). Mouse: `GameInput_GetMousePosition` (window pixels), `GetMouseDelta`, `GetWindowSize`, `GetMonitorSize`,
-`IsCursorCaptured`. Wheel: `GameInput_GetWheelDelta`. Text: `GameInput_GetTextCodepointCount` /
+consumption). Mouse: `GameInput_GetMousePosition` (window pixels, unclamped: past the window's edges too while a button is held), `GetMouseDelta`, `GetWindowSize`, `GetMonitorSize`,
+`IsCursorCaptured`, `IsCursorOnWindow`. The cursor itself: `GameInput_CaptureCursor` hides it and frees its movement from the window's edges, `GameInput_ReleaseCursor(input, position)` shows it
+and puts it at a place; both do nothing with no window, and are the only way code outside this module touches the cursor. Wheel: `GameInput_GetWheelDelta`. Text: `GameInput_GetTextCodepointCount` /
 `GameInput_GetTextCodepoint`.
 
 ### Consumption
@@ -106,6 +107,8 @@ the `GameActionCategory` enum, the same way:
 | | Next, Previous | `tbp:ui_next`, `tbp:ui_previous` | Tab, Shift+Tab |
 | | Accept | `tbp:ui_accept` | Enter, Keypad Enter |
 | | Back | `tbp:ui_back` | Escape |
+| | Reset, Copy, Paste | `tbp:ui_reset`, `tbp:ui_copy`, `tbp:ui_paste` | Backspace, Ctrl+C, Ctrl+V; a press the focused widget leaves goes on to the hovered one ([UIFramework.md](UIFramework.md), "Input") |
+| | Context Menu | `tbp:ui_context_menu` | the Menu key |
 
 Adding an engine action: an enum value and its row in `BuiltInActions` (`GameInput.c`: key, display name, description,
 category, defaults, the keeps-a-binding flag); a new engine category likewise in `GameActionCategory` and
@@ -198,6 +201,9 @@ bad one is warned about and ignored. Nothing writes the file yet: that comes wit
 
 ## Pitfalls
 
+- raylib sets the mouse position to (0, 0) when the cursor leaves the window, X sends that leave again when a press held off the window ends, and GLFW passes on no position equal to its last
+  one, so after coming back to the same pixel raylib stays at (0, 0). `GameInputInternal_KeepCursorPlace`, from `GameInput_Poll`, holds the last place until raylib says another, and works the
+  delta out from the places kept, but never for a captured cursor or across capturing and letting go: there raylib's delta is the device's own. Only a real window shows this.
 - Main thread only; `GameInput_SampleDevices` / `GameInput_Poll` need the window and must run once per update tick after
   `PollInputEvents` (only `GameFrameManager_Update` does it).
 - Never read input in `Render` (see the input notes in AGENTS.md and BUILDING.md); edge flags are per update tick.

@@ -154,6 +154,16 @@ typedef enum GameActionEnum
     /** @brief Switch between the window and the whole screen ("tbp:toggle_fullscreen"; default Alt+Enter, F11). The game window
      *  handles it before any frame updates, and consumes it. */
     GameAction_ToggleFullscreen,
+    /** @brief Put a value back to its default ("tbp:ui_reset"; default Backspace). Goes to the focused widget first, then to the
+     *  hovered one. */
+    GameAction_UIReset,
+    /** @brief Copy what the widget holds ("tbp:ui_copy"; default Ctrl+C). Goes to the focused widget first, then to the hovered
+     *  one. */
+    GameAction_UICopy,
+    /** @brief Paste into the widget ("tbp:ui_paste"; default Ctrl+V). Goes to the focused widget first, then to the hovered one. */
+    GameAction_UIPaste,
+    /** @brief Ask for the focused widget's context menu ("tbp:ui_context_menu"; default the menu key). */
+    GameAction_UIContextMenu,
 
     /** @brief One past the last engine action; equals the number of engine actions. Not an action. */
     GameAction_Count
@@ -308,9 +318,12 @@ typedef struct GameInputSampleStruct
     /** @brief The size in pixels of the monitor the window is on; (0, 0) when it is not known. GameInput_SampleDevices leaves it
      *  so, and GameInput_Poll fills it in, asking only now and then (it walks the monitors and goes to the display server). */
     Vector2 MonitorSize;
-    /** @brief Whether the cursor is hidden (raylib's IsCursorHidden: captured for mouse look, or hidden with HideCursor):
-     *  there is no pointer for the UI then. */
+    /** @brief Whether the cursor is hidden (raylib's IsCursorHidden: captured for mouse look or a hidden-cursor drag, or hidden
+     *  with HideCursor): there is no pointer for the UI then. */
     bool IsCursorCaptured;
+    /** @brief Whether the cursor is over the window (raylib's IsCursorOnScreen). GameInputSample_Clear starts it true. The position
+     *  alone cannot tell: when the cursor leaves the window fast, the last one reported lies just inside the edge. */
+    bool IsCursorOnWindow;
     /** @brief The Unicode codepoints typed this tick, in order; valid entries are [0, TextCodepointCount). */
     uint32_t TextCodepoints[GAME_INPUT_MAX_TEXT_CODEPOINTS];
     /** @brief The number of valid entries in @c TextCodepoints (at most GAME_INPUT_MAX_TEXT_CODEPOINTS). */
@@ -334,6 +347,8 @@ typedef struct GameInputStruct
     bool _isTextConsumed;
     /** @brief Whether the pointer was claimed this tick (it is over some UI). */
     bool _isPointerConsumed;
+    /** @brief Whether raylib has said nothing of the cursor's place since its reset at the cursor leaving the window, so the last place stands. */
+    bool _isCursorPlaceLost;
     /** @brief The monitor's size as last asked (GameInput_Poll), whether it was asked yet, the ticks since, and the window's place
      *  and size then. */
     Vector2 _monitorSize;
@@ -391,7 +406,7 @@ Error GameInput_Deconstruct(GameInput* self);
 
 // Ticks.
 /**
- * @brief Resets a sample to "nothing held, nothing moved, nothing typed".
+ * @brief Resets a sample to "nothing held, nothing moved, nothing typed", with the cursor on the window.
  * @param self The sample; must not be NULL.
  */
 void GameInputSample_Clear(GameInputSample* self);
@@ -527,12 +542,34 @@ Vector2 GameInput_GetMouseDelta(const GameInput* self);
 Vector2 GameInput_GetWindowSize(const GameInput* self);
 
 /**
- * @brief Returns whether the cursor is hidden (captured for mouse look, or hidden with raylib's HideCursor), in which
- *        case there is no pointer for UI.
+ * @brief Returns whether the cursor is hidden (captured for mouse look or a hidden-cursor drag, or hidden with raylib's
+ *        HideCursor), in which case there is no pointer for UI.
  * @param self The input; must not be NULL.
  * @returns true while hidden.
  */
 bool GameInput_IsCursorCaptured(const GameInput* self);
+
+/**
+ * @brief Returns whether the cursor is over the window: a position just inside the edge means nothing once it has left.
+ * @param self The input; must not be NULL.
+ * @returns true while it is over the window.
+ */
+bool GameInput_IsCursorOnWindow(const GameInput* self);
+
+/**
+ * @brief Hides the cursor and frees its movement from the window's edges: GameInput_GetMouseDelta then gives raw motion, and
+ *        GameInput_IsCursorCaptured answers true from the next tick on. The position the input reports means nothing meanwhile: the
+ *        cursor is put at the window's centre. Does nothing with no window, so a test that reaches it is safe.
+ * @param self The input; must not be NULL.
+ */
+void GameInput_CaptureCursor(GameInput* self);
+
+/**
+ * @brief Shows the cursor again and puts it at a place in the window. Does nothing with no window.
+ * @param self The input; must not be NULL.
+ * @param position Where the cursor goes, in window pixels.
+ */
+void GameInput_ReleaseCursor(GameInput* self, Vector2 position);
 
 /**
  * @brief Returns this tick's wheel movement, or (0, 0) once it is consumed.

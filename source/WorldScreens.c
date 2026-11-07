@@ -387,3 +387,34 @@ bool WorldScreens_Raycast(WorldScreens* self, Vector3Double origin, Vector3 dire
     };
     return true;
 }
+
+bool WorldScreens_ContinueRay(WorldScreens* self, uint64_t objectId, Vector3Double origin, Vector3 direction, WorldScreenHit* outHit)
+{
+    const WorldScreenEntry* Entries = (const WorldScreenEntry*)(void*)self->_entries._data;
+    for (size_t Index = 0U; Index < self->_entries._count; Index++)
+    {
+        const WorldScreenEntry* Entry = &Entries[Index];
+        const WorldObject* Owner = ((Entry->ObjectId == objectId) && Entry->HasSurface) ? FindOwner(self, Entry) : NULL;
+        if (Owner == NULL)
+        {
+            continue;
+        }
+        const WorldModelSurface* Surface = WorldModel_GetSurface(Entry->Asset, Entry->SurfaceIndex);
+        Matrix4Double Placement = WorldObject_GetWorldMatrix(Owner);
+        Vector2 Uv;
+        Vector3Double Point;
+        if (!WorldModelSurface_ContinueRay(Surface, &Placement, origin, direction, &Uv, &Point))
+        {
+            return false;
+        }
+        Vector2 Picture;
+        bool IsOnPicture = WorldModelSurface_GetContinuedPicturePosition(Surface, Uv, &Picture);
+        *outHit = (WorldScreenHit)
+        {
+            .ObjectId = objectId, .Surface = Surface, .SurfaceIndex = Entry->SurfaceIndex, .Uv = Uv, .Picture = Picture,
+            .IsOnPicture = IsOnPicture, .Point = Point, .Distance = (float)Vector3Double_Distance(origin, Point)
+        };
+        return true;
+    }
+    return false;
+}

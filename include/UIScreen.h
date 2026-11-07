@@ -14,6 +14,7 @@
 #include "ProgramTime.h"
 #include "GameInput.h"
 #include "UIAnimation.h"
+#include "UIInput.h"
 #include "UIWidgetFactory.h"
 
 
@@ -33,14 +34,22 @@
  * siblings by z then insertion) and the keyboard-navigation outlines.
  *
  * INPUT. The pointer hovers and clicks the top-most input-enabled widget under it; a press on a widget is consumed (the
- * game does not see it) and its release and drags go to that widget. Keys and typed text go to the focused widget
- * first, then up through its parents, until one handles them (they are then consumed). The widget that handles a key's
- * press owns the key until it is released: the key's repeats and release go to that widget alone, even after focus
- * moved. Keyboard navigation acts on the navigation actions nobody handled (GameAction_UI*), and whatever is still
- * unconsumed reaches the game. Focus can be on any focusable widget: a click focuses the nearest focusable widget under
- * the pointer, and navigation moves focus between focusable widgets. A click that hits no widget, including any click
- * while the screen has no pointer (the cursor captured for mouse look, or over UI above), is a click outside: it ends
- * navigation and clears focus, and the game gets the click.
+ * game does not see it). A held press owns the pointer: its drags and its release go to that widget wherever the pointer
+ * goes, past its box, past the screen and, with a host that tracks it, past the window; then the top widget under the
+ * pointer, if another one, hears of the release too (UIMouseInputType_ReleaseOver). A press that stops reaching its widget is
+ * reported (OnPressLost) unless the widget is being destroyed, and can be handed to another one (UIScreen_TransferPress). A
+ * widget holding a press can ask for a hidden-cursor drag (UIScreen_CapturePointer). The wheel goes to the widget under the
+ * pointer, then up through its ancestors until one handles it. Keys and typed text go to the focused widget first, then up
+ * through its parents, until one handles them (they are then consumed). A press of the reset, copy or paste action nobody
+ * handled then goes to the hovered widget and its ancestors. The widget that handles a key's press owns the key until it is
+ * released: the key's repeats and release go to that widget alone, even after focus moved. Keyboard navigation acts on the
+ * navigation actions nobody handled (GameAction_UI*), and whatever is still unconsumed reaches the game. Focus can be on any
+ * focusable widget: a click focuses the nearest focusable widget under the pointer, and navigation moves focus between
+ * focusable widgets. A click that hits no widget, including any click while the screen has no pointer (the cursor captured
+ * for mouse look, or over UI above), is a click outside: it ends navigation and clears focus, and the game gets the click.
+ *
+ * LAYERS. Every root stands in a layer (UIScreenLayer, UIScreen_SetRootLayer): drawing and hit testing go by layer, then by z,
+ * then by insertion. A press raises its root within a Normal or Floating layer, and in no other.
  *
  * NAVIGATION. ui_next / ui_previous move focus between the focusable widgets of the current level in reading order, the
  * arrows move it to the nearest one in that direction (the first such key only starts navigation and shows the
@@ -100,6 +109,11 @@ typedef struct UIThemeStruct UITheme;
 #define UI_SCREEN_MAX_SCALE 8.0f
 /** @brief How many element kinds a screen remembers reporting missing theme parts of. */
 #define UI_SCREEN_THEME_REPORT_KINDS ((size_t)32)
+/** @brief Presses of one button on one widget count as a row (a double click) while each comes within this many seconds of the
+ *  last ... */
+#define UI_SCREEN_MULTI_CLICK_SECONDS 0.4
+/** @brief ... and within this many UI pixels of it. */
+#define UI_SCREEN_MULTI_CLICK_DISTANCE 4.0f
 
 
 // Types.
@@ -130,10 +144,19 @@ typedef struct UIScreenInputStruct
     /** @brief The tick's input (keys, buttons, wheel, text, actions); consumption is recorded in it. Borrowed for the
      *  call; NULL means no input reaches the screen this tick. */
     GameInput* Input;
-    /** @brief Whether the pointer is over this screen this tick. */
+    /** @brief Whether the pointer is over this screen this tick: it hovers widgets and starts presses. */
     bool IsPointerPresent;
-    /** @brief The pointer position in the screen's own normalized [0;1] space; used when IsPointerPresent. */
+    /** @brief Whether PointerPosition is known even though the pointer is not over this screen, so a held press keeps following
+     *  it: past the window's edge, or below UI above that claimed the pointer. */
+    bool IsPointerTracked;
+    /** @brief The pointer position in the screen's own normalized space, [0;1] on the screen and past it off the screen; used
+     *  when IsPointerPresent or IsPointerTracked. */
     Vector2 PointerPosition;
+    /** @brief Whether the host hid the cursor for the drag the screen asked for (UIScreen_CapturePointer): the position stands
+     *  still, hover does not change, and held presses hear PointerDeltaPixels. Meaningless without that request. */
+    bool IsPointerRelative;
+    /** @brief The raw motion since the last tick, in surface pixels; used when IsPointerRelative. */
+    Vector2 PointerDeltaPixels;
     /** @brief Whether keys and typed text go to this screen this tick (keyboard navigation included). */
     bool HasKeyboardFocus;
 } UIScreenInput;
@@ -156,6 +179,23 @@ typedef enum UIEventKindEnum
 } UIEventKind;
 
 /**
+ * @brief The input a widget's own event tells of, by value, so a handler needs no widget (UIScreen_PostWidgetMouseEvent).
+ */
+typedef struct UIEventMouseStruct
+{
+    /** @brief The mouse button. For what the keyboard did (an activation, the menu key) the key; GameKey_Unknown for the wheel. */
+    GameKey Button;
+    /** @brief The GAME_KEY_MODIFIER_* flags held. */
+    uint8_t Modifiers;
+    /** @brief The pointer's position on the screen; for what the keyboard did, the middle of the widget. */
+    Vector2 ScreenPosition;
+    /** @brief The wheel's movement; zero for anything else. */
+    Vector2 ScrollDelta;
+    /** @brief Whether the pointer is over the widget. */
+    bool IsOverWidget;
+} UIEventMouse;
+
+/**
  * @brief One queued notification, delivered by value. A plain value type.
  */
 typedef struct UIEventStruct
@@ -169,12 +209,16 @@ typedef struct UIEventStruct
     uint64_t WidgetTypeId;
     /** @brief For the state changes: the new state. */
     bool IsSet;
-    /** @brief For UIEventKind_Widget: the type-defined event id (e.g. a button's "clicked"). */
+    /** @brief For UIEventKind_Widget: the type-defined event id (e.g. a button's "activated"). */
     int32_t WidgetEventId;
     /** @brief For UIEventKind_Widget: whether Value carries data. */
     bool HasValue;
     /** @brief For UIEventKind_Widget: the event's data, when HasValue. */
     UIPropertyValue Value;
+    /** @brief For UIEventKind_Widget: whether Mouse tells of the input behind it. */
+    bool HasMouse;
+    /** @brief For UIEventKind_Widget: the input behind it, when HasMouse. */
+    UIEventMouse Mouse;
 } UIEvent;
 
 /**
@@ -198,13 +242,34 @@ typedef struct UIScreenButtonTrackingStruct
 {
     /** @brief True while a press this screen took is held. */
     bool IsPressed;
-    /** @brief Id of the widget the press started on. */
+    /** @brief True once the press reached its widget, so a lost press has someone to tell. */
+    bool HasReachedWidget;
+    /** @brief Id of the widget that holds the press. */
     uint64_t TargetWidgetId;
-    /** @brief Where the press started, normalized [0;1] screen coordinates. */
+    /** @brief Where the press started, normalized screen coordinates. */
     Vector2 StartScreenPosition;
     /** @brief The update-tick total time when the press started. */
     double StartTime;
+    /** @brief Where the pointer was at the last delivery of this press, normalized screen coordinates. */
+    Vector2 LastPosition;
+    /** @brief How many presses in a row this one is (WidgetMouseInputArgs.ClickCount). */
+    uint32_t ClickCount;
 } UIScreenButtonTracking;
+
+/**
+ * @brief The last press and how many came in a row, for counting clicks. Internal state of the screen.
+ */
+typedef struct UIScreenClickRecordStruct
+{
+    /** @brief How many presses in a row; 0 when nothing can continue the row. */
+    uint32_t Count;
+    /** @brief The last press's button and widget. */
+    GameKey Button;
+    uint64_t WidgetId;
+    /** @brief Where it was, normalized screen coordinates, and when, in update-tick total time. */
+    Vector2 Position;
+    double Time;
+} UIScreenClickRecord;
 
 /**
  * @brief The UI context object. All fields are internal; use the UIScreen_* functions.
@@ -250,8 +315,14 @@ typedef struct UIScreenStruct
     GameInput* _input;
     /** @brief Whether the pointer was over the screen at the last update. */
     bool _hasPointer;
-    /** @brief The pointer position at the last update, normalized [0;1] screen coordinates. */
+    /** @brief Whether the pointer's position was known at the last update: over the screen, or tracked past it. */
+    bool _isPointerKnown;
+    /** @brief The pointer position at the last update, normalized screen coordinates. */
     Vector2 _pointerPosition;
+    /** @brief The widget a hidden-cursor drag was asked for, or WIDGET_ID_INVALID. */
+    uint64_t _pointerCaptureWidgetId;
+    /** @brief The last press, for counting clicks. */
+    UIScreenClickRecord _lastClick;
     /** @brief Whether the screen had the keyboard at the last update. */
     bool _hasKeyboardFocus;
     /** @brief Set when geometry or the tree changed, so the hovered widget is looked up again. */
@@ -342,14 +413,21 @@ static inline UIScreenInput UIScreenInput_CreateEmpty(void)
     {
         .Input = NULL,
         .IsPointerPresent = false,
+        .IsPointerTracked = false,
         .PointerPosition = (Vector2){ .x = 0.0f, .y = 0.0f },
+        .IsPointerRelative = false,
+        .PointerDeltaPixels = (Vector2){ .x = 0.0f, .y = 0.0f },
         .HasKeyboardFocus = false
     };
 }
 
 /**
- * @brief Makes the input of a screen that fills the window: the mouse position normalized by the window size (no
- *        pointer while the cursor is captured, outside the window, or already claimed by UI above), and the keyboard.
+ * @brief Makes the input of a screen that fills the window: the keyboard, and the mouse position divided by the window's size,
+ *        as it is, also past the window's edges (raylib does not clamp it, and the system keeps reporting it while a button is
+ *        held).
+ *
+ * The pointer is tracked unless the cursor is captured. It is present only while the cursor is on the window, inside it, and no UI
+ * above has claimed it: over UI above it stays tracked, so a drag held below that UI goes on.
  * @param input The tick's input; may be NULL (then the result is empty).
  * @returns The input.
  */
@@ -640,7 +718,7 @@ static inline bool UIScreen_IsNavigating(const UIScreen* self)
 Error UIScreen_SetFocusedWidget(UIScreen* self, Widget* widget);
 
 /**
- * @brief Raises a widget above its siblings (the roots, or its parent's children) in z order.
+ * @brief Raises a widget above its siblings (the roots of its layer, or its parent's children) in z order.
  * @param self The screen; must not be NULL.
  * @param widget The widget; must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if a pointer is NULL; propagates the z setter's error.
@@ -649,10 +727,31 @@ Error UIScreen_SetFocusedWidget(UIScreen* self, Widget* widget);
 Error UIScreen_BringToTop(UIScreen* self, Widget* widget);
 
 /**
+ * @brief Moves a root to another layer: the draw order and the hit test follow at once. A root that becomes an overlay takes no
+ *        input any more: what it holds loses the focus and its presses.
+ * @param self The screen; must not be NULL.
+ * @param root A root of this screen; must not be NULL. A root keeps its layer while it is away from the roots.
+ * @param layer The layer.
+ * @returns Success; ErrorCode_IllegalArgument if a pointer is NULL; ErrorCode_InvalidOperation if the widget is not a root of this
+ *          screen or is being destroyed; ErrorCode_ArgumentOutOfRange for an unknown layer; otherwise the first error from a
+ *          fired hook.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error UIScreen_SetRootLayer(UIScreen* self, Widget* root, UIScreenLayer layer);
+
+/**
+ * @brief Returns the layer a root stands in.
+ * @param self The screen; must not be NULL.
+ * @param root The widget; must not be NULL.
+ * @returns The layer; UIScreenLayer_Normal for a new one, and for a widget that is not a root.
+ */
+UIScreenLayer UIScreen_GetRootLayer(const UIScreen* self, const Widget* root);
+
+/**
  * @brief Finds the top-most input-enabled widget whose box contains a screen position.
  *
- * Respects z order (front-most wins) and subwidget clipping (AreSubWidgetsCut); input-disabled widgets are skipped
- * (input passes through them to whatever is behind).
+ * Respects layers and z order (front-most wins) and subwidget clipping (AreSubWidgetsCut); input-disabled widgets are skipped
+ * (input passes through them to whatever is behind), and overlays are never hit.
  * @param self The screen; must not be NULL.
  * @param screenPosition The position, normalized [0;1] screen coordinates.
  * @param outWidget [out] Receives the top-most widget, or NULL if none; must not be NULL.
@@ -737,14 +836,72 @@ static inline bool UIScreen_IsPointerPresent(const UIScreen* self)
 }
 
 /**
- * @brief Returns the pointer position at the last update, normalized [0;1] screen coordinates.
+ * @brief Returns the pointer position at the last update, normalized screen coordinates.
  * @param self The screen; must not be NULL.
- * @returns The position (the last known one when the pointer is not present).
+ * @returns The position (the last known one when the pointer is neither present nor tracked; it stands still during a
+ *          hidden-cursor drag).
  */
 static inline Vector2 UIScreen_GetPointerPosition(const UIScreen* self)
 {
     return self->_pointerPosition;
 }
+
+/**
+ * @brief Returns whether a press this screen took is held: what keeps a host's pointer going off its surface.
+ * @param self The screen; must not be NULL.
+ * @returns true while any button's press is held by a widget.
+ */
+bool UIScreen_HasHeldPress(const UIScreen* self);
+
+/**
+ * @brief Hands a held press to another widget: its drags and its release go there from now on, with its start, its click count
+ *        and its time kept. The widget that held it gets OnPressLost, and a hidden-cursor drag it asked for ends.
+ * @param self The screen; must not be NULL.
+ * @param button The press's mouse button.
+ * @param newWidgetId The widget to take it: alive, attached, taking input and shown. Handing it to the one that holds it changes
+ *        nothing.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL or @p button is no mouse button; ErrorCode_InvalidOperation if the
+ *          button holds no press, or the widget cannot take one; otherwise the error of the hook.
+ */
+Error UIScreen_TransferPress(UIScreen* self, GameKey button, uint64_t newWidgetId);
+
+/**
+ * @brief Asks for a hidden-cursor drag: the cursor hides, the pointer's position stands still, hover does not change, and drags
+ *        carry the raw motion in DeltaPixels, with no edge to stop them.
+ *
+ * Legal only for a widget holding a press, and it ends with that widget's last press (released, lost or its widget destroyed) or
+ * UIScreen_ReleasePointerCapture; the cursor then returns to where it began. The screen only records the request: a host applies
+ * it (UIWindowHost), and one that does not (a screen in the world) leaves the drag absolute.
+ * @param self The screen; must not be NULL.
+ * @param widgetId The widget.
+ * @returns Success (also when it already has it); ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_InvalidOperation if the
+ *          widget is gone or holds no press, or another widget has the capture.
+ */
+Error UIScreen_CapturePointer(UIScreen* self, uint64_t widgetId);
+
+/**
+ * @brief Ends a hidden-cursor drag before its press ends. Nothing happens without one.
+ * @param self The screen; must not be NULL.
+ */
+void UIScreen_ReleasePointerCapture(UIScreen* self);
+
+/**
+ * @brief Returns whether a hidden-cursor drag is asked for.
+ * @param self The screen; must not be NULL.
+ * @returns true from UIScreen_CapturePointer until it ends.
+ */
+static inline bool UIScreen_IsPointerCaptured(const UIScreen* self)
+{
+    return self->_pointerCaptureWidgetId != ((uint64_t)0);
+}
+
+/**
+ * @brief Returns the shape the pointer should show: the one of the widget holding a press, or else the hovered widget's. Read it
+ *        after the update.
+ * @param self The screen; must not be NULL.
+ * @returns The shape; UICursorShape_Arrow with neither.
+ */
+UICursorShape UIScreen_GetCursorShape(const UIScreen* self);
 
 
 // Animation.
@@ -837,7 +994,7 @@ Error UIScreen_Subscribe(UIScreen* self,
 Error UIScreen_Unsubscribe(UIScreen* self, uint64_t subscriptionId);
 
 /**
- * @brief Queues a widget type's own notification (e.g. a button's "clicked"), delivered at the end of the update, even if
+ * @brief Queues a widget type's own notification (e.g. a button's "activated"), delivered at the end of the update, even if
  *        the widget is destroyed meanwhile.
  * @param self The screen; must not be NULL.
  * @param widgetId The widget the event belongs to; must be alive.
@@ -847,3 +1004,15 @@ Error UIScreen_Unsubscribe(UIScreen* self, uint64_t subscriptionId);
  *          alive; ErrorCode_BufferTooLarge if the queue could not grow.
  */
 Error UIScreen_PostWidgetEvent(UIScreen* self, uint64_t widgetId, int32_t widgetEventId, const UIPropertyValue* value);
+
+/**
+ * @brief Queues a widget type's own notification that tells of the input behind it: UIScreen_PostWidgetEvent, with the mouse data
+ *        carried by value.
+ * @param self The screen; must not be NULL.
+ * @param widgetId The widget the event belongs to; must be alive.
+ * @param widgetEventId The type-defined event id.
+ * @param mouse The input behind it; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p self or @p mouse is NULL; ErrorCode_InvalidOperation if the widget is not
+ *          alive; ErrorCode_BufferTooLarge if the queue could not grow.
+ */
+Error UIScreen_PostWidgetMouseEvent(UIScreen* self, uint64_t widgetId, int32_t widgetEventId, const UIEventMouse* mouse);

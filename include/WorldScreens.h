@@ -41,6 +41,9 @@ typedef struct LoggerStruct Logger;
  * screen hides it (the screen's own colliders never do, so a monitor whose box encloses its glass is pointed at
  * through its box).
  *
+ * CONTINUING. A press held on a screen goes on when the ray leaves its picture: WorldScreens_ContinueRay finds where the ray goes on
+ * the plane of that one screen's surface, past its picture, nothing able to hide it.
+ *
  * POWER. WorldScreens_Advance, once a tick, moves every screen component's power transition toward its power state
  * (WorldScreenComponent.h, "POWER"): a CRT's over its surface's power-on and power-off times, any other screen's (and
  * one that shows on no surface) at once. A screen the sync meets for the first time starts settled at its power state,
@@ -157,3 +160,17 @@ bool WorldScreens_TryGetScreen(const WorldScreens* self, uint64_t objectId, Worl
  */
 bool WorldScreens_Raycast(WorldScreens* self, Vector3Double origin, Vector3 direction, float maxDistance,
     WorldCollision* collision, const WorldCollisionFilter* filter, WorldScreenHit* outHit);
+
+/**
+ * @brief Finds where a ray goes on the plane of one screen's surface, past its picture too (see the file comment, "CONTINUING";
+ *        WorldModelSurface_ContinueRay has the ray's rules). Nothing hides it. A CRT's picture position comes through its curvature on the
+ *        glass and goes on from its edge past it (WorldModelSurface_GetContinuedPicturePosition), so it goes on smoothly past the picture.
+ * @param self The screens; must not be NULL.
+ * @param objectId The screen's object.
+ * @param origin Where the ray starts, in the world.
+ * @param direction Its direction (any length but 0).
+ * @param outHit [out] Receives where on it; IsOnPicture tells whether that is still on the picture. Must not be NULL.
+ * @returns true when the object has a screen that shows on a surface (as of the last sync, and it is still in the world), and the
+ *          surface and the ray give an answer.
+ */
+bool WorldScreens_ContinueRay(WorldScreens* self, uint64_t objectId, Vector3Double origin, Vector3 direction, WorldScreenHit* outHit);
