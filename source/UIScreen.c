@@ -197,6 +197,11 @@ static void ForgetDyingReferences(UIScreen* self)
     {
         self->_focusedWidgetId = WIDGET_ID_INVALID;
     }
+    // A destroyed edit element is left silently, with no hook, as destroying promises.
+    if (IsIdDying(self, self->_enteredWidgetId))
+    {
+        self->_enteredWidgetId = WIDGET_ID_INVALID;
+    }
     // The stack is a path into the tree: everything after the first dying entry lies inside it.
     for (size_t Index = 0; Index < self->_navStack._count; Index++)
     {
@@ -378,7 +383,8 @@ static void DrawOutline(RenderContext* renderContext, const Widget* widget, Rend
     RenderContext_RenderRectangleOutline(renderContext, &Arguments);
 }
 
-/* Draws the keyboard-navigation outlines: green around each entered widget, white around the focused one. */
+/* Draws the keyboard-navigation outlines: green around each widget navigation entered and around an entered edit element,
+ * white around a focused widget that is only focused. */
 static void DrawNavigationOutlines(UIScreen* self, RenderContext* renderContext)
 {
     if (!self->_isNavigating)
@@ -397,7 +403,7 @@ static void DrawNavigationOutlines(UIScreen* self, RenderContext* renderContext)
     Widget* Focused = UIScreen_InternalResolve(self, self->_focusedWidgetId);
     if (Focused != NULL)
     {
-        DrawOutline(renderContext, Focused, RenderColor_White());
+        DrawOutline(renderContext, Focused, (self->_enteredWidgetId == self->_focusedWidgetId) ? Green : RenderColor_White());
     }
 }
 
@@ -654,6 +660,13 @@ Error UIScreen_InternalDetachWidget(UIScreen* self, Widget* widget)
         UnhoveredId = self->_hoveredWidgetId;
         self->_hoveredWidgetId = WIDGET_ID_INVALID;
     }
+    uint64_t UnenteredId = WIDGET_ID_INVALID;
+    Widget* EditedElement = UIScreen_InternalResolve(self, self->_enteredWidgetId);
+    if ((EditedElement != NULL) && UIScreen_InternalIsInSubtree(EditedElement, widget))
+    {
+        UnenteredId = self->_enteredWidgetId;
+        self->_enteredWidgetId = WIDGET_ID_INVALID;
+    }
     uint64_t UnfocusedId = WIDGET_ID_INVALID;
     Widget* Focused = UIScreen_InternalResolve(self, self->_focusedWidgetId);
     if ((Focused != NULL) && UIScreen_InternalIsInSubtree(Focused, widget))
@@ -701,6 +714,12 @@ Error UIScreen_InternalDetachWidget(UIScreen* self, Widget* widget)
     if (Unhovered != NULL)
     {
         Error Result = Widget_InternalSetHovered(Unhovered, false, NULL);
+        KeepFirstError(&FirstError, &Result);
+    }
+    Widget* Unentered = UIScreen_InternalResolve(self, UnenteredId);
+    if (Unentered != NULL)
+    {
+        Error Result = Widget_InternalLeave(Unentered, UILeaveReason_Keep);
         KeepFirstError(&FirstError, &Result);
     }
     Widget* Unfocused = UIScreen_InternalResolve(self, UnfocusedId);

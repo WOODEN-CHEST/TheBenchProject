@@ -38,6 +38,8 @@
 #define CHANGED_LOG_PERIOD_SECONDS 0.25
 /** The test row's box that asks for a hidden-cursor drag: how far the pointer goes before it does. */
 #define SCRUB_START_PIXELS 3.0f
+/** The keyboard box's width, in UI pixels. */
+#define KEYBOARD_BOX_WIDTH 320.0f
 
 
 // Types.
@@ -142,6 +144,20 @@ static uint64_t AddLabel(GalleryBuild* build, uint64_t parent, const unsigned ch
         build->Result = UIKit_CreateLabel(&build->Frame->_kit, &build->Frame->_screen, parent, &Options, &Id);
     }
     return Id;
+}
+
+/* A label that wraps to the width it is given. */
+static void AddWrappedLabel(GalleryBuild* build, uint64_t parent, const unsigned char* text, const unsigned char* variant)
+{
+    if (!HasFailed(build))
+    {
+        UILabelOptions Options = UILabelOptions_Create(text);
+        Options.IsWrapped = true;
+        Options.Element.Hint.Align = UIStackAlign_Stretch;
+        Options.Element.Variant = variant;
+        uint64_t Id = WIDGET_ID_INVALID;
+        build->Result = UIKit_CreateLabel(&build->Frame->_kit, &build->Frame->_screen, parent, &Options, &Id);
+    }
 }
 
 static uint64_t AddRow(GalleryBuild* build, uint64_t parent, float spacing)
@@ -449,7 +465,40 @@ static void BuildElements(GalleryBuild* build, uint64_t page)
 
     BuildRouting(build, Panel);
 
-    AddLabel(build, Panel, u8"Tab moves, the arrows too, Enter or Space clicks; the wheel moves a slider while focused or with Ctrl.", u8"hint");
+    AddLabel(build, Panel, u8"Tab moves, the arrows too; Enter or Space clicks; the wheel moves a slider once it is entered, or with Ctrl.", u8"hint");
+}
+
+/* The keyboard box: a button, two sliders and a toggle, to try Tab, the arrows and Enter on. The box is focusable and holds focusable
+ * elements, so it is a group: navigation reaches it as one, Enter goes in and Escape comes back out, and inside it Tab and the arrows
+ * stay among its elements (the page's reading order would mix them with the other panel's). A slider is an edit element: moving onto
+ * it changes nothing, and Enter or a click enters it. */
+static void BuildKeyboard(GalleryBuild* build, uint64_t panel)
+{
+    AddLabel(build, panel, u8"Keyboard: a box to go into with Enter; the arrows move past its sliders without changing them", u8"heading");
+    uint64_t Box = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIPanelOptions Options = UIPanelOptions_Create();
+        Options.HasSpacing = true;
+        Options.Spacing = 6.0f;
+        Options.Element.Variant = u8"inset";
+        Options.Element.Hint.Align = UIStackAlign_Start;
+        Options.Element.Hint.HasCrossSize = true;
+        Options.Element.Hint.CrossSize = KEYBOARD_BOX_WIDTH;
+        build->Result = UIKit_CreatePanel(&build->Frame->_kit, &build->Frame->_screen, panel, &Options, &Box);
+        Remember(build, Box, "the keyboard box");
+    }
+    Widget* BoxBase = NULL;
+    if (!HasFailed(build) && UIScreen_TryGetWidgetById(&build->Frame->_screen, Box, &BoxBase))
+    {
+        build->Result = Widget_SetIsFocusable(BoxBase, true);
+    }
+    AddButton(build, Box, u8"A button: Enter presses it at once", "the keyboard box's button", true, false, NULL, UIStackHint_Content());
+    AddSlider(build, Box, "the keyboard box's first slider", 30.0, false, 0.0, true);
+    AddSlider(build, Box, "the keyboard box's second slider", 70.0, true, 10.0, true);
+    AddToggle(build, Box, u8"A toggle", "the keyboard box's toggle", UIToggleState_Off, true);
+    AddWrappedLabel(build, panel, u8"Enter or a click enters a slider: its thumb takes its entered colour, and all four arrows are its own, each press at "
+        u8"once. Escape or Enter leaves it; Tab leaves it and enters the next slider, and only focuses a button. Escape again leaves the box.", u8"hint");
 }
 
 /* The right panel: how stacks size and align their children, and text at small sizes. */
@@ -493,15 +542,9 @@ static void BuildLayouts(GalleryBuild* build, uint64_t page)
         uint64_t Id = WIDGET_ID_INVALID;
         build->Result = UIKit_CreateLabel(&build->Frame->_kit, &build->Frame->_screen, Panel, &Options, &Id);
     }
-    if (!HasFailed(build))
-    {
-        UILabelOptions Options = UILabelOptions_Create(LongText);
-        Options.IsWrapped = true;
-        Options.Element.Hint.Align = UIStackAlign_Stretch;
-        Options.Element.Variant = u8"hint";
-        uint64_t Id = WIDGET_ID_INVALID;
-        build->Result = UIKit_CreateLabel(&build->Frame->_kit, &build->Frame->_screen, Panel, &Options, &Id);
-    }
+    AddWrappedLabel(build, Panel, LongText, u8"hint");
+
+    BuildKeyboard(build, Panel);
 }
 
 /* The page: a heading, two panels side by side, and a status line. */
@@ -517,7 +560,7 @@ static Error BuildPage(UIGalleryFrame* frame)
     Build.Result = UIKit_CreateStack(&frame->_kit, &frame->_screen, WIDGET_ID_INVALID, &PageOptions, &Page);
 
     AddLabel(&Build, Page, u8"UI gallery", u8"heading");
-    AddLabel(&Build, Page, u8"T the theme, + and - the scale, P the scale policy, L the event log, Escape quits.", u8"hint");
+    AddLabel(&Build, Page, u8"T the theme, + and - the scale, P the scale policy, L the event log. Escape steps out, and quits once nothing is focused.", u8"hint");
     uint64_t Panels = AddRow(&Build, Page, 8.0f);
     if (!HasFailed(&Build))
     {
@@ -599,6 +642,25 @@ static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserDa
     return Error_CreateSuccess();
 }
 
+/* Shows and logs an element being entered or left. */
+static Error OnEnteredChanged(UIScreen* screen, const UIEvent* event, const UserData* userData)
+{
+    UIGalleryFrame* Frame = UserData_GetPointer(userData);
+    char Status[STATUS_CAPACITY];
+    snprintf(Status, sizeof(Status), "%s %s", GetElementName(Frame, event->WidgetId), event->IsSet ? "entered: its keys are its own" : "left");
+    Error Result = UILabel_SetText(screen, Frame->_statusId, (const unsigned char*)Status);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (Frame->_isEventLogEnabled && (Frame->_services->Logger != NULL))
+    {
+        Error LogResult = Logger_LogInfoFormatted(Frame->_services->Logger, (const unsigned char*)u8"UIGallery: %s", Status);
+        Error_Deconstruct(&LogResult);
+    }
+    return Error_CreateSuccess();
+}
+
 static void LogLine(const UIGalleryFrame* frame, const char* format, const char* text)
 {
     if (frame->_services->Logger != NULL)
@@ -659,7 +721,7 @@ static Error HandleKeys(UIGalleryFrame* frame, GameInput* input)
 static Error UIGalleryFrame_Start(void* self, ProgramTime time)
 {
     UNUSED(time);
-    LogLine(self, "%s", "every element in every state. T the theme, + and - the scale, P the scale policy, L the event log, Escape quits.");
+    LogLine(self, "%s", "every element in every state. T the theme, + and - the scale, P the scale policy, L the event log, Escape steps out and quits.");
     return Error_CreateSuccess();
 }
 
@@ -825,6 +887,13 @@ static Error BuildFrameContents(UIGalleryFrame* frame)
         UserData FrameData = UserData_FromPointer(frame);
         uint64_t Subscription = UI_SCREEN_ID_INVALID;
         Result = UIScreen_Subscribe(&frame->_screen, WIDGET_ID_INVALID, UI_EVENT_KIND_MASK(UIEventKind_Widget), OnElementEvent, &FrameData, &Subscription);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        UserData FrameData = UserData_FromPointer(frame);
+        uint64_t Subscription = UI_SCREEN_ID_INVALID;
+        Result = UIScreen_Subscribe(&frame->_screen, WIDGET_ID_INVALID, UI_EVENT_KIND_MASK(UIEventKind_EnteredChanged), OnEnteredChanged, &FrameData,
+            &Subscription);
     }
     if (Result.Code == ErrorCode_Success)
     {

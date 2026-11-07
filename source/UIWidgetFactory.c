@@ -27,7 +27,7 @@ typedef struct TypeRecordStruct
     size_t StructSize;
     const WidgetVTable* VTable;
     WidgetConstructor Constructor;
-    bool IsFocusable;
+    WidgetTypeFlags Flags;
     GenericBuffer CapabilityEntries; // of WidgetCapabilityEntry
     GenericBuffer Properties;        // of WidgetPropertyDescriptor
     ObjectPool Pool;                 // element size == StructSize
@@ -258,7 +258,8 @@ Error UIWidgetFactory_RegisterType(UIWidgetFactory* self, const WidgetTypeDescri
     Record.StructSize = descriptor->StructSize;
     Record.VTable = descriptor->VTable;
     Record.Constructor = descriptor->Constructor;
-    Record.IsFocusable = descriptor->IsFocusable;
+    Record.Flags = (WidgetTypeFlags){ .IsFocusable = descriptor->IsFocusable, .NeedsEntering = descriptor->NeedsEntering,
+        .EntersItself = descriptor->EntersItself };
     GenericBuffer_AllocateVariable(&Record.CapabilityEntries, descriptor->CapabilityCount, sizeof(WidgetCapabilityEntry));
     GenericBuffer_AllocateVariable(&Record.Properties, descriptor->PropertyCount, sizeof(WidgetPropertyDescriptor));
 
@@ -351,7 +352,7 @@ Error UIWidgetFactory_CreateWidget(UIWidgetFactory* self, UIScreen* screen, uint
     }
     Widget* Created = Memory;
     WidgetConstructor Constructor = Record->Constructor;
-    Widget_InternalInitializeBase(Created, Record->VTable, screen, typeId, Record->IsFocusable);
+    Widget_InternalInitializeBase(Created, Record->VTable, screen, typeId, &Record->Flags);
     // Counted from here, so the type cannot be unregistered (and its pool freed) while the constructor runs.
     Record->LiveCount++;
 

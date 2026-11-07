@@ -50,6 +50,12 @@
  * widget in the same slot. Never hold a Widget* across anything that can run hooks or event handlers; keep the id and
  * re-resolve it (UIScreen_TryGetWidgetById / UIScreen_IsWidgetAlive).
  *
+ * EDIT ELEMENTS. A widget that needs entering (Widget_NeedsEntering: a slider, a text box) takes keys of its own only once it
+ * is entered: by the accept action while it is focused, a press on it, Tab going on from another entered element, or
+ * UIScreen_EnterWidget. Until then the arrows and Tab move past it and typing on it does nothing. The screen leaves it on the
+ * back action (a cancel), the accept action or Tab (keeping what was done) and whenever focus moves; OnEnter and OnLeave tell
+ * it. At most one widget of a screen is entered, and it is always the focused one.
+ *
  * Underscore-prefixed struct fields are read-only to code outside the UI framework; use the functions below.
  */
 
@@ -195,9 +201,12 @@ typedef struct WidgetVTableStruct
     /** @brief Called with a key event or typed text while the widget is focused or contains the focused widget (the
      *  focused widget first, then its input-enabled ancestors; input-disabled ones are skipped). Set @p outIsHandled to
      *  true to consume it and stop it there; an unhandled key goes on to the next ancestor, then to keyboard
-     *  navigation, then to the game. A widget that handles a key's press owns the key until it is released: the key's
-     *  repeats and release then come to it alone (even after focus moved, while it stays attached and input-enabled),
-     *  and its answer to them changes nothing. @p outIsHandled starts false. Optional (a NULL slot handles nothing). */
+     *  navigation (or, while an edit element is entered, to what the screen does for it), then to the game. A focused
+     *  edit element that is not entered (Widget_NeedsEntering) hears only the presses of the reset, copy, paste and context
+     *  menu actions: every other key and the typed text pass it by. A widget that handles a key's press owns the key until
+     *  it is released: the key's repeats and release then come to it alone (even after focus moved, while it stays
+     *  attached and input-enabled), and its answer to them changes nothing. @p outIsHandled starts false. Optional (a NULL
+     *  slot handles nothing). */
     Error (*OnKeyboardInput)(void* self, const WidgetKeyboardInputArgs* args, bool* outIsHandled);
     /** @brief Called when the widget becomes focused in its screen. Optional. */
     Error (*OnFocusEnable)(void* self);
@@ -211,6 +220,13 @@ typedef struct WidgetVTableStruct
     Error (*OnActiveEnable)(void* self);
     /** @brief Called when the widget stops being active. Optional. */
     Error (*OnActiveDisable)(void* self);
+    /** @brief Called when the widget, an edit element, is entered: it is the screen's focused widget, and from now on it hears
+     *  every key first until it is left. @p cause says what entered it (a text box selects everything on a key and places
+     *  the caret on a press). Before a press enters it, the press has not reached it yet. Optional. */
+    Error (*OnEnter)(void* self, UIEnterCause cause);
+    /** @brief Called when the entered widget is left; what @p reason means is the widget's (a cancel puts back what is not
+     *  finished). Not called for a widget being destroyed: no hook runs then. Optional. */
+    Error (*OnLeave)(void* self, UILeaveReason reason);
 
     /** @brief Reads a concrete property declared by the type (the base has checked the id; @p outValue->Type is already
      *  set to the declared type). Optional. */
@@ -275,6 +291,15 @@ typedef struct WidgetStruct
     bool _isScreenRoot;
     /** @brief When true the widget can take keyboard focus (clicks and keyboard navigation); the type sets the default. */
     bool _isFocusable;
+    /** @brief When true the widget is an edit element: keys of its own reach it only once it is entered; the type sets the
+     *  default. */
+    bool _needsEntering;
+    /** @brief When true a press does not enter the widget: it enters itself through UIScreen_EnterWidget; the type sets the
+     *  default. */
+    bool _entersItself;
+    /** @brief When true, while the widget is entered, the keys the screen would act on for it (Tab, the arrows, Enter,
+     *  Escape) stay unconsumed for their reader, and only focus moving, code or a world screen let go leave it. */
+    bool _keepsKeysWhenEntered;
 
     /** @brief True while the pointer hovers the widget. */
     bool _isHovered;
@@ -282,6 +307,8 @@ typedef struct WidgetStruct
     bool _isFocused;
     /** @brief True while keyboard navigation has entered the widget. */
     bool _isTabbed;
+    /** @brief True while the widget is its screen's entered edit element. */
+    bool _isEntered;
     /** @brief True while the widget is active (hovered or tabbed). */
     bool _isActive;
 
@@ -740,6 +767,67 @@ static inline bool Widget_IsFocusable(const Widget* self)
  */
 Error Widget_SetIsFocusable(Widget* self, bool isFocusable);
 
+/**
+ * @brief Returns whether the widget is an edit element: keys of its own (the arrows, typing) reach it only once it is entered.
+ * @param self The widget; must not be NULL.
+ * @returns true for an edit element.
+ */
+static inline bool Widget_NeedsEntering(const Widget* self)
+{
+    return self->_needsEntering;
+}
+
+/**
+ * @brief Makes the widget an edit element or not (its type gives the default).
+ *
+ * An edit element focused but not entered hears only the presses of the reset, copy, paste and context menu actions; the accept
+ * action, a press on it or UIScreen_EnterWidget enters it, and it then hears every key first. Making the entered widget no edit
+ * element leaves it (UILeaveReason_Keep).
+ * @param self The widget; must not be NULL.
+ * @param needsEntering The new flag.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; otherwise an error from the leave hook.
+ */
+Error Widget_SetNeedsEntering(Widget* self, bool needsEntering);
+
+/**
+ * @brief Returns whether a press leaves the entering to the widget itself.
+ * @param self The widget; must not be NULL.
+ * @returns true if a press does not enter it.
+ */
+static inline bool Widget_EntersItself(const Widget* self)
+{
+    return self->_entersItself;
+}
+
+/**
+ * @brief Sets whether a press on the edit element enters it (its type gives the default): one that enters itself calls
+ *        UIScreen_EnterWidget when it chooses, as a field whose drag scrubs does on a click that did not move.
+ * @param self The widget; must not be NULL.
+ * @param entersItself The new flag.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error Widget_SetEntersItself(Widget* self, bool entersItself);
+
+/**
+ * @brief Returns whether the widget keeps the screen's keys while it is entered.
+ * @param self The widget; must not be NULL.
+ * @returns true if it keeps them.
+ */
+static inline bool Widget_KeepsKeysWhenEntered(const Widget* self)
+{
+    return self->_keepsKeysWhenEntered;
+}
+
+/**
+ * @brief Sets whether the edit element keeps the screen's keys while it is entered: the screen then neither navigates nor leaves
+ *        it by a key, and Tab, the arrows, Enter and Escape stay unconsumed in the input for whoever reads them (a world view's
+ *        tools). Only focus moving, code or a world screen let go leave it. Takes effect at the next key.
+ * @param self The widget; must not be NULL.
+ * @param keepsKeys The new flag.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error Widget_SetKeepsKeysWhenEntered(Widget* self, bool keepsKeys);
+
 
 // Interaction state (driven by the screen).
 /**
@@ -789,6 +877,16 @@ static inline bool Widget_IsFocused(const Widget* self)
 static inline bool Widget_IsTabbed(const Widget* self)
 {
     return self->_isTabbed;
+}
+
+/**
+ * @brief Returns whether the widget is its screen's entered edit element: it hears every key first (UIScreen_EnterWidget).
+ * @param self The widget; must not be NULL.
+ * @returns true if entered.
+ */
+static inline bool Widget_IsEntered(const Widget* self)
+{
+    return self->_isEntered;
 }
 
 /**

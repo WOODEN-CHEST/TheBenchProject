@@ -40,13 +40,26 @@
  * reported (OnPressLost) unless the widget is being destroyed, and can be handed to another one (UIScreen_TransferPress). A
  * widget holding a press can ask for a hidden-cursor drag (UIScreen_CapturePointer). The wheel goes to the widget under the
  * pointer, then up through its ancestors until one handles it. Keys and typed text go to the focused widget first, then up
- * through its parents, until one handles them (they are then consumed). A press of the reset, copy or paste action nobody
- * handled then goes to the hovered widget and its ancestors. The widget that handles a key's press owns the key until it is
- * released: the key's repeats and release go to that widget alone, even after focus moved. Keyboard navigation acts on the
- * navigation actions nobody handled (GameAction_UI*), and whatever is still unconsumed reaches the game. Focus can be on any
- * focusable widget: a click focuses the nearest focusable widget under the pointer, and navigation moves focus between
- * focusable widgets. A click that hits no widget, including any click while the screen has no pointer (the cursor captured
- * for mouse look, or over UI above), is a click outside: it ends navigation and clears focus, and the game gets the click.
+ * through its parents, until one handles them (they are then consumed); a focused edit element that is not entered is passed
+ * over but for the short list (below, ENTERING). A press of the reset, copy or paste action nobody handled then goes to the
+ * hovered widget and its ancestors. The widget that handles a key's press owns the key until it is released: the key's
+ * repeats and release go to that widget alone, even after focus moved. Keyboard navigation acts on the navigation actions
+ * nobody handled (GameAction_UI*), and whatever is still unconsumed reaches the game. Focus can be on any focusable widget: a
+ * click focuses the nearest focusable widget under the pointer, and navigation moves focus between focusable widgets. A click
+ * that hits no widget, including any click while the screen has no pointer (the cursor captured for mouse look, or over UI
+ * above), is a click outside: it ends navigation and clears focus, and the game gets the click.
+ *
+ * ENTERING. An edit element (Widget_NeedsEntering: a slider, a text box) takes keys of its own only once it is entered. Moving
+ * the focus never changes anything: focused but not entered, it hears only the presses of the reset, copy, paste and context
+ * menu actions, and every other key and the typed text pass it by, so the arrows and Tab move past it and typing on it does
+ * nothing. The accept action's press on it (taken at its place, before its ancestors), a press of any mouse button on it
+ * (unless it enters itself, and only while the screen has the keyboard) or UIScreen_EnterWidget enters it. Entered, it hears every key first, then its ancestors; what
+ * both leave is the screen's in place of navigation's: the back action leaves it with a cancel, the accept action leaves it
+ * keeping what was done, Tab and Shift+Tab leave it and move on at once (entering the next element if that is an edit
+ * element, also on each repeat of the held key), and the arrows do nothing. Every one of them pressed in a tick is consumed, also
+ * when another acts first, and the keys that leave it stay consumed until they are released. Focus moving anywhere leaves it (keeping), and a destroyed one is left silently. At most one widget is
+ * entered, and it is always the focused one; pointer movement ends navigation but not the edit. An element that keeps the
+ * keys (Widget_SetKeepsKeysWhenEntered) is left only by focus moving and code, and those keys stay unconsumed for its reader.
  *
  * LAYERS. Every root stands in a layer (UIScreenLayer, UIScreen_SetRootLayer): drawing and hit testing go by layer, then by z,
  * then by insertion. A press raises its root within a Normal or Floating layer, and in no other.
@@ -60,7 +73,7 @@
  * the enclosing level. The entered widgets always lead to focus: when focus moves without navigation, the next
  * navigation step enters and leaves widgets to match.
  *
- * NOTIFICATIONS. Changes of a widget's hover, focus, tab and active state, and events a widget type posts
+ * NOTIFICATIONS. Changes of a widget's hover, focus, tab, active and entered state, and events a widget type posts
  * (UIScreen_PostWidgetEvent), are queued and delivered to subscribers (UIScreen_Subscribe) at one point, at the end of
  * UIScreen_Update, never in the middle of input routing. A notification names its widget by id. A state change is queued
  * before the widget's hook runs, so when hooks change a state again the last notification tells the final state; it is
@@ -174,6 +187,8 @@ typedef enum UIEventKindEnum
     UIEventKind_TabChanged,
     /** @brief The widget's active state changed (IsSet is the new state). */
     UIEventKind_ActiveChanged,
+    /** @brief The edit element was entered or left (IsSet is the new entered state). */
+    UIEventKind_EnteredChanged,
     /** @brief An event the widget's type posted (WidgetEventId says which; Value may carry data). */
     UIEventKind_Widget
 } UIEventKind;
@@ -299,6 +314,8 @@ typedef struct UIScreenStruct
 
     /** @brief The focused widget's id, or WIDGET_ID_INVALID. */
     uint64_t _focusedWidgetId;
+    /** @brief The entered edit element's id, or WIDGET_ID_INVALID; when set, it is the focused widget's. */
+    uint64_t _enteredWidgetId;
     /** @brief The hovered widget's id, or WIDGET_ID_INVALID. */
     uint64_t _hoveredWidgetId;
     /** @brief True while keyboard navigation is active (outlines are drawn). */
@@ -310,6 +327,10 @@ typedef struct UIScreenStruct
     /** @brief Per GameKey: navigation consumed the held key, so its auto-repeat (followed with the raw state) keeps
      *  navigating. */
     bool _navigationKeys[GameKey_Count];
+    /** @brief Per GameKey, meaningful while navigation follows the key (_navigationKeys, which sets it with each step): the held
+     *  key is a Tab that went on from an entered element, so each step its auto-repeat takes enters the edit element it lands
+     *  on. */
+    bool _editingKeys[GameKey_Count];
 
     /** @brief The input of the running UIScreen_Update; NULL outside it. Borrowed. */
     GameInput* _input;
@@ -693,6 +714,16 @@ static inline uint64_t UIScreen_GetHoveredWidgetId(const UIScreen* self)
 }
 
 /**
+ * @brief Returns the entered edit element's id: the focused widget, while it is being edited.
+ * @param self The screen; must not be NULL.
+ * @returns The id, or WIDGET_ID_INVALID (0) when nothing is entered.
+ */
+static inline uint64_t UIScreen_GetEnteredWidgetId(const UIScreen* self)
+{
+    return self->_enteredWidgetId;
+}
+
+/**
  * @brief Returns whether keyboard navigation is active (its outlines are drawn).
  * @param self The screen; must not be NULL.
  * @returns true while navigating.
@@ -705,9 +736,10 @@ static inline bool UIScreen_IsNavigating(const UIScreen* self)
 /**
  * @brief Focuses a widget, or clears focus.
  *
- * The old focus gets OnFocusDisable and the new one OnFocusEnable, immediately; FocusChanged notifications are queued.
- * If a hook moves focus again, the latest change wins and only that widget ends up focused; if a hook makes @p widget
- * unable to take focus (destroys, detaches or disables it), nothing ends up focused.
+ * When the focus moves, an entered edit element is left first (OnLeave with UILeaveReason_Keep). The old focus gets OnFocusDisable and the new one
+ * OnFocusEnable, immediately; FocusChanged notifications are queued. If a hook moves focus again, the latest change wins and
+ * only that widget ends up focused; if a hook makes @p widget unable to take focus (destroys, detaches or disables it),
+ * nothing ends up focused. Focusing an edit element does not enter it (UIScreen_EnterWidget does).
  * @param self The screen; must not be NULL.
  * @param widget An alive, attached, focusable and input-enabled widget of this screen, or NULL to clear focus.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL or @p widget belongs to another screen;
@@ -716,6 +748,32 @@ static inline bool UIScreen_IsNavigating(const UIScreen* self)
  * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
  */
 Error UIScreen_SetFocusedWidget(UIScreen* self, Widget* widget);
+
+/**
+ * @brief Enters an edit element, focusing it first: from now on it hears every key first, until it is left. For a popup's
+ *        list, a dialog's first field, the console's line when it opens.
+ *
+ * Moving the focus leaves the element entered before (UILeaveReason_Keep). The element hears OnEnter with UIEnterCause_Code,
+ * and an EnteredChanged notification is queued. A hook that moves the focus elsewhere meanwhile wins: nothing is entered then.
+ * Entering the entered element does nothing. Safe from hooks and handlers.
+ * @param self The screen; must not be NULL.
+ * @param widgetId The edit element (Widget_NeedsEntering): alive, attached, focusable, input-enabled, shown and not in an
+ *        overlay.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_InvalidOperation if the widget is gone, is no
+ *          edit element or cannot take focus; otherwise the first error from a hook.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error UIScreen_EnterWidget(UIScreen* self, uint64_t widgetId);
+
+/**
+ * @brief Leaves the entered edit element, if there is one: it stays focused, and hears OnLeave with @p reason; an
+ *        EnteredChanged notification is queued. Safe from hooks and handlers.
+ * @param self The screen; must not be NULL.
+ * @param reason Why: what a cancel takes back is the element's.
+ * @returns Success (also with nothing entered); ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for
+ *          an unknown reason; otherwise the error of the hook.
+ */
+Error UIScreen_LeaveWidget(UIScreen* self, UILeaveReason reason);
 
 /**
  * @brief Raises a widget above its siblings (the roots of its layer, or its parent's children) in z order.
@@ -805,7 +863,8 @@ Error UIScreen_Update(UIScreen* self, ProgramTime time, const UIScreenInput* inp
  *
  * Draws the roots, then each subtree parent first and children by z then insertion, with each widget's accumulated
  * transform and tint, clipping subtrees marked AreSubWidgetsCut through the context's clip stack. While navigating it
- * then draws green outlines around the entered widgets and a white one around the focused widget. Reads state only.
+ * then draws green outlines around the widgets navigation entered and around an entered edit element, and a white one around
+ * the focused widget that is only focused. Reads state only.
  * @param self The screen; must not be NULL.
  * @param renderContext The render context of the screen's surface; must not be NULL, inside a rendering pass.
  * @returns Success; ErrorCode_IllegalArgument if a pointer is NULL; otherwise the first error of a widget's Render.

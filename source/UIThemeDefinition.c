@@ -169,7 +169,7 @@ static Error FindState(const unsigned char* key, const char* where, UIElementSta
     char Printable[NAME_PRINT_CAPACITY];
     AssetJSON_CopyPrintable(key, Printable, sizeof(Printable));
     return Error_Construct4(ErrorCode_InvalidAssetDefinition,
-        "%s: unknown state \"%s\" (normal, hovered, pressed, focused, disabled, selected, invalid).", where, Printable);
+        "%s: unknown state \"%s\" (normal, hovered, pressed, focused, disabled, selected, invalid, entered).", where, Printable);
 }
 
 /* The next entry of a compound's enumerator; *outHasEntry says whether there was one. */

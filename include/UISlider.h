@@ -11,19 +11,25 @@
  * @file UISlider.h
  * @brief The slider element: a value in a range, by a drag, the arrows or the wheel, with an optional step and an optional default.
  *
- * A press on the track puts the thumb under the pointer; a press on the thumb holds it where it was grabbed, so a click on it
- * changes nothing. Dragging then maps the pointer to the value, clamped when the pointer leaves the box, the screen or the
- * window: past an end the value is exactly at the limit. The arrows step (the ui_left and ui_right actions' keys, repeats
- * following), Home and End jump. The wheel changes it only while it is focused or with Ctrl: otherwise it goes on up the tree, so
- * scrolling a panel never changes a value by accident. The reset action puts it back to its default, also while the pointer is only
- * over it. A change posts UIElementEvent_Changed each time the value moves, then UIElementEvent_Committed at the release or the
- * key's release (a wheel notch and a reset are whole changes: both at once) unless the value ended where it began; Escape during
- * one puts the first value back and posts UIElementEvent_Cancelled. A press that stops reaching it ends the change at once, with its
- * commit. The events carry the value as a double. Code setting the value posts nothing, and a value that is not a finite number is
- * refused. It also posts the events every element shares (UIElement_PostMouseEvents).
+ * It is an edit element (UIWidget.h, "EDIT ELEMENTS"): moving the focus onto it changes nothing, and its keys reach it only once
+ * it is entered, by the accept action (Enter), any press on it or code; the back action (Escape) or the accept action leaves it,
+ * and Tab leaves it and goes on. A press on the track puts the thumb under the pointer; a press on the thumb holds it where it was
+ * grabbed, so a click on it changes nothing. Dragging then maps the pointer to the value, clamped when the pointer leaves the
+ * box, the screen or the window: past an end the value is exactly at the limit. Entered, the arrows step (ui_up and ui_right
+ * higher, ui_down and ui_left lower, repeats following; at an end they do nothing and are still its), Home and End jump. The wheel
+ * changes it only while it is entered or with Ctrl: otherwise it goes on up the tree, so scrolling a panel never changes a value
+ * by accident. The reset action puts it back to its default, focused or only under the pointer, entered or not. A change posts
+ * UIElementEvent_Changed each time the value moves, then UIElementEvent_Committed at the release or the key's release (each
+ * arrow press is a whole change; a wheel notch and a reset are both at once) unless the value ended where it began; Escape during
+ * one puts the first value back and posts UIElementEvent_Cancelled, and the slider stays entered. With no change going on it leaves
+ * Escape to the screen, which leaves it: the presses already committed stay. Leaving it any way ends a change in progress (a drag,
+ * a held key) with its commit, and what is left of that drag or key does nothing; a cancel by code takes the change back. A press
+ * that stops reaching it ends the change at once, with its commit. The events carry the value as a double. Code setting the value posts nothing, and a value that is not a
+ * finite number is refused. It also posts the events every element shares (UIElement_PostMouseEvents).
  *
- * Calling code uses the UISlider_* functions by widget id; widget types of their own embed the capability and call the
- * UISliderCapability_* helpers. The value's arithmetic is pure, at the end of this file.
+ * Calling code uses the UISlider_* functions by widget id; widget types of their own embed the capability, call the
+ * UISliderCapability_* helpers and are edit elements too (their descriptor's NeedsEntering). The value's arithmetic is pure, at
+ * the end of this file.
  */
 
 
@@ -91,8 +97,9 @@ typedef struct UISliderCapabilityStruct
     bool _isDragging;
     /** @brief The key whose hold is a change in progress, or GameKey_Unknown. */
     GameKey _sessionKey;
-    /** @brief The key whose change was cancelled: its repeats and release do nothing until it is pressed anew. GameKey_Unknown when none. */
-    GameKey _cancelledKey;
+    /** @brief The key whose change was cancelled, or ended by leaving the slider: its repeats and release do nothing until it is pressed
+     *  anew. GameKey_Unknown when none. */
+    GameKey _endedKey;
     /** @brief The value when the change in progress began. */
     double _sessionStartValue;
     /** @brief How far from the thumb's centre a drag holds it, in surface pixels. */
@@ -225,7 +232,7 @@ Error UISliderCapability_OnMouseInput(UISliderCapability* self, Widget* widget, 
 Error UISliderCapability_OnPressLost(UISliderCapability* self, Widget* widget, GameKey button);
 
 /**
- * @brief Interprets the wheel, which it takes only while focused or with Ctrl; call it from OnScrollInput.
+ * @brief Interprets the wheel, which it takes only while entered or with Ctrl; call it from OnScrollInput.
  * @param self The capability; must not be NULL.
  * @param widget The widget; must not be NULL.
  * @param args The input; must not be NULL.
@@ -233,6 +240,19 @@ Error UISliderCapability_OnPressLost(UISliderCapability* self, Widget* widget, G
  * @returns Success, or the event queue's error.
  */
 Error UISliderCapability_OnScrollInput(UISliderCapability* self, Widget* widget, const WidgetScrollInputArgs* args, bool* outIsHandled);
+
+/**
+ * @brief Ends the change in progress when the slider is left; call it from OnLeave.
+ *
+ * A drag or a held key's change ends there: committed on UILeaveReason_Keep (unless the value ended where it began), taken back on
+ * UILeaveReason_Cancel. What is left of it does nothing: the drag's moves and release, the key's repeats and release (until it is
+ * pressed anew). Nothing happens with no change in progress.
+ * @param self The capability; must not be NULL.
+ * @param widget The widget; must not be NULL.
+ * @param reason Why the slider was left.
+ * @returns Success, or the event queue's error.
+ */
+Error UISliderCapability_OnLeave(UISliderCapability* self, Widget* widget, UILeaveReason reason);
 
 /**
  * @brief Interprets keyboard input; call it from OnKeyboardInput.

@@ -66,8 +66,8 @@
             "fill": { "kind": "flat", "colors": { "normal": "#6f8fc4", "hovered": "#86a4d6", "disabled": "#44474e" } },
             "thumb": {
                 "kind": "flat",
-                "colors": { "normal": "#c8ccd4", "hovered": "#e0e3e8", "pressed": "#9ec1ff", "focused": "#d6dbe4", "disabled": "#5a5f68" },
-                "outline": { "thickness": 1, "colors": { "normal": "#54585f", "focused": "#9ec1ff" } }
+                "colors": { "normal": "#c8ccd4", "hovered": "#e0e3e8", "pressed": "#9ec1ff", "focused": "#d6dbe4", "disabled": "#5a5f68", "entered": "#7fd69a" },
+                "outline": { "thickness": 1, "colors": { "normal": "#54585f", "focused": "#9ec1ff", "entered": "#2f8a4c" } }
             }
         }
     }

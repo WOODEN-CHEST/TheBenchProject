@@ -110,7 +110,13 @@ Error WorldScreenHost_UpdateContinued(WorldScreenHost* self, UIScreen* screen, P
     }
     if (self->_isFocused && !self->_isPointed)
     {
-        self->_isFocused = false; // looked away: the screen gets no input
+        // Looked away: the screen gets no input, and what was being edited on it is left.
+        self->_isFocused = false;
+        Error LeaveResult = UIScreen_LeaveWidget(screen, UILeaveReason_Keep);
+        if (LeaveResult.Code != ErrorCode_Success)
+        {
+            return LeaveResult;
+        }
     }
     if (!self->_isFocused)
     {
@@ -166,19 +172,21 @@ Error WorldScreenHost_UpdateContinued(WorldScreenHost* self, UIScreen* screen, P
     if (!IsTyping && (GameInput_IsActionPressed(input, GameAction_UIBack)
         || GameInput_IsActionPressed(input, GameAction_Pause)))
     {
-        // An Escape the UI did not use lets go of the screen, and does not reach the game as pause.
+        // An Escape the UI did not use lets go of the screen, and does not reach the game as pause. What is still entered (an element
+        // that keeps its keys, or any one when pause is on a key of its own) is left, keeping.
         self->_isFocused = false;
         self->_isUseHeld = false;
         GameInput_ConsumeAction(input, GameAction_UIBack);
         GameInput_ConsumeAction(input, GameAction_Pause);
-        return Error_CreateSuccess();
+        return UIScreen_LeaveWidget(screen, UILeaveReason_Keep);
     }
     TakeKeyboard(input);
     return Error_CreateSuccess();
 }
 
-void WorldScreenHost_Release(WorldScreenHost* self)
+Error WorldScreenHost_Release(WorldScreenHost* self, UIScreen* screen)
 {
     self->_isFocused = false;
     self->_isUseHeld = false;
+    return UIScreen_LeaveWidget(screen, UILeaveReason_Keep);
 }

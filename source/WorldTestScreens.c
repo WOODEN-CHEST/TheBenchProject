@@ -559,7 +559,11 @@ static Error KeepDeskFocus(WorldTestScreens* self)
     bool IsDeskFocused = IsFocusOnDesk(self);
     if (IsInUse && !IsDeskFocused && self->_wasInUse && self->_wasDeskFocused)
     {
-        WorldScreenHost_Release(&self->_host);
+        Error Result = WorldScreenHost_Release(&self->_host, &self->_screen);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
         IsInUse = false;
     }
     else if (IsInUse && !IsDeskFocused && UIScreen_TryGetWidgetById(&self->_screen, self->_deskId, &Desk))

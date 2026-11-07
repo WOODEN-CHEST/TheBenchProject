@@ -61,7 +61,8 @@ static bool IsActivationKey(const UIScreen* screen, GameKey key)
 
 
 // Public functions: state.
-UIElementState UIElementState_Choose(bool isEnabled, bool isPressed, bool isInvalid, bool isSelected, bool isHovered, bool isFocused)
+UIElementState UIElementState_Choose(bool isEnabled, bool isPressed, bool isInvalid, bool isEntered, bool isSelected, bool isHovered,
+    bool isFocused)
 {
     if (!isEnabled)
     {
@@ -74,6 +75,10 @@ UIElementState UIElementState_Choose(bool isEnabled, bool isPressed, bool isInva
     if (isInvalid)
     {
         return UIElementState_Invalid;
+    }
+    if (isEntered)
+    {
+        return UIElementState_Entered;
     }
     if (isSelected)
     {

@@ -18,7 +18,8 @@
  * passed to UIWidgetFactory_CreateWidget. It solves three problems:
  *   - Type identity without a giant central enum. Capabilities are registered first, each minting a capability id.
  *     Widget types are registered next from a WidgetTypeDescriptor (struct size, vtable, constructor, capabilities,
- *     typed properties, default focusability), each minting a type id. Both ids start at 1 (0 is invalid).
+ *     typed properties, default focusability, whether they are edit elements), each minting a type id. Both ids start at
+ *     1 (0 is invalid).
  *   - Creation that cannot half-fail. The factory builds the widget base itself: it borrows a pool slot, initializes
  *     the base, reserves the widget's id with the screen, runs the type's constructor for the concrete part and only
  *     then makes the widget alive. A failing constructor leaves nothing registered.
@@ -121,6 +122,14 @@ typedef struct WidgetTypeDescriptorStruct
     size_t PropertyCount;
     /** @brief Whether new widgets of the type can take keyboard focus (Widget_SetIsFocusable changes it per widget). */
     bool IsFocusable;
+    /** @brief Whether new widgets of the type are edit elements (Widget_SetNeedsEntering changes it per widget): keys of their
+     *  own (the arrows, typing) reach them only once they are entered, by the accept action, a press on them or code, and the
+     *  screen leaves them on the back action, the accept action, Tab and focus moving. An element that uses the arrows or
+     *  typing is one: a slider, a text box, a list. Meaningful with IsFocusable. */
+    bool NeedsEntering;
+    /** @brief Whether a press on one leaves the entering to the widget (Widget_SetEntersItself changes it per widget): a field
+     *  whose drag scrubs enters only on a click that did not move. Meaningful with NeedsEntering. */
+    bool EntersItself;
 } WidgetTypeDescriptor;
 
 /**

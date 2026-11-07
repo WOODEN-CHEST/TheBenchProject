@@ -1779,7 +1779,7 @@ The look of the UI's elements as data (`agents/UIElements.md`): a JSON file in `
 
 A part a theme leaves out draws a plain box and is logged once; `"kind": "none"` leaves a box empty on purpose.
 
-**Colors** are a color per state, in the form of "Colors" above: `{ "normal": "#3a3a3a", "hovered": "#4a4a4a" }`. The states are `normal`, `hovered`, `pressed`, `focused`, `disabled`, `selected` and `invalid`. A state left out takes `normal`'s; with no `normal` either, opaque white.
+**Colors** are a color per state, in the form of "Colors" above: `{ "normal": "#3a3a3a", "hovered": "#4a4a4a" }`. The states are `normal`, `hovered`, `pressed`, `focused`, `disabled`, `selected`, `invalid` and `entered` (an edit element, such as a slider, being edited: its keys are its own). A state left out takes `normal`'s, and `entered` takes `focused`'s first; with no `normal` either, opaque white. A nine-slice's `sources` fall back the same way.
 
 **A box:**
 ```

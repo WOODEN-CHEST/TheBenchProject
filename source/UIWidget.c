@@ -274,7 +274,7 @@ static Error ReleaseFocusIfIneligible(Widget* self)
 
 // Internal functions (declared in UIInternal.h).
 void Widget_InternalInitializeBase(Widget* self, const WidgetVTable* vtable, UIScreen* screen, uint64_t typeId,
-    bool isFocusable)
+    const WidgetTypeFlags* flags)
 {
     self->VTable = vtable;
     self->_screen = screen;
@@ -295,11 +295,15 @@ void Widget_InternalInitializeBase(Widget* self, const WidgetVTable* vtable, UIS
     self->_isInputEnabled = true;
     self->_areSubWidgetsCut = false;
     self->_isScreenRoot = false;
-    self->_isFocusable = isFocusable;
+    self->_isFocusable = flags->IsFocusable;
+    self->_needsEntering = flags->NeedsEntering;
+    self->_entersItself = flags->EntersItself;
+    self->_keepsKeysWhenEntered = false;
 
     self->_isHovered = false;
     self->_isFocused = false;
     self->_isTabbed = false;
+    self->_isEntered = false;
     self->_isActive = false;
 
     self->_isInitialized = false;
@@ -421,6 +425,30 @@ Error Widget_InternalSetTabbed(Widget* self, bool isTabbed)
         }
     }
     return UpdateActive(self);
+}
+
+Error Widget_InternalEnter(Widget* self, UIEnterCause cause)
+{
+    if (self->_isEntered || self->_isDying)
+    {
+        return Error_CreateSuccess();
+    }
+
+    self->_isEntered = true;
+    PostStateEvent(self, UIEventKind_EnteredChanged, true);
+    return (self->VTable->OnEnter != NULL) ? self->VTable->OnEnter(self, cause) : Error_CreateSuccess();
+}
+
+Error Widget_InternalLeave(Widget* self, UILeaveReason reason)
+{
+    if (!self->_isEntered || self->_isDying)
+    {
+        return Error_CreateSuccess();
+    }
+
+    self->_isEntered = false;
+    PostStateEvent(self, UIEventKind_EnteredChanged, false);
+    return (self->VTable->OnLeave != NULL) ? self->VTable->OnLeave(self, reason) : Error_CreateSuccess();
 }
 
 void Widget_InternalSetScreenRoot(Widget* self, bool isScreenRoot, uint64_t sequence)
@@ -913,6 +941,37 @@ Error Widget_SetIsFocusable(Widget* self, bool isFocusable)
     }
     self->_isFocusable = isFocusable;
     return ReleaseFocusIfIneligible(self);
+}
+
+Error Widget_SetNeedsEntering(Widget* self, bool needsEntering)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetNeedsEntering: self must not be NULL.");
+    }
+    self->_needsEntering = needsEntering;
+    bool IsEnteredWidget = !self->_isDying && (self->_id != WIDGET_ID_INVALID) && (UIScreen_GetEnteredWidgetId(self->_screen) == self->_id);
+    return (!needsEntering && IsEnteredWidget) ? UIScreen_InternalLeave(self->_screen, UILeaveReason_Keep) : Error_CreateSuccess();
+}
+
+Error Widget_SetEntersItself(Widget* self, bool entersItself)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetEntersItself: self must not be NULL.");
+    }
+    self->_entersItself = entersItself;
+    return Error_CreateSuccess();
+}
+
+Error Widget_SetKeepsKeysWhenEntered(Widget* self, bool keepsKeys)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetKeepsKeysWhenEntered: self must not be NULL.");
+    }
+    self->_keepsKeysWhenEntered = keepsKeys;
+    return Error_CreateSuccess();
 }
 
 

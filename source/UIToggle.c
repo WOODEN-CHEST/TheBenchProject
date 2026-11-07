@@ -319,8 +319,8 @@ Error UIToggleCapability_Update(UIToggleCapability* self, Widget* widget, Progra
 {
     UIScreen* Screen = Widget_GetScreen(widget);
     UIPressable_Update(&self->_press, Screen);
-    UIElementState State = UIElementState_Choose(self->_isEnabled, UIPressable_IsPressed(&self->_press), false, false,
-        Widget_IsHovered(widget), Widget_IsFocused(widget));
+    UIElementState State = UIElementState_Choose(self->_isEnabled, UIPressable_IsPressed(&self->_press), false, Widget_IsEntered(widget),
+        false, Widget_IsHovered(widget), Widget_IsFocused(widget));
     UIElementLook_Update(&self->_look, Screen, State, time.PassedTime);
     return UIElementText_Refresh(&self->_text, Screen);
 }

@@ -785,13 +785,14 @@ static void AHiddenButtonIsOutOfTheKeyboardsReach(TestRun* run)
 
 static void AButtonsStatesShowInTheirOrder(TestRun* run)
 {
-    TEST_CHECK(run, UIElementState_Choose(false, true, true, true, true, true) == UIElementState_Disabled);
-    TEST_CHECK(run, UIElementState_Choose(true, true, true, true, true, true) == UIElementState_Pressed);
-    TEST_CHECK(run, UIElementState_Choose(true, false, true, true, true, true) == UIElementState_Invalid);
-    TEST_CHECK(run, UIElementState_Choose(true, false, false, true, true, true) == UIElementState_Selected);
-    TEST_CHECK(run, UIElementState_Choose(true, false, false, false, true, true) == UIElementState_Hovered);
-    TEST_CHECK(run, UIElementState_Choose(true, false, false, false, false, true) == UIElementState_Focused);
-    TEST_CHECK(run, UIElementState_Choose(true, false, false, false, false, false) == UIElementState_Normal);
+    TEST_CHECK(run, UIElementState_Choose(false, true, true, true, true, true, true) == UIElementState_Disabled);
+    TEST_CHECK(run, UIElementState_Choose(true, true, true, true, true, true, true) == UIElementState_Pressed);
+    TEST_CHECK(run, UIElementState_Choose(true, false, true, true, true, true, true) == UIElementState_Invalid);
+    TEST_CHECK(run, UIElementState_Choose(true, false, false, true, true, true, true) == UIElementState_Entered);
+    TEST_CHECK(run, UIElementState_Choose(true, false, false, false, true, true, true) == UIElementState_Selected);
+    TEST_CHECK(run, UIElementState_Choose(true, false, false, false, false, true, true) == UIElementState_Hovered);
+    TEST_CHECK(run, UIElementState_Choose(true, false, false, false, false, false, true) == UIElementState_Focused);
+    TEST_CHECK(run, UIElementState_Choose(true, false, false, false, false, false, false) == UIElementState_Normal);
 
     TestUIFixture Fixture;
     if (Construct(run, &Fixture))
@@ -1264,7 +1265,7 @@ static void ArrowsStepHomeAndEndJumpAndTheKeysReleaseCommits(TestRun* run)
         Widget* Base = NULL;
         if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
         {
-            TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Base));
+            TEST_CHECK_SUCCESS(run, UIScreen_EnterWidget(&Fixture.Screen, Id)); // Its keys are its own once it is entered.
             TestUI_Press(&Fixture, GameKey_Right);
             TestUI_Tick(run, &Fixture);
             TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 6.0);
@@ -1304,7 +1305,13 @@ static void ArrowsStepHomeAndEndJumpAndTheKeysReleaseCommits(TestRun* run)
             TestUI_Tap(run, &Fixture, GameKey_Home);
             TEST_CHECK(run, Events.Count == Count);
 
-            // Up and down are the navigation's; a key of no meaning is left alone.
+            // Up steps higher and down lower, as right and left do: all four arrows are the entered slider's. A key of no meaning
+            // is left alone.
+            TestUI_Tap(run, &Fixture, GameKey_Up);
+            TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 1.0);
+            TestUI_Tap(run, &Fixture, GameKey_Down);
+            TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 0.0);
+            TEST_CHECK(run, UIScreen_GetEnteredWidgetId(&Fixture.Screen) == Id);
             TestUI_Press(&Fixture, GameKey_A);
             TestUI_Tick(run, &Fixture);
             TEST_CHECK(run, GameInput_IsKeyDown(&Fixture.Input, GameKey_A));
@@ -1330,7 +1337,7 @@ static void TheStepActionsKeysStep(TestRun* run)
         Widget* Base = NULL;
         if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
         {
-            TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Base));
+            TEST_CHECK_SUCCESS(run, UIScreen_EnterWidget(&Fixture.Screen, Id)); // Its keys are its own once it is entered.
             GameInputBinding Binding = { .Key = GameKey_L, .Modifiers = 0U };
             TEST_CHECK_SUCCESS(run, GameInput_SetBindings(&Fixture.Input, GameAction_UIRight, &Binding, 1U));
             TestUI_Tap(run, &Fixture, GameKey_L);
@@ -1361,7 +1368,8 @@ static void EscapeDuringADragPutsTheFirstValueBack(TestRun* run)
         TestUI_Tick(run, &Fixture);
         TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 2.0);
         TEST_CHECK(run, (Events.Count == (Count + 1U)) && IsDoubleEvent(&Events, Count, Id, UIElementEvent_Cancelled, 2.0));
-        TEST_CHECK(run, UIScreen_GetFocusedWidgetId(&Fixture.Screen) == Id); // It used the Escape: its focus stays.
+        TEST_CHECK(run, UIScreen_GetFocusedWidgetId(&Fixture.Screen) == Id); // It used the Escape: its focus stays, and it is still entered.
+        TEST_CHECK(run, UIScreen_GetEnteredWidgetId(&Fixture.Screen) == Id);
         TEST_CHECK(run, !GameInput_IsKeyPressed(&Fixture.Input, GameKey_Escape));
         TestUI_Release(&Fixture, GameKey_Escape);
         TestUI_Tick(run, &Fixture);
@@ -1374,7 +1382,11 @@ static void EscapeDuringADragPutsTheFirstValueBack(TestRun* run)
         TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 2.0);
         TEST_CHECK(run, Events.Count == (Count + 1U));
 
-        // Escape with nothing in progress is not the slider's: the screen clears the focus.
+        // The press entered it, and the cancel kept it entered. Escape with nothing in progress is not the slider's: the screen
+        // leaves it (it stays focused), and the next Escape clears the focus.
+        TEST_CHECK(run, UIScreen_GetEnteredWidgetId(&Fixture.Screen) == Id);
+        TestUI_Tap(run, &Fixture, GameKey_Escape);
+        TEST_CHECK(run, (UIScreen_GetEnteredWidgetId(&Fixture.Screen) == WIDGET_ID_INVALID) && (UIScreen_GetFocusedWidgetId(&Fixture.Screen) == Id));
         TestUI_Tap(run, &Fixture, GameKey_Escape);
         TEST_CHECK(run, UIScreen_GetFocusedWidgetId(&Fixture.Screen) == WIDGET_ID_INVALID);
         TEST_CHECK(run, Events.Count == (Count + 1U));
@@ -1392,7 +1404,7 @@ static void EscapeDuringAKeysHoldPutsTheFirstValueBack(TestRun* run)
         Widget* Base = NULL;
         if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
         {
-            TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Base));
+            TEST_CHECK_SUCCESS(run, UIScreen_EnterWidget(&Fixture.Screen, Id)); // Its keys are its own once it is entered.
             TestUI_Press(&Fixture, GameKey_Right);
             TestUI_Tick(run, &Fixture);
             TestUI_Repeat(&Fixture, GameKey_Right);
@@ -1401,6 +1413,7 @@ static void EscapeDuringAKeysHoldPutsTheFirstValueBack(TestRun* run)
             TestUI_Tap(run, &Fixture, GameKey_Escape);
             TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 5.0);
             TEST_CHECK(run, IsDoubleEvent(&Events, Events.Count - 1U, Id, UIElementEvent_Cancelled, 5.0));
+            TEST_CHECK(run, UIScreen_GetEnteredWidgetId(&Fixture.Screen) == Id); // It used that Escape: still entered.
             size_t Count = Events.Count;
             TestUI_Release(&Fixture, GameKey_Right);
             TestUI_Tick(run, &Fixture);
@@ -1410,8 +1423,9 @@ static void EscapeDuringAKeysHoldPutsTheFirstValueBack(TestRun* run)
     TestUI_Deconstruct(run, &Fixture);
 }
 
-/* The wheel changes it only while focused, so scrolling a panel never changes a value by accident. */
-static void TheWheelChangesItOnlyWhileFocused(TestRun* run)
+/* The wheel changes it only while entered, so scrolling a panel never changes a value by accident: hovered or only focused, the
+ * wheel is not its. */
+static void TheWheelChangesItOnlyWhileEntered(TestRun* run)
 {
     TestUIFixture Fixture;
     TestUIEvents Events;
@@ -1429,6 +1443,11 @@ static void TheWheelChangesItOnlyWhileFocused(TestRun* run)
         if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
         {
             TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Base));
+            TestUI_Wheel(&Fixture, 1.0f);
+            TestUI_Tick(run, &Fixture);
+            TEST_CHECK(run, (GetSliderValue(run, &Fixture, Id) == 5.0) && (Events.Count == 0U));
+
+            TEST_CHECK_SUCCESS(run, UIScreen_EnterWidget(&Fixture.Screen, Id));
             TestUI_Wheel(&Fixture, 1.0f);
             TestUI_Tick(run, &Fixture);
             TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 6.0);
@@ -1662,7 +1681,7 @@ static void ARepeatOfAJumpDoesNotJumpAgain(TestRun* run)
         Widget* Base = NULL;
         if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
         {
-            TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Base));
+            TEST_CHECK_SUCCESS(run, UIScreen_EnterWidget(&Fixture.Screen, Id)); // Its keys are its own once it is entered.
             TestUI_Press(&Fixture, GameKey_Home);
             TestUI_Tick(run, &Fixture);
             TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 0.0);
@@ -1688,7 +1707,7 @@ static void ADetachedKeysChangeEndsOnceItIsBack(TestRun* run)
         Widget* Base = NULL;
         if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
         {
-            TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Base));
+            TEST_CHECK_SUCCESS(run, UIScreen_EnterWidget(&Fixture.Screen, Id)); // Its keys are its own once it is entered.
             TestUI_Press(&Fixture, GameKey_Right);
             TestUI_Tick(run, &Fixture);
             TEST_CHECK_SUCCESS(run, UIScreen_RemoveWidget(&Fixture.Screen, Base));
@@ -2671,8 +2690,8 @@ static void AButtonTakesTheWheelOnlyWhenMadeTo(TestRun* run)
     TestUI_Deconstruct(run, &Fixture);
 }
 
-/* The wheel over a slider: only focused or with Ctrl it is the slider's; otherwise it goes on up the tree to what holds it. */
-static void ASliderTakesTheWheelWhenFocusedOrWithControl(TestRun* run)
+/* The wheel over a slider: only entered or with Ctrl it is the slider's; otherwise it goes on up the tree to what holds it. */
+static void ASliderTakesTheWheelWhenEnteredOrWithControl(TestRun* run)
 {
     TestUIFixture Fixture;
     TestUIEvents Events;
@@ -2689,7 +2708,7 @@ static void ASliderTakesTheWheelWhenFocusedOrWithControl(TestRun* run)
             TestUI_Tick(run, &Fixture);
             TEST_CHECK(run, (GetSliderValue(run, &Fixture, Id) == 5.0) && (Events.Count == 0U));
 
-            // It says so to what holds it: left to them plain, stopped when focused or with Ctrl, in a change or disabled too.
+            // It says so to what holds it: left to them plain, stopped when entered or with Ctrl, in a change or disabled too.
             UISliderCapability* Slider = Widget_GetCapability(Base, UIKit_GetCapabilityId(&Fixture.Kit, UIElementCapability_Slider));
             WidgetScrollInputArgs Wheel = { .ScrollDelta = { .x = 0.0f, .y = 0.0f }, .Modifiers = 0U };
             bool IsHandled = false;
@@ -2710,7 +2729,7 @@ static void ASliderTakesTheWheelWhenFocusedOrWithControl(TestRun* run)
 
             // During a change nothing else moves it: the wheel stops there.
             Events.Count = 0U;
-            TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Base));
+            TEST_CHECK_SUCCESS(run, UIScreen_EnterWidget(&Fixture.Screen, Id));
             TestUI_Press(&Fixture, GameKey_Right);
             TestUI_Tick(run, &Fixture);
             TestUI_Wheel(&Fixture, 1.0f);
@@ -2785,10 +2804,12 @@ static void TheResetActionPutsASliderBack(TestRun* run)
             TestUI_RemovePointer(&Fixture);
             TestUI_Tick(run, &Fixture);
 
-            // Another key pressed while the action's key is down is not the action.
+            // Another key pressed while the action's key is down is not the action. Focused but not entered it hears the reset (the
+            // short list), and entered the arrows too.
             TestUI_Press(&Fixture, GameKey_Backspace);
             TestUI_Tick(run, &Fixture);
             TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 3.0);
+            TEST_CHECK_SUCCESS(run, UIScreen_EnterWidget(Screen, Id));
             TEST_CHECK_SUCCESS(run, UISlider_SetValue(Screen, Id, 8.0));
             TestUI_Press(&Fixture, GameKey_Left);
             TestUI_Tick(run, &Fixture);
@@ -3034,7 +3055,7 @@ static void AHiddenSlidersHeldKeyDoesNothingMore(TestRun* run)
         Widget* Base = NULL;
         if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
         {
-            TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Base));
+            TEST_CHECK_SUCCESS(run, UIScreen_EnterWidget(&Fixture.Screen, Id)); // Its keys are its own once it is entered.
             TestUI_Press(&Fixture, GameKey_Right);
             TestUI_Tick(run, &Fixture);
             TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 6.0);
@@ -3082,7 +3103,7 @@ static void ACancelIsFinalWhileItsKeyStaysDown(TestRun* run)
         Widget* Base = NULL;
         if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Base)))
         {
-            TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Base));
+            TEST_CHECK_SUCCESS(run, UIScreen_EnterWidget(&Fixture.Screen, Id)); // Its keys are its own once it is entered.
             TestUI_Press(&Fixture, GameKey_Right);
             TestUI_Tick(run, &Fixture);
             TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 6.0);
@@ -3552,7 +3573,7 @@ void UIElementTests_Run(TestRun* run)
         { "the_step_actions_keys_step", TheStepActionsKeysStep },
         { "escape_during_a_drag_puts_the_first_value_back", EscapeDuringADragPutsTheFirstValueBack },
         { "escape_during_a_keys_hold_puts_the_first_value_back", EscapeDuringAKeysHoldPutsTheFirstValueBack },
-        { "the_wheel_changes_it_only_while_focused", TheWheelChangesItOnlyWhileFocused },
+        { "the_wheel_changes_it_only_while_entered", TheWheelChangesItOnlyWhileEntered },
         { "bad_values_and_ranges_are_refused", BadValuesAndRangesAreRefused },
         { "disabling_cancels_a_drag_and_swallows_input", DisablingCancelsADragAndSwallowsInput },
         { "a_detached_drag_commits_at_once", ADetachedDragCommitsAtOnce },
@@ -3581,7 +3602,7 @@ void UIElementTests_Run(TestRun* run)
         { "an_element_asks_for_its_context_menu", AnElementAsksForItsContextMenu },
         { "every_element_tells_the_same_mouse_events", EveryElementTellsTheSameMouseEvents },
         { "a_button_takes_the_wheel_only_when_made_to", AButtonTakesTheWheelOnlyWhenMadeTo },
-        { "a_slider_takes_the_wheel_when_focused_or_with_control", ASliderTakesTheWheelWhenFocusedOrWithControl },
+        { "a_slider_takes_the_wheel_when_entered_or_with_control", ASliderTakesTheWheelWhenEnteredOrWithControl },
         { "the_reset_action_puts_a_slider_back", TheResetActionPutsASliderBack },
         { "only_the_drags_own_press_ends_the_drag", OnlyTheDragsOwnPressEndsTheDrag },
         { "a_hidden_sliders_held_key_does_nothing_more", AHiddenSlidersHeldKeyDoesNothingMore },

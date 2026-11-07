@@ -470,9 +470,44 @@ static Error NavigateBack(UIScreen* self, bool* outIsActed)
     return Error_CreateSuccess();
 }
 
+/* ui_next / ui_previous that moves at once: where navigation does not run it starts first, and only a start that had to move
+ * the focus counts as the step (this is not a first press that only shows the outlines). */
+static Error NavigateSequentialAtOnce(UIScreen* self, bool isForward, bool* outIsActed)
+{
+    if (!self->_isNavigating)
+    {
+        uint64_t FocusedBefore = self->_focusedWidgetId;
+        Error Result = StartNavigation(self, outIsActed);
+        if ((Result.Code != ErrorCode_Success) || !*outIsActed || (self->_focusedWidgetId != FocusedBefore))
+        {
+            return Result;
+        }
+    }
+    return NavigateSequential(self, isForward, outIsActed);
+}
+
+/* Tab going on from an entered element, or a held Tab that did: leaves it keeping what was done, moves on at once and enters
+ * the element it lands on if that is an edit element. Every hook may change the tree, so focus is read again after each. */
+static Error TabOn(UIScreen* self, bool isForward, bool* outIsActed)
+{
+    *outIsActed = false;
+    Error Result = UIScreen_InternalLeave(self, UILeaveReason_Keep);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = NavigateSequentialAtOnce(self, isForward, outIsActed);
+    if ((Result.Code != ErrorCode_Success) || !*outIsActed)
+    {
+        return Result;
+    }
+    return UIScreen_InternalEnter(self, self->_focusedWidgetId, UIEnterCause_Key); // Nothing for what is no edit element.
+}
+
 /* Consumes the action of a step that used it. For a repeating step, its keys that are still held are followed: the
- * consumption hides their auto-repeat from the usual queries. */
-static Error ApplyStep(UIScreen* self, GameActionId action, Error result, bool isActed, bool isRepeating)
+ * consumption hides their auto-repeat from the usual queries. Those of a step that went on from an entered element carry the
+ * editing on: each step they repeat enters what it lands on. */
+static Error ApplyStep(UIScreen* self, GameActionId action, Error result, bool isActed, bool isRepeating, bool isEditing)
 {
     if ((result.Code != ErrorCode_Success) || !isActed)
     {
@@ -487,6 +522,7 @@ static Error ApplyStep(UIScreen* self, GameActionId action, Error result, bool i
             if ((GameInput_GetRawKeyState(self->_input, Keys[Index]) & GAME_INPUT_KEY_STATE_DOWN) != 0)
             {
                 self->_navigationKeys[Keys[Index]] = true;
+                self->_editingKeys[Keys[Index]] = isEditing;
             }
         }
     }
@@ -494,12 +530,54 @@ static Error ApplyStep(UIScreen* self, GameActionId action, Error result, bool i
     return result;
 }
 
+/* While an edit element is entered, what it and its ancestors leave of the navigation actions is the screen's, in place of
+ * navigation's: the arrows do nothing (they never throw you out, nor reach the game), the back action leaves it with a cancel,
+ * the accept action leaves it keeping what was done, and Tab and Shift+Tab leave it and move on at once, entering the next
+ * element if that is an edit element (also with each repeat of their held key). One of them acts, in that order; every one
+ * pressed this tick is consumed, so none reaches the game and their repeats reach no one. */
+static Error RouteEnteredKeys(UIScreen* self, const bool isRepeated[NAV_REPEATING_STEP_COUNT])
+{
+    bool IsBack = GameInput_IsActionPressed(self->_input, GameAction_UIBack);
+    bool IsAccept = GameInput_IsActionPressed(self->_input, GameAction_UIAccept);
+    size_t TabIndex = NAV_REPEATING_STEP_COUNT;
+    for (size_t Index = 0; Index < NAV_REPEATING_STEP_COUNT; Index++)
+    {
+        const NavRepeatingStep* Step = &RepeatingSteps[Index];
+        if (!isRepeated[Index] && !GameInput_IsActionPressedOrRepeated(self->_input, Step->Action))
+        {
+            continue;
+        }
+        if (Step->IsSequential && !IsBack && !IsAccept && (TabIndex == NAV_REPEATING_STEP_COUNT))
+        {
+            TabIndex = Index; // It acts below, and its step consumes it.
+        }
+        else
+        {
+            GameInput_ConsumeAction(self->_input, Step->Action);
+        }
+    }
+    if (IsBack || IsAccept)
+    {
+        GameInput_ConsumeAction(self->_input, GameAction_UIBack);
+        GameInput_ConsumeAction(self->_input, GameAction_UIAccept);
+        return UIScreen_InternalLeave(self, IsBack ? UILeaveReason_Cancel : UILeaveReason_Keep);
+    }
+    if (TabIndex == NAV_REPEATING_STEP_COUNT)
+    {
+        return Error_CreateSuccess();
+    }
+    const NavRepeatingStep* Tab = &RepeatingSteps[TabIndex];
+    bool IsActed = false;
+    Error Result = TabOn(self, Tab->IsForward, &IsActed);
+    return ApplyStep(self, Tab->Action, Result, true, true, true); // It left the element: used, wherever it went.
+}
+
 
 // Static functions: held keys.
 /* Follows the keys navigation consumed while they are held: marks the repeating steps whose action one of them
- * auto-repeats this tick (with the modifiers held now), and forgets the keys that are up or pressed anew (a new press
- * is unconsumed, so it is routed as usual). */
-static void FollowNavigationKeys(UIScreen* self, bool isRepeated[NAV_REPEATING_STEP_COUNT])
+ * auto-repeats this tick (with the modifiers held now), and which of them a key that carries editing on repeats, and forgets
+ * the keys that are up or pressed anew (a new press is unconsumed, so it is routed as usual). */
+static void FollowNavigationKeys(UIScreen* self, bool isRepeated[NAV_REPEATING_STEP_COUNT], bool isEditing[NAV_REPEATING_STEP_COUNT])
 {
     for (int32_t KeyIndex = (int32_t)GameKey_Unknown + 1; KeyIndex < (int32_t)GameKey_Count; KeyIndex++)
     {
@@ -520,7 +598,9 @@ static void FollowNavigationKeys(UIScreen* self, bool isRepeated[NAV_REPEATING_S
         }
         for (size_t StepIndex = 0; StepIndex < NAV_REPEATING_STEP_COUNT; StepIndex++)
         {
-            isRepeated[StepIndex] = isRepeated[StepIndex] || UIScreen_InternalIsActionKey(self->_input, RepeatingSteps[StepIndex].Action, Key);
+            bool IsStepKey = UIScreen_InternalIsActionKey(self->_input, RepeatingSteps[StepIndex].Action, Key);
+            isRepeated[StepIndex] = isRepeated[StepIndex] || IsStepKey;
+            isEditing[StepIndex] = isEditing[StepIndex] || (IsStepKey && self->_editingKeys[KeyIndex]);
         }
     }
 }
@@ -544,7 +624,15 @@ void UIScreen_InternalReleaseNavigation(UIScreen* self)
 Error UIScreen_InternalRouteNavigation(UIScreen* self)
 {
     bool IsRepeated[NAV_REPEATING_STEP_COUNT] = { false };
-    FollowNavigationKeys(self, IsRepeated);
+    bool IsEditing[NAV_REPEATING_STEP_COUNT] = { false };
+    FollowNavigationKeys(self, IsRepeated, IsEditing);
+
+    // An entered element's keys are the screen's, not navigation's; one that keeps them leaves them unconsumed for its reader.
+    const Widget* Entered = UIScreen_InternalResolve(self, self->_enteredWidgetId);
+    if (Entered != NULL)
+    {
+        return Entered->_keepsKeysWhenEntered ? Error_CreateSuccess() : RouteEnteredKeys(self, IsRepeated);
+    }
 
     Error Result = Error_CreateSuccess();
     for (size_t Index = 0; (Result.Code == ErrorCode_Success) && (Index < NAV_REPEATING_STEP_COUNT); Index++)
@@ -553,22 +641,29 @@ Error UIScreen_InternalRouteNavigation(UIScreen* self)
         if (IsRepeated[Index] || GameInput_IsActionPressedOrRepeated(self->_input, Step->Action))
         {
             bool IsActed = false;
-            Result = Step->IsSequential ? NavigateSequential(self, Step->IsForward, &IsActed)
-                : NavigateArrow(self, Step->Direction, &IsActed);
-            Result = ApplyStep(self, Step->Action, Result, IsActed, true);
+            if (Step->IsSequential && IsEditing[Index])
+            {
+                Result = TabOn(self, Step->IsForward, &IsActed); // A held Tab that went on from an entered element.
+            }
+            else
+            {
+                Result = Step->IsSequential ? NavigateSequential(self, Step->IsForward, &IsActed)
+                    : NavigateArrow(self, Step->Direction, &IsActed);
+            }
+            Result = ApplyStep(self, Step->Action, Result, IsActed, true, IsEditing[Index]);
         }
     }
     if ((Result.Code == ErrorCode_Success) && GameInput_IsActionPressed(self->_input, GameAction_UIAccept))
     {
         bool IsActed = false;
         Result = NavigateAccept(self, &IsActed);
-        Result = ApplyStep(self, GameAction_UIAccept, Result, IsActed, false);
+        Result = ApplyStep(self, GameAction_UIAccept, Result, IsActed, false, false);
     }
     if ((Result.Code == ErrorCode_Success) && GameInput_IsActionPressed(self->_input, GameAction_UIBack))
     {
         bool IsActed = false;
         Result = NavigateBack(self, &IsActed);
-        Result = ApplyStep(self, GameAction_UIBack, Result, IsActed, false);
+        Result = ApplyStep(self, GameAction_UIBack, Result, IsActed, false, false);
     }
     return Result;
 }

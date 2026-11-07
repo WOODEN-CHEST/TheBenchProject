@@ -87,7 +87,7 @@
                 "kind": "nine_slice",
                 "texture": "tbp:ui_knob",
                 "margins": 5,
-                "colors": { "normal": "#e6d8b4", "hovered": "#f6ead0", "pressed": "#d2a65a", "focused": "#f0e2bc", "disabled": "#6a6250" }
+                "colors": { "normal": "#e6d8b4", "hovered": "#f6ead0", "pressed": "#d2a65a", "focused": "#f0e2bc", "disabled": "#6a6250", "entered": "#9fdc84" }
             }
         }
     }

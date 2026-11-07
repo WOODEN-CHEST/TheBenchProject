@@ -695,19 +695,20 @@ Current module list:
 * UI framework (UIFramework.md) - The in-game UI, on any surface (the window or a texture in the world: the host passes
   the pointer, the keyboard and the viewport). A screen holds a tree of widgets with slot + generation ids, routes the
   tick's GameInput (a held press owns the pointer past the surface, the focused widget gets every key first, consumed input does not reach the game), drives keyboard
-  navigation through actions, runs typed property animations, queues notifications to the end of its update, lays
+  navigation through actions and the one rule for edit elements (keys of their own only once entered by Enter, a press or code; Escape, Enter, Tab and focus moving leave them; a held Tab
+  carries editing on), runs typed property animations, queues notifications to the end of its update, lays
   widgets out in update and draws them with nested clipping. Widget_Destroy is deferred and takes the whole subtree.
   Covers these modules (UIScreen is split by job behind the private source/UIInternal.h):
-  * UIInput - The argument structs handed to a widget's input hooks (keys and buttons are GameKeys), the layers of a screen's roots and the pointer's shapes.
+  * UIInput - The argument structs handed to a widget's input hooks (keys and buttons are GameKeys), what entered an edit element and why it was left, the layers of a screen's roots and the pointer's shapes.
   * UIAnimation - Typed property values (UIPropertyValue), easing methods, keyframes, keyframe validation and
     evaluation. Pure data + math.
   * UIRenderContext - The widget-local drawing device: wraps the renderer's RenderContext with the widget's absolute box + accumulated tint, and maps widget-local [0;1] draws onto the screen.
   * UIWidgetFactory - Registers capabilities and widget types (a descriptor: struct size, vtable, constructor,
-    capabilities, typed properties, focusability), owns per-type pools, creates widgets (base first, id reserved,
+    capabilities, typed properties, focusability, whether they are edit elements), owns per-type pools, creates widgets (base first, id reserved,
     constructor, then alive: a failed constructor leaves nothing) and counts live widgets. One per program.
-  * UIWidget - The abstract widget base (vtable incl. Layout, keyboard first refusal, a lost press and the wheel, geometry/flags/state, subwidgets
+  * UIWidget - The abstract widget base (vtable incl. Layout, keyboard first refusal, a lost press and the wheel, entering and leaving, geometry/flags/state, subwidgets
     with a separate draw order, moving whole to another parent, capabilities, typed properties, deferred destroy); concrete widgets embed it first.
-  * UIScreen - The context: id registry, roots, focus, input routing, keyboard navigation + outlines, animations,
+  * UIScreen - The context: id registry, roots, focus, the entered edit element, input routing, keyboard navigation + outlines, animations,
     notifications (subscriptions; queued, delivered at the end of UIScreen_Update), layout pass and rendering.
   * UIPlacement - Where a widget sits in UI pixels: placements (anchors and offsets), insets and a stack's hints, with their pure arithmetic, each edge a whole
     surface pixel. Placements are applied in the layout pass; a widget's preferred size is its Measure hook, cached (UIFramework.md, "UI pixels").
@@ -719,7 +720,7 @@ Current module list:
   * WorldScreenHost - The host of a UI shown on a screen in the world: its pointer where the player points (the aim or
     the free cursor, through WorldScreens), the keyboard while the player uses the screen (the use action or a click
     focuses it; the screen reads first, then the host takes the whole keyboard), letting go on an unused Escape or when
-    the player points away; a held press keeps the screen and follows the ray along its plane (UIFramework.md, "World screens").
+    the player points away (each Escape one level out; letting go leaves the entered element); a held press keeps the screen and follows the ray along its plane (UIFramework.md, "World screens").
   * LabelWidget - The first concrete widget: displays a (possibly multi-line) rich text with per-line alignment and bound handling (cut/wrap/resize/wrap-then-resize/wrap-then-cut). Embeds a TextDocument and a TextLayout (TextDocument.md), lays out in Update, draws in Render. Auto-fits its widget box to the rendered text.
   Also adds 2D rectangle/outline/line primitives to the Renderer module.
 * UI elements (UIElements.md) - What calling code builds a UI from, sized in UI pixels, its looks data: the same elements in flat boxes or nine-slice art with no
@@ -737,8 +738,8 @@ Current module list:
   * UILabel - LabelWidget as an element of the kit: its text size in UI pixels, its font and colours from the theme.
   * UIButton - Activates by its click mode and buttons, or Enter or Space; an enabled flag (a disabled button swallows the click); an optional toggled look; it can take the wheel.
   * UIToggle - A checkbox: on, off or mixed, with the same click modes.
-  * UISlider - A value in a range, by a drag that goes past the window to its limit, the arrows or the wheel (only while focused or with Ctrl), with an optional step and default (the reset action); changed, committed, cancelled.
-  * UIGalleryFrame - A game frame showing every element in every state and trying the routing, started with --ui-gallery: T the theme, + and - the scale, P the scale policy, L the event log.
+  * UISlider - A value in a range, by a drag that goes past the window to its limit, the arrows or the wheel (only while entered or with Ctrl), with an optional step and default (the reset action); changed, committed, cancelled. An edit element: its four arrows are its own only once Enter, a press or code entered it.
+  * UIGalleryFrame - A game frame showing every element in every state and trying the routing and the keyboard (a box to go into, whose sliders Enter enters), started with --ui-gallery: T the theme, + and - the scale, P the scale policy, L the event log.
 * Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text as a STRICT TREE: a parent owns
   its children, a tree has at most 64 levels, components own copies of their strings, and fonts and sprite animations
   are named, never held. Every change gives the component and its ancestors a new revision. Covers three modules (plus

@@ -186,17 +186,20 @@ static inline UIElementOptions UIElementOptions_Create(void)
 /**
  * @brief The one state an element shows, from everything that holds for it.
  *
- * Disabled first, then pressed, invalid, selected, hovered and focused: a focused button under the pointer shows as hovered
- * (keyboard navigation has its own outline), a selected one stays selected under the pointer.
+ * Disabled first, then pressed, invalid, entered, selected, hovered and focused: a focused button under the pointer shows as
+ * hovered (keyboard navigation has its own outline), a selected one stays selected under the pointer, and an entered edit
+ * element shows so under the pointer too, so the player can tell its keys are its own.
  * @param isEnabled Whether it takes input.
  * @param isPressed Whether it is being pressed.
  * @param isInvalid Whether its value is refused.
+ * @param isEntered Whether it is an edit element that was entered (Widget_IsEntered).
  * @param isSelected Whether it is the chosen one.
  * @param isHovered Whether the pointer is over it.
  * @param isFocused Whether it has the keyboard's focus.
  * @returns The state.
  */
-UIElementState UIElementState_Choose(bool isEnabled, bool isPressed, bool isInvalid, bool isSelected, bool isHovered, bool isFocused);
+UIElementState UIElementState_Choose(bool isEnabled, bool isPressed, bool isInvalid, bool isEntered, bool isSelected, bool isHovered,
+    bool isFocused);
 
 
 // The look.

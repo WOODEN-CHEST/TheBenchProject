@@ -98,7 +98,7 @@ static Error EndSession(UISliderCapability* self, Widget* widget)
 /* The change in progress is taken back; while its key stays down, what is left of it does nothing. */
 static Error CancelSession(UISliderCapability* self, Widget* widget)
 {
-    self->_cancelledKey = self->_sessionKey;
+    self->_endedKey = self->_sessionKey;
     self->_isDragging = false;
     self->_sessionKey = GameKey_Unknown;
     self->_value = self->_sessionStartValue;
@@ -152,16 +152,17 @@ static Error BeginDrag(UISliderCapability* self, Widget* widget, const WidgetMou
     return MoveTo(self, widget, GetPointerValue(self, widget, args));
 }
 
-/* A key's move: an arrow by a step, Home and End to the ends. Returns false for another key. */
+/* A key's move: an arrow by a step (up and right higher, down and left lower), Home and End to the ends. Returns false for
+ * another key. */
 static bool TryGetKeyTarget(const UISliderCapability* self, const UIScreen* screen, GameKey key, bool* outIsRepeatable, double* outTarget)
 {
     *outIsRepeatable = true;
-    if (UIElement_IsActionKey(screen, GameAction_UILeft, key))
+    if (UIElement_IsActionKey(screen, GameAction_UILeft, key) || UIElement_IsActionKey(screen, GameAction_UIDown, key))
     {
         *outTarget = UISlider_GetStepped(self->_value, self->_minimum, self->_maximum, self->_hasStep, self->_step, -1.0);
         return true;
     }
-    if (UIElement_IsActionKey(screen, GameAction_UIRight, key))
+    if (UIElement_IsActionKey(screen, GameAction_UIRight, key) || UIElement_IsActionKey(screen, GameAction_UIUp, key))
     {
         *outTarget = UISlider_GetStepped(self->_value, self->_minimum, self->_maximum, self->_hasStep, self->_step, 1.0);
         return true;
@@ -280,6 +281,12 @@ static Error UISliderWidget_OnKeyboardInputVT(void* self, const WidgetKeyboardIn
     return UISliderCapability_OnKeyboardInput(&Slider->Slider, &Slider->Base, args, outIsHandled);
 }
 
+static Error UISliderWidget_OnLeaveVT(void* self, UILeaveReason reason)
+{
+    UISliderWidget* Slider = self;
+    return UISliderCapability_OnLeave(&Slider->Slider, &Slider->Base, reason);
+}
+
 static void* ResolveLook(void* widget)
 {
     return &((UISliderWidget*)widget)->Slider._look;
@@ -300,6 +307,7 @@ static const WidgetVTable UISliderWidgetVTable =
     .OnPressLost = UISliderWidget_OnPressLostVT,
     .OnScrollInput = UISliderWidget_OnScrollInputVT,
     .OnKeyboardInput = UISliderWidget_OnKeyboardInputVT,
+    .OnLeave = UISliderWidget_OnLeaveVT,
     .Measure = UISliderWidget_MeasureVT
 };
 
@@ -444,7 +452,7 @@ Error UISliderCapability_Construct(UISliderCapability* self, Widget* widget, con
     self->_default = Options->Default;
     self->_isDragging = false;
     self->_sessionKey = GameKey_Unknown;
-    self->_cancelledKey = GameKey_Unknown;
+    self->_endedKey = GameKey_Unknown;
     self->_sessionStartValue = self->_value;
     self->_grabOffsetPixels = 0.0;
     if (!Options->IsEnabled)
@@ -472,8 +480,8 @@ Error UISliderCapability_Update(UISliderCapability* self, Widget* widget, Progra
             Result = EndSession(self, widget);
         }
     }
-    UIElementState State = UIElementState_Choose(self->_isEnabled, self->_isDragging, false, false, Widget_IsHovered(widget),
-        Widget_IsFocused(widget));
+    UIElementState State = UIElementState_Choose(self->_isEnabled, self->_isDragging, false, Widget_IsEntered(widget), false,
+        Widget_IsHovered(widget), Widget_IsFocused(widget));
     UIElementLook_Update(&self->_look, Screen, State, time.PassedTime);
     return Result;
 }
@@ -513,9 +521,22 @@ Error UISliderCapability_OnPressLost(UISliderCapability* self, Widget* widget, G
     return ((button == GameKey_MouseLeft) && self->_isDragging) ? EndSession(self, widget) : Error_CreateSuccess();
 }
 
+Error UISliderCapability_OnLeave(UISliderCapability* self, Widget* widget, UILeaveReason reason)
+{
+    if (!IsInSession(self))
+    {
+        return Error_CreateSuccess();
+    }
+    // Left, the slider's keys are not its own any more, so its change ends here; what is left of the drag or the key does nothing.
+    GameKey Key = self->_sessionKey;
+    Error Result = (reason == UILeaveReason_Cancel) ? CancelSession(self, widget) : EndSession(self, widget);
+    self->_endedKey = Key;
+    return Result;
+}
+
 Error UISliderCapability_OnScrollInput(UISliderCapability* self, Widget* widget, const WidgetScrollInputArgs* args, bool* outIsHandled)
 {
-    if (!Widget_IsFocused(widget) && ((args->Modifiers & GAME_KEY_MODIFIER_CONTROL) == 0U))
+    if (!Widget_IsEntered(widget) && ((args->Modifiers & GAME_KEY_MODIFIER_CONTROL) == 0U))
     {
         return Error_CreateSuccess();
     }
@@ -536,14 +557,14 @@ Error UISliderCapability_OnKeyboardInput(UISliderCapability* self, Widget* widge
     {
         return Error_CreateSuccess();
     }
-    if (args->Key == self->_cancelledKey)
+    if (args->Key == self->_endedKey)
     {
         if (args->Type != UIKeyboardInputType_KeyPress)
         {
             *outIsHandled = true;
             return Error_CreateSuccess();
         }
-        self->_cancelledKey = GameKey_Unknown; // Pressed anew: a key like any other again.
+        self->_endedKey = GameKey_Unknown; // Pressed anew: a key like any other again.
     }
     if (args->Type == UIKeyboardInputType_KeyRelease)
     {
@@ -610,7 +631,8 @@ Error UISlider_RegisterType(UIWidgetFactory* factory, uint64_t lookCapabilityId,
         .CapabilityCount = sizeof(Capabilities) / sizeof(Capabilities[0]),
         .Properties = NULL,
         .PropertyCount = 0U,
-        .IsFocusable = true
+        .IsFocusable = true,
+        .NeedsEntering = true
     };
     return UIWidgetFactory_RegisterType(factory, &Descriptor, outTypeId);
 }

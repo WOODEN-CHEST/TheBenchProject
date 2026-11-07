@@ -14,16 +14,17 @@ The elements calling code builds a UI from (the kit, panels, buttons, stacks, th
 ## Modules
 
 - **UIInput** (`UIInput.h`, header-only): the argument structs handed to a widget's input hooks
-  (`WidgetHoverArgs`, `WidgetMouseInputArgs`, `WidgetScrollInputArgs`, `WidgetKeyboardInputArgs`), the layers of a screen's roots
-  (`UIScreenLayer`) and the pointer's shapes (`UICursorShape`). Keys and mouse buttons are `GameKey`s ([GameInput.md](GameInput.md)).
+  (`WidgetHoverArgs`, `WidgetMouseInputArgs`, `WidgetScrollInputArgs`, `WidgetKeyboardInputArgs`), what entered an edit element and why it was
+  left (`UIEnterCause`, `UILeaveReason`), the layers of a screen's roots (`UIScreenLayer`) and the pointer's shapes (`UICursorShape`). Keys and
+  mouse buttons are `GameKey`s ([GameInput.md](GameInput.md)).
 - **UIAnimation** (`UIAnimation.h/.c`): typed property values (`UIPropertyType`, `UIPropertyData`, `UIPropertyValue`
   and its `UIPropertyValue_From*` helpers), easing (`UIInterpolation`), keyframes, `UIAnimation_ValidateKeyframes` and
   `UIAnimation_EvaluateKeyframes`. Pure data and math.
 - **UIRenderContext** (`UIRenderContext.h/.c`): the widget-local drawing device handed to `Render`: the renderer's
   `RenderContext` plus the widget's absolute box and accumulated tint.
 - **UIWidgetFactory** (`UIWidgetFactory.h/.c`): one per program. Registers capabilities and widget types (a
-  `WidgetTypeDescriptor`: struct size, vtable, constructor, capabilities, typed properties, default focusability), owns
-  a pool per type, creates widgets (`UIWidgetFactory_CreateWidget`) and counts each type's live widgets.
+  `WidgetTypeDescriptor`: struct size, vtable, constructor, capabilities, typed properties, default focusability, whether its widgets are edit
+  elements and enter themselves), owns a pool per type, creates widgets (`UIWidgetFactory_CreateWidget`) and counts each type's live widgets.
 - **UIWidget** (`UIWidget.h/.c`): the abstract widget base (vtable, identity, geometry, flags, state, subwidgets,
   capabilities, typed properties, `Widget_Destroy`). Concrete widgets embed it first.
 - **UIScreen** (`UIScreen.h`, split by job into `source/UIScreen.c` (registry, roots, draw order, destruction,
@@ -163,20 +164,22 @@ What the host does each tick:
   the movement actions included. The mouse is not the keyboard's, so the view still turns and the pointer follows the
   aim.
 - **Letting go**: an Escape (`ui_back` or `pause`) the UI leaves unused releases the screen and is consumed (it does not
-  pause the game); one the UI uses (clearing its focus, ending navigation) does not, and neither does a press in a tick
-  whose typed text the UI took (a `pause` bound to a letter types it into a field; an Escape in that same tick needs
-  pressing again). A `ui_back` bound to a letter is still the UI's navigation first: a widget that takes text should
-  claim the key presses that type it, or that letter clears its focus. Pointing away from the picture with no press held
-  releases it too: a screen the player no longer points at gets no input. `WorldScreenHost_Release` lets go at once (the
-  object went away).
+  pause the game); one the UI uses (leaving an entered element, clearing its focus, ending navigation) does not, and neither does a press in a
+  tick whose typed text the UI took (a `pause` bound to a letter types it into a field; an Escape in that same tick needs
+  pressing again). A `ui_back` bound to a letter passes an edit element that is not entered (it hears only the short list), so it clears the
+  focus; once the element is entered it hears that letter first, and a text box claims the presses that type text, so the letter types.
+  Pointing away from the picture with no press held releases it too: a screen the player no longer points at gets no input.
+  `WorldScreenHost_Release(host, screen)` lets go at once (the object went away). However the screen is let go, its entered edit element is left,
+  keeping what was done (`UILeaveReason_Keep`); the game window losing the system's focus does not leave it.
 
-The UI's own focus is the UI's: the first Escape over a focused widget clears that focus, and only the next lets go of
-the screen. Content that wants one Escape to give control back keeps a widget focused while the screen is in use and
-releases the host when the UI lets go of it (the test frame's monitor does: its full-screen desk widget). A UI frame
+**Each Escape goes one level out**: it leaves an entered edit element (a cancel), then clears the UI's focus (or leaves the group navigation
+entered), then lets go of the screen. Content that wants one Escape less keeps a widget focused while the screen is in use and releases the
+host when the UI lets go of it (the test frame's monitor does: its full-screen desk widget, so clearing the focus there lets go). A UI frame
 above the world that always has the keyboard (the UI test frame) still reads Tab and the arrows first. Tests:
 `tests/WorldScreenTests.c` (a probe screen: the pointer, focus by use or a click, the keyboard taken after the UI read
 it, the use press neither typing nor reaching the UI, keys and clicks left to the game while the screen is not in use,
-letting go by Escape, pause or pointing away, a press held off the picture).
+letting go by Escape, pause or pointing away, a press held off the picture, the Escape chain out of an edit element and a letter bound to
+`ui_back`).
 
 ## Widget lifecycle
 
@@ -227,32 +230,89 @@ The screen routes, in this order, from its `UIScreenInput`:
 3. **Wheel.** Wheel movement over a widget is consumed from the game, whether anything uses it or not. It goes to that widget's `OnScrollInput`, then up through its
    ancestors that still take input (a hook may have taken one away), until one sets `*outIsHandled`.
 4. **Keys and text** (when the screen has the keyboard). The **focused** widget gets every key first (Tab, arrows, Enter
-   and Escape included), then its ancestors that still take input, until one sets `*outIsHandled` in `OnKeyboardInput`. A key **press** of the reset, copy or paste action
+   and Escape included), then its ancestors that still take input, until one sets `*outIsHandled` in `OnKeyboardInput`. A focused **edit
+   element that is not entered** is the exception (below, "Entering elements"): it hears only the presses of the short list, and every other
+   key and the typed text pass it by to its ancestors. A key **press** of the reset, copy or paste action
    (`tbp:ui_reset`, `tbp:ui_copy`, `tbp:ui_paste`) they leave goes on to the **hovered** widget and up its ancestors, with `IsHoverDelivery` set, so a focused widget can
    hear it twice for two reasons. Nothing else goes this way, no repeat and no typed text. A
    handled key is consumed and **owned** by the widget that handled it until it is released: the key's repeats and
    release go to that widget alone, even after focus moved (and are dropped once it is destroyed, detached or
    input-disabled). Typed text follows the focused path (if any codepoint is handled, the tick's text is consumed).
 5. **Keyboard navigation** acts on the navigation actions nobody handled (`GameAction_UI*`, rebindable), and consumes
-   only what it uses:
+   only what it uses. While an edit element is entered, the screen's own rules for it take navigation's place (below):
    - `ui_next` / `ui_previous` (Tab / Shift+Tab) move focus between the current level's focusable widgets in reading
      order (top row first, then left); the arrows (`ui_up` ...) move to the nearest one in that direction. The first
      such key only starts navigation (outlines appear) where focus is. Holding one keeps moving with the key's
      auto-repeat: navigation consumed the key, so it follows that key's repeats itself (with the modifiers held at each
      repeat) until the key is released or navigation ends.
-   - `ui_accept` (Enter) enters the focused widget when it contains focusable widgets: it becomes **tabbed** (green
+   - `ui_accept` (Enter) enters the focused widget when it contains focusable widgets (a **group**): it becomes **tabbed** (green
      outline) and focus moves to its first one. This also starts navigation, so Enter opens a container focused by a
-     click. Otherwise Enter is left to the game.
+     click. On an edit element Enter enters it instead (below). Otherwise Enter is left to the game.
    - `ui_back` (Escape) leaves the entered widget (it is focused again); at the top level it ends navigation and clears
      focus; outside navigation it clears focus; with nothing to do it is left to the game (where it is `pause`).
    - Non-focusable widgets are transparent to navigation: their focusable descendants belong to the enclosing level.
-   - While navigating the white outline marks the focused widget; navigation re-enters where focus is.
+   - While navigating the white outline marks the focused widget, and a green one an entered edit element (as it marks the groups navigation
+     entered); navigation re-enters where focus is.
    - The entered (tabbed) widgets always lead to focus. When focus moves without navigation (`UIScreen_SetFocusedWidget`,
      a hook), the next navigation step leaves and enters widgets to match; with nothing focused (the focused widget was
      destroyed) navigation carries on at its level. A widget a hook detaches is never left tabbed or focused.
 
 Whatever is not consumed reaches the game: the frame's game logic (and frames below) read it through the same
 `GameInput`. Widgets that need more read the input of the running update with `UIScreen_GetInput`.
+
+### Entering elements
+
+One keyboard rule for every element: **moving the focus never changes anything**, and nothing focus passes over takes Tab or the arrows. An
+element is one of three kinds, by what Enter does:
+
+| Kind | What it is | Enter, or a press | Focused but not entered, it hears |
+|---|---|---|---|
+| **Press** | a button, a toggle, a menu item | activates it | every key first |
+| **Group** | a focusable widget holding focusable widgets | goes in (navigation, above) | every key first |
+| **Edit** | a type whose descriptor says `NeedsEntering` (`Widget_SetNeedsEntering` per widget): a slider, a text box, a list, a world view | enters it | the presses of the short list only |
+
+An edit element that is **not entered** hears only the presses of the short list, the reset, copy, paste and context menu actions
+(`tbp:ui_reset`, `tbp:ui_copy`, `tbp:ui_paste`, `tbp:ui_context_menu`): every other key and the typed text pass it by as if it had not handled
+them, on to its ancestors, then navigation, then the game. So the arrows and Tab move past it and typing on it does nothing.
+
+**Entering.** At most one widget of a screen is entered (`UIScreen_GetEnteredWidgetId`, `Widget_IsEntered`), and it is always the focused one,
+so focus moving anywhere leaves it first. It is kept apart from navigation's tabbed path: pointer movement ends navigation, never an edit.
+- **Enter** (`ui_accept`) on a focused edit element that is not entered: the screen takes that press at the element's place in the chain,
+  before its ancestors, so a dialog around a field cannot swallow it. It is consumed until released, so its repeats do nothing; an Enter
+  held from before the focus came enters nothing.
+- **A press of any mouse button** on it: the press focuses it as usual and enters it before the press arrives, so the element sees itself
+  entered in its `ButtonPress`. Only on a screen that has the keyboard: entering gives the element its keys, so on a world screen not in use
+  (a right or middle click: only a left click or the use action takes the keyboard) the press only focuses it. A type that enters itself (`EntersItself` in the descriptor, `Widget_SetEntersItself`) is only focused: it
+  calls `UIScreen_EnterWidget` when it chooses, as a field whose drag scrubs does on a click that did not move.
+- **Code:** `UIScreen_EnterWidget(screen, id)` focuses and enters an edit element (a popup's list, a dialog's first field, the console's
+  line); it is refused for a widget that is no edit element or cannot take focus. Only the focused widget is entered, so a focus hook that
+  moves the focus elsewhere meanwhile wins.
+- **Tab** out of another entered element (below).
+
+The element hears `OnEnter(self, cause)`: `UIEnterCause_Key`, `_Press` or `_Code` (a text box selects everything on a key and places the
+caret on a press).
+
+**Inside**, the element hears every key first, then its ancestors, as a focused widget does; a console's history or a dialog's default
+button can still take what the element leaves. What both leave is the screen's, in place of navigation's:
+- **Escape** (`ui_back`): leaves with `UILeaveReason_Cancel`.
+- **Enter** (`ui_accept`): leaves with `UILeaveReason_Keep`.
+- **Tab and Shift+Tab** (`ui_next`, `ui_previous`): leave with `Keep` and move to the next or previous candidate at once, starting navigation
+  if it was not running (no first press that only shows the outlines); the element they land on is entered if it is an edit element
+  (`UIEnterCause_Key`), and a button or a group is only focused. While the key is held, navigation follows its repeats and each step enters
+  the edit element it lands on, past buttons too; no element hears those repeats.
+- **The arrows** (`ui_up` and the rest): consumed, and nothing happens. They never throw you out of an element, nor reach the game while you
+  edit.
+
+Every one of those actions pressed while an element is entered is consumed, also when another acts first in the same tick (Escape before
+Enter before Tab), so none reaches the game; the keys that leave stay consumed until released. **Focus moving** leaves with `Keep`: a press elsewhere or outside, `UIScreen_SetFocusedWidget`,
+hiding, disabling, making it unfocusable, an overlay, detaching it, `Widget_SetNeedsEntering(false)`. **A destroyed element is left
+silently**: no hook runs, as destroying promises. `UIScreen_LeaveWidget(screen, reason)` leaves by code. The element hears
+`OnLeave(self, reason)`; what `Cancel` means is the element's (a slider whose presses each committed has nothing to put back; a text box goes
+back to its text at entering).
+
+**Kept keys.** `Widget_SetKeepsKeysWhenEntered(widget, true)` (a world view's tools read the keys): while it is entered the screen neither
+navigates nor leaves it by a key, and Tab, the arrows, Enter and Escape stay unconsumed in `GameInput` for their reader. Only focus moving,
+code or a world screen let go leave it.
 
 **A held press.** It owns the pointer. Its `Move`s and its `ButtonRelease` go to the widget that took it, wherever the pointer is, past the surface too (positions past
 `[0;1]`, unclamped), for as long as the widget stays attached, takes input and shows. One `Move` comes per tick the pointer moved or came or went, for every button held; a pointer
@@ -280,15 +340,16 @@ capture changes nothing and the drag stays absolute: read `DeltaPixels` either w
 **The pointer's shape.** `Widget_SetCursorShape(widget, shape)`; `UIScreen_GetCursorShape` answers the shape of the widget holding the first held press, or else of the hovered one, or
 else the arrow, and `UIWindowHost` applies it when it changes. `NotAllowed` and the two diagonal resizes need a cursor theme on X11, and without one show the arrow.
 
-**States.** Hovered (pointer), focused (keyboard target; at most one per screen), tabbed (entered by navigation), active
-(hovered or tabbed). Widgets get `IsFocusable` from their type (`Widget_SetIsFocusable` changes it); an input-disabled
-widget is transparent to the pointer and cannot keep focus. A hidden widget (`Widget_SetIsRendered`) is not there for the pointer or the keyboard, with its
+**States.** Hovered (pointer), focused (keyboard target; at most one per screen), tabbed (a group navigation entered), entered (the
+edit element being edited: at most one, always the focused one), active (hovered or tabbed). Widgets get `IsFocusable`, `NeedsEntering`
+and `EntersItself` from their type (`Widget_SetIsFocusable`, `Widget_SetNeedsEntering`, `Widget_SetEntersItself` change them); an
+input-disabled widget is transparent to the pointer and cannot keep focus. A hidden widget (`Widget_SetIsRendered`) is not there for the pointer or the keyboard, with its
 subtree: nothing in it can have the focus (hiding takes it away), navigation passes it, navigation inside it ends, and a press or a held key that began on it is over
 for it. A box of no size holds no point.
 
 ## Notifications
 
-State changes (`UIEventKind_HoverChanged`, `FocusChanged`, `TabChanged`, `ActiveChanged`) and a widget type's own events
+State changes (`UIEventKind_HoverChanged`, `FocusChanged`, `TabChanged`, `ActiveChanged`, `EnteredChanged`) and a widget type's own events
 (`UIScreen_PostWidgetEvent`, `UIEventKind_Widget` with a type-defined id and an optional `UIPropertyValue`; `UIScreen_PostWidgetMouseEvent` adds the mouse's data by value,
 `UIEvent.HasMouse` and `UIEvent.Mouse`: button, modifiers, screen position, scroll delta, whether over the widget) are
 **queued** and delivered at one point, at the end of `UIScreen_Update` (after the widget updates and layout), never in
@@ -296,7 +357,7 @@ the middle of input routing. Subscribe with `UIScreen_Subscribe(screen, widgetId
 handler, userData, &id)`; a subscription to one widget ends when it is torn down (at the end of the update it was
 destroyed in). A `UIEvent` names its widget by id. A state change is queued right after the state changes and before
 the widget's hook runs, so when a hook changes the state again (a focus hook moving focus on), the last notification
-about a widget always tells its final state. A state change is dropped when its widget is destroyed before delivery; a
+about a widget always tells its final state. When focus moves off an entered element, its `EnteredChanged` comes before its `FocusChanged`. A state change is dropped when its widget is destroyed before delivery; a
 widget type's own event is delivered even then (it carries everything by value), so a button that closes its dialog
 still reports the click. Handlers may destroy widgets, move focus, start animations, subscribe or unsubscribe, and post
 more notifications (delivered in the same pass, at most `UI_SCREEN_MAX_EVENTS_PER_DISPATCH` per update: the rest are
@@ -366,7 +427,8 @@ detaching it does not. `UIScreen_StopAnimation`, `UIScreen_StopWidgetAnimations`
   placement it keeps the box it is given. As an element of the kit it also takes its font and colours from the theme ([UIElements.md](UIElements.md)).
 
 Writing a new widget type (an element of the kit: [UIElements.md](UIElements.md)): embed `Widget` first; give the type a static `WidgetVTable` and a descriptor (declare its
-typed properties there); construct only the concrete part in the constructor; create child widgets in `Initialize`;
+typed properties there; a type that uses the arrows or typing sets `NeedsEntering`, and answers `OnEnter` and `OnLeave` where entering and a
+cancel mean something to it); construct only the concrete part in the constructor; create child widgets in `Initialize`;
 report keys you handle through `outIsHandled` (handle a key's press to get its repeats and release), and the wheel the same way in `OnScrollInput`; a press that starts something must
 answer `OnPressLost` as well as the release (Destroy tells nothing: the widget is gone); post your own
 events with `UIScreen_PostWidgetEvent` or `UIScreen_PostWidgetMouseEvent` (they reach subscribers even if the widget is destroyed in the same update);

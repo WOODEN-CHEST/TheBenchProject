@@ -57,6 +57,32 @@ typedef enum UIKeyboardInputTypeEnum
 } UIKeyboardInputType;
 
 /**
+ * @brief What entered an edit element (WidgetVTable.OnEnter): from then on it hears every key first, until it is left.
+ */
+typedef enum UIEnterCauseEnum
+{
+    /** @brief The keyboard: the accept action's key on the focused element, or Tab going on from another element that was
+     *  entered. */
+    UIEnterCause_Key,
+    /** @brief A press of any mouse button on it. */
+    UIEnterCause_Press,
+    /** @brief Code (UIScreen_EnterWidget): a popup's list, a dialog's first field, the console's line. */
+    UIEnterCause_Code
+} UIEnterCause;
+
+/**
+ * @brief Why an entered element is left (WidgetVTable.OnLeave). What each means is the element's own: a text box goes back
+ *        to its text at entering on a cancel, a slider whose presses each committed has nothing to put back.
+ */
+typedef enum UILeaveReasonEnum
+{
+    /** @brief What was done stays: the accept action, Tab, focus moving anywhere else, a world screen let go, code. */
+    UILeaveReason_Keep,
+    /** @brief The back action (Escape): what is not finished is taken back. */
+    UILeaveReason_Cancel
+} UILeaveReason;
+
+/**
  * @brief Where a root of a screen stands among the others (UIScreen_SetRootLayer): drawing and hit testing go by layer, then by
  *        z, then by insertion. From the bottom up.
  */
@@ -174,8 +200,9 @@ typedef struct WidgetScrollInputArgsStruct
  *
  * Covers key state changes (press / release / repeat, in Key) and text entry (a Unicode codepoint, in Codepoint);
  * Type says which fields are meaningful. The focused widget gets every key first, then its ancestors, until one
- * reports it handled; a press of the reset, copy or paste action that nobody handled then goes to the hovered widget and
- * its ancestors (IsHoverDelivery).
+ * reports it handled; a focused edit element that is not entered hears only the presses of the short list (reset, copy,
+ * paste, the context menu) and is passed over for the rest. A press of the reset, copy or paste action that nobody handled
+ * then goes to the hovered widget and its ancestors (IsHoverDelivery).
  */
 typedef struct WidgetKeyboardInputArgsStruct
 {

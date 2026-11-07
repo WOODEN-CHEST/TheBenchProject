@@ -97,6 +97,9 @@ typedef struct HostProbeStruct
     int TextCount;
     GameKey LastKey;
     uint32_t LastCodepoint;
+    int EnterCount;
+    int LeaveCount;
+    UILeaveReason LastLeaveReason;
 } HostProbe;
 
 /* A screen with the probe type, the tick's input and a host. */
@@ -108,6 +111,8 @@ typedef struct HostFixtureStruct
     UIWidgetFactory Factory;
     UIScreen Screen;
     uint64_t ProbeType;
+    /** The probe as an edit element: its keys reach it only once entered. */
+    uint64_t EditProbeType;
     WorldScreenHost Host;
     double Time;
     bool IsScreenConstructed;
@@ -1259,10 +1264,27 @@ static Error HostProbe_OnKeyboardInput(void* self, const WidgetKeyboardInputArgs
     return Error_CreateSuccess();
 }
 
+static Error HostProbe_OnEnter(void* self, UIEnterCause cause)
+{
+    (void)cause;
+    ((HostProbe*)self)->EnterCount++;
+    return Error_CreateSuccess();
+}
+
+static Error HostProbe_OnLeave(void* self, UILeaveReason reason)
+{
+    HostProbe* Probe = self;
+    Probe->LeaveCount++;
+    Probe->LastLeaveReason = reason;
+    return Error_CreateSuccess();
+}
+
 static const WidgetVTable HostProbeVTable =
 {
     .OnMouseInput = HostProbe_OnMouseInput,
-    .OnKeyboardInput = HostProbe_OnKeyboardInput
+    .OnKeyboardInput = HostProbe_OnKeyboardInput,
+    .OnEnter = HostProbe_OnEnter,
+    .OnLeave = HostProbe_OnLeave
 };
 
 static bool HostFixture_Construct(TestRun* run, HostFixture* self, uint64_t objectId)
@@ -1272,10 +1294,14 @@ static bool HostFixture_Construct(TestRun* run, HostFixture* self, uint64_t obje
     {
         .Name = u8"HostProbe", .StructSize = sizeof(HostProbe), .VTable = &HostProbeVTable, .IsFocusable = true
     };
+    WidgetTypeDescriptor EditDescriptor = Descriptor;
+    EditDescriptor.Name = u8"HostEditProbe";
+    EditDescriptor.NeedsEntering = true;
     bool IsBuilt = TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&self->Keys))
         && TEST_CHECK_SUCCESS(run, GameInput_Construct(&self->Input, &self->Keys, NULL, NULL))
         && TEST_CHECK_SUCCESS(run, UIWidgetFactory_Construct(&self->Factory))
-        && TEST_CHECK_SUCCESS(run, UIWidgetFactory_RegisterType(&self->Factory, &Descriptor, &self->ProbeType));
+        && TEST_CHECK_SUCCESS(run, UIWidgetFactory_RegisterType(&self->Factory, &Descriptor, &self->ProbeType))
+        && TEST_CHECK_SUCCESS(run, UIWidgetFactory_RegisterType(&self->Factory, &EditDescriptor, &self->EditProbeType));
     self->IsScreenConstructed = IsBuilt && TEST_CHECK_SUCCESS(run, UIScreen_Construct(&self->Screen, &self->Factory,
         NULL));
     GameInputSample_Clear(&self->Sample);
@@ -1298,11 +1324,11 @@ static void HostFixture_Deconstruct(TestRun* run, HostFixture* self)
     KeyRegistry_Deconstruct(&self->Keys);
 }
 
-/* A probe over the box (screen-relative), initialized and added as a root. */
-static HostProbe* AddProbe(TestRun* run, HostFixture* self, Rectangle box)
+/* A probe of a type over the box (screen-relative), initialized and added as a root. */
+static HostProbe* AddProbeOfType(TestRun* run, HostFixture* self, uint64_t typeId, Rectangle box)
 {
     Widget* Created = NULL;
-    if (!TEST_CHECK_SUCCESS(run, UIWidgetFactory_CreateWidget(&self->Factory, &self->Screen, self->ProbeType, NULL,
+    if (!TEST_CHECK_SUCCESS(run, UIWidgetFactory_CreateWidget(&self->Factory, &self->Screen, typeId, NULL,
         &Created)))
     {
         return NULL;
@@ -1315,6 +1341,12 @@ static HostProbe* AddProbe(TestRun* run, HostFixture* self, Rectangle box)
         return NULL;
     }
     return (HostProbe*)Created;
+}
+
+/* A plain probe over the box. */
+static HostProbe* AddProbe(TestRun* run, HostFixture* self, Rectangle box)
+{
+    return AddProbeOfType(run, self, self->ProbeType, box);
 }
 
 /* Begins a tick with the sample (the host's update follows); its presses become holds and its releases end after. */
@@ -1441,7 +1473,7 @@ static void UseOrAClickOnThePictureFocusesTheScreen(TestRun* run)
             && (GameInput_GetTextCodepointCount(&Fixture.Input) == 0U));
         EndTick(&Fixture);
         TEST_CHECK(run, (Probe != NULL) && (Probe->TextCount == 0));
-        WorldScreenHost_Release(&Fixture.Host);
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_Release(&Fixture.Host, &Fixture.Screen));
         TEST_CHECK(run, !WorldScreenHost_IsFocused(&Fixture.Host));
 
         // A click on the probe: focused, the press reaches the probe and the game never sees it.
@@ -1455,7 +1487,7 @@ static void UseOrAClickOnThePictureFocusesTheScreen(TestRun* run)
         Widget* Resolved = NULL;
         TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, ProbeId, &Resolved) && (Probe->PressCount == 1)
             && (UIScreen_GetFocusedWidgetId(&Fixture.Screen) == ProbeId));
-        WorldScreenHost_Release(&Fixture.Host);
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_Release(&Fixture.Host, &Fixture.Screen));
         Fixture.Sample.KeyStates[GameKey_MouseLeft] = GAME_INPUT_KEY_STATE_RELEASED;
         HostTick(run, &Fixture, &OnProbe);
 
@@ -1498,7 +1530,7 @@ static void UseOrAClickOnThePictureFocusesTheScreen(TestRun* run)
         Fixture.Sample.TextCodepointCount = 1U;
         HostTick(run, &Fixture, &OnProbe);
         TEST_CHECK(run, (Probe->TextCount == 1) && (Probe->LastCodepoint == 'x'));
-        WorldScreenHost_Release(&Fixture.Host);
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_Release(&Fixture.Host, &Fixture.Screen));
 
         // A click on the picture beside every widget: focused, and still the screen's.
         WorldScreenHit Beside = HitAt(7U, (Vector2){ 0.8f, 0.5f }, true);
@@ -1511,7 +1543,7 @@ static void UseOrAClickOnThePictureFocusesTheScreen(TestRun* run)
         EndTick(&Fixture);
         TEST_CHECK(run, Probe->PressCount == 1);
         // A right press on the picture is the screen's too (but does not focus).
-        WorldScreenHost_Release(&Fixture.Host);
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_Release(&Fixture.Host, &Fixture.Screen));
         Press(&Fixture, GameKey_MouseRight);
         BeginTick(&Fixture);
         TEST_CHECK_SUCCESS(run, WorldScreenHost_Update(&Fixture.Host, &Fixture.Screen, ProgramTime_Create(1.3, 0.1),
@@ -1688,6 +1720,92 @@ static void EscapeAndPointingAwayLetGo(TestRun* run)
         TEST_CHECK(run, WorldScreenHost_IsFocused(&Fixture.Host) && !GameInput_IsActionPressed(&Fixture.Input,
             GameAction_Pause) && (Probe->TextCount == (TextBefore + 1)) && (Probe->LastCodepoint == 'p'));
         EndTick(&Fixture);
+    }
+    HostFixture_Deconstruct(run, &Fixture);
+}
+
+
+/* A tap of a key on the hosted screen: its press, then its release, each a tick. */
+static void HostTap(TestRun* run, HostFixture* self, GameKey key, const WorldScreenHit* pointed)
+{
+    Press(self, key);
+    HostTick(run, self, pointed);
+    self->Sample.KeyStates[key] = GAME_INPUT_KEY_STATE_RELEASED;
+    HostTick(run, self, pointed);
+}
+
+/* On a world screen each Escape goes one level out: out of an entered edit element, then off the UI's focus, then off the
+ * screen. Letting go however it comes (pointing away, WorldScreenHost_Release) leaves the element, keeping. A letter bound to
+ * ui_back passes an edit element that is not entered (and clears the focus), and is the element's while it is entered. */
+static void EscapeGoesOneLevelOutOfAnEditElement(TestRun* run)
+{
+    HostFixture Fixture;
+    if (HostFixture_Construct(run, &Fixture, 7U))
+    {
+        HostProbe* Probe = AddProbeOfType(run, &Fixture, Fixture.EditProbeType, (Rectangle){ 0.0f, 0.0f, 1.0f, 1.0f });
+        uint64_t ProbeId = (Probe != NULL) ? Widget_GetId(&Probe->Base) : WIDGET_ID_INVALID;
+        WorldScreenHit OnIt = HitAt(7U, (Vector2){ 0.5f, 0.5f }, true);
+        // Not in use, the screen has no keyboard: a right or middle press focuses the element and enters nothing.
+        HostTap(run, &Fixture, GameKey_MouseRight, &OnIt);
+        HostTap(run, &Fixture, GameKey_MouseMiddle, &OnIt);
+        TEST_CHECK(run, !WorldScreenHost_IsFocused(&Fixture.Host) && (UIScreen_GetFocusedWidgetId(&Fixture.Screen) == ProbeId)
+            && (UIScreen_GetEnteredWidgetId(&Fixture.Screen) == WIDGET_ID_INVALID) && (Probe->EnterCount == 0));
+        HostTap(run, &Fixture, GameKey_MouseLeft, &OnIt);
+        TEST_CHECK(run, (Probe != NULL) && WorldScreenHost_IsFocused(&Fixture.Host) && (UIScreen_GetEnteredWidgetId(&Fixture.Screen) == ProbeId));
+
+        // One: out of the element, its focus kept. Two: the UI's focus cleared. Three: the screen let go, no pause.
+        HostTap(run, &Fixture, GameKey_Escape, &OnIt);
+        TEST_CHECK(run, (Probe->LeaveCount == 1) && (Probe->LastLeaveReason == UILeaveReason_Cancel));
+        TEST_CHECK(run, WorldScreenHost_IsFocused(&Fixture.Host) && (UIScreen_GetFocusedWidgetId(&Fixture.Screen) == ProbeId));
+        HostTap(run, &Fixture, GameKey_Escape, &OnIt);
+        TEST_CHECK(run, WorldScreenHost_IsFocused(&Fixture.Host) && (UIScreen_GetFocusedWidgetId(&Fixture.Screen) == WIDGET_ID_INVALID));
+        Press(&Fixture, GameKey_Escape);
+        BeginTick(&Fixture);
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_Update(&Fixture.Host, &Fixture.Screen, ProgramTime_Create(2.0, 0.1), &Fixture.Input, &OnIt));
+        TEST_CHECK(run, !WorldScreenHost_IsFocused(&Fixture.Host) && !GameInput_IsActionPressed(&Fixture.Input, GameAction_Pause));
+        EndTick(&Fixture);
+        Fixture.Sample.KeyStates[GameKey_Escape] = GAME_INPUT_KEY_STATE_RELEASED;
+        HostTick(run, &Fixture, &OnIt);
+
+        // Pointing away lets go, and leaves the element keeping; so does letting go by code.
+        HostTap(run, &Fixture, GameKey_MouseLeft, &OnIt);
+        TEST_CHECK(run, UIScreen_GetEnteredWidgetId(&Fixture.Screen) == ProbeId);
+        WorldScreenHit OffIt = HitAt(7U, (Vector2){ -0.2f, 0.5f }, false);
+        HostTick(run, &Fixture, &OffIt);
+        TEST_CHECK(run, !WorldScreenHost_IsFocused(&Fixture.Host) && (UIScreen_GetEnteredWidgetId(&Fixture.Screen) == WIDGET_ID_INVALID));
+        TEST_CHECK(run, (Probe->LeaveCount == 2) && (Probe->LastLeaveReason == UILeaveReason_Keep));
+        HostTap(run, &Fixture, GameKey_MouseLeft, &OnIt);
+        TEST_CHECK(run, WorldScreenHost_IsFocused(&Fixture.Host) && (UIScreen_GetEnteredWidgetId(&Fixture.Screen) == ProbeId));
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_Release(&Fixture.Host, &Fixture.Screen));
+        TEST_CHECK(run, !WorldScreenHost_IsFocused(&Fixture.Host) && (UIScreen_GetEnteredWidgetId(&Fixture.Screen) == WIDGET_ID_INVALID));
+        TEST_CHECK(run, (Probe->LeaveCount == 3) && (Probe->LastLeaveReason == UILeaveReason_Keep));
+        HostTick(run, &Fixture, &OnIt);
+
+        // ui_back on a letter: focused but not entered, the letter passes the element and clears the focus.
+        GameActionOverride BackOnQ = { .OverridesDefaultBindings = true,
+            .DefaultBindings = { { .Key = GameKey_Q, .Modifiers = GAME_KEY_MODIFIER_NONE } }, .DefaultBindingCount = 1U };
+        TEST_CHECK_SUCCESS(run, GameInput_OverrideAction(&Fixture.Input, GameAction_UIBack, &BackOnQ, NAMESPACED_KEY_ID_NONE));
+        HostTap(run, &Fixture, GameKey_MouseLeft, &OnIt);
+        TEST_CHECK_SUCCESS(run, UIScreen_LeaveWidget(&Fixture.Screen, UILeaveReason_Keep));
+        int KeysBefore = Probe->KeyCount;
+        HostTap(run, &Fixture, GameKey_Q, &OnIt);
+        TEST_CHECK(run, (Probe->KeyCount == KeysBefore) && (UIScreen_GetFocusedWidgetId(&Fixture.Screen) == WIDGET_ID_INVALID)
+            && WorldScreenHost_IsFocused(&Fixture.Host));
+        // Entered, the letter is the element's first: one that takes it stays entered and focused.
+        Probe->IsHandlingKeys = true;
+        HostTap(run, &Fixture, GameKey_MouseLeft, &OnIt);
+        HostTap(run, &Fixture, GameKey_Q, &OnIt);
+        TEST_CHECK(run, (Probe->KeyCount == (KeysBefore + 1)) && (Probe->LastKey == GameKey_Q));
+        TEST_CHECK(run, (UIScreen_GetEnteredWidgetId(&Fixture.Screen) == ProbeId) && WorldScreenHost_IsFocused(&Fixture.Host));
+
+        // An element that keeps its keys leaves ui_back unused: it lets go of the screen, and the element is left, keeping.
+        TEST_CHECK_SUCCESS(run, Widget_SetKeepsKeysWhenEntered(&Probe->Base, true));
+        Probe->IsHandlingKeys = false;
+        int LeavesBefore = Probe->LeaveCount;
+        Press(&Fixture, GameKey_Q);
+        HostTick(run, &Fixture, &OnIt);
+        TEST_CHECK(run, !WorldScreenHost_IsFocused(&Fixture.Host) && (UIScreen_GetEnteredWidgetId(&Fixture.Screen) == WIDGET_ID_INVALID));
+        TEST_CHECK(run, (Probe->LeaveCount == (LeavesBefore + 1)) && (Probe->LastLeaveReason == UILeaveReason_Keep));
     }
     HostFixture_Deconstruct(run, &Fixture);
 }
@@ -2662,7 +2780,7 @@ static void OnlyAHeldPressKeepsAScreen(TestRun* run)
         Press(&Fixture, GameKey_MouseLeft);
         HostTick(run, &Fixture, &OnIt);
         TEST_CHECK(run, WorldScreenHost_IsFocused(&Fixture.Host) && UIScreen_HasHeldPress(&Fixture.Screen));
-        WorldScreenHost_Release(&Fixture.Host);
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_Release(&Fixture.Host, &Fixture.Screen));
         Press(&Fixture, GameKey_E);
         BeginTick(&Fixture);
         Fixture.Time += HOST_TICK_SECONDS;
@@ -2967,6 +3085,7 @@ void WorldScreenTests_Run(TestRun* run)
         { "use_or_a_click_on_the_picture_focuses_the_screen", UseOrAClickOnThePictureFocusesTheScreen },
         { "a_focused_screen_takes_the_whole_keyboard_after_its_ui", AFocusedScreenTakesTheWholeKeyboardAfterItsUi },
         { "escape_and_pointing_away_let_go", EscapeAndPointingAwayLetGo },
+        { "escape_goes_one_level_out_of_an_edit_element", EscapeGoesOneLevelOutOfAnEditElement },
         { "the_render_cache_takes_the_screens_surface", TheRenderCacheTakesTheScreensSurface },
         { "the_picture_goes_into_the_slots_material_copy_for_one_render",
             ThePictureGoesIntoTheSlotsMaterialCopyForOneRender },

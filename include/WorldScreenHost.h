@@ -39,7 +39,9 @@
  * - LETTING GO: an Escape the UI leaves unused (ui_back or pause) releases the screen (and is consumed: it does not
  *   pause the game), and so does pointing away from its picture: a screen the player no longer points at gets no input.
  *   A ui_back or pause press in a tick whose typed text the UI took is typing, not letting go (pause bound to a letter
- *   types it into a field; that tick's Escape, rare, needs pressing again).
+ *   types it into a field; that tick's Escape, rare, needs pressing again). Each Escape goes one level out: it leaves an
+ *   entered edit element, then clears the UI's focus, then lets go of the screen. Letting go, however it comes, leaves the
+ *   entered element (UILeaveReason_Keep); the game window losing the system's focus does not.
  *
  * A plain value type: construct it in place, one per hosted screen; it owns nothing.
  */
@@ -88,7 +90,7 @@ void WorldScreenHost_Deconstruct(WorldScreenHost* self);
  * @param input The tick's input (consumption is recorded in it), or NULL: the screen gets no input this tick (no pointer:
  *        not pointed at) and keeps its focus.
  * @param pointed Where the player points this tick (WorldScreens_Raycast's hit), or NULL for nowhere.
- * @returns Success, or the error of UIScreen_Update (a broken invariant: see AGENTS.md rule 7).
+ * @returns Success, or the error of UIScreen_Update or of the UI's leave hook (a broken invariant: see AGENTS.md rule 7).
  */
 Error WorldScreenHost_Update(WorldScreenHost* self, UIScreen* screen, ProgramTime time, GameInput* input,
     const WorldScreenHit* pointed);
@@ -104,17 +106,19 @@ Error WorldScreenHost_Update(WorldScreenHost* self, UIScreen* screen, ProgramTim
  * @param pointed Where the player points this tick (WorldScreens_Raycast's hit), or NULL for nowhere.
  * @param continued Where the ray goes on the screen's plane (WorldScreens_ContinueRay's hit), or NULL for not known. @p pointed
  *        counts instead when it lies on this screen.
- * @returns Success, or the error of UIScreen_Update (a broken invariant: see AGENTS.md rule 7).
+ * @returns Success, or the error of UIScreen_Update or of the UI's leave hook (a broken invariant: see AGENTS.md rule 7).
  */
 Error WorldScreenHost_UpdateContinued(WorldScreenHost* self, UIScreen* screen, ProgramTime time, GameInput* input,
     const WorldScreenHit* pointed, const WorldScreenHit* continued);
 
 /**
  * @brief Lets go of the screen at once: no keyboard from the next update on (the screen's object went away, the player
- *        was moved elsewhere).
+ *        was moved elsewhere), and its UI's entered edit element is left, keeping what was done.
  * @param self The host; must not be NULL.
+ * @param screen The UI shown on the screen; must not be NULL.
+ * @returns Success, or the error of the UI's leave hook (a broken invariant: see AGENTS.md rule 7).
  */
-void WorldScreenHost_Release(WorldScreenHost* self);
+Error WorldScreenHost_Release(WorldScreenHost* self, UIScreen* screen);
 
 /** @brief Returns the screen's object (0: none). @param self The host; must not be NULL. */
 static inline uint64_t WorldScreenHost_GetObjectId(const WorldScreenHost* self)

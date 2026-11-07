@@ -99,9 +99,10 @@ static WidgetMouseInputArgs MakeMouseArgs(const UIScreen* self, UIMouseInputType
 }
 
 /* Hands keyboard input to a widget, then up through its ancestors (those that take input) until one handles it;
- * @p outHandlerId receives that widget's id (WIDGET_ID_INVALID if none did). Each step resolves the widget by id (captured
- * before the previous hook ran). */
-static Error DeliverKeyboardInput(UIScreen* self, uint64_t startId, const WidgetKeyboardInputArgs* args, uint64_t* outHandlerId)
+ * @p outHandlerId receives that widget's id (WIDGET_ID_INVALID if none did). With @p isStartPassedOver the first widget does
+ * not hear it, and its ancestors do. Each step resolves the widget by id (captured before the previous hook ran). */
+static Error DeliverKeyboardInput(UIScreen* self, uint64_t startId, bool isStartPassedOver, const WidgetKeyboardInputArgs* args,
+    uint64_t* outHandlerId)
 {
     *outHandlerId = WIDGET_ID_INVALID;
     uint64_t CurrentId = startId;
@@ -113,7 +114,8 @@ static Error DeliverKeyboardInput(UIScreen* self, uint64_t startId, const Widget
             return Error_CreateSuccess();
         }
         uint64_t NextId = (Widget_GetParent(Current) != NULL) ? Widget_GetId(Widget_GetParent(Current)) : WIDGET_ID_INVALID;
-        if (UIScreen_InternalTakesPressedInput(Current)) // A hook may have taken it away, and hover stands still during a hidden-cursor drag.
+        bool IsPassedOver = (Step == 0U) && isStartPassedOver;
+        if (!IsPassedOver && UIScreen_InternalTakesPressedInput(Current)) // A hook may have taken it away, and hover stands still during a hidden-cursor drag.
         {
             bool IsHandled = false;
             Error Result = Widget_OnKeyboardInput(Current, args, &IsHandled);
@@ -136,6 +138,35 @@ static bool IsHoverKey(const GameInput* input, GameKey key)
 {
     return UIScreen_InternalIsActionKey(input, GameAction_UIReset, key) || UIScreen_InternalIsActionKey(input, GameAction_UICopy, key)
         || UIScreen_InternalIsActionKey(input, GameAction_UIPaste, key);
+}
+
+/* Whether a pressed key is one of the short list a focused edit element that is not entered hears, as a hovered widget does:
+ * the hover keys and the context menu. */
+static bool IsShortListKey(const GameInput* input, GameKey key)
+{
+    return IsHoverKey(input, key) || UIScreen_InternalIsActionKey(input, GameAction_UIContextMenu, key);
+}
+
+/* The focused widget when it is an edit element that is not entered, or NULL. */
+static Widget* GetFocusedEditElementOutside(const UIScreen* self)
+{
+    Widget* Focused = UIScreen_InternalResolve(self, self->_focusedWidgetId);
+    if ((Focused == NULL) || !Focused->_needsEntering || (self->_enteredWidgetId == self->_focusedWidgetId))
+    {
+        return NULL;
+    }
+    return Focused;
+}
+
+/* Whether keyboard input passes the focused widget by: an edit element that is not entered hears only the presses of the short
+ * list, and its ancestors hear the rest. */
+static bool IsFocusedPassedOver(const UIScreen* self, const WidgetKeyboardInputArgs* args)
+{
+    if (GetFocusedEditElementOutside(self) == NULL)
+    {
+        return false;
+    }
+    return (args->Type != UIKeyboardInputType_KeyPress) || !IsShortListKey(self->_input, args->Key);
 }
 
 /* Hands a repeat or the release of a key to the widget that handled its press, and to no other, while that widget still
@@ -257,8 +288,9 @@ static Error RaiseRootOf(UIScreen* self, Widget* widget)
     return UIScreen_InternalIsRaisedByInput(Root) ? UIScreen_BringToTop(self, Root) : Error_CreateSuccess(); // Runs no hooks.
 }
 
-/* A fresh (unconsumed) press: over a widget it is consumed, focuses the nearest focusable widget under the pointer,
- * raises the widget's root and reaches the widget; over empty space, with no other press held, it only clears focus (the game gets the click). */
+/* A fresh (unconsumed) press: over a widget it is consumed, focuses the nearest focusable widget under the pointer (entering it
+ * if it is an edit element and the screen has the keyboard), raises the widget's root and reaches the widget; over empty space, with
+ * no other press held, it only clears focus (the game gets the click). */
 static Error PressButton(UIScreen* self, ProgramTime time, GameKey button, size_t index)
 {
     // A held press owns the pointer: another button's press over nothing is nobody's, neither a click outside nor the game's.
@@ -299,10 +331,23 @@ static Error PressButton(UIScreen* self, ProgramTime time, GameKey button, size_
     {
         FocusTarget = Widget_GetParent(FocusTarget);
     }
-    Error Result = UIScreen_InternalSetFocus(self, (FocusTarget != NULL) ? Widget_GetId(FocusTarget) : WIDGET_ID_INVALID);
+    uint64_t FocusTargetId = (FocusTarget != NULL) ? Widget_GetId(FocusTarget) : WIDGET_ID_INVALID;
+    Error Result = UIScreen_InternalSetFocus(self, FocusTargetId);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
+    }
+    // An edit element the press focused is entered before the press arrives, unless it enters itself, and only on a screen that has
+    // the keyboard (its keys are what entering gives it: a world screen not in use only focuses it); a hook that moved the focus on
+    // wins (only the focused widget can be entered).
+    Widget* FocusedTarget = UIScreen_InternalResolve(self, FocusTargetId);
+    if ((FocusedTarget != NULL) && !FocusedTarget->_entersItself && self->_hasKeyboardFocus)
+    {
+        Result = UIScreen_InternalEnter(self, FocusTargetId, UIEnterCause_Press);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
     }
 
     // The focus hooks may have destroyed, detached or disabled the widget, which ended the press (it stays consumed), or handed it on.
@@ -504,13 +549,23 @@ static Error RouteKey(UIScreen* self, GameKey key, uint8_t modifiers)
         return Error_CreateSuccess();
     }
 
+    // The accept action's press enters a focused edit element that is not entered, at its place in the chain: before its
+    // ancestors, so a dialog around it cannot take that press. Consumed, it reaches nobody while it is held.
+    Widget* Outside = GetFocusedEditElementOutside(self);
+    if ((Outside != NULL) && (Type == UIKeyboardInputType_KeyPress) && UIScreen_InternalTakesPressedInput(Outside)
+        && UIScreen_InternalIsActionKey(self->_input, GameAction_UIAccept, key))
+    {
+        GameInput_ConsumeKey(self->_input, key);
+        return UIScreen_InternalEnter(self, Widget_GetId(Outside), UIEnterCause_Key);
+    }
+
     WidgetKeyboardInputArgs Arguments = { .Type = Type, .Key = key, .Modifiers = modifiers, .Codepoint = 0U, .IsHoverDelivery = false };
     uint64_t HandlerId = WIDGET_ID_INVALID;
-    Error Result = DeliverKeyboardInput(self, self->_focusedWidgetId, &Arguments, &HandlerId);
+    Error Result = DeliverKeyboardInput(self, self->_focusedWidgetId, IsFocusedPassedOver(self, &Arguments), &Arguments, &HandlerId);
     if ((Result.Code == ErrorCode_Success) && (HandlerId == WIDGET_ID_INVALID) && (Type == UIKeyboardInputType_KeyPress) && IsHoverKey(self->_input, key))
     {
         Arguments.IsHoverDelivery = true;
-        Result = DeliverKeyboardInput(self, self->_hoveredWidgetId, &Arguments, &HandlerId);
+        Result = DeliverKeyboardInput(self, self->_hoveredWidgetId, false, &Arguments, &HandlerId);
     }
     if (HandlerId != WIDGET_ID_INVALID)
     {
@@ -541,7 +596,8 @@ static Error RouteKeys(UIScreen* self)
     return Error_CreateSuccess();
 }
 
-/* Typed text goes to the focused widget and its ancestors; if any codepoint is handled, the tick's text is consumed. */
+/* Typed text goes to the focused widget and its ancestors (past an edit element that is not entered); if any codepoint is
+ * handled, the tick's text is consumed. */
 static Error RouteText(UIScreen* self)
 {
     size_t Count = GameInput_GetTextCodepointCount(self->_input);
@@ -569,7 +625,7 @@ static Error RouteText(UIScreen* self)
             .IsHoverDelivery = false
         };
         uint64_t HandlerId = WIDGET_ID_INVALID;
-        Error Result = DeliverKeyboardInput(self, self->_focusedWidgetId, &Arguments, &HandlerId);
+        Error Result = DeliverKeyboardInput(self, self->_focusedWidgetId, IsFocusedPassedOver(self, &Arguments), &Arguments, &HandlerId);
         if (Result.Code != ErrorCode_Success)
         {
             return Result;
@@ -633,6 +689,34 @@ bool UIScreen_InternalCanFocus(const Widget* widget)
     return (widget != NULL) && !widget->_isDying && widget->_isInitialized && widget->_isFocusable
         && widget->_isInputEnabled && UIScreen_InternalIsAttached(widget) && UIScreen_InternalIsShown(widget)
         && !UIScreen_InternalIsInOverlay(widget);
+}
+
+bool UIScreen_InternalCanEnter(const Widget* widget)
+{
+    return UIScreen_InternalCanFocus(widget) && widget->_needsEntering;
+}
+
+Error UIScreen_InternalEnter(UIScreen* self, uint64_t widgetId, UIEnterCause cause)
+{
+    Widget* Target = UIScreen_InternalResolve(self, widgetId);
+    if ((widgetId != self->_focusedWidgetId) || !UIScreen_InternalCanEnter(Target))
+    {
+        return Error_CreateSuccess();
+    }
+    self->_enteredWidgetId = widgetId;
+    return Widget_InternalEnter(Target, cause); // Nothing for the widget that is entered already.
+}
+
+Error UIScreen_InternalLeave(UIScreen* self, UILeaveReason reason)
+{
+    uint64_t LeftId = self->_enteredWidgetId;
+    if (LeftId == WIDGET_ID_INVALID)
+    {
+        return Error_CreateSuccess();
+    }
+    self->_enteredWidgetId = WIDGET_ID_INVALID;
+    Widget* Left = UIScreen_InternalResolve(self, LeftId);
+    return (Left != NULL) ? Widget_InternalLeave(Left, reason) : Error_CreateSuccess();
 }
 
 bool UIScreen_InternalIsRaisedByInput(const Widget* widget)
@@ -709,10 +793,17 @@ Error UIScreen_InternalSetFocus(UIScreen* self, uint64_t widgetId)
     uint64_t OldId = self->_focusedWidgetId;
     self->_focusedWidgetId = widgetId;
 
-    Widget* Old = UIScreen_InternalResolve(self, OldId);
-    if (Old != NULL)
+    // The entered element (the old focus) is left first, keeping what was done; a leave hook that focused the old widget again
+    // keeps it focused.
+    Error Result = UIScreen_InternalLeave(self, UILeaveReason_Keep);
+    if (Result.Code != ErrorCode_Success)
     {
-        Error Result = Widget_InternalSetFocused(Old, false);
+        return Result;
+    }
+    Widget* Old = UIScreen_InternalResolve(self, OldId);
+    if ((Old != NULL) && (self->_focusedWidgetId != OldId))
+    {
+        Result = Widget_InternalSetFocused(Old, false);
         if (Result.Code != ErrorCode_Success)
         {
             return Result;
@@ -846,4 +937,36 @@ Error UIScreen_SetFocusedWidget(UIScreen* self, Widget* widget)
             "UIScreen_SetFocusedWidget: the widget must be alive, attached, focusable and input-enabled.");
     }
     return UIScreen_InternalSetFocus(self, Widget_GetId(widget));
+}
+
+Error UIScreen_EnterWidget(UIScreen* self, uint64_t widgetId)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_EnterWidget: self must not be NULL.");
+    }
+    if (!UIScreen_InternalCanEnter(UIScreen_InternalResolve(self, widgetId)))
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation,
+            "UIScreen_EnterWidget: the widget must be an edit element that is alive, attached, focusable, input-enabled and shown.");
+    }
+    Error Result = UIScreen_InternalSetFocus(self, widgetId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    return UIScreen_InternalEnter(self, widgetId, UIEnterCause_Code); // Nothing if it is entered already, or a hook moved the focus on.
+}
+
+Error UIScreen_LeaveWidget(UIScreen* self, UILeaveReason reason)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_LeaveWidget: self must not be NULL.");
+    }
+    if ((reason != UILeaveReason_Keep) && (reason != UILeaveReason_Cancel))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIScreen_LeaveWidget: an unknown reason.");
+    }
+    return UIScreen_InternalLeave(self, reason);
 }

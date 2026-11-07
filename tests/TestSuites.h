@@ -387,6 +387,11 @@ void UIWindowHostTests_Run(TestRun* run);
  *  moving a widget, the wheel up the tree, layers, the hidden-cursor drag, hover keys, cursor shapes (UIRoutingTests.c). */
 void UIRoutingTests_Run(TestRun* run);
 
+/** @brief Entering elements: the key rule for an edit element outside and inside, entering by Enter, a press or code, leaving
+ *  by Escape, Enter, Tab and focus moving, a held Tab carrying editing on, kept keys, hooks, the entered state shown
+ *  (UIEnteringTests.c). */
+void UIEnteringTests_Run(TestRun* run);
+
 /** @brief UI pixels: placements, the scale, preferred sizes and their cache, stacks and their children's hints, labels in UI
  *  pixels (UILayoutTests.c). */
 void UILayoutTests_Run(TestRun* run);

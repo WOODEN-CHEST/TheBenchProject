@@ -13,11 +13,26 @@
 // Fields.
 static const unsigned char* const StateNames[UIElementState_Count] =
 {
-    u8"normal", u8"hovered", u8"pressed", u8"focused", u8"disabled", u8"selected", u8"invalid"
+    u8"normal", u8"hovered", u8"pressed", u8"focused", u8"disabled", u8"selected", u8"invalid", u8"entered"
 };
 
 
 // Static functions.
+/* The state whose value a state shows: its own where it is given, else entered shows focused's, else normal's. */
+static UIElementState GetShownState(const bool* isGiven, UIElementState state)
+{
+    bool IsStateValid = ((int32_t)state >= 0) && ((int32_t)state < (int32_t)UIElementState_Count);
+    if (!IsStateValid)
+    {
+        return UIElementState_Normal;
+    }
+    if (isGiven[state])
+    {
+        return state;
+    }
+    return ((state == UIElementState_Entered) && isGiven[UIElementState_Focused]) ? UIElementState_Focused : UIElementState_Normal;
+}
+
 static bool IsPositiveFinite(float value)
 {
     return (value > 0.0f) && !Math_IsInfinityFloat(value);
@@ -91,17 +106,13 @@ static void DrawNineSlice(const UIBoxStyle* style, UIRenderContext* context, Rec
 // Public functions.
 Color UIStateColors_Resolve(const UIStateColors* colors, UIElementState state, Color fallback)
 {
-    if (((int32_t)state >= 0) && ((int32_t)state < (int32_t)UIElementState_Count) && colors->HasColor[state])
-    {
-        return colors->Colors[state];
-    }
-    return colors->HasColor[UIElementState_Normal] ? colors->Colors[UIElementState_Normal] : fallback;
+    UIElementState Shown = GetShownState(colors->HasColor, state);
+    return colors->HasColor[Shown] ? colors->Colors[Shown] : fallback;
 }
 
 UIBoxPaint UIBoxStyle_Resolve(const UIBoxStyle* style, UIElementState state)
 {
-    bool IsStateValid = ((int32_t)state >= 0) && ((int32_t)state < (int32_t)UIElementState_Count);
-    UIElementState SourceState = (IsStateValid && style->HasSource[state]) ? state : UIElementState_Normal;
+    UIElementState SourceState = GetShownState(style->HasSource, state);
     return (UIBoxPaint)
     {
         .Fill = UIStateColors_Resolve(&style->Colors, state, WHITE),

@@ -51,8 +51,9 @@ Error UIScreen_InternalMoveWidget(UIScreen* self, Widget* widget, Widget* newPar
 /** Keeps the draw order of a widget's siblings sorted after its z changed. */
 void UIScreen_InternalOnZChanged(UIScreen* self, Widget* widget);
 
-/** The one detach path for an alive widget (a root or a child): unlinks it, then ends hover, focus, navigation and
- *  mouse presses inside its subtree, running the hooks (OnPressLost among them) last with every widget re-resolved by id. */
+/** The one detach path for an alive widget (a root or a child): unlinks it, then ends hover, the entered element, focus,
+ *  navigation and mouse presses inside its subtree, running the hooks (OnLeave and OnPressLost among them) last with every
+ *  widget re-resolved by id. */
 Error UIScreen_InternalDetachWidget(UIScreen* self, Widget* widget);
 
 /** Widget_Destroy's work: unlinks the subtree, marks it dying, forgets every reference into it (no hooks) and queues it
@@ -89,9 +90,10 @@ Rectangle UIScreen_InternalPeekEstimatedScreenBox(const Widget* widget);
 /** Routes the tick's input: pointer, buttons, wheel, then keys, text and navigation. */
 Error UIScreen_InternalRouteInput(UIScreen* self, ProgramTime time, const UIScreenInput* input);
 
-/** Moves focus to a widget id (WIDGET_ID_INVALID clears it) without the public argument checks. The old widget's hooks
- *  run first and a change made by a hook wins. A target that cannot take focus by then (UIScreen_InternalCanFocus:
- *  destroyed, detached or disabled, also by a hook) leaves nothing focused, so focus is never on an ineligible widget. */
+/** Moves focus to a widget id (WIDGET_ID_INVALID clears it) without the public argument checks. The entered edit element is
+ *  left first (keeping), then the old widget's hooks run, and a change made by a hook wins. A target that cannot take focus by
+ *  then (UIScreen_InternalCanFocus: destroyed, detached or disabled, also by a hook) leaves nothing focused, so focus is never
+ *  on an ineligible widget. */
 Error UIScreen_InternalSetFocus(UIScreen* self, uint64_t widgetId);
 
 /** Returns whether a widget can take focus now: alive, attached, focusable, input-enabled, shown and not in an overlay. */
@@ -113,6 +115,16 @@ Error UIScreen_InternalReleaseUnreachable(UIScreen* self);
 /** Returns whether a key is one of those an action's bindings match this tick, consumed or not. */
 bool UIScreen_InternalIsActionKey(const GameInput* input, GameActionId action, GameKey key);
 
+/** Returns whether a widget can be entered now: an edit element that can take focus. */
+bool UIScreen_InternalCanEnter(const Widget* widget);
+
+/** Enters the focused widget when it can be entered: the screen's entered widget is set first, then the widget's flag, its
+ *  notification and OnEnter. A widget that is not focused, cannot be entered or is entered already changes nothing. */
+Error UIScreen_InternalEnter(UIScreen* self, uint64_t widgetId, UIEnterCause cause);
+
+/** Leaves the entered widget, if any: the screen forgets it first, then the widget's flag, its notification and OnLeave. */
+Error UIScreen_InternalLeave(UIScreen* self, UILeaveReason reason);
+
 
 // Screen: keyboard navigation (UIScreenNavigation.c).
 /** Allocates the navigation module's buffers (screen construction). */
@@ -124,8 +136,8 @@ void UIScreen_InternalReleaseNavigation(UIScreen* self);
 /** Acts on the navigation actions nobody handled, consuming the ones it uses. */
 Error UIScreen_InternalRouteNavigation(UIScreen* self);
 
-/** Ends keyboard navigation (pointer movement or a click): leaves every entered widget and stops following the held
- *  navigation keys; focus stays. */
+/** Ends keyboard navigation (pointer movement or a click): leaves every widget navigation entered and stops following the held
+ *  navigation keys; focus stays, and so does an entered edit element. */
 Error UIScreen_InternalStopNavigation(UIScreen* self);
 
 /** A widget moved in the tree: the entered path stays a path down it. It follows focus, or with nothing focused what no longer
@@ -165,9 +177,18 @@ void UIScreen_InternalReleaseEvents(UIScreen* self);
 
 
 // Widget base (UIWidget.c).
-/** Initializes the base of freshly borrowed widget storage: defaults, no id yet, empty child lists. Cannot fail. */
+/** The defaults a widget type gives its widgets' flags. */
+typedef struct WidgetTypeFlagsStruct
+{
+    bool IsFocusable;
+    bool NeedsEntering;
+    bool EntersItself;
+} WidgetTypeFlags;
+
+/** Initializes the base of freshly borrowed widget storage: defaults (the type's flags), no id yet, empty child lists. Cannot
+ *  fail. */
 void Widget_InternalInitializeBase(Widget* self, const WidgetVTable* vtable, UIScreen* screen, uint64_t typeId,
-    bool isFocusable);
+    const WidgetTypeFlags* flags);
 
 /** Frees the base's own storage (the child lists). */
 void Widget_InternalReleaseBase(Widget* self);
@@ -184,6 +205,13 @@ Error Widget_InternalSetFocused(Widget* self, bool isFocused);
 
 /** Sets the tabbed state: notification, hook, active state. */
 Error Widget_InternalSetTabbed(Widget* self, bool isTabbed);
+
+/** Sets the entered state: the flag, the notification, then OnEnter. Nothing happens to an entered or dying widget. */
+Error Widget_InternalEnter(Widget* self, UIEnterCause cause);
+
+/** Clears the entered state: the flag, the notification, then OnLeave. Nothing happens to a widget that is not entered or is
+ *  dying. */
+Error Widget_InternalLeave(Widget* self, UILeaveReason reason);
 
 /** Marks a widget as a root (with its insertion sequence) or not. */
 void Widget_InternalSetScreenRoot(Widget* self, bool isScreenRoot, uint64_t sequence);

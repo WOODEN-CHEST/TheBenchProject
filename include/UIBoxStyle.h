@@ -35,7 +35,8 @@ typedef struct UIRenderContextStruct UIRenderContext;
 
 // Types.
 /**
- * @brief An element's state, which picks its colours and its art. A state a theme leaves out falls back to normal.
+ * @brief An element's state, which picks its colours and its art. A state a theme leaves out falls back to normal; entered falls
+ *        back to focused first.
  */
 typedef enum UIElementStateEnum
 {
@@ -53,6 +54,8 @@ typedef enum UIElementStateEnum
     UIElementState_Selected,
     /** @brief Its value is refused. */
     UIElementState_Invalid,
+    /** @brief It is being edited: an edit element that was entered, so its keys are its own. Left out, it shows focused. */
+    UIElementState_Entered,
     /** @brief The number of states. */
     UIElementState_Count
 } UIElementState;
@@ -140,7 +143,7 @@ typedef struct UINineSliceQuadStruct
 
 // Functions.
 /**
- * @brief Returns the colour of a state: its own, else normal's, else @p fallback.
+ * @brief Returns the colour of a state: its own, else (for entered) focused's, else normal's, else @p fallback.
  * @param colors The colours; must not be NULL.
  * @param state The state; a value out of range counts as normal.
  * @param fallback The colour when not even normal has one.
@@ -149,7 +152,8 @@ typedef struct UINineSliceQuadStruct
 Color UIStateColors_Resolve(const UIStateColors* colors, UIElementState state, Color fallback);
 
 /**
- * @brief Returns what a box style comes to in a state, with fallbacks to normal.
+ * @brief Returns what a box style comes to in a state, with the fallbacks of UIStateColors_Resolve (entered to focused, then
+ *        normal), for the art's rectangle too.
  * @param style The style; must not be NULL.
  * @param state The state.
  * @returns The colours (white where none is given) and the art's rectangle.

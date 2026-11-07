@@ -101,12 +101,18 @@ lies behind it, so a disabled button takes the click and reports nothing, nor th
 
 **Toggle** (`UIToggle.h`). On, off or mixed; an activation from mixed turns it on. The same click modes and activation buttons, Enter or Space. Disabled, it is as a disabled button.
 
-**Slider** (`UISlider.h`). A value in a range, as a double, with an optional step. A left press on the track brings the thumb under the
-pointer; a press on the thumb holds it where it was grabbed, so a click on it changes nothing. Dragging follows the pointer wherever it goes, past the box and past the window: past an
-end the value is that end. The arrows step (the `ui_left` and `ui_right` actions' keys; repeats follow), Home and End jump. Up and down are
-left to navigation. The wheel is the slider's only while it is focused or with Ctrl: otherwise it goes on up the tree, so scrolling a panel never changes a value by accident. With
-`HasDefault` and `Default` (`UISlider_SetDefault`), the reset action (`tbp:ui_reset`, Backspace), focused or only hovered, puts it back, a whole change; during a change it is used and does
-nothing. A range that is no whole number of steps keeps its upper end reachable: the end counts as a step.
+**Slider** (`UISlider.h`). A value in a range, as a double, with an optional step. It is an **edit element** ([UIFramework.md](UIFramework.md),
+"Entering elements"): moving the focus onto it changes nothing, and Tab and the arrows go past it until it is entered, by Enter, any press on it
+or code. A left press on the track brings the thumb under the pointer; a press on the thumb holds it where it was grabbed, so a click on it
+changes nothing. Dragging follows the pointer wherever it goes, past the box and past the window: past an end the value is that end. Entered,
+all four arrows are its own: `ui_up` and `ui_right` step higher, `ui_down` and `ui_left` lower (repeats follow; at an end they do nothing and
+are still consumed), Home and End jump. Each press is a whole change, committed when its key comes up. Escape during a held key or a drag
+cancels that change and the slider stays entered; otherwise it leaves Escape to the screen, which leaves it, and the presses already committed
+stay. Left any way (Enter, Tab, focus moving, code), it ends a drag or a held key's change there, with its commit (a cancel by code takes it
+back), and what is left of that drag or key does nothing. The wheel is the slider's only while it is entered or with Ctrl: otherwise it goes on up the tree, so scrolling a panel never changes a
+value by accident. With `HasDefault` and `Default` (`UISlider_SetDefault`), the reset action (`tbp:ui_reset`, Backspace), focused or only hovered,
+entered or not, puts it back, a whole change; during a change it is used and does nothing. A range that is no whole number of steps keeps its
+upper end reachable: the end counts as a step.
 
 ### Click modes
 
@@ -162,8 +168,10 @@ UI changes at once, with no element's code changing.
   theme past that, so a swap between an update and a render cannot leave a dangling pointer. Every lookup takes a NULL style and answers
   with the kind's default.
 - **Variants merge when read:** a variant is a copy of its kind's values with what it names on top, down to one state's colour.
-- **States:** normal, hovered, pressed, focused, disabled, selected, invalid. A state a theme leaves out falls back to normal.
-  `UIElementState_Choose` picks the one that shows: disabled, pressed, invalid, selected, hovered, focused, normal.
+- **States:** normal, hovered, pressed, focused, disabled, selected, invalid, entered (an edit element being edited, so its keys are its
+  own). A state a theme leaves out falls back to normal; entered falls back to focused first. `UIElementState_Choose` picks the one that
+  shows: disabled, pressed, invalid, entered, selected, hovered, focused, normal. Both test themes give the slider's thumb an entered colour
+  of its own, so a player can tell whether the arrows will move the slider or move on.
 - **Fading:** `UIElementLook_Update` moves a weight per state over the transition time (in Update; Render only reads), so a state change
   that turns around half way never jumps.
 - **What a theme survives:** a theme that does not load keeps what the screen had. A missing theme or part draws a plain box
@@ -191,15 +199,22 @@ UI is scaled, and at 28 both go away while 14 pixels stays sharp enough to read 
 `sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test: every element in every state it can be put in,
 in stacks that show content, fixed and filling sizes, over a plain background. It keeps its pixels (`UIScalePolicy_ConstantPixels`): drag the window's edges, and the controls keep their size with more room around them. P switches to following the
 window's height and back, to compare them. T switches the theme (`tbp:test_flat`, `tbp:test_nine_slice`, whose art
-`asset_source/scripts/placeholder_ui.py` generates), + and - the player's scale, L the event log, Escape quits. Each event shows in its status line and
-in the log, with its button, modifiers and place (a drag's `Changed` events a few times a second). A row tries the routing: a button per click mode (left and middle activate), a stack
+`asset_source/scripts/placeholder_ui.py` generates), + and - the player's scale, L the event log; Escape steps out one level at a time, and quits once nothing is focused. Each event shows in its status line and
+in the log, with its button, modifiers and place (a drag's `Changed` events a few times a second), and so does each element entered or left. A row tries the routing: a button per click mode (left and middle activate), a stack
 that takes the wheel holding two buttons that leave it, a button made with `TakesWheel`, a row with each pointer shape, and a box whose drag hides the cursor and reads the raw motion. Every
-slider has a default, so Backspace over one puts it back.
+slider has a default, so Backspace over one puts it back. The keyboard box (the right panel) holds a button, two sliders and a toggle to try Tab, the arrows and Enter on: the box is a
+focusable panel holding focusable elements, a group, so navigation reaches it as one, Enter goes in and Escape comes back out, and inside it Tab and the arrows stay among its elements.
+There the arrows move past the sliders, Enter or a click enters one (the green outline, the thumb's entered colour), Tab carries the editing into the next slider and only focuses the toggle.
+Escape steps out one level at a time, and quits once nothing is focused.
 
 ## Rules for a new element
 
 - Input only through the hooks; `UIScreen_GetInput` for an action's keys (`UIElement_IsActionKey`, `UIElement_IsActionPress` with its modifiers counted) and held state. A key a player could rebind is
   an action's.
+- An element that uses the arrows or typing is an **edit element**: its descriptor sets `NeedsEntering`, so those keys reach it only once it is entered, and the screen leaves it on Escape,
+  Enter, Tab and focus moving ([UIFramework.md](UIFramework.md), "Entering elements"). It answers `OnEnter` and `OnLeave` where entering and a cancel mean something to it, uses Escape only
+  for what it can take back on its own (a change in progress), and passes `Widget_IsEntered` to `UIElementState_Choose`. One whose press does something else first (a scrub) sets `EntersItself`
+  and enters itself.
 - A press that starts something answers `OnPressLost` as well as the release, and what stops the wheel says so in `OnScrollInput`. `UIElement_PostMouseEvents` tells the input events,
   `UIElement_OnContextKey` the menu key.
 - Render reads state, never writes it: state changes in the hooks and in Update. Report a missing part from Update, not Render.
