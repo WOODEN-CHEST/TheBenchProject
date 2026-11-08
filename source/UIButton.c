@@ -88,12 +88,13 @@ static Error Behaviour_OnKeyboardInput(void* widget, const WidgetKeyboardInputAr
 
 
 // Fields.
+static const UIKindCapability ButtonCapabilities[] = { { .Capability = UIElementCapability_Button, .Resolve = ResolveCapability } };
+
 static const UIKindBehaviour ButtonBehaviour =
 {
     .Kind = UIElementKind_Button,
-    .HasCapability = true,
-    .Capability = UIElementCapability_Button,
-    .ResolveCapability = ResolveCapability,
+    .Capabilities = ButtonCapabilities,
+    .CapabilityCount = sizeof(ButtonCapabilities) / sizeof(ButtonCapabilities[0]),
     .BaseSize = sizeof(UIButtonLookBase),
     .IsFocusable = true,
     .NeedsEntering = false,

@@ -20,18 +20,28 @@
  */
 
 
+// Macros.
+/** The most capabilities a kind declares. */
+#define UI_KIND_MAX_CAPABILITIES ((size_t)3)
+
+
 // Types.
+/** One capability a kind declares, and how to find it in any look's widget of the kind (it sits at the same place in all of them). */
+typedef struct UIKindCapabilityStruct
+{
+    UIElementCapability Capability;
+    WidgetCapabilityResolver Resolve;
+} UIKindCapability;
+
 /** What a kind of the kit is made of, apart from its look. Static data; every hook is optional. */
 typedef struct UIKindBehaviourStruct
 {
     /** The kind. */
     UIElementKind Kind;
-    /** Whether the kind has a capability calling code resolves (the panel has none: only its creation). */
-    bool HasCapability;
-    /** The capability, when HasCapability. */
-    UIElementCapability Capability;
-    /** Resolves the capability in any look's widget of the kind (it sits at the same place in all of them). */
-    WidgetCapabilityResolver ResolveCapability;
+    /** The capabilities calling code resolves (the panel has none: only its creation); static, CapabilityCount of them. */
+    const UIKindCapability* Capabilities;
+    /** How many, at most UI_KIND_MAX_CAPABILITIES. */
+    size_t CapabilityCount;
     /** The size of the Widget and the capability together: a look's struct is at least this large. */
     size_t BaseSize;
     /** The flags its widgets start with. */
@@ -55,6 +65,7 @@ typedef struct UIKindBehaviourStruct
     Error (*OnKeyboardInput)(void* widget, const WidgetKeyboardInputArgs* args, bool* outIsHandled);
     Error (*OnEnter)(void* widget, UIEnterCause cause);
     Error (*OnLeave)(void* widget, UILeaveReason reason);
+    Error (*OnDescendantFocus)(void* widget, uint64_t widgetId);
 } UIKindBehaviour;
 
 
@@ -67,3 +78,13 @@ const UIKindBehaviour* UIButton_GetKindBehaviour(void);
 const UIKindBehaviour* UIToggle_GetKindBehaviour(void);
 /** The slider's. */
 const UIKindBehaviour* UISlider_GetKindBehaviour(void);
+/** The scroll bar's. */
+const UIKindBehaviour* UIScrollbar_GetKindBehaviour(void);
+/** The scroll area's: its children laid out at its offset, the wheel, focus scrolled into view. */
+const UIKindBehaviour* UIScrollArea_GetKindBehaviour(void);
+/** The dropdown's head: it opens and closes its list. */
+const UIKindBehaviour* UIDropdown_GetKindBehaviour(void);
+/** The menu bar's: which entry's menu is open. */
+const UIKindBehaviour* UIMenuBar_GetKindBehaviour(void);
+/** The status bar's: its message's time, what it shows, its sections laid out. */
+const UIKindBehaviour* UIStatusBar_GetKindBehaviour(void);

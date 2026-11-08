@@ -113,6 +113,10 @@ int main(void)
     UIScaleTests_Run(&Run);
     UILookTests_Run(&Run);
     UITooltipTests_Run(&Run);
+    UIScrollTests_Run(&Run);
+    UIPopupTests_Run(&Run);
+    UIDropdownTests_Run(&Run);
+    UIMenuTests_Run(&Run);
     GameWindowStateTests_Run(&Run);
     GameWindowTests_Run(&Run);
     UITestFrameTests_Run(&Run);

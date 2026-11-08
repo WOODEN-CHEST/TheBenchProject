@@ -108,12 +108,13 @@ static Error Behaviour_OnKeyboardInput(void* widget, const WidgetKeyboardInputAr
 
 
 // Fields.
+static const UIKindCapability ToggleCapabilities[] = { { .Capability = UIElementCapability_Toggle, .Resolve = ResolveCapability } };
+
 static const UIKindBehaviour ToggleBehaviour =
 {
     .Kind = UIElementKind_Toggle,
-    .HasCapability = true,
-    .Capability = UIElementCapability_Toggle,
-    .ResolveCapability = ResolveCapability,
+    .Capabilities = ToggleCapabilities,
+    .CapabilityCount = sizeof(ToggleCapabilities) / sizeof(ToggleCapabilities[0]),
     .BaseSize = sizeof(UIToggleLookBase),
     .IsFocusable = true,
     .NeedsEntering = false,

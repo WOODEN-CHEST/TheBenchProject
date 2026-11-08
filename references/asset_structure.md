@@ -1760,7 +1760,7 @@ The look of the UI's elements as data (`agents/UIElements.md`): a JSON file in `
         "accent": "#9ec1ff",             //            each a plain colour ("Colors" above), never "@..."
         "danger": "#7a2a2a"
     },
-    "elements": {                        // [OPTIONAL] a block per kind, each [OPTIONAL]: panel, label, button, toggle, slider, tooltip
+    "elements": {                        // [OPTIONAL] a block per kind, each [OPTIONAL]: the kinds of the table below
         "button": {
             "look": namespaced key,      // [OPTIONAL] the code that draws the kind's elements; see below
             "padding": [8, 4],           // metrics: UI pixels, each number in [0;4096] (the tooltip's offset in [-4096;4096]); the table below has each kind's and its default
@@ -1785,8 +1785,15 @@ The look of the UI's elements as data (`agents/UIElements.md`): a JSON file in `
 | `toggle` | `box_size` [16, 16], `spacing` 6, `min_size` [16, 24] | `box`: a box; `check`: a box, inside it while on, as a bar while mixed; `text`: colors |
 | `slider` | `min_size` [64, 24], `thumb_size` [12, 20], `track_thickness` 4 | `track`, `fill` (the track up to the thumb), `thumb`: boxes |
 | `tooltip` | `padding` [6, 3], `offset` [12, 18] (where its top-left sits from the pointer; negative components put it left of or above the pointer), `max_width` 320 (its text wraps past it) | `background`: a box; `text`: colors |
+| `scrollbar` | `thickness` 12 (across), `min_thumb_length` 16, `thumb_inset` 2 (between the thumb and the track's sides) | `track`: a box, the whole bar; `thumb`: a box |
+| `scroll_area` | | `background`: a box behind the content (its bars are `scrollbar`s) |
+| `dropdown` | `padding` [8, 4] (around the head's text; the rows' text is inset by its first), `min_size` [48, 24] (the head's), `arrow_size` 8 (the width of the head's arrow and the list's scroll arrows), `list_padding` [1, 1], `row_height` 22, `scroll_arrow_height` 12 (the strips at the list's top and bottom while it scrolls) | `background`: a box, the head; `text`: colors, the head's; `arrow`: colors, the head's arrow and the scroll arrows; `list`: a box behind the open list; `row`: a box per row (`hovered` the highlighted row, `selected` the chosen one); `row_text`: colors |
+| `menu` | `padding` [2, 2], `item_height` 22, `item_padding` [8, 0], `check_width` 18 (the column at an item's left for its check or icon), `separator_height` 7, `separator_thickness` 1 | `background`: a box, the menu; `item`: a box per item (`hovered` and `focused` under the pointer or the keyboard, `selected` the one whose submenu is open, `disabled`); `text`: colors, the label, the check and the submenu arrow; `shortcut`: colors; `separator`: a box, its line |
+| `menu_bar` | `padding` [2, 0], `entry_padding` [8, 3] (around an entry's text), `min_size` [0, 22] | `background`: a box, the bar; `entry`: a box per entry (`hovered` under the pointer, `selected` while its menu is open); `text`: colors |
+| `status_bar` | `padding` [6, 2], `spacing` 8 (between its sections' elements), `min_size` [0, 22] | `background`: a box, the bar; `text`: colors, its message or the hover text |
+| `backdrop` | | `background`: a box over the whole surface behind a modal popup (a translucent colour dims what lies behind) |
 
-A part a theme leaves out draws a plain box and is logged once; `"kind": "none"` leaves a box empty on purpose.
+A part a theme leaves out draws a plain box and is logged once; `"kind": "none"` leaves a box empty on purpose. The looks of a menu, of a dropdown's open list, of a menu bar's entries and of the backdrop are the kit's own for now, so a `"look"` in those blocks changes nothing; the open list is drawn with its head's variant, menus and entries with their kind's own values.
 
 **Colors** are a color per state, each in the form of "Colors" above or `"@name"`, a colour of the theme's palette: `{ "normal": "#3a3a3a", "hovered": "@raised_hover" }`. The states are `normal`, `hovered`, `pressed`, `focused`, `disabled`, `selected`, `invalid` and `entered` (an edit element, such as a slider, being edited: its keys are its own). A state left out takes `normal`'s, and `entered` takes `focused`'s first; with no `normal` either, opaque white. A nine-slice's `sources` fall back the same way.
 

@@ -231,12 +231,13 @@ static Error Behaviour_OnLeave(void* widget, UILeaveReason reason)
 
 
 // Fields.
+static const UIKindCapability SliderCapabilities[] = { { .Capability = UIElementCapability_Slider, .Resolve = ResolveCapability } };
+
 static const UIKindBehaviour SliderBehaviour =
 {
     .Kind = UIElementKind_Slider,
-    .HasCapability = true,
-    .Capability = UIElementCapability_Slider,
-    .ResolveCapability = ResolveCapability,
+    .Capabilities = SliderCapabilities,
+    .CapabilityCount = sizeof(SliderCapabilities) / sizeof(SliderCapabilities[0]),
     .BaseSize = sizeof(UISliderLookBase),
     .IsFocusable = true,
     .NeedsEntering = true,

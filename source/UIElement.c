@@ -1,4 +1,5 @@
 #include "UIElement.h"
+#include "UIContextMenu.h"
 #include "AssetManager.h"
 #include "NamespacedKey.h"
 #include "TextComponent.h"
@@ -111,6 +112,13 @@ Error UIElementLook_SetVariant(UIElementLook* self, const unsigned char* variant
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
+    }
+    bool IsSame = false;
+    Error Compared = StringUTF8_EqualsExact(Name, self->_variant, &IsSame); // Both are terminated names: it cannot fail.
+    Error_Deconstruct(&Compared);
+    if (IsSame)
+    {
+        return Error_CreateSuccess(); // The same variant: what it read from the theme still holds.
     }
     Memory_Copy(Name, self->_variant, sizeof(Name));
     self->_hasCheckedTheme = false;
@@ -714,6 +722,31 @@ void UIPressable_Cancel(UIPressable* self)
 
 
 // Public functions: shared helpers.
+void UIElement_DrawArrow(UIRenderContext* context, Rectangle box, UIArrowDirection direction, Color color)
+{
+    bool IsVertical = (direction == UIArrowDirection_Up) || (direction == UIArrowDirection_Down);
+    float Base = Math_FloorFloat((IsVertical ? box.width : box.height) + 0.5f);
+    float Room = Math_FloorFloat((IsVertical ? box.height : box.width) + 0.5f);
+    if (!(Base >= 1.0f) || !(Room >= 1.0f))
+    {
+        return;
+    }
+    // A step per pixel row: the base row is Base wide and each row toward the point two pixels narrower.
+    float Height = Math_MinFloat(Room, Math_CeilFloat(Base * 0.5f));
+    float BaseStart = Math_FloorFloat((IsVertical ? box.x : box.y) + 0.5f);
+    float PointStart = Math_FloorFloat((IsVertical ? box.y : box.x) + ((Room - Height) * 0.5f) + 0.5f);
+    for (float Step = 0.0f; Step < Height; Step += 1.0f)
+    {
+        float Width = Math_MaxFloat(1.0f, Base - (2.0f * Step));
+        float Across = BaseStart + Math_FloorFloat((Base - Width) * 0.5f);
+        bool IsBaseFirst = (direction == UIArrowDirection_Down) || (direction == UIArrowDirection_Right);
+        float Along = IsBaseFirst ? (PointStart + Step) : (PointStart + Height - 1.0f - Step);
+        Rectangle Row = IsVertical ? (Rectangle){ .x = Across, .y = Along, .width = Width, .height = 1.0f }
+            : (Rectangle){ .x = Along, .y = Across, .width = 1.0f, .height = Width };
+        UIRenderContext_RenderPixelRectangle(context, Row, color);
+    }
+}
+
 bool UIElement_IsActionKey(const UIScreen* screen, GameActionId action, GameKey key)
 {
     const GameInput* Input = UIScreen_GetInput(screen);
@@ -846,7 +879,12 @@ Error UIElement_OnContextKey(Widget* widget, const WidgetKeyboardInputArgs* args
     }
     *outIsHandled = true;
     UIEventMouse Mouse = MakeEventMouseFromKey(widget, args);
-    return UIScreen_PostWidgetMouseEvent(Screen, Widget_GetId(widget), UIElementEvent_ContextRequested, &Mouse);
+    Error Result = UIScreen_PostWidgetMouseEvent(Screen, Widget_GetId(widget), UIElementEvent_ContextRequested, &Mouse);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    return UIContextMenu_Request(Screen, Widget_GetId(widget), Mouse.ScreenPosition, true, NULL);
 }
 
 Error UIElement_ApplyOptions(Widget* widget, const UIElementOptions* options)

@@ -414,6 +414,26 @@ void UILookTests_Run(TestRun* run);
  *  surface, a screen with nothing to show it with (UITooltipTests.c). */
 void UITooltipTests_Run(TestRun* run);
 
+/** @brief The scrollable piece's arithmetic, the scroll bar's thumb and paging, the scroll area: its content at its offset, bars by mode,
+ *  measuring at the view's width, the wheel up the tree at an end, Shift, focus scrolled into view (nested too), page keys, an idle area
+ *  measuring nothing (UIScrollTests.c). */
+void UIScrollTests_Run(TestRun* run);
+
+/** @brief The popup layer: the placement's arithmetic, opening above everything and following the anchor, closing by a press outside (going
+ *  on to the widget behind), by Escape, by the owner going away, nested popups from the inside out, modal popups and their backdrop, an
+ *  owner that counts as inside, navigation kept in the topmost popup, refusals (UIPopupTests.c). */
+void UIPopupTests_Run(TestRun* run);
+
+/** @brief The choice piece, the row recycler's visible range, and the dropdown: opening below or above by the room or forced, a row chosen by
+ *  a click or a press-drag-release, a long list's strips, bar and wheel, keys passing the head and working in the list at once, a letter, a
+ *  provider's 100 000 options costing the rows in view, Ctrl with the wheel, mixed, disabled (UIDropdownTests.c). */
+void UIDropdownTests_Run(TestRun* run);
+
+/** @brief Menus: items, separators, disabled and checked items, keys, submenus by resting, Right and a click, provided submenus, a handler
+ *  destroying the owner, checks; context requests walking up to a provider (right click, the menu key, none found); the menu bar (opening,
+ *  switching, press-drag-release, Left and Right); the status bar's message and hover text (UIMenuTests.c). */
+void UIMenuTests_Run(TestRun* run);
+
 /** @brief The ui_theme asset type: every key, each refusal with its message, state fallbacks, variants, hostile sizes and
  *  counts, a screen's theme swap and teardown; box styles; the nine-slice's quads (UIThemeTests.c). */
 void UIThemeTests_Run(TestRun* run);

@@ -29,9 +29,13 @@ The elements calling code builds a UI from (the kit, panels, buttons, stacks, th
   capabilities, typed properties, `Widget_Destroy`). Concrete widgets embed it first.
 - **UIScreen** (`UIScreen.h`, split by job into `source/UIScreen.c` (registry, roots, draw order, destruction,
   update/render, layout, hit testing and coordinates through render transforms), `UIScreenInput.c` (pointer, buttons, wheel, keys,
-  text, focus), `UIScreenNavigation.c`, `UIScreenAnimation.c`, `UIScreenEvents.c` (notifications and cues) and `UIScreenTooltips.c`
-  (hover text), sharing the private `source/UIInternal.h`).
+  text, focus), `UIScreenNavigation.c`, `UIScreenAnimation.c`, `UIScreenEvents.c` (notifications and cues), `UIScreenTooltips.c`
+  (hover text), `UIScreenPopups.c` (the popup layer) and `UIScreenContextMenus.c` (context menu providers), sharing the private
+  `source/UIInternal.h`).
 - **UITooltip** (`UITooltip.h`, implemented in `source/UIScreenTooltips.c`): hover text, a service of the screen (below, "Hover text").
+- **UIPopup** (`UIPopup.h`, implemented in `source/UIScreenPopups.c`): the popup layer, a service of the screen (below, "Popups").
+- **UIContextMenu** (`UIContextMenu.h`, implemented in `source/UIScreenContextMenus.c`): who answers a context request, a service of the
+  screen (below, "Context menus").
 - **LabelWidget** (`LabelWidget.h/.c`): the first concrete widget (below).
 - **UITestFrame** (`UITestFrame.h/.c`): a debug game frame running a screen over the world test (see
   [WorldRuntime.md](WorldRuntime.md)).
@@ -246,6 +250,7 @@ The screen routes, in this order, from its `UIScreenInput`:
    A press that hits no widget is a **click outside**: it ends navigation and clears focus, and the game gets it. That
    includes any press while the screen has no pointer (the cursor captured for mouse look, or the pointer over UI of a
    higher frame), so clicking into the world blurs the UI. With another press held it is neither: it is consumed and does nothing. The rest is under "A held press" below.
+   While popups are open, a press first closes those it falls outside of (below, "Popups"), and a press on a modal popup's backdrop goes no further.
 3. **Wheel.** Wheel movement over a widget is consumed from the game, whether anything uses it or not. It goes to that widget's `OnScrollInput`, then up through its
    ancestors that still take input (a hook may have taken one away), until one sets `*outIsHandled`.
 4. **Keys and text** (when the screen has the keyboard). The **focused** widget gets every key first (Tab, arrows, Enter
@@ -256,7 +261,9 @@ The screen routes, in this order, from its `UIScreenInput`:
    hear it twice for two reasons. Nothing else goes this way, no repeat and no typed text. A
    handled key is consumed and **owned** by the widget that handled it until it is released: the key's repeats and
    release go to that widget alone, even after focus moved (and are dropped once it is destroyed, detached or
-   input-disabled). Typed text follows the focused path (if any codepoint is handled, the tick's text is consumed).
+   input-disabled). Typed text follows the focused path (if any codepoint is handled, the tick's text is consumed). A press of the context menu
+   action (`tbp:ui_context_menu`) that the focused widget and its ancestors leave asks for a context menu for the focused widget (below,
+   "Context menus").
 5. **Keyboard navigation** acts on the navigation actions nobody handled (`GameAction_UI*`, rebindable), and consumes
    only what it uses. While an edit element is entered, the screen's own rules for it take navigation's place (below):
    - `ui_next` / `ui_previous` (Tab / Shift+Tab) move focus between the current level's focusable widgets in reading
@@ -268,7 +275,9 @@ The screen routes, in this order, from its `UIScreenInput`:
      outline) and focus moves to its first one. This also starts navigation, so Enter opens a container focused by a
      click. On an edit element Enter enters it instead (below). Otherwise Enter is left to the game.
    - `ui_back` (Escape) leaves the entered widget (it is focused again); at the top level it ends navigation and clears
-     focus; outside navigation it clears focus; with nothing to do it is left to the game (where it is `pause`).
+     focus; outside navigation it clears focus; with nothing to do it is left to the game (where it is `pause`). While a popup that closes on
+     Escape is open, an Escape that nothing used closes the topmost one first (an element entered inside it is left with `Cancel` as it closes).
+   - While popups are open, navigation's top level is the topmost popup: Tab and the arrows stay among its focusable widgets.
    - Non-focusable widgets are transparent to navigation: their focusable descendants belong to the enclosing level.
    - While navigating the white outline marks the focused widget, and a green one an entered edit element (as it marks the groups navigation
      entered); navigation re-enters where focus is.
@@ -375,7 +384,7 @@ for it. A box of no size holds no point.
 
 ## Notifications
 
-State changes (`UIEventKind_HoverChanged`, `FocusChanged`, `TabChanged`, `ActiveChanged`, `EnteredChanged`), sound cues (`UIEventKind_Cue`, below) and a widget type's own events
+State changes (`UIEventKind_HoverChanged`, `FocusChanged`, `TabChanged`, `ActiveChanged`, `EnteredChanged`), a popup closing (`UIEventKind_PopupClosed`, "Popups" above), sound cues (`UIEventKind_Cue`, below) and a widget type's own events
 (`UIScreen_PostWidgetEvent`, `UIEventKind_Widget` with a type-defined id and an optional `UIPropertyValue`; `UIScreen_PostWidgetMouseEvent` adds the mouse's data by value,
 `UIEvent.HasMouse` and `UIEvent.Mouse`: button, modifiers, screen position, scroll delta, whether over the widget) are
 **queued** and delivered at one point, at the end of `UIScreen_Update` (after the widget updates and layout), never in
@@ -414,10 +423,56 @@ It shows as a widget of the type the factory names (`UIWidgetFactory_SetTooltipT
 made with no arguments the first time a text shows, as a root of the overlay layer: it takes no input, so the widget under it keeps the hover. That widget
 reads `UITooltip_GetCurrent` in its Update and places itself in its Layout. Without a type nothing shows and the rest still works.
 
+## Popups
+
+Things that open above everything (a dropdown's list, a menu, a modal dialog) are roots of the `Popup` layer opened through the screen
+(`UIPopup.h`): `UIScreen_OpenPopup(screen, rootId, &options)` takes an initialized widget that is detached or a root, and
+`UIScreen_ClosePopup(screen, rootId)` closes it with every popup opened above it. `UIScreen_CloseAllPopups`, `UIScreen_IsPopupOpen`,
+`UIScreen_GetPopupCount` and `UIScreen_GetPopupAt` are the rest. All are safe from hooks and handlers; a popup opened in a tick takes input
+from the next.
+
+- **Placed against an anchor** each update, after the widgets' updates and before the layout: a box in normalized screen coordinates
+  (`AnchorBox`), or a widget whose box is followed while it lives (`AnchorWidgetId`), so a popup keeps its place when the window resizes. It
+  opens on a side (`Below`, `Above`, `Right`, `Left`, or `Center`: centred on the anchor, never flipped, a dialog on the whole surface's box)
+  at its preferred size (`Widget_Measure` at an unbounded width). It flips to the other side when it does not fit and fits there, or there is
+  more room there (`Flips`); it may be made shorter to fit the room, down to a minimum (`AllowsShrinking`, `MinimumLength`, a long list);
+  below or above it can be as wide as its anchor at least (`MatchesAnchorWidth`); then it is kept on the surface, in whole pixels, and when
+  the surface keeps it narrower than it asked it is asked again at the width it gets, so what wraps is as tall as it will be. The
+  arithmetic is the pure `UIPopupPlacement_Resolve`, in surface pixels. It is scaled like its owner (`IsScaledLikeOwner`, on by default):
+  its own scale follows the owner's effective scale as a share of the screen's, so a popup of a zoomed element is zoomed with it.
+- **Closing.** A press outside every open popup closes them all, and goes on to the widget behind as any press does; a press inside one
+  closes those above it. A press on the popup's owner counts as inside when `IsOwnerInside` is set (a menu bar's entry, a dropdown's head:
+  the owner decides). Escape closes the topmost popup when it `ClosesOnEscape`; a topmost popup that refuses Escape keeps every popup under
+  it open too. A popup closes when its owner (`OwnerId`) is destroyed,
+  detached or hidden, and when its root goes. Popups nest, and close from the inside out. A popup's root is **destroyed** when it closes: open
+  a new one each time. It posts the `Close` cue (`Open` when it opens).
+- **Its owner is told:** `UIEventKind_PopupClosed`, delivered under the owner's id with the `UIPopupCloseReason` as the `WidgetEventId`
+  (code, a press outside, Escape, the owner gone). Like a state change, it is dropped when the owner is destroyed before delivery.
+- **Modal** (`IsModal`): a backdrop under it, a root of the same layer over the whole surface, takes every press, the wheel and hover
+  over the rest of the screen: a press on it is swallowed and nothing behind can be pressed while the popup is open, from the update it
+  opens in on (a press that lands behind before the backdrop's first layout is swallowed too). The backdrop is a
+  widget of the type the factory names (`UIWidgetFactory_SetBackdropType`; the kit registers a theme-driven one, the `backdrop` kind), so
+  opening a modal popup without one is refused.
+- **Focus** moves in on open (`MovesFocus`): to `FocusId`, entered at once if it is an edit element (the dropdown's list is one, so its keys
+  work at once), or to nothing. When a popup closes with the focus inside it, or with nothing focused, the focus goes back to the widget
+  focused when it opened, entered again if it was (a text box under its context menu); a press that closes it and goes on gives nothing
+  back, since it puts the focus where it lands (so no scroll area scrolls the opener into view under the press). While a popup is open,
+  navigation stays in the topmost one: a group entered before it opened lies behind it, and neither Tab nor Escape steps back into it.
+
+## Context menus
+
+`UIContextMenu_SetProvider(screen, widgetId, provider, userData)` gives a widget a context menu, in a side table emptied when the widget is
+torn down (`UIContextMenu_Clear`, `UIContextMenu_HasProvider`). A request (`UIContextMenu_Request(screen, widgetId, position, isFromKey,
+&isAnswered)`) walks up from the widget to the first ancestor with a provider and calls it with a `UIContextMenuRequest`: the provider's
+widget, the widget the request is for, the place in normalized screen coordinates and whether a key asked. The provider opens what it wants,
+usually `UIMenu_OpenAt` ([UIElements.md](UIElements.md), "Menus"); with no provider up the tree nothing happens. Requests come from a right
+press let go over the widget it began on (the pointer's place), from the context menu action on the focused widget when nothing used it (the
+widget's middle), and from an element's `UIElement_OnContextKey`. The element's `ContextRequested` event is posted either way.
+
 ## Update order
 
 `UIScreen_Update`: snapshot the attached widgets (pre-order) → route input → advance animations → update the snapshot
-widgets that are still alive, attached and updated → **Layout** the snapshot widgets that are still alive and attached,
+widgets that are still alive, attached and updated → place the open popups (closing those whose owner went) → **Layout** the snapshot widgets that are still alive and attached,
 parents first (`Layout` hook, with a `UILayoutContext`: a measuring render context for the viewport and the parent's
 absolute size) → deliver notifications → tear down destroyed widgets. Widgets created or attached during the tick (by a
 hook, a handler or input routing) get their first Update and Layout next tick, like frames added during a manager
@@ -436,7 +491,7 @@ for drawing and for hit testing alike:
 | `Normal` (the default) | yes, within its layer | the ordinary root |
 | `Floating` | yes, within its layer | movable windows |
 | `Maximized` | no | a window that fills the screen |
-| `Popup` | no | menus and the like |
+| `Popup` | no | popups ("Popups" above), each above those opened before it, a modal one's backdrop under it |
 | `Overlay` | no, and it takes no input | what only shows: the pointer goes through it, nothing in it can have focus or a press, and navigation passes it and leaves it at once if it becomes one |
 
 A layer belongs to a root: a root moved under a parent stops having one, and gets back its own if it becomes a root again. `UIScreen_BringToTop` and a root's `Widget_SetZLayer` work within the
@@ -493,7 +548,8 @@ typed properties there; a type that uses the arrows or typing sets `NeedsEnterin
 cancel mean something to it); construct only the concrete part in the constructor; create child widgets in `Initialize`;
 report keys you handle through `outIsHandled` (handle a key's press to get its repeats and release), and the wheel the same way in `OnScrollInput`; a press that starts something must
 answer `OnPressLost` as well as the release (Destroy tells nothing: the widget is gone); answer `Measure` in your own UI pixels and turn them into surface pixels
-with `Widget_GetEffectiveScale`; give a `HitTest` hook when your shape is not your box; post your own
+with `Widget_GetEffectiveScale`; give a `HitTest` hook when your shape is not your box; `OnDescendantFocus(self, focusedId)` runs on each ancestor of a widget that has just
+become focused, innermost first (a scroll area scrolls it into view there, unless a press focused it); post your own
 events with `UIScreen_PostWidgetEvent` or `UIScreen_PostWidgetMouseEvent` (they reach subscribers even if the widget is destroyed in the same update);
 never write state in `Render`.
 
@@ -501,5 +557,6 @@ never write state in `Render`.
 
 The program-wide factory owns every widget's storage (per-type pools). A screen borrows the factory and owns its
 registry, queues and widgets' lifetimes. Teardown order at program end: screens (they destroy their widgets) → factory.
-Nothing allocates per tick in steady state: the snapshot, navigation candidates, event queue, keyframe storage and hover text's
-buffer (which a provider writes into) are reused; childless widgets allocate no child lists.
+Nothing allocates per tick in steady state: the snapshot, navigation candidates, event queue, keyframe storage, hover text's
+buffer (which a provider writes into) and the popup and context menu tables are reused; childless widgets allocate no child lists. Opening a
+popup makes its widgets then (a menu copies its items once, when it opens).

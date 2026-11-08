@@ -41,3 +41,14 @@ Error UIStandardLooks_Register(UIKit* kit);
  * @returns Success, or the factory's error.
  */
 Error UIStandardLooks_RegisterTooltip(UIKit* kit, UIWidgetFactory* factory, uint64_t* outTypeId);
+
+/**
+ * @brief Registers the widget type a screen puts under a modal popup (UIPopup.h): the theme's backdrop kind's background over the whole
+ *        surface (nothing drawn when the theme gives none), taking every press, the wheel and hover there. A plain widget type made with
+ *        no arguments; the kit names it to the factory (UIWidgetFactory_SetBackdropType).
+ * @param kit The kit, whose capabilities exist already; must not be NULL.
+ * @param factory The kit's factory; must not be NULL.
+ * @param outTypeId [out] Receives the type's id. Must not be NULL.
+ * @returns Success, or the factory's error.
+ */
+Error UIStandardLooks_RegisterBackdrop(UIKit* kit, UIWidgetFactory* factory, uint64_t* outTypeId);

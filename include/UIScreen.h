@@ -193,7 +193,10 @@ typedef enum UIEventKindEnum
     UIEventKind_Widget,
     /** @brief A named sound cue (WidgetEventId is a UIElementCue): what an element would sound like. Posted only while a
      *  subscription asks for this kind (UIScreen_PostCue), and delivered even if the widget was destroyed after posting it. */
-    UIEventKind_Cue
+    UIEventKind_Cue,
+    /** @brief A popup the widget owns closed (UIPopup.h; WidgetEventId is the UIPopupCloseReason). Like a state change, it is dropped
+     *  when the owner is destroyed before delivery (a submenu's item going with its menu). */
+    UIEventKind_PopupClosed
 } UIEventKind;
 
 /**
@@ -443,6 +446,11 @@ typedef struct UIScreenStruct
     GenericBuffer _tooltipText;
     /** @brief The widget that shows it (a root in the overlay layer), or WIDGET_ID_INVALID until one is needed. */
     uint64_t _tooltipDisplayId;
+
+    /** @brief The open popups (UIPopup.h; a private element type), the first opened first. Owned. */
+    GenericBuffer _popups;
+    /** @brief Context menus' side table (UIContextMenu.h; a private element type), one entry per widget with a provider. Owned. */
+    GenericBuffer _contextMenus;
 
     /** @brief True while UIScreen_Update runs. */
     bool _isUpdating;

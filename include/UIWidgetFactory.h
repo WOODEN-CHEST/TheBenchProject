@@ -149,6 +149,8 @@ typedef struct UIWidgetFactoryStruct
     UIKit* _kit;
     /** @brief The widget type screens show hover text with (UITooltip.h), or WIDGET_TYPE_ID_INVALID for none. */
     uint64_t _tooltipTypeId;
+    /** @brief The widget type screens put under a modal popup (UIPopup.h), or WIDGET_TYPE_ID_INVALID for none. */
+    uint64_t _backdropTypeId;
 } UIWidgetFactory;
 
 
@@ -282,6 +284,27 @@ static inline void UIWidgetFactory_SetTooltipType(UIWidgetFactory* self, uint64_
 static inline uint64_t UIWidgetFactory_GetTooltipType(const UIWidgetFactory* self)
 {
     return self->_tooltipTypeId;
+}
+
+/**
+ * @brief Names the widget type a screen puts under a modal popup (UIPopup.h; the kit registers one): made with NULL arguments when the
+ *        popup opens, as a root of the popup layer stretched over the whole surface, it takes every press, the wheel and hover there.
+ * @param self The factory; must not be NULL.
+ * @param typeId The type, or WIDGET_TYPE_ID_INVALID for none (modal popups are then refused).
+ */
+static inline void UIWidgetFactory_SetBackdropType(UIWidgetFactory* self, uint64_t typeId)
+{
+    self->_backdropTypeId = typeId;
+}
+
+/**
+ * @brief Returns the widget type a screen puts under a modal popup.
+ * @param self The factory; must not be NULL.
+ * @returns The type, or WIDGET_TYPE_ID_INVALID for none.
+ */
+static inline uint64_t UIWidgetFactory_GetBackdropType(const UIWidgetFactory* self)
+{
+    return self->_backdropTypeId;
 }
 
 /**

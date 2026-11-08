@@ -1,7 +1,7 @@
 # UI elements: the kit, themes and looks
 
-The elements calling code builds a UI from: panels, labels, buttons, toggles, sliders and stacks, sized in UI pixels and
-drawn through a theme. They stand on the framework in [UIFramework.md](UIFramework.md) (screens, widgets, input routing,
+The elements calling code builds a UI from: panels, labels, buttons, toggles, sliders, stacks, scroll areas and scroll bars,
+dropdowns, menus, menu bars and status bars, sized in UI pixels and drawn through a theme. They stand on the framework in [UIFramework.md](UIFramework.md) (screens, widgets, input routing,
 notifications).
 
 | Module | Files | What it is |
@@ -11,11 +11,18 @@ notifications).
 | UITheme | `include/UITheme.h`, `source/UITheme.c`, `source/UIThemeDefinition.c`, private `source/UIThemeInternal.h` | The `ui_theme` asset type: the look of every element kind as data. |
 | UIElement | `include/UIElement.h`, `source/UIElement.c` | What every element kind shares: its options, its events and cues, plain text content, icons, the press behaviour, and the helpers looks draw with. |
 | UIKit | `include/UIKit.h`, `source/UIKit.c`, private `source/UIKitInternal.h` | The one way to make elements, over one widget factory: capabilities, the looks registered by kind and name, the widget types it composes. |
-| UIStandardLooks | `include/UIStandardLooks.h`, `source/UIStandardLooks.c` | The kit's standard look (`tbp:test_box`) for the panel, the button, the toggle and the slider, and the widget that shows hover text. |
+| UIStandardLooks | `include/UIStandardLooks.h`, `source/UIStandardLooks.c` | The kit's standard look (`tbp:test_box`) for the panel, the button, the toggle, the slider, the scroll bar, the scroll area, the dropdown's head, the menu bar and the status bar; the widget that shows hover text; a modal popup's backdrop. |
 | StackWidget | `include/StackWidget.h`, `source/StackWidget.c` | Children in a row or a column. Its arithmetic (`UIStackLayout`) is shared with the panel. |
 | UIPanel | `include/UIPanel.h`, `source/UIPanel.c` | A background and padding for what it holds. |
 | UILabel | `include/UILabel.h`, `source/UILabel.c`, with `LabelWidget` | `LabelWidget` as an element of the kit. |
 | UIButton, UIToggle, UISlider | `include/UI<Kind>.h`, `source/UI<Kind>.c` | The element kinds with input. |
+| UIScrollable | `include/UIScrollable.h`, `source/UIScrollable.c` | The scrollable piece: content and view sizes, the clamped offset, a mode per axis; its arithmetic pure. |
+| UIScrollbar, UIScrollArea | `include/UI<Kind>.h`, `source/UI<Kind>.c` | A bar bound to another element's scrollable piece; content larger than its box, with two bars. |
+| UIChoice | `include/UIChoice.h`, `source/UIChoice.c` | The choice piece: options as texts or from providers, the selection, mixed. |
+| UIRowRecycler | `include/UIRowRecycler.h`, `source/UIRowRecycler.c` | Widgets for the rows in view only, reused as the view scrolls. |
+| UIDropdown | `include/UIDropdown.h`, `source/UIDropdown.c` | One choice of several: a head and a list in a popup. |
+| UIMenu | `include/UIMenu.h`, `source/UIMenu.c`, private `source/UIMenuInternal.h` | Menus as data, each open level a popup list of items. |
+| UIMenuBar, UIStatusBar | `include/UI<Kind>.h`, `source/UI<Kind>.c` | A strip of entries opening menus; a strip of sections and a line of text. |
 | UIGalleryFrame | `include/UIGalleryFrame.h`, `source/UIGalleryFrame.c` | Every element in every state: `--ui-gallery`. |
 
 ## Using it
@@ -72,7 +79,8 @@ A variant costs, from cheapest:
 3. **A look of its own** (below): Render and Measure, maybe Update.
 
 **Looks.** A look is a struct that starts with its kind's look base (`UIPanelLookBase`, `UIButtonLookBase`, `UIToggleLookBase`,
-`UISliderLookBase`: the `Widget`, then the capability) and a `UILookVTable`:
+`UISliderLookBase`, `UIScrollbarLookBase`, `UIScrollAreaLookBase`, `UIDropdownLookBase`, `UIMenuBarLookBase`, `UIStatusBarLookBase`: the `Widget`, then the
+capability) and a `UILookVTable`:
 
 | Slot | | What it does |
 |---|---|---|
@@ -90,8 +98,9 @@ Measure alone (`OwnButtonLook`), the gallery another (the diamond). Looks are re
 kit registers its standard look for every kind under `UI_KIT_STANDARD_LOOK` (`UIStandardLooks`: theme-driven boxes, flat or nine-slice, the example to
 follow). An element is made with the look its options name (`UIElementOptions.Look`), else the one the screen's theme names for its kind (`"look"` in
 the kind's block), else the standard one; a name no look answers gets the standard look and is logged once (per name). **Looks are fixed at
-creation:** swapping the theme changes the values a look reads, never an element's widget type. The label's and the tooltip's looks are not
-replaceable yet (`// TODO:` in `UIKit.c`'s kinds): `UIKit_RegisterLook` refuses them.
+creation:** swapping the theme changes the values a look reads, never an element's widget type. The looks of the label, the tooltip, a menu
+(its list and items), a dropdown's open list and rows, a menu bar's entries and the backdrop are not replaceable yet (`// TODO:` in `UIKit.c`'s
+kinds): `UIKit_RegisterLook` refuses the label, the tooltip, the menu and the backdrop kinds, and the other parts are the kit's own widget types.
 
 A slider look also tells the behaviour how long its thumb is (`UISliderCapability_SetThumbLength`, in its own UI pixels, from its Update): a press within
 the thumb holds it where it was grabbed, and the thumb's centre travels the track less its length. A look that never says has a thumb of no length: the
@@ -105,9 +114,12 @@ ids. A second kit over a factory is refused.
    that table, up to `UI_THEME_MAX_PARTS` values per kind.
 2. If calling code talks to it, a value in `UIElementCapability`, and a capability struct holding behaviour alone (content as `UITextContent` and
    `UIElementIcon`, never a look) with its helpers and its by-id functions, in a module of its own; a look base struct (`Widget`, then the capability).
-3. Its `UIKindBehaviour` (`source/UIKitInternal.h`: the capability's resolver, the flags its widgets start with, its hooks for construction, the
-   behaviour's update, input, entering, leaving and hover) and its case in `GetBehaviour` (`source/UIKit.c`), and its kit creation function, which
-   resolves the look (`ResolveLookType`).
+   A capability may embed pieces calling code also reaches by id (the dropdown's holds the choice piece; the scroll area's the scrollable piece): the kind
+   declares each, up to `UI_KIND_MAX_CAPABILITIES`.
+3. Its `UIKindBehaviour` (`source/UIKitInternal.h`: the capabilities and their resolvers, the flags its widgets start with, its hooks for construction, the
+   behaviour's update, input, entering, leaving, hover and a descendant's focus) and its case in `GetBehaviour` (`source/UIKit.c`), and its kit creation
+   function, which resolves the look (`ResolveLookType`). A kind made of parts the kit adds (the scroll area's bars, the status bar's sections) gets them
+   from that function, once the element is attached, each of the look the theme names for its own kind.
 4. Its standard look in `UIStandardLooks.c`, registered in `UIStandardLooks_Register`.
 5. Its section in `references/asset_structure.md`, "UI themes", and the gallery.
 
@@ -151,6 +163,75 @@ value by accident. With `HasDefault` and `Default` (`UISlider_SetDefault`), the 
 entered or not, puts it back, a whole change; during a change it is used and does nothing. A range that is no whole number of steps keeps its
 upper end reachable: the end counts as a step.
 
+**Scroll area** (`UIScrollArea.h`, kind `scroll_area`). Content larger than its box. Calling code adds the content to the area as to any parent
+(one child is the usual, a column stack); every child but its two bars gets the same box. It measures the content at the view's width while only
+the vertical axis scrolls, unbounded across while that axis scrolls, and the content box is at least the view, so a short page still fills it. It
+cuts its subtree to its box and places the content at its offset; its two bars (made with it by `UIKit_CreateScrollArea`, each of the look the theme
+names for the `scrollbar` kind) lie on top along its right and bottom edges, by the modes (`UIScrollMode_Disabled`; `_Auto`, a bar while the content
+is longer; `_Always`): a bar that does not show has no size, and the vertical one runs the whole height, the corner being the end of its track. The
+wheel over it, or over anything inside it that leaves the wheel alone, scrolls it while it can still scroll that way and then goes on up the tree, so
+an area inside an area scrolls the outer one at the inner's end; Shift turns a plain wheel across. Page Up and Page Down that the focused widget inside
+leaves scroll a page. A widget inside focused by the keyboard or by code is scrolled into view, as little as it takes (nested areas each in the same
+tick); a press never scrolls, so the content does not jump under the pointer. It takes input and is not focusable. Measuring is cached: an idle area
+measures nothing.
+
+The **scrollable piece** (`UIScrollable.h`) is what every element whose content can be larger than its box holds (the scroll area, the dropdown's
+list; later the text box, the list, the windows): the content's and the view's sizes in its own UI pixels, the offset (clamped to [0, content - view]
+whenever either changes) and a mode per axis. Calling code moves it by id: `UIScrollable_SetOffset`, `_ScrollBy`, `_EnsureVisible` (a box of the
+content), `_RevealWidget` (a descendant), `_GetOffset`, `_GetRange`, `_GetSizes`, `_SetModes`, `_SetWheelStep`. The arithmetic on the struct is pure.
+Offsets are floats: content past about 16 million UI pixels scrolls in steps larger than a pixel.
+
+**Scroll bar** (`UIScrollbar.h`, kind `scrollbar`). A track and a thumb along one axis, bound to an element holding a scrollable piece
+(`UIScrollbarOptions.TargetId`, `UIScrollbar_SetTarget`). The thumb's length is the view's share of the content, never shorter than the look's
+minimum (`min_thumb_length`); a left press on the thumb holds it where it was grabbed and a drag moves it, past the window too; a press on the track
+pages toward the pointer, and holding it pages again after `UI_SCROLLBAR_PAGE_DELAY_SECONDS` until the thumb reaches the pointer. The wheel over it
+scrolls along its axis. With nothing to scroll the thumb fills the track and presses do nothing. It is not focusable.
+
+**Dropdown** (`UIDropdown.h`, kind `dropdown`). One choice of several, through the **choice piece** (`UIChoice.h`): options as a list of texts
+(`UIChoice_SetOptions`) or from providers, a count and the text at an index (`UIChoice_SetProvider`, for long or changing lists; the rows in view
+keep their texts until the count changes or `UIChoice_Refresh` says the data did), the selected one
+(`UIChoice_SetSelected`, `_GetSelected`) and mixed (`UIChoice_SetMixed`: the head shows the mixed text, a hyphen unless its options give one). The
+**head** is a press element: focused, the arrows go past it; a left press opens the list at once (so press, drag to a row, let go chooses it; a
+release within a click's distance of the press chooses nothing, so a list placed over its head is not chosen by the click that opened it), Enter
+or Space opens it too; Ctrl and the wheel step through the options while it is closed, a whole change a notch, and a plain wheel goes on up the tree.
+The **list** is a popup below the head, or above when there is too little room below and more above (`UIDropdownDirection_Auto`; `Up` and `Down`
+force a side), as wide as the head at least, at most `VisibleCount` rows tall (`UIDropdown_SetVisibleCount`) and shorter when the room is. It makes
+widgets for the rows in view only (the **row recycler**, `UIRowRecycler.h`: bound in the list's Update, placed in its Layout, reused as it
+scrolls), so a provider's hundred thousand options cost what the rows on screen cost. With more rows than fit it scrolls by the wheel, the keys
+and a bar at its side, between strips at its top and bottom whose arrows show while more lies that way (a press on one scrolls a row, holding it goes
+on). It is an edit element entered as it opens: Up and Down move the highlight, Home and End go to the ends, Page Up and Page Down a list's height, a
+letter to the next option starting with it, Enter chooses, Tab and Escape close it. The highlight starts at the selected option and follows the
+pointer when it moves (rows scrolled under a pointer at rest leave it where the keys put it). A row chosen posts `Changed` then `Committed` on the
+head with the index as a double (nothing when it was selected already and not mixed), and the list closes, the focus back on the head. Disabled (`UIDropdown_SetIsEnabled`), the head swallows presses and is not focusable.
+`UIDropdown_Open`, `_Close` and `_IsOpen` work by id.
+
+**Menus** (`UIMenu.h`). A menu is data: `UIMenuItem`s, each a label with an optional icon, a shortcut text (only text: nothing binds it), a check,
+disabled, a separator, or a submenu (`Children`, or built by the menu's `SubmenuProvider` when it opens, `HasProvidedSubmenu`, through
+`UIMenuBuilder_Add`, which copies each item at once). Submenus nest at most `UI_MENU_MAX_DEPTH` levels; one that cannot open does not, and is
+logged once. `UIMenu_Open(screen, items, count, &options, &menuId)` copies the whole tree and opens its first level as a popup against an
+anchor; `UIMenu_OpenAt(screen, request, items, count, handler, userData)` opens one for a context request at its place, owned by the widget it is for.
+Items are press elements: the arrows move between them (navigation, kept in the topmost menu), Enter or Space activates, a click or a release over
+one of a press that began elsewhere activates. An item with a submenu opens it instead: after the pointer rests on it for
+`UI_MENU_SUBMENU_DELAY_SECONDS` (resting on another item of the same menu closes it again), on a click, or on Right (its first item focused); Left
+closes a submenu, the focus back on its item; Escape closes one level. A menu opened by the mouse has nothing focused; one opened by a key focuses
+its first item. Activating an item closes every level, the focus goes back where it was, and the menu's handler gets a `UIMenuActivation` (the
+item's id, the owner, the button and modifiers). The menu knows nothing of actions: whoever opens it runs what an id means.
+
+**Menu bar** (`UIMenuBar.h`, kind `menu_bar`). A strip of entries (`UIMenuBar_AddEntry`: a label and its menu's items, copied), each a press
+element: a left press opens its menu below it at once (another press on it closes it), so press, drag to an item and let go activates it; Enter or
+Space opens it with its first item focused. While a menu is open, the pointer coming onto another entry switches to its menu, and in the open menu
+Left and Right with nothing more to open move to the entries beside. A press on the bar counts as inside its menus. Activated items call the bar's
+handler (`UIMenuBarOptions.Handler`, `UIMenuBar_SetHandler`). Alt alone does nothing yet.
+
+**Status bar** (`UIStatusBar.h`, kind `status_bar`). A strip with left, centre and right sections, each a row stack made with it by
+`UIKit_CreateStatusBar` (`UIStatusBar_GetSection` for calling code to add to): the left and right ones as wide as what they hold, the centre one
+filling what is between. Its line of text, at the start of the centre section and cut where the right one begins, is a message
+(`UIStatusBar_SetMessage(screen, id, text, seconds)`, 0 seconds for until it is replaced or cleared), else the hover text where the pointer rests
+(`UITooltip_GetCurrent`, before the delay too) while it shows hover text (`UIStatusBar_SetShowsHoverText`). For now it is placed like any element.
+
+**Context menus** are a service of the screen ([UIFramework.md](UIFramework.md), "Context menus"): a provider set on a widget answers a right click or
+the menu key on it or on anything inside it that has no provider of its own, and opens a menu with `UIMenu_OpenAt`.
+
 ### Click modes
 
 Button and toggle options have `ClickMode` and `ActivationButtons` (`UIButton_SetClickMode`, `UIButton_SetActivationButtons`, and the toggle's).
@@ -174,7 +255,7 @@ Elements post through `UIScreen_PostWidgetEvent`, or `UIScreen_PostWidgetMouseEv
 | Event | Posted | Carries |
 |---|---|---|
 | `Activated` | a button's click, by its click mode, or its key | mouse data |
-| `Changed` | the value moved and may go on: during a drag, at each key step | bool or double |
+| `Changed` | the value moved and may go on: during a drag, at each key step; a dropdown's choice (with `Committed`) | bool or double (a dropdown's index) |
 | `Committed` | the change is done: the release, the key's release, the press lost; what an undo history records. Not posted when the value ends where it began | bool or double |
 | `Cancelled` | Escape (the `ui_back` action's keys) during a change, or disabling it: the value at its start is back | double |
 | `Pressed` | a press of any button reached the element | mouse data |
@@ -254,7 +335,8 @@ UI is scaled, and at 28 both go away while 14 pixels stays sharp enough to read 
 
 ## The gallery
 
-`sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test, on two pages (N switches). It keeps its pixels
+`sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test, on three pages (N switches), each in a scroll area, so the
+whole page scrolls at small window sizes while its status line stays below it. It keeps its pixels
 (`UIScalePolicy_ConstantPixels`): drag the window's edges, and the controls keep their size with more room around them. P switches to following the
 window's height and back, to compare them. T switches the theme (`tbp:test_flat`, `tbp:test_nine_slice`, whose art `asset_source/scripts/placeholder_ui.py`
 generates, and `tbp:test_light`, the first with another palette), + and - the player's scale, L the event log; Escape steps out one level at a time, and
@@ -274,12 +356,24 @@ fixed 100 x 24 in a box of scale 2, so 200 x 48), a panel that turns once in 20 
 slides in by its visual offset (its button slides it in again), a second look of the button that writes only Render and Measure (a diamond in the theme's
 colours for the button's state, with no fade and no text), and buttons with placeholder letter icons.
 
+The third page: a menu bar (File, Edit, View, Help: icons, shortcut texts, a submenu, separators, disabled and checked items; the View menu's items
+change the theme, the scale and the page, after the screen's update), a row under it with a dropdown near each top corner, a box with a context menu
+(submenus three deep, a Locked item whose check remembers, a disabled item; a button in it with no menu of its own, so its request walks up to the box's,
+and an inner box with a menu of its own), a button opening a modal dialog (a plain panel with Yes and No, centred over a backdrop: Enter says yes, Escape
+no), dropdowns of three options and of a thousand from a provider, showing four rows, always opening up, mixed and disabled, two scroll areas (down only
+with forty buttons to Tab through; both ways with its bars always shown), and a long end with a button at the bottom for Tab to scroll to. A status bar
+closes the page: its message is the status line, for five seconds, then the hover text where the pointer rests; a dropdown stands at each of its ends,
+near the window's bottom corners.
+
 ## Rules for a new element
 
 - Behaviour and looks apart: the capability holds logical state and content, never a look, a colour or laid-out text; the look draws it. Calling code
   uses the capability by id.
 - Input only through the hooks; `UIScreen_GetInput` for an action's keys (`UIElement_IsActionKey`, `UIElement_IsActionPress` with its modifiers counted) and held state. A key a player could rebind is
   an action's.
+- What opens above everything opens through the popup layer ([UIFramework.md](UIFramework.md), "Popups"), owned by the element that opened it; a list in it that
+  takes the arrows is an edit element focused and entered as it opens (`UIPopupOptions.FocusId`), so its keys work at once.
+- Content that can be larger than the box holds the scrollable piece and lets a scroll bar move it; rows of data go through the row recycler.
 - An element that uses the arrows or typing is an **edit element**: its descriptor sets `NeedsEntering`, so those keys reach it only once it is entered, and the screen leaves it on Escape,
   Enter, Tab and focus moving ([UIFramework.md](UIFramework.md), "Entering elements"). It answers `OnEnter` and `OnLeave` where entering and a cancel mean something to it, uses Escape only
   for what it can take back on its own (a change in progress), and passes `Widget_IsEntered` to `UIElementState_Choose`. One whose press does something else first (a scrub) sets `EntersItself`

@@ -2,6 +2,7 @@
 #include "LabelWidget.h"
 #include "Logger.h"
 #include "UIKitInternal.h"
+#include "UIMenuInternal.h"
 #include "UIScreen.h"
 #include "UIStandardLooks.h"
 #include "UIWidgetFactory.h"
@@ -42,10 +43,23 @@ static const UIKindBehaviour* GetBehaviour(UIElementKind kind)
             return UIToggle_GetKindBehaviour();
         case UIElementKind_Slider:
             return UISlider_GetKindBehaviour();
-        // TODO: the label's and the tooltip's looks are not replaceable: the label is LabelWidget itself, and the tooltip's box is
-        // a plain type the factory names (UIWidgetFactory_SetTooltipType). Each needs a behaviour of its own split out first.
+        case UIElementKind_Scrollbar:
+            return UIScrollbar_GetKindBehaviour();
+        case UIElementKind_ScrollArea:
+            return UIScrollArea_GetKindBehaviour();
+        case UIElementKind_Dropdown:
+            return UIDropdown_GetKindBehaviour();
+        case UIElementKind_MenuBar:
+            return UIMenuBar_GetKindBehaviour();
+        case UIElementKind_StatusBar:
+            return UIStatusBar_GetKindBehaviour();
+        // TODO: the label's, the tooltip's, the menu's and the backdrop's looks are not replaceable: the label is LabelWidget itself,
+        // and the tooltip's box, a menu's list and items and a modal popup's backdrop are plain types of the kit's (the tooltip's and the
+        // backdrop's named to the factory). Each needs a behaviour of its own split out first.
         case UIElementKind_Label:
         case UIElementKind_Tooltip:
+        case UIElementKind_Menu:
+        case UIElementKind_Backdrop:
         case UIElementKind_Count:
             return NULL;
     }
@@ -298,6 +312,16 @@ static Error Composed_OnLeave(void* self, UILeaveReason reason)
     return (Entry->Behaviour->OnLeave != NULL) ? Entry->Behaviour->OnLeave(self, reason) : Error_CreateSuccess();
 }
 
+static Error Composed_OnDescendantFocus(void* self, uint64_t widgetId)
+{
+    const UIKitLook* Entry = FindLookOfWidget(self);
+    if (Entry == NULL)
+    {
+        return KitGone();
+    }
+    return (Entry->Behaviour->OnDescendantFocus != NULL) ? Entry->Behaviour->OnDescendantFocus(self, widgetId) : Error_CreateSuccess();
+}
+
 /* The look capability of a composed widget: its look's UIElementLook. Declared only for looks that have GetThemeLook. */
 static void* Composed_ResolveThemeLook(void* widget)
 {
@@ -322,7 +346,8 @@ static const WidgetVTable ComposedVTable =
     .OnEnter = Composed_OnEnter,
     .OnLeave = Composed_OnLeave,
     .Measure = Composed_Measure,
-    .HitTest = Composed_HitTest
+    .HitTest = Composed_HitTest,
+    .OnDescendantFocus = Composed_OnDescendantFocus
 };
 
 /* The names of the kinds' widget types, for the factory's messages. */
@@ -334,6 +359,13 @@ static const unsigned char* const KindTypeNames[UIElementKind_Count] =
     [UIElementKind_Toggle] = u8"Toggle",
     [UIElementKind_Slider] = u8"Slider",
     [UIElementKind_Tooltip] = u8"Tooltip",
+    [UIElementKind_Scrollbar] = u8"Scrollbar",
+    [UIElementKind_ScrollArea] = u8"ScrollArea",
+    [UIElementKind_Dropdown] = u8"Dropdown",
+    [UIElementKind_Menu] = u8"Menu",
+    [UIElementKind_MenuBar] = u8"MenuBar",
+    [UIElementKind_StatusBar] = u8"StatusBar",
+    [UIElementKind_Backdrop] = u8"Backdrop",
 };
 
 
@@ -383,6 +415,27 @@ static Error RegisterEverything(UIKit* self)
     if (Result.Code == ErrorCode_Success)
     {
         Result = AddStandardType(self, UIElementKind_Tooltip, TooltipType);
+    }
+    uint64_t BackdropType = WIDGET_TYPE_ID_INVALID;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIStandardLooks_RegisterBackdrop(self, self->_factory, &BackdropType);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AddStandardType(self, UIElementKind_Backdrop, BackdropType);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIDropdown_RegisterTypes(self, self->_factory);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIMenu_RegisterTypes(self, self->_factory);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIMenuBar_RegisterTypes(self, self->_factory);
     }
     return Result;
 }
@@ -497,6 +550,7 @@ Error UIKit_Construct(UIKit* self, UIWidgetFactory* factory, TextComponentFactor
     }
     UIWidgetFactory_SetKit(factory, self);
     UIWidgetFactory_SetTooltipType(factory, UIKit_GetElementType(self, UIElementKind_Tooltip));
+    UIWidgetFactory_SetBackdropType(factory, UIKit_GetElementType(self, UIElementKind_Backdrop));
     return Error_CreateSuccess();
 }
 
@@ -517,6 +571,7 @@ Error UIKit_Deconstruct(UIKit* self)
     }
     UIWidgetFactory_SetKit(self->_factory, NULL);
     UIWidgetFactory_SetTooltipType(self->_factory, WIDGET_TYPE_ID_INVALID);
+    UIWidgetFactory_SetBackdropType(self->_factory, WIDGET_TYPE_ID_INVALID);
     self->_factory = NULL;
     ReleaseTables(self);
     return Error_CreateSuccess();
@@ -575,12 +630,12 @@ Error UIKit_RegisterLook(UIKit* self, UIElementKind kind, const unsigned char* l
         return Error_Construct2(ErrorCode_InvalidOperation, "UIKit_RegisterLook: the kind has a look by that name already.");
     }
 
-    WidgetCapabilityEntry Capabilities[2];
+    WidgetCapabilityEntry Capabilities[UI_KIND_MAX_CAPABILITIES + 1U];
     size_t CapabilityCount = 0U;
-    if (Behaviour->HasCapability)
+    for (size_t Index = 0U; (Index < Behaviour->CapabilityCount) && (Index < UI_KIND_MAX_CAPABILITIES); Index++)
     {
-        Capabilities[CapabilityCount++] = (WidgetCapabilityEntry){ .CapabilityId = self->_capabilities[Behaviour->Capability],
-            .Resolver = Behaviour->ResolveCapability };
+        Capabilities[CapabilityCount++] = (WidgetCapabilityEntry){ .CapabilityId = self->_capabilities[Behaviour->Capabilities[Index].Capability],
+            .Resolver = Behaviour->Capabilities[Index].Resolve };
     }
     if (look->GetThemeLook != NULL)
     {
@@ -703,4 +758,144 @@ Error UIKit_CreateSlider(UIKit* self, UIScreen* screen, uint64_t parentId, const
     UISliderArgs Arguments = { .Kit = self, .Options = options };
     uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Slider, options->Element.Look);
     return CreateElement(self, screen, parentId, TypeId, &Arguments, outId);
+}
+
+static void DestroyPartlyMade(UIScreen* screen, uint64_t id);
+
+Error UIKit_CreateDropdown(UIKit* self, UIScreen* screen, uint64_t parentId, const UIDropdownOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateDropdown: self, screen and options must not be NULL.");
+    }
+    UIDropdownArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Dropdown, options->Element.Look);
+    return CreateElement(self, screen, parentId, TypeId, &Arguments, outId);
+}
+
+Error UIKit_CreateMenuBar(UIKit* self, UIScreen* screen, uint64_t parentId, const UIMenuBarOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateMenuBar: self, screen and options must not be NULL.");
+    }
+    UIMenuBarArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_MenuBar, options->Element.Look);
+    return CreateElement(self, screen, parentId, TypeId, &Arguments, outId);
+}
+
+Error UIKit_CreateStatusBar(UIKit* self, UIScreen* screen, uint64_t parentId, const UIStatusBarOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL) || (outId == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateStatusBar: self, screen, options and outId must not be NULL.");
+    }
+    UIStatusBarArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_StatusBar, options->Element.Look);
+    uint64_t BarId = WIDGET_ID_INVALID;
+    Error Result = CreateElement(self, screen, parentId, TypeId, &Arguments, &BarId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        *outId = WIDGET_ID_INVALID;
+        return Result;
+    }
+    uint64_t Sections[UIStatusBarSection_Count] = { WIDGET_ID_INVALID, WIDGET_ID_INVALID, WIDGET_ID_INVALID };
+    for (int32_t Section = 0; (Section < (int32_t)UIStatusBarSection_Count) && (Result.Code == ErrorCode_Success); Section++)
+    {
+        UIStackOptions Row = UIStackOptions_Create(UIStackDirection_Row);
+        Row.Element.HasPlacement = true;
+        Row.Element.Placement = UIPlacement_FromTopLeft(0.0f, 0.0f, 0.0f, 0.0f);
+        Result = UIKit_CreateStack(self, screen, BarId, &Row, &Sections[Section]);
+    }
+    Widget* Bar = NULL;
+    if ((Result.Code != ErrorCode_Success) || !UIScreen_TryGetWidgetById(screen, BarId, &Bar))
+    {
+        DestroyPartlyMade(screen, BarId);
+        *outId = WIDGET_ID_INVALID;
+        return (Result.Code != ErrorCode_Success) ? Result
+            : Error_Construct2(ErrorCode_InvalidOperation, "UIKit_CreateStatusBar: a hook took the bar away.");
+    }
+    // Every status bar look's struct starts with UIStatusBarLookBase (UIKit_RegisterLook checks its size).
+    UIStatusBar_SetSections(&((UIStatusBarLookBase*)(void*)Bar)->StatusBar, Sections);
+    *outId = BarId;
+    return Error_CreateSuccess();
+}
+
+Error UIKit_CreateScrollbar(UIKit* self, UIScreen* screen, uint64_t parentId, const UIScrollbarOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateScrollbar: self, screen and options must not be NULL.");
+    }
+    UIScrollbarArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Scrollbar, options->Element.Look);
+    return CreateElement(self, screen, parentId, TypeId, &Arguments, outId);
+}
+
+/* Destroys an element made in parts whose making failed half way, with its subtree. */
+static void DestroyPartlyMade(UIScreen* screen, uint64_t id)
+{
+    Widget* Made = NULL;
+    if (UIScreen_TryGetWidgetById(screen, id, &Made))
+    {
+        Error Cleanup = Widget_Destroy(Made);
+        Error_Deconstruct(&Cleanup);
+    }
+}
+
+/* Makes one of a scroll area's bars: placed by the area, on top of its content. */
+static Error CreateAreaBar(UIKit* self, UIScreen* screen, uint64_t areaId, UIScrollAxis axis, uint64_t* outBarId)
+{
+    UIScrollbarOptions Bar = UIScrollbarOptions_Create();
+    Bar.Axis = axis;
+    Bar.TargetId = areaId;
+    Bar.Element.HasPlacement = true;
+    Bar.Element.Placement = UIPlacement_FromTopLeft(0.0f, 0.0f, 0.0f, 0.0f);
+    Error Result = UIKit_CreateScrollbar(self, screen, areaId, &Bar, outBarId);
+    Widget* Made = NULL;
+    if ((Result.Code == ErrorCode_Success) && UIScreen_TryGetWidgetById(screen, *outBarId, &Made))
+    {
+        Result = Widget_SetZLayer(Made, 1.0f);
+    }
+    return Result;
+}
+
+Error UIKit_CreateScrollArea(UIKit* self, UIScreen* screen, uint64_t parentId, const UIScrollAreaOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL) || (outId == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateScrollArea: self, screen, options and outId must not be NULL.");
+    }
+    UIScrollAreaArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_ScrollArea, options->Element.Look);
+    uint64_t AreaId = WIDGET_ID_INVALID;
+    Error Result = CreateElement(self, screen, parentId, TypeId, &Arguments, &AreaId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        *outId = WIDGET_ID_INVALID;
+        return Result;
+    }
+    uint64_t BarIds[UIScrollAxis_Count] = { WIDGET_ID_INVALID, WIDGET_ID_INVALID };
+    Result = CreateAreaBar(self, screen, AreaId, UIScrollAxis_Horizontal, &BarIds[UIScrollAxis_Horizontal]);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = CreateAreaBar(self, screen, AreaId, UIScrollAxis_Vertical, &BarIds[UIScrollAxis_Vertical]);
+    }
+    Widget* Area = NULL;
+    UIScrollableCapability* Scrollable = NULL;
+    if ((Result.Code == ErrorCode_Success) && UIScreen_TryGetWidgetById(screen, AreaId, &Area))
+    {
+        Scrollable = Widget_GetCapability(Area, self->_capabilities[UIElementCapability_Scrollable]);
+    }
+    if ((Result.Code != ErrorCode_Success) || (Scrollable == NULL))
+    {
+        DestroyPartlyMade(screen, AreaId);
+        *outId = WIDGET_ID_INVALID;
+        return (Result.Code != ErrorCode_Success) ? Result
+            : Error_Construct2(ErrorCode_InvalidOperation, "UIKit_CreateScrollArea: a hook took the area away.");
+    }
+    // Every scroll area look's struct starts with UIScrollAreaLookBase (UIKit_RegisterLook checks its size).
+    UIScrollArea_SetBars(&((UIScrollAreaLookBase*)(void*)Area)->Area, BarIds[UIScrollAxis_Horizontal], BarIds[UIScrollAxis_Vertical]);
+    *outId = AreaId;
+    return Error_CreateSuccess();
 }

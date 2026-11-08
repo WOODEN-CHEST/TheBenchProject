@@ -93,6 +93,20 @@ typedef enum UIElementKindEnum
     UIElementKind_Slider,
     /** @brief Hover text: a box of text near the pointer. */
     UIElementKind_Tooltip,
+    /** @brief A scroll bar: a track and a thumb. */
+    UIElementKind_Scrollbar,
+    /** @brief Content larger than its box, clipped, with bars. */
+    UIElementKind_ScrollArea,
+    /** @brief One choice of several: a head showing it and a list that opens. */
+    UIElementKind_Dropdown,
+    /** @brief A popup list of items: a context menu, a menu bar's menu, a submenu. */
+    UIElementKind_Menu,
+    /** @brief A strip of menu entries. */
+    UIElementKind_MenuBar,
+    /** @brief A strip with left, centre and right sections and a message. */
+    UIElementKind_StatusBar,
+    /** @brief What lies behind a modal popup: it takes every press. */
+    UIElementKind_Backdrop,
     /** @brief The number of kinds. */
     UIElementKind_Count
 } UIElementKind;
@@ -191,6 +205,138 @@ typedef enum UITooltipPartEnum
     /** @brief The number of hover text's values. */
     UITooltipPart_Count
 } UITooltipPart;
+
+/** @brief A scroll bar's values in a theme. */
+typedef enum UIScrollbarPartEnum
+{
+    /** @brief "thickness": how wide the bar is across, UI pixels. */
+    UIScrollbarPart_Thickness,
+    /** @brief "min_thumb_length": the shortest the thumb gets along the track, UI pixels. */
+    UIScrollbarPart_MinThumbLength,
+    /** @brief "thumb_inset": the gap between the thumb and the track's sides across, UI pixels. */
+    UIScrollbarPart_ThumbInset,
+    /** @brief "track": a box, the whole bar. */
+    UIScrollbarPart_Track,
+    /** @brief "thumb": a box. */
+    UIScrollbarPart_Thumb,
+    /** @brief The number of a scroll bar's values. */
+    UIScrollbarPart_Count
+} UIScrollbarPart;
+
+/** @brief A scroll area's values in a theme. */
+typedef enum UIScrollAreaPartEnum
+{
+    /** @brief "background": a box behind the content. */
+    UIScrollAreaPart_Background,
+    /** @brief The number of a scroll area's values. */
+    UIScrollAreaPart_Count
+} UIScrollAreaPart;
+
+/** @brief A dropdown's values in a theme: its head, and the list it opens. */
+typedef enum UIDropdownPartEnum
+{
+    /** @brief "padding": horizontal and vertical around the head's text, UI pixels; the rows' text is inset by its horizontal one. */
+    UIDropdownPart_Padding,
+    /** @brief "min_size": the head's, UI pixels. */
+    UIDropdownPart_MinSize,
+    /** @brief "arrow_size": the width of the head's arrow and of the list's scroll arrows, UI pixels. */
+    UIDropdownPart_ArrowSize,
+    /** @brief "background": a box, the head. */
+    UIDropdownPart_Background,
+    /** @brief "text": a colour per state, the head's text. */
+    UIDropdownPart_Text,
+    /** @brief "arrow": a colour per state, the head's arrow and the list's scroll arrows. */
+    UIDropdownPart_Arrow,
+    /** @brief "list": a box, behind the open list. */
+    UIDropdownPart_List,
+    /** @brief "list_padding": horizontal and vertical inside the list's box, UI pixels. */
+    UIDropdownPart_ListPadding,
+    /** @brief "row_height": a row's height, UI pixels. */
+    UIDropdownPart_RowHeight,
+    /** @brief "row": a box per row; hovered is the highlighted row, selected the chosen one. */
+    UIDropdownPart_Row,
+    /** @brief "row_text": a colour per state, a row's text. */
+    UIDropdownPart_RowText,
+    /** @brief "scroll_arrow_height": the height of the strips at the list's top and bottom that hold its scroll arrows, UI pixels. */
+    UIDropdownPart_ScrollArrowHeight,
+    /** @brief The number of a dropdown's values. */
+    UIDropdownPart_Count
+} UIDropdownPart;
+
+/** @brief A menu's values in a theme. */
+typedef enum UIMenuPartEnum
+{
+    /** @brief "padding": horizontal and vertical inside the menu's box, UI pixels. */
+    UIMenuPart_Padding,
+    /** @brief "item_height": an item's height, UI pixels. */
+    UIMenuPart_ItemHeight,
+    /** @brief "item_padding": horizontal and vertical inside an item, UI pixels. */
+    UIMenuPart_ItemPadding,
+    /** @brief "check_width": the column at an item's left that holds its check or its icon, UI pixels. */
+    UIMenuPart_CheckWidth,
+    /** @brief "separator_height": a separator's height, UI pixels. */
+    UIMenuPart_SeparatorHeight,
+    /** @brief "separator_thickness": the separator's line, UI pixels. */
+    UIMenuPart_SeparatorThickness,
+    /** @brief "background": a box, the menu. */
+    UIMenuPart_Background,
+    /** @brief "item": a box per item; hovered and focused are the item under the pointer or the keyboard, selected the one whose
+     *  submenu is open. */
+    UIMenuPart_Item,
+    /** @brief "text": a colour per state, an item's label, check and submenu arrow. */
+    UIMenuPart_Text,
+    /** @brief "shortcut": a colour per state, an item's shortcut text. */
+    UIMenuPart_Shortcut,
+    /** @brief "separator": a box, the separator's line. */
+    UIMenuPart_Separator,
+    /** @brief The number of a menu's values. */
+    UIMenuPart_Count
+} UIMenuPart;
+
+/** @brief A menu bar's values in a theme. */
+typedef enum UIMenuBarPartEnum
+{
+    /** @brief "padding": horizontal and vertical inside the bar, UI pixels. */
+    UIMenuBarPart_Padding,
+    /** @brief "entry_padding": horizontal and vertical around an entry's text, UI pixels. */
+    UIMenuBarPart_EntryPadding,
+    /** @brief "min_size": UI pixels. */
+    UIMenuBarPart_MinSize,
+    /** @brief "background": a box, the bar. */
+    UIMenuBarPart_Background,
+    /** @brief "entry": a box per entry; hovered under the pointer, selected while its menu is open. */
+    UIMenuBarPart_Entry,
+    /** @brief "text": a colour per state, an entry's text. */
+    UIMenuBarPart_Text,
+    /** @brief The number of a menu bar's values. */
+    UIMenuBarPart_Count
+} UIMenuBarPart;
+
+/** @brief A status bar's values in a theme. */
+typedef enum UIStatusBarPartEnum
+{
+    /** @brief "padding": horizontal and vertical inside the bar, UI pixels. */
+    UIStatusBarPart_Padding,
+    /** @brief "spacing": between its sections' elements, UI pixels. */
+    UIStatusBarPart_Spacing,
+    /** @brief "min_size": UI pixels. */
+    UIStatusBarPart_MinSize,
+    /** @brief "background": a box, the bar. */
+    UIStatusBarPart_Background,
+    /** @brief "text": a colour per state, the message. */
+    UIStatusBarPart_Text,
+    /** @brief The number of a status bar's values. */
+    UIStatusBarPart_Count
+} UIStatusBarPart;
+
+/** @brief A modal popup's backdrop's values in a theme. */
+typedef enum UIBackdropPartEnum
+{
+    /** @brief "background": a box over the whole surface behind the popup (a translucent colour dims what lies behind). */
+    UIBackdropPart_Background,
+    /** @brief The number of a backdrop's values. */
+    UIBackdropPart_Count
+} UIBackdropPart;
 
 /**
  * @brief What a value of an element kind is.

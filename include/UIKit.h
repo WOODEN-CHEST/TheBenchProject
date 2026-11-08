@@ -7,10 +7,18 @@
 #include "NamespacedKey.h"
 #include "StackWidget.h"
 #include "UIButton.h"
+#include "UIChoice.h"
+#include "UIDropdown.h"
 #include "UIElement.h"
 #include "UILabel.h"
+#include "UIMenu.h"
+#include "UIMenuBar.h"
 #include "UIPanel.h"
+#include "UIScrollArea.h"
+#include "UIScrollbar.h"
+#include "UIScrollable.h"
 #include "UISlider.h"
+#include "UIStatusBar.h"
 #include "UITheme.h"
 #include "UIToggle.h"
 
@@ -68,6 +76,18 @@ typedef enum UIElementCapabilityEnum
     UIElementCapability_Toggle,
     /** @brief UISliderCapability. */
     UIElementCapability_Slider,
+    /** @brief UIScrollableCapability (UIScrollable.h): what scrolls; a scroll area's, a dropdown list's. */
+    UIElementCapability_Scrollable,
+    /** @brief UIScrollbarCapability (UIScrollbar.h). */
+    UIElementCapability_Scrollbar,
+    /** @brief UIChoiceCapability (UIChoice.h): a dropdown's options and the selected one. */
+    UIElementCapability_Choice,
+    /** @brief UIDropdownCapability (UIDropdown.h). */
+    UIElementCapability_Dropdown,
+    /** @brief UIMenuBarCapability (UIMenuBar.h). */
+    UIElementCapability_MenuBar,
+    /** @brief UIStatusBarCapability (UIStatusBar.h). */
+    UIElementCapability_StatusBar,
     /** @brief The number of capabilities. */
     UIElementCapability_Count
 } UIElementCapability;
@@ -118,6 +138,14 @@ typedef struct UIKitStruct
     uint64_t _capabilities[UIElementCapability_Count];
     /** @brief The stack's widget type. */
     uint64_t _stackType;
+    /** @brief The kit's own widget types that no look stands for: a dropdown's open list and its rows, a box that cuts its children,
+     *  a menu's list and its items. */
+    uint64_t _dropdownListType;
+    uint64_t _dropdownRowType;
+    uint64_t _clipType;
+    uint64_t _menuListType;
+    uint64_t _menuItemType;
+    uint64_t _menuBarEntryType;
     /** @brief The registered looks (a private element type): kind, name, widget type, hooks. Owned. */
     GenericBuffer _looks;
     /** @brief Per factory type id less one, the index + 1 of its look in _looks (uint32_t), 0 for a type that is no look. Owned. */
@@ -256,3 +284,15 @@ Error UIKit_CreateButton(UIKit* self, UIScreen* screen, uint64_t parentId, const
 Error UIKit_CreateToggle(UIKit* self, UIScreen* screen, uint64_t parentId, const UIToggleOptions* options, uint64_t* outId);
 /** @brief Makes a slider (UISlider.h). See the comment above for the parameters and the result. */
 Error UIKit_CreateSlider(UIKit* self, UIScreen* screen, uint64_t parentId, const UISliderOptions* options, uint64_t* outId);
+/** @brief Makes a scroll bar (UIScrollbar.h). See the comment above for the parameters and the result. */
+Error UIKit_CreateScrollbar(UIKit* self, UIScreen* screen, uint64_t parentId, const UIScrollbarOptions* options, uint64_t* outId);
+/** @brief Makes a scroll area (UIScrollArea.h) with its two bars, each of the look the screen's theme names for the scroll bar (else the
+ *  standard one), on top of whatever calling code adds to it. See the comment above for the parameters and the result. */
+Error UIKit_CreateScrollArea(UIKit* self, UIScreen* screen, uint64_t parentId, const UIScrollAreaOptions* options, uint64_t* outId);
+/** @brief Makes a dropdown (UIDropdown.h). See the comment above for the parameters and the result. */
+Error UIKit_CreateDropdown(UIKit* self, UIScreen* screen, uint64_t parentId, const UIDropdownOptions* options, uint64_t* outId);
+/** @brief Makes a menu bar (UIMenuBar.h), with no entries yet. See the comment above for the parameters and the result. */
+Error UIKit_CreateMenuBar(UIKit* self, UIScreen* screen, uint64_t parentId, const UIMenuBarOptions* options, uint64_t* outId);
+/** @brief Makes a status bar (UIStatusBar.h) with its three sections, each a row stack. See the comment above for the parameters and the
+ *  result. */
+Error UIKit_CreateStatusBar(UIKit* self, UIScreen* screen, uint64_t parentId, const UIStatusBarOptions* options, uint64_t* outId);

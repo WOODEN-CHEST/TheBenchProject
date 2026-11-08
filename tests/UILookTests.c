@@ -534,6 +534,28 @@ static void ALooksHitTestStandsInForItsBox(TestRun* run)
 
 
 // Public functions.
+/* Setting the variant a look has already changes nothing, so a look that sets it each update (the scroll bar's thumb) does not read the
+ * theme's parts again each update; another variant is checked anew. */
+static void TheSameVariantAgainKeepsWhatWasChecked(TestRun* run)
+{
+    TestUIFixture Fixture;
+    if (Construct(run, &Fixture))
+    {
+        UIElementLook Look;
+        TEST_CHECK_SUCCESS(run, UIElementLook_Construct(&Look, UIElementKind_Button, u8"danger"));
+        UIElementLook_Update(&Look, &Fixture.Screen, UIElementState_Normal, 0.0);
+        TEST_CHECK(run, Look._hasCheckedTheme);
+        TEST_CHECK_SUCCESS(run, UIElementLook_SetVariant(&Look, u8"danger"));
+        TEST_CHECK(run, Look._hasCheckedTheme);
+        TEST_CHECK_SUCCESS(run, UIElementLook_SetVariant(&Look, u8"other"));
+        TEST_CHECK(run, !Look._hasCheckedTheme);
+        UIElementLook_Update(&Look, &Fixture.Screen, UIElementState_Normal, 0.0);
+        TEST_CHECK_SUCCESS(run, UIElementLook_SetVariant(&Look, NULL));
+        TEST_CHECK(run, !Look._hasCheckedTheme);
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
 void UILookTests_Run(TestRun* run)
 {
     static const TestCase Cases[] =
@@ -547,6 +569,7 @@ void UILookTests_Run(TestRun* run)
         { "a_looks_hit_test_stands_in_for_its_box", ALooksHitTestStandsInForItsBox },
         { "every_element_cues_what_it_does", EveryElementCuesWhatItDoes },
         { "the_kit_stays_while_its_widgets_live", TheKitStaysWhileItsWidgetsLive },
+        { "the_same_variant_again_keeps_what_was_checked", TheSameVariantAgainKeepsWhatWasChecked },
     };
     TestRun_RunSuite(run, "UILook", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

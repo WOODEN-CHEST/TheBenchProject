@@ -180,6 +180,43 @@ void UIScreen_InternalForgetCurrentTooltip(UIScreen* self);
 uint64_t UIScreen_InternalGetCurrentTooltipWidgetId(const UIScreen* self);
 
 
+// Screen: popups (UIScreenPopups.c).
+/** Allocates the popups' list (screen construction). */
+void UIScreen_InternalInitializePopups(UIScreen* self);
+
+/** Frees it (screen teardown; the widgets go with the screen's). */
+void UIScreen_InternalReleasePopups(UIScreen* self);
+
+/** Before the layout: closes the popups whose owner or root is gone, then places each against its anchor. */
+Error UIScreen_InternalPlacePopups(UIScreen* self);
+
+/** A press on @p targetId (WIDGET_ID_INVALID: on no widget) while popups are open: closes those it is outside of, from the top down.
+ *  @p outIsSwallowed is set when it landed on a modal popup's backdrop: nothing else is done with it. @p outIsBlocked is set when it
+ *  hit no widget while a modal popup is open: it is not this screen's to clear the focus with. */
+Error UIScreen_InternalClosePopupsForPress(UIScreen* self, uint64_t targetId, bool* outIsSwallowed, bool* outIsBlocked);
+
+/** The back action's press nobody used while popups are open: leaves the element entered in the topmost popup that closes on Escape
+ *  with a cancel and closes that popup. @p outIsActed is set when it did. */
+Error UIScreen_InternalRoutePopupEscape(UIScreen* self, bool* outIsActed);
+
+/** The root keyboard navigation's top level is confined to while popups are open (the topmost one), or NULL. */
+Widget* UIScreen_InternalGetNavigationRoot(const UIScreen* self);
+
+/** Whether any popup is open. */
+bool UIScreen_InternalHasPopups(const UIScreen* self);
+
+
+// Screen: context menus (UIScreenContextMenus.c).
+/** Allocates the side table (screen construction). */
+void UIScreen_InternalInitializeContextMenus(UIScreen* self);
+
+/** Frees it (screen teardown). */
+void UIScreen_InternalReleaseContextMenus(UIScreen* self);
+
+/** Forgets a widget's provider (it is being torn down). */
+void UIScreen_InternalRemoveWidgetContextMenu(UIScreen* self, uint64_t widgetId);
+
+
 // Screen: notifications (UIScreenEvents.c).
 /** Allocates the notification module's buffers (screen construction). */
 void UIScreen_InternalInitializeEvents(UIScreen* self);

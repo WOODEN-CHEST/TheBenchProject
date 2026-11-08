@@ -275,6 +275,10 @@ typedef struct WidgetVTableStruct
      *  widget's box and whether it lies in the box. Runs on the update side, whenever the screen looks up what is under a
      *  point, and must not change any state. Without a slot the box decides. Optional. */
     bool (*HitTest)(void* self, const WidgetHitTestArgs* args);
+    /** @brief Called on each ancestor of a widget that has just become focused, innermost first, right after its OnFocusEnable: a
+     *  scroll area scrolls it into view. @p widgetId is the focused widget. Each ancestor is resolved again after the one before, so a
+     *  hook may change the tree. Optional. */
+    Error (*OnDescendantFocus)(void* self, uint64_t widgetId);
 } WidgetVTable;
 
 /**

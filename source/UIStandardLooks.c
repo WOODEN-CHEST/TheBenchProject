@@ -47,6 +47,53 @@ typedef struct SliderBoxStruct
     UIElementLook Look;
 } SliderBox;
 
+/* The standard scroll bar: the track over the whole bar, the thumb inside it. The thumb's state is its own (pressed while dragged,
+ * hovered under the pointer), so it fades on a look of its own. */
+typedef struct ScrollbarBoxStruct
+{
+    UIScrollbarLookBase Base;
+    UIElementLook Look;
+    UIElementLook ThumbLook;
+} ScrollbarBox;
+
+/* The standard scroll area: a background, and the corner where both bars meet. */
+typedef struct ScrollAreaBoxStruct
+{
+    UIScrollAreaLookBase Base;
+    UIElementLook Look;
+} ScrollAreaBox;
+
+/* The standard dropdown head: a background, the text at the left and the arrow at the right. */
+typedef struct DropdownBoxStruct
+{
+    UIDropdownLookBase Base;
+    UIElementLook Look;
+    UIElementText Text;
+} DropdownBox;
+
+/* The standard menu bar: a background, its entries in a row inside the theme's padding. */
+typedef struct MenuBarBoxStruct
+{
+    UIMenuBarLookBase Base;
+    UIElementLook Look;
+} MenuBarBox;
+
+/* The standard status bar: a background, its sections inside the theme's padding, and its text at the start of the centre section. */
+typedef struct StatusBarBoxStruct
+{
+    UIStatusBarLookBase Base;
+    UIElementLook Look;
+    UIElementText Text;
+} StatusBarBox;
+
+/* What lies under a modal popup: the theme's backdrop over the whole surface. A plain widget type, made by the screen (UIPopup.h) with
+ * no arguments; it takes input, so presses, the wheel and hover stop at it. */
+typedef struct BackdropBoxStruct
+{
+    Widget Base;
+    UIElementLook Look;
+} BackdropBox;
+
 /* What shows hover text: a box beside the pointer with the text in it, wrapped at the theme's width. A plain widget type, made by
  * the screen (UITooltip.h) with no arguments. */
 typedef struct TooltipBoxStruct
@@ -444,6 +491,370 @@ static UIElementLook* SliderBox_GetThemeLook(void* self)
 }
 
 
+// Static functions: the scroll bar.
+static Error ScrollbarBox_Construct(void* self, void* args)
+{
+    ScrollbarBox* Box = self;
+    const UIScrollbarArgs* Arguments = args;
+    Error Result = UIElementLook_Construct(&Box->Look, UIElementKind_Scrollbar, Arguments->Options->Element.Variant);
+    return (Result.Code == ErrorCode_Success) ? UIElementLook_Construct(&Box->ThumbLook, UIElementKind_Scrollbar, Arguments->Options->Element.Variant)
+        : Result;
+}
+
+static Error ScrollbarBox_Update(void* self, ProgramTime time)
+{
+    ScrollbarBox* Box = self;
+    UIScreen* Screen = Widget_GetScreen(&Box->Base.Base);
+    // A variant set on the bar (through its theme look) is the thumb's too.
+    if (UIElementLook_SetVariant(&Box->ThumbLook, Box->Look._variant).Code != ErrorCode_Success)
+    {
+        Error Cleanup = UIElementLook_SetVariant(&Box->ThumbLook, NULL);
+        Error_Deconstruct(&Cleanup);
+    }
+    UIElementState TrackState = Widget_IsHovered(&Box->Base.Base) ? UIElementState_Hovered : UIElementState_Normal;
+    UIElementLook_Update(&Box->Look, Screen, TrackState, time.PassedTime);
+    UIElementLook_Update(&Box->ThumbLook, Screen, UIScrollbarCapability_GetThumbState(&Box->Base.Scrollbar), time.PassedTime);
+    const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Screen);
+    UIScrollbarCapability_SetMinThumbLength(&Box->Base.Scrollbar,
+        UIThemeStyle_GetNumber(Style, UIElementKind_Scrollbar, UIScrollbarPart_MinThumbLength));
+    return Error_CreateSuccess();
+}
+
+static Error ScrollbarBox_Measure(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
+{
+    (void)context;
+    (void)availableWidth;
+    ScrollbarBox* Box = self;
+    float Thickness = UIThemeStyle_GetNumber(UIElementLook_GetStyle(&Box->Look, Widget_GetScreen(&Box->Base.Base)), UIElementKind_Scrollbar,
+        UIScrollbarPart_Thickness);
+    *outSize = (Vector2){ .x = Thickness, .y = Thickness };
+    return Error_CreateSuccess();
+}
+
+static Error ScrollbarBox_Render(void* self, UIRenderContext* context)
+{
+    ScrollbarBox* Box = self;
+    Rectangle Pixels = UIRenderContext_GetPixelBox(context);
+    if (UIElement_IsBoxEmpty(Pixels))
+    {
+        return Error_CreateSuccess();
+    }
+    float Scale = Widget_GetEffectiveScale(&Box->Base.Base);
+    const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Widget_GetScreen(&Box->Base.Base));
+    Error Result = UIElementLook_DrawBox(&Box->Look, Style, UIScrollbarPart_Track, context, Pixels, Scale);
+    Rectangle Thumb;
+    float Inset = RoundToPixel(UIThemeStyle_GetNumber(Style, UIElementKind_Scrollbar, UIScrollbarPart_ThumbInset) * Scale);
+    if ((Result.Code != ErrorCode_Success) || !UIScrollbarCapability_GetThumbBox(&Box->Base.Scrollbar, &Box->Base.Base, Pixels, Inset, &Thumb)
+        || UIElement_IsBoxEmpty(Thumb))
+    {
+        return Result; // Nothing to scroll: the track alone.
+    }
+    return UIElementLook_DrawBox(&Box->ThumbLook, Style, UIScrollbarPart_Thumb, context, Thumb, Scale);
+}
+
+static UIElementLook* ScrollbarBox_GetThemeLook(void* self)
+{
+    return &((ScrollbarBox*)self)->Look;
+}
+
+
+// Static functions: the scroll area.
+static Error ScrollAreaBox_Construct(void* self, void* args)
+{
+    const UIScrollAreaArgs* Arguments = args;
+    return UIElementLook_Construct(&((ScrollAreaBox*)self)->Look, UIElementKind_ScrollArea, Arguments->Options->Element.Variant);
+}
+
+static Error ScrollAreaBox_Update(void* self, ProgramTime time)
+{
+    ScrollAreaBox* Box = self;
+    UIElementLook_Update(&Box->Look, Widget_GetScreen(&Box->Base.Base), UIElementState_Normal, time.PassedTime);
+    return Error_CreateSuccess();
+}
+
+static Error ScrollAreaBox_Measure(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
+{
+    ScrollAreaBox* Box = self;
+    return UIScrollArea_MeasurePreferred(&Box->Base.Area, &Box->Base.Base, context, availableWidth, outSize);
+}
+
+static Error ScrollAreaBox_Render(void* self, UIRenderContext* context)
+{
+    ScrollAreaBox* Box = self;
+    Rectangle Pixels = UIRenderContext_GetPixelBox(context);
+    if (UIElement_IsBoxEmpty(Pixels))
+    {
+        return Error_CreateSuccess();
+    }
+    return UIElementLook_DrawBox(&Box->Look, UIElementLook_GetStyle(&Box->Look, Widget_GetScreen(&Box->Base.Base)), UIScrollAreaPart_Background,
+        context, Pixels, Widget_GetEffectiveScale(&Box->Base.Base));
+}
+
+static UIElementLook* ScrollAreaBox_GetThemeLook(void* self)
+{
+    return &((ScrollAreaBox*)self)->Look;
+}
+
+
+// Static functions: the dropdown's head.
+static Error DropdownBox_Construct(void* self, void* args)
+{
+    DropdownBox* Box = self;
+    const UIDropdownArgs* Arguments = args;
+    Error Result = UIElementLook_Construct(&Box->Look, UIElementKind_Dropdown, Arguments->Options->Element.Variant);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    return UIElementText_Construct(&Box->Text, UIKit_GetTextFactory(Arguments->Kit), UIKit_GetAssets(Arguments->Kit),
+        UIKit_GetLogger(Arguments->Kit));
+}
+
+static Error DropdownBox_Deconstruct(void* self)
+{
+    return UIElementText_Deconstruct(&((DropdownBox*)self)->Text);
+}
+
+static Error DropdownBox_Update(void* self, ProgramTime time)
+{
+    DropdownBox* Box = self;
+    UIElementLook_Update(&Box->Look, Widget_GetScreen(&Box->Base.Base), UIDropdownCapability_GetState(&Box->Base.Dropdown, &Box->Base.Base),
+        time.PassedTime);
+    return UIElementText_Refresh(&Box->Text, &Box->Base.Base, UIDropdownCapability_GetShownText(&Box->Base.Dropdown));
+}
+
+static Error DropdownBox_Measure(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
+{
+    (void)context;
+    (void)availableWidth;
+    DropdownBox* Box = self;
+    Error Result = UIElementText_Refresh(&Box->Text, &Box->Base.Base, UIDropdownCapability_GetShownText(&Box->Base.Dropdown));
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    const UIScreen* Screen = Widget_GetScreen(&Box->Base.Base);
+    const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Screen);
+    Vector2 Text = UIElementText_GetPixelSize(&Box->Text, Screen);
+    float Scale = Widget_GetEffectiveScale(&Box->Base.Base);
+    Vector2 Padding = UIThemeStyle_GetVector(Style, UIElementKind_Dropdown, UIDropdownPart_Padding);
+    Vector2 Minimum = UIThemeStyle_GetVector(Style, UIElementKind_Dropdown, UIDropdownPart_MinSize);
+    float Arrow = UIThemeStyle_GetNumber(Style, UIElementKind_Dropdown, UIDropdownPart_ArrowSize);
+    // The text, a gap of the padding, the arrow, and the padding on both sides.
+    outSize->x = Math_MaxFloat((Text.x / Scale) + (3.0f * Padding.x) + Arrow, Minimum.x);
+    outSize->y = Math_MaxFloat((Text.y / Scale) + (2.0f * Padding.y), Minimum.y);
+    return Error_CreateSuccess();
+}
+
+static Error DropdownBox_Render(void* self, UIRenderContext* context)
+{
+    DropdownBox* Box = self;
+    Rectangle Pixels = UIRenderContext_GetPixelBox(context);
+    if (UIElement_IsBoxEmpty(Pixels))
+    {
+        return Error_CreateSuccess();
+    }
+    const UIScreen* Screen = Widget_GetScreen(&Box->Base.Base);
+    const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Screen);
+    float Scale = Widget_GetEffectiveScale(&Box->Base.Base);
+    Error Result = UIElementLook_DrawBox(&Box->Look, Style, UIDropdownPart_Background, context, Pixels, Scale);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    float Padding = RoundToPixel(UIThemeStyle_GetVector(Style, UIElementKind_Dropdown, UIDropdownPart_Padding).x * Scale);
+    float Arrow = RoundToPixel(UIThemeStyle_GetNumber(Style, UIElementKind_Dropdown, UIDropdownPart_ArrowSize) * Scale);
+    Rectangle ArrowBox = { .x = (Pixels.x + Pixels.width) - Padding - Arrow, .y = Pixels.y, .width = Arrow, .height = Pixels.height };
+    UIElement_DrawArrow(context, ArrowBox, UIArrowDirection_Down,
+        UIElementLook_BlendColors(&Box->Look, UIThemeStyle_GetColors(Style, UIDropdownPart_Arrow), WHITE));
+    // The text from the padding, cut where the arrow's gap begins.
+    Vector2 Text = UIElementText_GetPixelSize(&Box->Text, Screen);
+    Rectangle TextArea = { .x = Pixels.x, .y = Pixels.y, .width = Math_MaxFloat(0.0f, ArrowBox.x - Padding - Pixels.x), .height = Pixels.height };
+    Color TextColor = UIElementLook_BlendColors(&Box->Look, UIThemeStyle_GetColors(Style, UIDropdownPart_Text), WHITE);
+    RenderContext_PushClip(UIRenderContext_GetRenderContext(context), TextArea);
+    Result = UIElementText_Draw(&Box->Text, context, Pixels.x + Padding, Pixels.y + RoundToPixel((Pixels.height - Text.y) * 0.5f), TextColor);
+    RenderContext_PopClip(UIRenderContext_GetRenderContext(context));
+    return Result;
+}
+
+static UIElementLook* DropdownBox_GetThemeLook(void* self)
+{
+    return &((DropdownBox*)self)->Look;
+}
+
+
+// Static functions: the menu bar.
+static Error MenuBarBox_Construct(void* self, void* args)
+{
+    const UIMenuBarArgs* Arguments = args;
+    return UIElementLook_Construct(&((MenuBarBox*)self)->Look, UIElementKind_MenuBar, Arguments->Options->Element.Variant);
+}
+
+static Error MenuBarBox_Update(void* self, ProgramTime time)
+{
+    MenuBarBox* Box = self;
+    UIElementLook_Update(&Box->Look, Widget_GetScreen(&Box->Base.Base), UIElementState_Normal, time.PassedTime);
+    return Error_CreateSuccess();
+}
+
+static Vector2 MenuBarBox_GetPadding(const MenuBarBox* box)
+{
+    return UIThemeStyle_GetVector(UIElementLook_GetStyle(&box->Look, Widget_GetScreen(&box->Base.Base)), UIElementKind_MenuBar, UIMenuBarPart_Padding);
+}
+
+static Error MenuBarBox_Layout(void* self, const UILayoutContext* context)
+{
+    MenuBarBox* Box = self;
+    return UIMenuBar_ArrangeEntries(&Box->Base.Base, context, MenuBarBox_GetPadding(Box));
+}
+
+static Error MenuBarBox_Measure(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
+{
+    (void)availableWidth;
+    MenuBarBox* Box = self;
+    Error Result = UIMenuBar_MeasureEntries(&Box->Base.Base, context, MenuBarBox_GetPadding(Box), outSize);
+    Vector2 Minimum = UIThemeStyle_GetVector(UIElementLook_GetStyle(&Box->Look, Widget_GetScreen(&Box->Base.Base)), UIElementKind_MenuBar,
+        UIMenuBarPart_MinSize);
+    outSize->x = Math_MaxFloat(outSize->x, Minimum.x);
+    outSize->y = Math_MaxFloat(outSize->y, Minimum.y);
+    return Result;
+}
+
+static Error MenuBarBox_Render(void* self, UIRenderContext* context)
+{
+    MenuBarBox* Box = self;
+    Rectangle Pixels = UIRenderContext_GetPixelBox(context);
+    if (UIElement_IsBoxEmpty(Pixels))
+    {
+        return Error_CreateSuccess();
+    }
+    return UIElementLook_DrawBox(&Box->Look, UIElementLook_GetStyle(&Box->Look, Widget_GetScreen(&Box->Base.Base)), UIMenuBarPart_Background,
+        context, Pixels, Widget_GetEffectiveScale(&Box->Base.Base));
+}
+
+static UIElementLook* MenuBarBox_GetThemeLook(void* self)
+{
+    return &((MenuBarBox*)self)->Look;
+}
+
+
+// Static functions: the status bar.
+static Error StatusBarBox_Construct(void* self, void* args)
+{
+    StatusBarBox* Box = self;
+    const UIStatusBarArgs* Arguments = args;
+    Error Result = UIElementLook_Construct(&Box->Look, UIElementKind_StatusBar, Arguments->Options->Element.Variant);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    return UIElementText_Construct(&Box->Text, UIKit_GetTextFactory(Arguments->Kit), UIKit_GetAssets(Arguments->Kit),
+        UIKit_GetLogger(Arguments->Kit));
+}
+
+static Error StatusBarBox_Deconstruct(void* self)
+{
+    return UIElementText_Deconstruct(&((StatusBarBox*)self)->Text);
+}
+
+static Error StatusBarBox_Update(void* self, ProgramTime time)
+{
+    StatusBarBox* Box = self;
+    UIElementLook_Update(&Box->Look, Widget_GetScreen(&Box->Base.Base), UIElementState_Normal, time.PassedTime);
+    return UIElementText_Refresh(&Box->Text, &Box->Base.Base, UIStatusBarCapability_GetShownText(&Box->Base.StatusBar));
+}
+
+static Error StatusBarBox_Layout(void* self, const UILayoutContext* context)
+{
+    StatusBarBox* Box = self;
+    const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Widget_GetScreen(&Box->Base.Base));
+    return UIStatusBar_ArrangeSections(&Box->Base.Base, context, UIThemeStyle_GetVector(Style, UIElementKind_StatusBar, UIStatusBarPart_Padding),
+        UIThemeStyle_GetNumber(Style, UIElementKind_StatusBar, UIStatusBarPart_Spacing));
+}
+
+static Error StatusBarBox_Measure(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
+{
+    (void)context;
+    (void)availableWidth;
+    StatusBarBox* Box = self;
+    Error Result = UIElementText_Refresh(&Box->Text, &Box->Base.Base, UIStatusBarCapability_GetShownText(&Box->Base.StatusBar));
+    const UIScreen* Screen = Widget_GetScreen(&Box->Base.Base);
+    const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Screen);
+    Vector2 Padding = UIThemeStyle_GetVector(Style, UIElementKind_StatusBar, UIStatusBarPart_Padding);
+    Vector2 Minimum = UIThemeStyle_GetVector(Style, UIElementKind_StatusBar, UIStatusBarPart_MinSize);
+    // One line of the theme's text tall: what a message needs (the sections fit their own content).
+    float Line = UITheme_GetTextSize(UIScreen_GetTheme(Screen));
+    outSize->x = Minimum.x;
+    outSize->y = Math_MaxFloat(Line + (2.0f * Padding.y), Minimum.y);
+    return Result;
+}
+
+static Error StatusBarBox_Render(void* self, UIRenderContext* context)
+{
+    StatusBarBox* Box = self;
+    Rectangle Pixels = UIRenderContext_GetPixelBox(context);
+    if (UIElement_IsBoxEmpty(Pixels))
+    {
+        return Error_CreateSuccess();
+    }
+    const UIScreen* Screen = Widget_GetScreen(&Box->Base.Base);
+    const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Screen);
+    Error Result = UIElementLook_DrawBox(&Box->Look, Style, UIStatusBarPart_Background, context, Pixels, Widget_GetEffectiveScale(&Box->Base.Base));
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    float Start = 0.0f;
+    float End = 1.0f;
+    UIStatusBar_GetTextSpan(&Box->Base.Base, &Start, &End);
+    Rectangle Span = { .x = Pixels.x + RoundToPixel(Start * Pixels.width), .y = Pixels.y, .width = Math_MaxFloat(0.0f, (End - Start) * Pixels.width),
+        .height = Pixels.height };
+    Vector2 Text = UIElementText_GetPixelSize(&Box->Text, Screen);
+    Color TextColor = UIElementLook_BlendColors(&Box->Look, UIThemeStyle_GetColors(Style, UIStatusBarPart_Text), WHITE);
+    RenderContext_PushClip(UIRenderContext_GetRenderContext(context), Span);
+    Result = UIElementText_Draw(&Box->Text, context, Span.x, Pixels.y + RoundToPixel((Pixels.height - Text.y) * 0.5f), TextColor);
+    RenderContext_PopClip(UIRenderContext_GetRenderContext(context));
+    return Result;
+}
+
+static UIElementLook* StatusBarBox_GetThemeLook(void* self)
+{
+    return &((StatusBarBox*)self)->Look;
+}
+
+
+// Static functions: the backdrop.
+static Error BackdropBox_Construct(void* widget, void* args)
+{
+    (void)args;
+    return UIElementLook_Construct(&((BackdropBox*)widget)->Look, UIElementKind_Backdrop, NULL);
+}
+
+static Error BackdropBox_Update(void* self, ProgramTime time)
+{
+    BackdropBox* Box = self;
+    UIElementLook_Update(&Box->Look, Widget_GetScreen(&Box->Base), UIElementState_Normal, time.PassedTime);
+    return Error_CreateSuccess();
+}
+
+static Error BackdropBox_Render(void* self, UIRenderContext* context)
+{
+    BackdropBox* Box = self;
+    Rectangle Pixels = UIRenderContext_GetPixelBox(context);
+    const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Widget_GetScreen(&Box->Base));
+    if (UIElement_IsBoxEmpty(Pixels) || (UIThemeStyle_GetBox(Style, UIBackdropPart_Background) == NULL))
+    {
+        return Error_CreateSuccess(); // A theme that gives none dims nothing: the backdrop still takes the presses.
+    }
+    return UIElementLook_DrawBox(&Box->Look, Style, UIBackdropPart_Background, context, Pixels, Widget_GetEffectiveScale(&Box->Base));
+}
+
+static void* BackdropBox_ResolveLook(void* widget)
+{
+    return &((BackdropBox*)widget)->Look;
+}
+
+
 // Static functions: the hover text's box.
 static Error TooltipBox_Construct(void* widget, void* args)
 {
@@ -627,6 +1038,12 @@ static const WidgetVTable TooltipBoxVTable =
     .Measure = TooltipBox_Measure
 };
 
+static const WidgetVTable BackdropBoxVTable =
+{
+    .Update = BackdropBox_Update,
+    .Render = BackdropBox_Render
+};
+
 static const UILookVTable PanelBoxLook =
 {
     .Construct = PanelBox_Construct,
@@ -666,8 +1083,78 @@ static const UILookVTable SliderBoxLook =
     .GetThemeLook = SliderBox_GetThemeLook
 };
 
+static const UILookVTable ScrollbarBoxLook =
+{
+    .Construct = ScrollbarBox_Construct,
+    .Update = ScrollbarBox_Update,
+    .Render = ScrollbarBox_Render,
+    .Measure = ScrollbarBox_Measure,
+    .GetThemeLook = ScrollbarBox_GetThemeLook
+};
+
+static const UILookVTable DropdownBoxLook =
+{
+    .Construct = DropdownBox_Construct,
+    .Deconstruct = DropdownBox_Deconstruct,
+    .Update = DropdownBox_Update,
+    .Render = DropdownBox_Render,
+    .Measure = DropdownBox_Measure,
+    .GetThemeLook = DropdownBox_GetThemeLook
+};
+
+static const UILookVTable MenuBarBoxLook =
+{
+    .Construct = MenuBarBox_Construct,
+    .Update = MenuBarBox_Update,
+    .Layout = MenuBarBox_Layout,
+    .Render = MenuBarBox_Render,
+    .Measure = MenuBarBox_Measure,
+    .GetThemeLook = MenuBarBox_GetThemeLook
+};
+
+static const UILookVTable StatusBarBoxLook =
+{
+    .Construct = StatusBarBox_Construct,
+    .Deconstruct = StatusBarBox_Deconstruct,
+    .Update = StatusBarBox_Update,
+    .Layout = StatusBarBox_Layout,
+    .Render = StatusBarBox_Render,
+    .Measure = StatusBarBox_Measure,
+    .GetThemeLook = StatusBarBox_GetThemeLook
+};
+
+static const UILookVTable ScrollAreaBoxLook =
+{
+    .Construct = ScrollAreaBox_Construct,
+    .Update = ScrollAreaBox_Update,
+    .Render = ScrollAreaBox_Render,
+    .Measure = ScrollAreaBox_Measure,
+    .GetThemeLook = ScrollAreaBox_GetThemeLook
+};
+
 
 // Public functions.
+Error UIStandardLooks_RegisterBackdrop(UIKit* kit, UIWidgetFactory* factory, uint64_t* outTypeId)
+{
+    WidgetCapabilityEntry Capabilities[] =
+    {
+        { .CapabilityId = UIKit_GetCapabilityId(kit, UIElementCapability_Look), .Resolver = BackdropBox_ResolveLook }
+    };
+    WidgetTypeDescriptor Descriptor =
+    {
+        .Name = u8"Backdrop",
+        .StructSize = sizeof(BackdropBox),
+        .VTable = &BackdropBoxVTable,
+        .Constructor = BackdropBox_Construct,
+        .Capabilities = Capabilities,
+        .CapabilityCount = sizeof(Capabilities) / sizeof(Capabilities[0]),
+        .Properties = NULL,
+        .PropertyCount = 0U,
+        .IsFocusable = false
+    };
+    return UIWidgetFactory_RegisterType(factory, &Descriptor, outTypeId);
+}
+
 Error UIStandardLooks_RegisterTooltip(UIKit* kit, UIWidgetFactory* factory, uint64_t* outTypeId)
 {
     WidgetCapabilityEntry Capabilities[] =
@@ -703,6 +1190,26 @@ Error UIStandardLooks_Register(UIKit* kit)
     if (Result.Code == ErrorCode_Success)
     {
         Result = UIKit_RegisterLook(kit, UIElementKind_Slider, UI_KIT_STANDARD_LOOK, sizeof(SliderBox), &SliderBoxLook, NULL);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIKit_RegisterLook(kit, UIElementKind_Scrollbar, UI_KIT_STANDARD_LOOK, sizeof(ScrollbarBox), &ScrollbarBoxLook, NULL);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIKit_RegisterLook(kit, UIElementKind_ScrollArea, UI_KIT_STANDARD_LOOK, sizeof(ScrollAreaBox), &ScrollAreaBoxLook, NULL);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIKit_RegisterLook(kit, UIElementKind_Dropdown, UI_KIT_STANDARD_LOOK, sizeof(DropdownBox), &DropdownBoxLook, NULL);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIKit_RegisterLook(kit, UIElementKind_MenuBar, UI_KIT_STANDARD_LOOK, sizeof(MenuBarBox), &MenuBarBoxLook, NULL);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIKit_RegisterLook(kit, UIElementKind_StatusBar, UI_KIT_STANDARD_LOOK, sizeof(StatusBarBox), &StatusBarBoxLook, NULL);
     }
     return Result;
 }

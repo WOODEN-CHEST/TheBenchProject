@@ -66,6 +66,69 @@ static const UIThemePartDescriptor TooltipParts[UITooltipPart_Count] =
     [UITooltipPart_Text] = COLORS_PART("text"),
 };
 
+static const UIThemePartDescriptor ScrollbarParts[UIScrollbarPart_Count] =
+{
+    [UIScrollbarPart_Thickness] = NUMBER_PART("thickness", 12.0f),
+    [UIScrollbarPart_MinThumbLength] = NUMBER_PART("min_thumb_length", 16.0f),
+    [UIScrollbarPart_ThumbInset] = NUMBER_PART("thumb_inset", 2.0f),
+    [UIScrollbarPart_Track] = BOX_PART("track"),
+    [UIScrollbarPart_Thumb] = BOX_PART("thumb"),
+};
+static const UIThemePartDescriptor ScrollAreaParts[UIScrollAreaPart_Count] =
+{
+    [UIScrollAreaPart_Background] = BOX_PART("background"),
+};
+static const UIThemePartDescriptor DropdownParts[UIDropdownPart_Count] =
+{
+    [UIDropdownPart_Padding] = VECTOR_PART("padding", 8.0f, 4.0f),
+    [UIDropdownPart_MinSize] = VECTOR_PART("min_size", 48.0f, 24.0f),
+    [UIDropdownPart_ArrowSize] = NUMBER_PART("arrow_size", 8.0f),
+    [UIDropdownPart_Background] = BOX_PART("background"),
+    [UIDropdownPart_Text] = COLORS_PART("text"),
+    [UIDropdownPart_Arrow] = COLORS_PART("arrow"),
+    [UIDropdownPart_List] = BOX_PART("list"),
+    [UIDropdownPart_ListPadding] = VECTOR_PART("list_padding", 1.0f, 1.0f),
+    [UIDropdownPart_RowHeight] = NUMBER_PART("row_height", 22.0f),
+    [UIDropdownPart_Row] = BOX_PART("row"),
+    [UIDropdownPart_RowText] = COLORS_PART("row_text"),
+    [UIDropdownPart_ScrollArrowHeight] = NUMBER_PART("scroll_arrow_height", 12.0f),
+};
+static const UIThemePartDescriptor MenuParts[UIMenuPart_Count] =
+{
+    [UIMenuPart_Padding] = VECTOR_PART("padding", 2.0f, 2.0f),
+    [UIMenuPart_ItemHeight] = NUMBER_PART("item_height", 22.0f),
+    [UIMenuPart_ItemPadding] = VECTOR_PART("item_padding", 8.0f, 0.0f),
+    [UIMenuPart_CheckWidth] = NUMBER_PART("check_width", 18.0f),
+    [UIMenuPart_SeparatorHeight] = NUMBER_PART("separator_height", 7.0f),
+    [UIMenuPart_SeparatorThickness] = NUMBER_PART("separator_thickness", 1.0f),
+    [UIMenuPart_Background] = BOX_PART("background"),
+    [UIMenuPart_Item] = BOX_PART("item"),
+    [UIMenuPart_Text] = COLORS_PART("text"),
+    [UIMenuPart_Shortcut] = COLORS_PART("shortcut"),
+    [UIMenuPart_Separator] = BOX_PART("separator"),
+};
+static const UIThemePartDescriptor MenuBarParts[UIMenuBarPart_Count] =
+{
+    [UIMenuBarPart_Padding] = VECTOR_PART("padding", 2.0f, 0.0f),
+    [UIMenuBarPart_EntryPadding] = VECTOR_PART("entry_padding", 8.0f, 3.0f),
+    [UIMenuBarPart_MinSize] = VECTOR_PART("min_size", 0.0f, 22.0f),
+    [UIMenuBarPart_Background] = BOX_PART("background"),
+    [UIMenuBarPart_Entry] = BOX_PART("entry"),
+    [UIMenuBarPart_Text] = COLORS_PART("text"),
+};
+static const UIThemePartDescriptor StatusBarParts[UIStatusBarPart_Count] =
+{
+    [UIStatusBarPart_Padding] = VECTOR_PART("padding", 6.0f, 2.0f),
+    [UIStatusBarPart_Spacing] = NUMBER_PART("spacing", 8.0f),
+    [UIStatusBarPart_MinSize] = VECTOR_PART("min_size", 0.0f, 22.0f),
+    [UIStatusBarPart_Background] = BOX_PART("background"),
+    [UIStatusBarPart_Text] = COLORS_PART("text"),
+};
+static const UIThemePartDescriptor BackdropParts[UIBackdropPart_Count] =
+{
+    [UIBackdropPart_Background] = BOX_PART("background"),
+};
+
 static const struct
 {
     const unsigned char* Name;
@@ -80,6 +143,13 @@ Kinds[UIElementKind_Count] =
     [UIElementKind_Toggle] = { u8"toggle", ToggleParts, UITogglePart_Count },
     [UIElementKind_Slider] = { u8"slider", SliderParts, UISliderPart_Count },
     [UIElementKind_Tooltip] = { u8"tooltip", TooltipParts, UITooltipPart_Count },
+    [UIElementKind_Scrollbar] = { u8"scrollbar", ScrollbarParts, UIScrollbarPart_Count },
+    [UIElementKind_ScrollArea] = { u8"scroll_area", ScrollAreaParts, UIScrollAreaPart_Count },
+    [UIElementKind_Dropdown] = { u8"dropdown", DropdownParts, UIDropdownPart_Count },
+    [UIElementKind_Menu] = { u8"menu", MenuParts, UIMenuPart_Count },
+    [UIElementKind_MenuBar] = { u8"menu_bar", MenuBarParts, UIMenuBarPart_Count },
+    [UIElementKind_StatusBar] = { u8"status_bar", StatusBarParts, UIStatusBarPart_Count },
+    [UIElementKind_Backdrop] = { u8"backdrop", BackdropParts, UIBackdropPart_Count },
 };
 
 

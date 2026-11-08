@@ -5,6 +5,7 @@
     "transition_time": 0.06,
     "tooltip_delay": 0.5,
     "palette": {
+        "backdrop": "#00000080",
         "surface": "#3b3424",
         "surface_sunken": "#2b261a",
         "surface_disabled": "#4a4436",
@@ -131,6 +132,66 @@
                 "colors": { "normal": "@paper" }
             },
             "text": { "normal": "@ink" }
+        },
+        "scrollbar": {
+            "thickness": 12,
+            "min_thumb_length": 20,
+            "thumb_inset": 2,
+            "track": { "kind": "flat", "colors": { "normal": "@surface_sunken" } },
+            "thumb": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@paper", "hovered": "@paper_hover", "pressed": "@accent" } }
+        },
+        "scroll_area": {
+            "background": { "kind": "none" }
+        },
+        "dropdown": {
+            "padding": [ 12, 5 ],
+            "min_size": [ 48, 28 ],
+            "arrow_size": 9,
+            "background": {
+                "kind": "nine_slice",
+                "texture": "tbp:ui_box",
+                "margins": 6,
+                "colors": { "normal": "@raised", "hovered": "@accent", "pressed": "@pressed", "focused": "@raised_focus", "disabled": "@raised_disabled" }
+            },
+            "text": { "normal": "@ink", "disabled": "@text_disabled" },
+            "arrow": { "normal": "@ink", "disabled": "@text_disabled" },
+            "list": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@surface" } },
+            "list_padding": [ 4, 4 ],
+            "row_height": 24,
+            "row": { "kind": "flat", "colors": { "normal": "#00000000", "hovered": "@accent", "selected": "@selected" } },
+            "row_text": { "normal": "@text", "hovered": "@ink" },
+            "scroll_arrow_height": 12
+        },
+        "menu": {
+            "padding": [ 4, 5 ],
+            "item_height": 24,
+            "item_padding": [ 10, 0 ],
+            "check_width": 18,
+            "separator_height": 9,
+            "separator_thickness": 2,
+            "background": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@surface" } },
+            "item": { "kind": "flat", "colors": { "normal": "#00000000", "hovered": "@accent", "focused": "@accent", "selected": "@raised", "disabled": "#00000000" } },
+            "text": { "normal": "@text", "hovered": "@ink", "focused": "@ink", "disabled": "@text_disabled" },
+            "shortcut": { "normal": "@text_dim", "hovered": "@ink", "focused": "@ink", "disabled": "@text_disabled" },
+            "separator": { "kind": "flat", "colors": { "normal": "@surface_sunken" } }
+        },
+        "menu_bar": {
+            "padding": [ 4, 2 ],
+            "entry_padding": [ 12, 3 ],
+            "min_size": [ 0, 28 ],
+            "background": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@surface_sunken" } },
+            "entry": { "kind": "flat", "colors": { "normal": "#00000000", "hovered": "@raised", "pressed": "@pressed", "focused": "@raised_focus", "selected": "@accent" } },
+            "text": { "normal": "@text", "hovered": "@ink", "selected": "@ink" }
+        },
+        "status_bar": {
+            "padding": [ 8, 3 ],
+            "spacing": 8,
+            "min_size": [ 0, 26 ],
+            "background": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@surface_sunken" } },
+            "text": { "normal": "@text_dim" }
+        },
+        "backdrop": {
+            "background": { "kind": "flat", "colors": { "normal": "@backdrop" } }
         }
     }
 }

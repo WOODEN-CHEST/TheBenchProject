@@ -1,4 +1,5 @@
 #include "UIScreen.h"
+#include "UIContextMenu.h"
 #include "UIInternal.h"
 #include "UIWidget.h"
 #include "GameInput.h"
@@ -169,6 +170,33 @@ static bool IsFocusedPassedOver(const UIScreen* self, const WidgetKeyboardInputA
     return (args->Type != UIKeyboardInputType_KeyPress) || !IsShortListKey(self->_input, args->Key);
 }
 
+/* Tells each ancestor of a widget that has just become focused, innermost first (a scroll area scrolls it into view). Each step
+ * resolves the ancestor by id, captured before the previous hook ran; the walk ends where focus moved on meanwhile. */
+static Error TellAncestorsOfFocus(UIScreen* self, uint64_t focusedId)
+{
+    Widget* Focused = UIScreen_InternalResolve(self, focusedId);
+    uint64_t CurrentId = ((Focused != NULL) && (Widget_GetParent(Focused) != NULL)) ? Widget_GetId(Widget_GetParent(Focused)) : WIDGET_ID_INVALID;
+    for (size_t Step = 0; (Step < WIDGET_MAX_TREE_DEPTH) && (CurrentId != WIDGET_ID_INVALID) && (self->_focusedWidgetId == focusedId); Step++)
+    {
+        Widget* Current = UIScreen_InternalResolve(self, CurrentId);
+        if (Current == NULL)
+        {
+            return Error_CreateSuccess();
+        }
+        uint64_t NextId = (Widget_GetParent(Current) != NULL) ? Widget_GetId(Widget_GetParent(Current)) : WIDGET_ID_INVALID;
+        if (Current->VTable->OnDescendantFocus != NULL)
+        {
+            Error Result = Current->VTable->OnDescendantFocus(Current, focusedId);
+            if (Result.Code != ErrorCode_Success)
+            {
+                return Result;
+            }
+        }
+        CurrentId = NextId;
+    }
+    return Error_CreateSuccess();
+}
+
 /* Hands a repeat or the release of a key to the widget that handled its press, and to no other, while that widget still
  * takes input (alive, attached, input-enabled, shown); otherwise it is dropped. Either way the key stays consumed for
  * everyone else until it is released. */
@@ -309,6 +337,30 @@ static Error PressButton(UIScreen* self, ProgramTime time, GameKey button, size_
     }
 
     Widget* Target = GetWidgetUnderPointer(self);
+    if (UIScreen_InternalHasPopups(self))
+    {
+        // Popups the press is outside of close first, from the top down; it goes on to what it landed on, but a modal popup's backdrop
+        // swallows it, and with a modal popup open a press on no widget is not this screen's at all.
+        uint64_t TargetId = (Target != NULL) ? Widget_GetId(Target) : WIDGET_ID_INVALID;
+        bool IsSwallowed = false;
+        bool IsBlocked = false;
+        Error PopupResult = UIScreen_InternalClosePopupsForPress(self, TargetId, &IsSwallowed, &IsBlocked);
+        if ((PopupResult.Code != ErrorCode_Success) || IsBlocked || IsSwallowed)
+        {
+            self->_lastClick.Count = 0U;
+            if (IsSwallowed)
+            {
+                GameInput_ConsumeKey(self->_input, button);
+            }
+            return PopupResult;
+        }
+        Target = UIScreen_InternalResolve(self, TargetId);
+        if ((TargetId != WIDGET_ID_INVALID) && (Target == NULL))
+        {
+            GameInput_ConsumeKey(self->_input, button); // A hook took it away: the press was over a widget, so it stays the UI's.
+            return Error_CreateSuccess();
+        }
+    }
     if (Target == NULL)
     {
         self->_lastClick.Count = 0U;
@@ -404,6 +456,11 @@ static Error DeliverRelease(UIScreen* self, ProgramTime time, GameKey button, si
         }
     }
     Widget* Over = GetWidgetUnderPointer(self); // After the hook: what it did to the tree counts.
+    if ((Over != NULL) && (Widget_GetId(Over) == Press.TargetWidgetId) && (button == GameKey_MouseRight))
+    {
+        // A right press let go on the widget it began on asks for its context menu.
+        return UIContextMenu_Request(self, Press.TargetWidgetId, self->_pointerPosition, false, NULL);
+    }
     if ((Over == NULL) || (Widget_GetId(Over) == Press.TargetWidgetId))
     {
         return Error_CreateSuccess();
@@ -596,6 +653,25 @@ static Error RouteKeys(UIScreen* self)
     return Error_CreateSuccess();
 }
 
+/* A press of the context menu action that no widget used asks for the focused widget's context menu, opening at its middle; consumed
+ * when a provider answered. */
+static Error RouteContextKey(UIScreen* self)
+{
+    Widget* Focused = UIScreen_InternalResolve(self, self->_focusedWidgetId);
+    if ((Focused == NULL) || !GameInput_IsActionPressed(self->_input, GameAction_UIContextMenu))
+    {
+        return Error_CreateSuccess();
+    }
+    Vector2 Middle = UIScreen_WidgetToScreen(self, Focused, (Vector2){ .x = 0.5f, .y = 0.5f });
+    bool IsAnswered = false;
+    Error Result = UIContextMenu_Request(self, self->_focusedWidgetId, Middle, true, &IsAnswered);
+    if (IsAnswered)
+    {
+        GameInput_ConsumeAction(self->_input, GameAction_UIContextMenu);
+    }
+    return Result;
+}
+
 /* Typed text goes to the focused widget and its ancestors (past an edit element that is not entered); if any codepoint is
  * handled, the tick's text is consumed. */
 static Error RouteText(UIScreen* self)
@@ -672,6 +748,10 @@ Error UIScreen_InternalRouteInput(UIScreen* self, ProgramTime time, const UIScre
     if ((Result.Code == ErrorCode_Success) && self->_hasKeyboardFocus)
     {
         Result = RouteKeys(self);
+    }
+    if ((Result.Code == ErrorCode_Success) && self->_hasKeyboardFocus)
+    {
+        Result = RouteContextKey(self);
     }
     if ((Result.Code == ErrorCode_Success) && self->_hasKeyboardFocus)
     {
@@ -820,7 +900,12 @@ Error UIScreen_InternalSetFocus(UIScreen* self, uint64_t widgetId)
         self->_focusedWidgetId = WIDGET_ID_INVALID; // Cleared on purpose, or destroyed, detached or disabled by a hook.
         return Error_CreateSuccess();
     }
-    return Widget_InternalSetFocused(New, true);
+    Result = Widget_InternalSetFocused(New, true);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    return TellAncestorsOfFocus(self, widgetId);
 }
 
 

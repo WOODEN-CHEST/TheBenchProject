@@ -10,8 +10,16 @@
 #include "TextComponentFactory.h"
 #include "GameKey.h"
 #include "StackWidget.h"
+#include "UIChoice.h"
+#include "UIContextMenu.h"
+#include "UIDropdown.h"
 #include "UIKit.h"
+#include "UIMenu.h"
+#include "UIMenuBar.h"
+#include "UIPopup.h"
 #include "UIScreen.h"
+#include "UIScrollArea.h"
+#include "UIStatusBar.h"
 #include "UITooltip.h"
 #include "UIWidget.h"
 #include "UIWidgetFactory.h"
@@ -31,7 +39,7 @@
 /** The scales the + and - keys go through. */
 #define SCALE_COUNT ((size_t)6)
 /** How many elements are named in the log. */
-#define MAX_NAMED_ELEMENTS ((size_t)80)
+#define MAX_NAMED_ELEMENTS ((size_t)160)
 /** Room for a status line. */
 #define STATUS_CAPACITY ((size_t)160)
 /** The background behind everything, opaque: the gallery has no world under it. */
@@ -43,7 +51,19 @@
 /** The keyboard box's width, in UI pixels. */
 #define KEYBOARD_BOX_WIDTH 320.0f
 /** How many pages the gallery has (N steps through them). */
-#define PAGE_COUNT ((size_t)2)
+#define PAGE_COUNT ((size_t)3)
+/** How many options the long dropdowns have, and how many dropdowns the gallery tells apart. */
+#define LONG_OPTION_COUNT ((size_t)1000)
+#define MAX_DROPDOWNS ((size_t)12)
+/** How long the third page's status bar shows a status before it goes back to the hover text, in seconds. */
+#define STATUS_MESSAGE_SECONDS 5.0
+/** How many buttons the third page's first scroll area holds, how many lines its second one, and how many lines end the page. */
+#define LIST_BUTTON_COUNT ((size_t)40)
+#define WIDE_LINE_COUNT ((size_t)30)
+#define END_LINE_COUNT ((size_t)30)
+/** A dropdown's width in the third page's rows and bars, and the height of its scroll areas, in UI pixels. */
+#define DROPDOWN_WIDTH 170.0f
+#define SCROLL_BOX_HEIGHT 190.0f
 /** How long the turning panel takes for a whole turn, and how far the slide-in starts, in UI pixels, and how long it takes. */
 #define TURN_SECONDS 20.0
 #define SLIDE_DISTANCE 360.0f
@@ -54,6 +74,49 @@
 
 
 // Types.
+/* The third page's menu items; an item's id indexes MenuLabels. */
+typedef enum GalleryMenuItemEnum
+{
+    GalleryMenuItem_None,
+    GalleryMenuItem_New,
+    GalleryMenuItem_Open,
+    GalleryMenuItem_OpenRecent,
+    GalleryMenuItem_RecentScene,
+    GalleryMenuItem_RecentNotes,
+    GalleryMenuItem_RecentGone,
+    GalleryMenuItem_Save,
+    GalleryMenuItem_SaveAs,
+    GalleryMenuItem_Export,
+    GalleryMenuItem_Undo,
+    GalleryMenuItem_Redo,
+    GalleryMenuItem_Cut,
+    GalleryMenuItem_Copy,
+    GalleryMenuItem_Paste,
+    GalleryMenuItem_Snap,
+    GalleryMenuItem_NextTheme,
+    GalleryMenuItem_Larger,
+    GalleryMenuItem_Smaller,
+    GalleryMenuItem_NextPage,
+    GalleryMenuItem_About,
+    GalleryMenuItem_Rename,
+    GalleryMenuItem_Duplicate,
+    GalleryMenuItem_Delete,
+    GalleryMenuItem_Insert,
+    GalleryMenuItem_InsertBox,
+    GalleryMenuItem_InsertSphere,
+    GalleryMenuItem_InsertLight,
+    GalleryMenuItem_LightPoint,
+    GalleryMenuItem_LightSpot,
+    GalleryMenuItem_LightSun,
+    GalleryMenuItem_Locked,
+    GalleryMenuItem_PasteHere,
+    GalleryMenuItem_Colour,
+    GalleryMenuItem_Red,
+    GalleryMenuItem_Green,
+    GalleryMenuItem_Blue,
+    GalleryMenuItem_Count
+} GalleryMenuItem;
+
 /* An element's name for the log. */
 typedef struct NamedElementStruct
 {
@@ -103,6 +166,21 @@ typedef struct UIGalleryFrameStruct
     /** The elements given a hover text of their own; the rest named get one saying what they are. */
     uint64_t _describedIds[MAX_NAMED_ELEMENTS];
     size_t _describedCount;
+    /** The third page's menu bar and status bar; the status line there is the bar's message. */
+    uint64_t _menuBarId;
+    uint64_t _statusBarId;
+    /** The button that opens the dialog, and the open dialog with its two buttons (WIDGET_ID_INVALID while it is closed). */
+    uint64_t _dialogButtonId;
+    uint64_t _dialogId;
+    uint64_t _dialogYesId;
+    uint64_t _dialogNoId;
+    /** The dropdowns: their events say the option chosen. */
+    uint64_t _dropdownIds[MAX_DROPDOWNS];
+    size_t _dropdownCount;
+    /** Whether the context menu's Locked item is checked. */
+    bool _isLocked;
+    /** A menu item the frame acts on after the screen's update (the theme, the scale, the page), or none. */
+    GalleryMenuItem _pendingMenuItem;
 } UIGalleryFrame;
 
 /* A stack that takes the wheel, as a scroll area does: its children's wheel comes up to it. */
@@ -138,6 +216,48 @@ static const float Scales[SCALE_COUNT] = { 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f 
 /* Text in every alphabet the font has, for looking at small sizes. */
 static const unsigned char SampleText[] = u8"The quick brown fox jumps over the lazy dog 0123456789 āčēģīķļņšūž Ждём";
 static const unsigned char LongText[] = u8"A label that wraps: this line is longer than the panel it stands in, so it breaks at a space and the stack makes room for the next line.";
+/* The short dropdowns' options. */
+static const unsigned char* const ShortOptions[] = { u8"Small", u8"Medium", u8"Large" };
+static const unsigned char* const MenuLabels[GalleryMenuItem_Count] =
+{
+    [GalleryMenuItem_None] = u8"",
+    [GalleryMenuItem_New] = u8"New",
+    [GalleryMenuItem_Open] = u8"Open...",
+    [GalleryMenuItem_OpenRecent] = u8"Open recent",
+    [GalleryMenuItem_RecentScene] = u8"scene.json",
+    [GalleryMenuItem_RecentNotes] = u8"notes.txt",
+    [GalleryMenuItem_RecentGone] = u8"a file that is gone",
+    [GalleryMenuItem_Save] = u8"Save",
+    [GalleryMenuItem_SaveAs] = u8"Save as...",
+    [GalleryMenuItem_Export] = u8"Export",
+    [GalleryMenuItem_Undo] = u8"Undo",
+    [GalleryMenuItem_Redo] = u8"Redo",
+    [GalleryMenuItem_Cut] = u8"Cut",
+    [GalleryMenuItem_Copy] = u8"Copy",
+    [GalleryMenuItem_Paste] = u8"Paste",
+    [GalleryMenuItem_Snap] = u8"Snap to the grid",
+    [GalleryMenuItem_NextTheme] = u8"Next theme",
+    [GalleryMenuItem_Larger] = u8"Larger",
+    [GalleryMenuItem_Smaller] = u8"Smaller",
+    [GalleryMenuItem_NextPage] = u8"Next page",
+    [GalleryMenuItem_About] = u8"About the gallery",
+    [GalleryMenuItem_Rename] = u8"Rename",
+    [GalleryMenuItem_Duplicate] = u8"Duplicate",
+    [GalleryMenuItem_Delete] = u8"Delete",
+    [GalleryMenuItem_Insert] = u8"Insert",
+    [GalleryMenuItem_InsertBox] = u8"Box",
+    [GalleryMenuItem_InsertSphere] = u8"Sphere",
+    [GalleryMenuItem_InsertLight] = u8"Light",
+    [GalleryMenuItem_LightPoint] = u8"Point",
+    [GalleryMenuItem_LightSpot] = u8"Spot",
+    [GalleryMenuItem_LightSun] = u8"Sun",
+    [GalleryMenuItem_Locked] = u8"Locked",
+    [GalleryMenuItem_PasteHere] = u8"Paste here",
+    [GalleryMenuItem_Colour] = u8"Colour",
+    [GalleryMenuItem_Red] = u8"Red",
+    [GalleryMenuItem_Green] = u8"Green",
+    [GalleryMenuItem_Blue] = u8"Blue"
+};
 
 
 // Static functions: building the page.
@@ -256,6 +376,55 @@ static void AddSlider(GalleryBuild* build, uint64_t parent, const char* name, do
     }
 }
 
+/* A page's root: a column filling the surface. Its content scrolls in a scroll area (AddPageContent), so the whole page works at
+ * small window sizes; above and below it stand what stays (the third page's bars, the status line). */
+static uint64_t AddPageRoot(GalleryBuild* build)
+{
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIStackOptions Options = UIStackOptions_Create(UIStackDirection_Column);
+        Options.Element.HasPlacement = true;
+        Options.Element.Placement = UIPlacement_Stretch(UIInsets_All(0.0f));
+        build->Result = UIKit_CreateStack(&build->Frame->_kit, &build->Frame->_screen, WIDGET_ID_INVALID, &Options, &Id);
+    }
+    return Id;
+}
+
+/* The page's scroll area, filling what the root's other children leave, and the column in it that holds the page's content. */
+static uint64_t AddPageContent(GalleryBuild* build, uint64_t root)
+{
+    uint64_t Area = WIDGET_ID_INVALID;
+    uint64_t Column = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIScrollAreaOptions Options = UIScrollAreaOptions_Create();
+        Options.Element.Hint = UIStackHint_Fill(1.0f);
+        build->Result = UIKit_CreateScrollArea(&build->Frame->_kit, &build->Frame->_screen, root, &Options, &Area);
+    }
+    if (!HasFailed(build))
+    {
+        UIStackOptions Options = UIStackOptions_Create(UIStackDirection_Column);
+        Options.Layout.Padding = UIInsets_All(12.0f);
+        Options.Layout.Spacing = 8.0f;
+        build->Result = UIKit_CreateStack(&build->Frame->_kit, &build->Frame->_screen, Area, &Options, &Column);
+    }
+    return Column;
+}
+
+/* The status line under a page's scroll area, so it shows wherever the page is scrolled. */
+static uint64_t AddStatusLine(GalleryBuild* build, uint64_t root)
+{
+    uint64_t Row = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIStackOptions Options = UIStackOptions_Create(UIStackDirection_Row);
+        Options.Layout.Padding = (UIInsets){ .Left = 12.0f, .Top = 4.0f, .Right = 12.0f, .Bottom = 8.0f };
+        build->Result = UIKit_CreateStack(&build->Frame->_kit, &build->Frame->_screen, root, &Options, &Row);
+    }
+    return AddLabel(build, Row, u8"Nothing yet.", u8"hint");
+}
+
 /* Puts a text in every page's status line. */
 static Error SetStatus(UIGalleryFrame* frame, const char* text)
 {
@@ -267,6 +436,18 @@ static Error SetStatus(UIGalleryFrame* frame, const char* text)
             continue;
         }
         Error Result = UILabel_SetText(&frame->_screen, frame->_statusIds[Index], (const unsigned char*)text);
+        if (First.Code == ErrorCode_Success)
+        {
+            First = Result;
+        }
+        else
+        {
+            Error_Deconstruct(&Result);
+        }
+    }
+    if (frame->_statusBarId != WIDGET_ID_INVALID)
+    {
+        Error Result = UIStatusBar_SetMessage(&frame->_screen, frame->_statusBarId, (const unsigned char*)text, STATUS_MESSAGE_SECONDS);
         if (First.Code == ErrorCode_Success)
         {
             First = Result;
@@ -291,6 +472,18 @@ static void ReportScrub(UIGalleryFrame* frame, const char* what, float pixels)
         Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger, (const unsigned char*)u8"UIGallery: %s", Status);
         Error_Deconstruct(&LogResult);
     }
+}
+
+/* Sets the status line and logs it while the event log is on. */
+static Error Report(UIGalleryFrame* frame, const char* text)
+{
+    Error Result = SetStatus(frame, text);
+    if ((frame->_services->Logger != NULL) && frame->_isEventLogEnabled)
+    {
+        Error LogResult = Logger_LogInfoFormatted(frame->_services->Logger, (const unsigned char*)u8"UIGallery: %s", text);
+        Error_Deconstruct(&LogResult);
+    }
+    return Result;
 }
 
 static Error WheelStack_Layout(void* self, const UILayoutContext* context)
@@ -594,22 +787,19 @@ static void BuildLayouts(GalleryBuild* build, uint64_t page)
 }
 
 static void BuildLooksPage(GalleryBuild* build);
+static void BuildPopupsPage(GalleryBuild* build);
 static void DescribeEverything(GalleryBuild* build);
 
-/* The first page: a heading, two panels side by side, and a status line; then the second page, and hover text on everything. */
+/* The first page: a heading and two panels side by side, scrolling, over a status line; then the other pages, and hover text on
+ * everything. */
 static Error BuildPage(UIGalleryFrame* frame)
 {
     GalleryBuild Build = { .Frame = frame, .Result = Error_CreateSuccess() };
-    UIStackOptions PageOptions = UIStackOptions_Create(UIStackDirection_Column);
-    PageOptions.Layout.Padding = UIInsets_All(12.0f);
-    PageOptions.Layout.Spacing = 8.0f;
-    PageOptions.Element.HasPlacement = true;
-    PageOptions.Element.Placement = UIPlacement_Stretch(UIInsets_All(0.0f));
-    uint64_t Page = WIDGET_ID_INVALID;
-    Build.Result = UIKit_CreateStack(&frame->_kit, &frame->_screen, WIDGET_ID_INVALID, &PageOptions, &Page);
+    uint64_t Root = AddPageRoot(&Build);
+    uint64_t Page = AddPageContent(&Build, Root);
 
     AddLabel(&Build, Page, u8"UI gallery", u8"heading");
-    AddLabel(&Build, Page, u8"T the theme, + and - the scale, P the scale policy, L the event log. Escape steps out, and quits once nothing is focused.", u8"hint");
+    AddLabel(&Build, Page, u8"N the next page, T the theme, + and - the scale, P the scale policy, L the event log. Escape steps out, and quits once nothing is focused.", u8"hint");
     uint64_t Panels = AddRow(&Build, Page, 8.0f);
     if (!HasFailed(&Build))
     {
@@ -618,9 +808,10 @@ static Error BuildPage(UIGalleryFrame* frame)
     }
     BuildElements(&Build, Panels);
     BuildLayouts(&Build, Panels);
-    frame->_statusIds[0] = AddLabel(&Build, Page, u8"Nothing yet.", u8"hint");
-    frame->_pageIds[0] = Page;
+    frame->_statusIds[0] = AddStatusLine(&Build, Root);
+    frame->_pageIds[0] = Root;
     BuildLooksPage(&Build);
+    BuildPopupsPage(&Build);
     DescribeEverything(&Build);
     return Build.Result;
 }
@@ -857,16 +1048,11 @@ static void BuildLooksPage(GalleryBuild* build)
     {
         return;
     }
-    UIStackOptions PageOptions = UIStackOptions_Create(UIStackDirection_Column);
-    PageOptions.Layout.Padding = UIInsets_All(12.0f);
-    PageOptions.Layout.Spacing = 8.0f;
-    PageOptions.Element.HasPlacement = true;
-    PageOptions.Element.Placement = UIPlacement_Stretch(UIInsets_All(0.0f));
-    uint64_t Page = WIDGET_ID_INVALID;
-    build->Result = UIKit_CreateStack(&Frame->_kit, &Frame->_screen, WIDGET_ID_INVALID, &PageOptions, &Page);
-    Frame->_pageIds[1] = Page;
+    uint64_t Root = AddPageRoot(build);
+    uint64_t Page = AddPageContent(build, Root);
+    Frame->_pageIds[1] = Root;
     AddLabel(build, Page, u8"UI gallery: looks, scale and turns", u8"heading");
-    AddLabel(build, Page, u8"N the other page, T the theme (the third is the first with another palette), + and - the scale. Hover anything for its text.", u8"hint");
+    AddLabel(build, Page, u8"N the next page, T the theme (the third is the first with another palette), + and - the scale. Hover anything for its text.", u8"hint");
     uint64_t Panel = AddPanel(build, Page, UIStackHint_Fill(1.0f), NULL);
     BuildScaleRows(build, Panel);
     BuildMovingRows(build, Panel);
@@ -891,14 +1077,488 @@ static void BuildLooksPage(GalleryBuild* build)
         build->Result = UIKit_CreateButton(&Frame->_kit, &Frame->_screen, Icons, &Options, &Id);
         Remember(build, Id, IconNames[Index]);
     }
-    Frame->_statusIds[1] = AddLabel(build, Page, u8"Nothing yet.", u8"hint");
+    Frame->_statusIds[1] = AddStatusLine(build, Root);
     Widget* PageBase = NULL;
-    if (!HasFailed(build) && UIScreen_TryGetWidgetById(&Frame->_screen, Page, &PageBase))
+    if (!HasFailed(build) && UIScreen_TryGetWidgetById(&Frame->_screen, Root, &PageBase))
     {
         build->Result = Widget_SetIsRendered(PageBase, false);
     }
 }
 
+// Static functions: the third page.
+static UIMenuItem MakeItem(GalleryMenuItem id, const unsigned char* shortcut)
+{
+    UIMenuItem Item = UIMenuItem_Create((uint32_t)id, MenuLabels[id]);
+    Item.Shortcut = shortcut;
+    return Item;
+}
+
+/* Every menu's handler: it says which item was activated. The Locked item flips its check (the box's menu is built at each request,
+ * so the check shows the state), and the View menu's items are acted on after the screen's update, since they change the theme, the
+ * scale or the page under the closing menu. */
+static Error OnMenuItem(UIScreen* screen, const UIMenuActivation* activation, const UserData* userData)
+{
+    UIGalleryFrame* Frame = UserData_GetPointer(userData);
+    UNUSED(screen);
+    GalleryMenuItem Item = (activation->ItemId < (uint32_t)GalleryMenuItem_Count) ? (GalleryMenuItem)activation->ItemId : GalleryMenuItem_None;
+    bool IsFramesOwn = (Item == GalleryMenuItem_NextTheme) || (Item == GalleryMenuItem_Larger) || (Item == GalleryMenuItem_Smaller)
+        || (Item == GalleryMenuItem_NextPage);
+    if (IsFramesOwn)
+    {
+        Frame->_pendingMenuItem = Item;
+    }
+    if (Item == GalleryMenuItem_Locked)
+    {
+        Frame->_isLocked = !Frame->_isLocked;
+    }
+    char Status[STATUS_CAPACITY];
+    snprintf(Status, sizeof(Status), "the menu item %s activated%s", (const char*)MenuLabels[Item],
+        (Item != GalleryMenuItem_Locked) ? "" : (Frame->_isLocked ? ": locked" : ": unlocked"));
+    return Report(Frame, Status);
+}
+
+/* The box's context menu: submenus three deep, shortcut texts, an icon, a check that remembers and a disabled item. */
+static Error OnBoxMenu(UIScreen* screen, const UIContextMenuRequest* request, const UserData* userData)
+{
+    const UIGalleryFrame* Frame = UserData_GetPointer(userData);
+    UIMenuItem Lights[] = { MakeItem(GalleryMenuItem_LightPoint, NULL), MakeItem(GalleryMenuItem_LightSpot, NULL), MakeItem(GalleryMenuItem_LightSun, NULL) };
+    UIMenuItem Insert[] = { MakeItem(GalleryMenuItem_InsertBox, NULL), MakeItem(GalleryMenuItem_InsertSphere, NULL),
+        MakeItem(GalleryMenuItem_InsertLight, NULL) };
+    Insert[2].Children = Lights;
+    Insert[2].ChildCount = sizeof(Lights) / sizeof(Lights[0]);
+    UIMenuItem Items[] = { MakeItem(GalleryMenuItem_Rename, u8"F2"), MakeItem(GalleryMenuItem_Duplicate, u8"Ctrl+D"), MakeItem(GalleryMenuItem_Delete, u8"Delete"),
+        UIMenuItem_Separator(), MakeItem(GalleryMenuItem_Insert, NULL), UIMenuItem_Separator(), MakeItem(GalleryMenuItem_Locked, NULL),
+        MakeItem(GalleryMenuItem_PasteHere, u8"Ctrl+V") };
+    Items[1].Icon = UIElementIcon_FromLetter((uint32_t)'D');
+    Items[4].Children = Insert;
+    Items[4].ChildCount = sizeof(Insert) / sizeof(Insert[0]);
+    Items[6].IsChecked = Frame->_isLocked;
+    Items[7].IsEnabled = false;
+    return UIMenu_OpenAt(screen, request, Items, sizeof(Items) / sizeof(Items[0]), OnMenuItem, userData);
+}
+
+/* The inner box's own menu: a request walks up to the first provider and stops there. */
+static Error OnInnerBoxMenu(UIScreen* screen, const UIContextMenuRequest* request, const UserData* userData)
+{
+    UIMenuItem Colours[] = { MakeItem(GalleryMenuItem_Red, NULL), MakeItem(GalleryMenuItem_Green, NULL), MakeItem(GalleryMenuItem_Blue, NULL) };
+    UIMenuItem Items[] = { MakeItem(GalleryMenuItem_Colour, NULL), MakeItem(GalleryMenuItem_Rename, u8"F2") };
+    Items[0].Children = Colours;
+    Items[0].ChildCount = sizeof(Colours) / sizeof(Colours[0]);
+    return UIMenu_OpenAt(screen, request, Items, sizeof(Items) / sizeof(Items[0]), OnMenuItem, userData);
+}
+
+static size_t CountLongOptions(UIScreen* screen, uint64_t widgetId, const UserData* userData)
+{
+    UNUSED(screen);
+    UNUSED(widgetId);
+    UNUSED(userData);
+    return LONG_OPTION_COUNT;
+}
+
+static Error WriteLongOption(UIScreen* screen, uint64_t widgetId, const UserData* userData, size_t index, GenericBuffer* outText)
+{
+    UNUSED(screen);
+    UNUSED(widgetId);
+    UNUSED(userData);
+    char Text[32];
+    snprintf(Text, sizeof(Text), "Option %zu", index + 1U);
+    return GenericBuffer_AppendString(outText, (const unsigned char*)Text) ? Error_CreateSuccess()
+        : Error_Construct2(ErrorCode_BufferTooLarge, "UIGallery: an option's text could not be written.");
+}
+
+/* How a dropdown stands in a row (its width, centred across), and in a column (its width, at the start). */
+static UIStackHint RowDropdownHint(void)
+{
+    UIStackHint Hint = UIStackHint_Fixed(DROPDOWN_WIDTH);
+    Hint.Align = UIStackAlign_Center;
+    return Hint;
+}
+
+static UIStackHint ColumnDropdownHint(void)
+{
+    UIStackHint Hint = UIStackHint_Content();
+    Hint.Align = UIStackAlign_Start;
+    Hint.HasCrossSize = true;
+    Hint.CrossSize = DROPDOWN_WIDTH;
+    return Hint;
+}
+
+/* A dropdown: the three short options, the middle one chosen, or a thousand from a provider, the first chosen. */
+static uint64_t AddDropdown(GalleryBuild* build, uint64_t parent, const char* name, bool isLong, UIStackHint hint)
+{
+    UIGalleryFrame* Frame = build->Frame;
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (HasFailed(build))
+    {
+        return Id;
+    }
+    UIDropdownOptions Options = UIDropdownOptions_Create();
+    Options.Element.Hint = hint;
+    Options.Options = isLong ? NULL : ShortOptions;
+    Options.OptionCount = isLong ? 0U : (sizeof(ShortOptions) / sizeof(ShortOptions[0]));
+    Options.HasSelection = !isLong;
+    Options.Selected = 1U;
+    build->Result = UIKit_CreateDropdown(&Frame->_kit, &Frame->_screen, parent, &Options, &Id);
+    if (!HasFailed(build) && isLong)
+    {
+        UserData Data = UserData_FromPointer(Frame);
+        build->Result = UIChoice_SetProvider(&Frame->_screen, Id, CountLongOptions, WriteLongOption, &Data);
+    }
+    if (!HasFailed(build) && isLong)
+    {
+        build->Result = UIChoice_SetSelected(&Frame->_screen, Id, true, 0U);
+    }
+    Remember(build, Id, name);
+    if (!HasFailed(build) && (Frame->_dropdownCount < MAX_DROPDOWNS))
+    {
+        Frame->_dropdownIds[Frame->_dropdownCount] = Id;
+        Frame->_dropdownCount++;
+    }
+    return Id;
+}
+
+/* A column in a row: a caption over what is added to it. */
+static uint64_t AddCaptioned(GalleryBuild* build, uint64_t row, const unsigned char* caption)
+{
+    uint64_t Column = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIStackOptions Options = UIStackOptions_Create(UIStackDirection_Column);
+        Options.Layout.Spacing = 2.0f;
+        build->Result = UIKit_CreateStack(&build->Frame->_kit, &build->Frame->_screen, row, &Options, &Column);
+    }
+    AddLabel(build, Column, caption, u8"hint");
+    return Column;
+}
+
+static uint64_t AddColumn(GalleryBuild* build, uint64_t parent, float padding, float spacing)
+{
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIStackOptions Options = UIStackOptions_Create(UIStackDirection_Column);
+        Options.Layout.Padding = UIInsets_All(padding);
+        Options.Layout.Spacing = spacing;
+        build->Result = UIKit_CreateStack(&build->Frame->_kit, &build->Frame->_screen, parent, &Options, &Id);
+    }
+    return Id;
+}
+
+/* The menu bar: four menus with items of every sort. Shortcut texts are only text; the View menu's are the gallery's own keys. */
+static void AddMenuBar(GalleryBuild* build, uint64_t root)
+{
+    UIGalleryFrame* Frame = build->Frame;
+    if (HasFailed(build))
+    {
+        return;
+    }
+    UIMenuBarOptions Options = UIMenuBarOptions_Create();
+    Options.Handler = OnMenuItem;
+    Options.Data = UserData_FromPointer(Frame);
+    build->Result = UIKit_CreateMenuBar(&Frame->_kit, &Frame->_screen, root, &Options, &Frame->_menuBarId);
+    Remember(build, Frame->_menuBarId, "the menu bar");
+
+    UIMenuItem Recent[] = { MakeItem(GalleryMenuItem_RecentScene, NULL), MakeItem(GalleryMenuItem_RecentNotes, NULL),
+        MakeItem(GalleryMenuItem_RecentGone, NULL) };
+    Recent[2].IsEnabled = false;
+    UIMenuItem File[] = { MakeItem(GalleryMenuItem_New, u8"Ctrl+N"), MakeItem(GalleryMenuItem_Open, u8"Ctrl+O"), MakeItem(GalleryMenuItem_OpenRecent, NULL),
+        UIMenuItem_Separator(), MakeItem(GalleryMenuItem_Save, u8"Ctrl+S"), MakeItem(GalleryMenuItem_SaveAs, u8"Ctrl+Shift+S"), UIMenuItem_Separator(),
+        MakeItem(GalleryMenuItem_Export, NULL) };
+    File[0].Icon = UIElementIcon_FromLetter((uint32_t)'N');
+    File[1].Icon = UIElementIcon_FromLetter((uint32_t)'O');
+    File[2].Children = Recent;
+    File[2].ChildCount = sizeof(Recent) / sizeof(Recent[0]);
+    File[4].Icon = UIElementIcon_FromLetter((uint32_t)'S');
+    File[7].IsEnabled = false;
+    UIMenuItem Edit[] = { MakeItem(GalleryMenuItem_Undo, u8"Ctrl+Z"), MakeItem(GalleryMenuItem_Redo, u8"Ctrl+Y"), UIMenuItem_Separator(),
+        MakeItem(GalleryMenuItem_Cut, u8"Ctrl+X"), MakeItem(GalleryMenuItem_Copy, u8"Ctrl+C"), MakeItem(GalleryMenuItem_Paste, u8"Ctrl+V"),
+        UIMenuItem_Separator(), MakeItem(GalleryMenuItem_Snap, NULL) };
+    Edit[1].IsEnabled = false;
+    Edit[7].IsChecked = true;
+    UIMenuItem View[] = { MakeItem(GalleryMenuItem_NextTheme, u8"T"), MakeItem(GalleryMenuItem_Larger, u8"+"), MakeItem(GalleryMenuItem_Smaller, u8"-"),
+        UIMenuItem_Separator(), MakeItem(GalleryMenuItem_NextPage, u8"N") };
+    UIMenuItem Help[] = { MakeItem(GalleryMenuItem_About, NULL) };
+    const unsigned char* const Labels[] = { u8"File", u8"Edit", u8"View", u8"Help" };
+    const UIMenuItem* const Menus[] = { File, Edit, View, Help };
+    const size_t Counts[] = { sizeof(File) / sizeof(File[0]), sizeof(Edit) / sizeof(Edit[0]), sizeof(View) / sizeof(View[0]), sizeof(Help) / sizeof(Help[0]) };
+    for (size_t Index = 0U; (Index < (sizeof(Menus) / sizeof(Menus[0]))) && !HasFailed(build); Index++)
+    {
+        build->Result = UIMenuBar_AddEntry(&Frame->_screen, Frame->_menuBarId, Labels[Index], Menus[Index], Counts[Index], NULL);
+    }
+}
+
+/* Under the menu bar: a dropdown at each end, near the window's top corners, where a list opens the way that fits. */
+static void AddEdgeRow(GalleryBuild* build, uint64_t root)
+{
+    uint64_t Row = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIStackOptions Options = UIStackOptions_Create(UIStackDirection_Row);
+        Options.Layout.Padding = (UIInsets){ .Left = 12.0f, .Top = 6.0f, .Right = 12.0f, .Bottom = 6.0f };
+        Options.Layout.Spacing = 8.0f;
+        build->Result = UIKit_CreateStack(&build->Frame->_kit, &build->Frame->_screen, root, &Options, &Row);
+    }
+    Describe(build, AddDropdown(build, Row, "the dropdown at the top left", false, RowDropdownHint()), u8"Three options, near the window's top left corner.");
+    if (!HasFailed(build))
+    {
+        UILabelOptions Options = UILabelOptions_Create(u8"Dropdowns near the window's edges");
+        Options.Element.Hint = UIStackHint_Fill(1.0f);
+        Options.Element.Hint.Align = UIStackAlign_Center;
+        Options.Element.Variant = u8"hint";
+        uint64_t Id = WIDGET_ID_INVALID;
+        build->Result = UIKit_CreateLabel(&build->Frame->_kit, &build->Frame->_screen, Row, &Options, &Id);
+    }
+    Describe(build, AddDropdown(build, Row, "the dropdown at the top right", true, RowDropdownHint()),
+        u8"A thousand options, near the window's top right corner.");
+}
+
+/* A box with a context menu, a button in it with no menu of its own (the request walks up to the box's), and an inner box with a menu
+ * of its own. */
+static void BuildContextBox(GalleryBuild* build, uint64_t page)
+{
+    UIGalleryFrame* Frame = build->Frame;
+    AddLabel(build, page, u8"Context menus: right-click the box, or focus its button and press the menu key", u8"heading");
+    uint64_t Box = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIPanelOptions Options = UIPanelOptions_Create();
+        Options.HasSpacing = true;
+        Options.Spacing = 8.0f;
+        Options.Element.Variant = u8"inset";
+        build->Result = UIKit_CreatePanel(&Frame->_kit, &Frame->_screen, page, &Options, &Box);
+        Remember(build, Box, "the box with a context menu");
+    }
+    if (!HasFailed(build))
+    {
+        UserData Data = UserData_FromPointer(Frame);
+        build->Result = UIContextMenu_SetProvider(&Frame->_screen, Box, OnBoxMenu, &Data);
+    }
+    AddWrappedLabel(build, Box, u8"Right-click anywhere in this box: a menu with submenus (Insert, then Light), a check that remembers (Locked) and a "
+        u8"disabled item. The arrows move through it, Right opens a submenu, Left and Escape close one. Near the window's right edge a submenu "
+        u8"opens to the left.", u8"hint");
+    uint64_t Row = AddRow(build, Box, 8.0f);
+    UIStackHint ButtonHint = UIStackHint_Content();
+    ButtonHint.Align = UIStackAlign_Center;
+    AddButton(build, Row, u8"A button with no menu: the box's", "the button in the box", true, false, NULL, ButtonHint);
+    uint64_t Inner = AddPanel(build, Row, UIStackHint_Fill(1.0f), NULL);
+    Remember(build, Inner, "the inner box");
+    AddLabel(build, Inner, u8"An inner box with a menu of its own", NULL);
+    if (!HasFailed(build))
+    {
+        UserData Data = UserData_FromPointer(Frame);
+        build->Result = UIContextMenu_SetProvider(&Frame->_screen, Inner, OnInnerBoxMenu, &Data);
+    }
+}
+
+/* The button that opens the modal dialog. */
+static void BuildDialogButton(GalleryBuild* build, uint64_t page)
+{
+    AddLabel(build, page, u8"A modal dialog: nothing behind it takes a click or the wheel; Enter says yes, Escape no", u8"heading");
+    UIStackHint Hint = UIStackHint_Content();
+    Hint.Align = UIStackAlign_Start;
+    build->Frame->_dialogButtonId = AddButton(build, page, u8"Discard the changes...", "the dialog's button", true, false, NULL, Hint);
+    Describe(build, build->Frame->_dialogButtonId, u8"Opens a plain panel with Yes and No over a backdrop that takes every press.");
+}
+
+/* Dropdowns of every sort, each under a caption. */
+static void BuildDropdowns(GalleryBuild* build, uint64_t page)
+{
+    UIGalleryFrame* Frame = build->Frame;
+    AddLabel(build, page, u8"Dropdowns: Ctrl and the wheel step a closed one; open, the arrows, Home, End, a letter and Enter choose", u8"heading");
+    uint64_t First = AddRow(build, page, 12.0f);
+    AddDropdown(build, AddCaptioned(build, First, u8"Three options"), "the three options dropdown", false, ColumnDropdownHint());
+    Describe(build, AddDropdown(build, AddCaptioned(build, First, u8"A thousand"), "the thousand options dropdown", true, ColumnDropdownHint()),
+        u8"A thousand options from a provider: only the rows in view have widgets.");
+    uint64_t Four = AddDropdown(build, AddCaptioned(build, First, u8"Four rows shown"), "the dropdown showing four rows", true, ColumnDropdownHint());
+    if (!HasFailed(build))
+    {
+        build->Result = UIDropdown_SetVisibleCount(&Frame->_screen, Four, 4U);
+    }
+    uint64_t Second = AddRow(build, page, 12.0f);
+    uint64_t Up = AddDropdown(build, AddCaptioned(build, Second, u8"Always opening up"), "the dropdown opening up", true, ColumnDropdownHint());
+    if (!HasFailed(build))
+    {
+        build->Result = UIDropdown_SetDirection(&Frame->_screen, Up, UIDropdownDirection_Up);
+    }
+    uint64_t Mixed = AddDropdown(build, AddCaptioned(build, Second, u8"Mixed"), "the mixed dropdown", false, ColumnDropdownHint());
+    if (!HasFailed(build))
+    {
+        build->Result = UIChoice_SetMixed(&Frame->_screen, Mixed, true);
+    }
+    uint64_t Off = AddDropdown(build, AddCaptioned(build, Second, u8"Disabled"), "the disabled dropdown", false, ColumnDropdownHint());
+    if (!HasFailed(build))
+    {
+        build->Result = UIDropdown_SetIsEnabled(&Frame->_screen, Off, false);
+    }
+}
+
+/* A scroll area of the third page: a fixed height in its row, sharing its width. */
+static uint64_t AddScrollBox(GalleryBuild* build, uint64_t row, UIScrollMode horizontal, UIScrollMode vertical, const char* name)
+{
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIScrollAreaOptions Options = UIScrollAreaOptions_Create();
+        Options.Horizontal = horizontal;
+        Options.Vertical = vertical;
+        Options.Element.Hint = UIStackHint_Fill(1.0f);
+        Options.Element.Hint.Align = UIStackAlign_Start;
+        Options.Element.Hint.HasCrossSize = true;
+        Options.Element.Hint.CrossSize = SCROLL_BOX_HEIGHT;
+        build->Result = UIKit_CreateScrollArea(&build->Frame->_kit, &build->Frame->_screen, row, &Options, &Id);
+        Remember(build, Id, name);
+    }
+    return Id;
+}
+
+/* Two scroll areas side by side: one down only with buttons to Tab through, one both ways with its bars always shown. */
+static void BuildScrollAreas(GalleryBuild* build, uint64_t page)
+{
+    AddLabel(build, page, u8"Scroll areas: down only, Tab scrolling its buttons into view; both ways, its bars always shown, Shift and the wheel across",
+        u8"heading");
+    uint64_t Row = AddRow(build, page, 8.0f);
+    uint64_t Down = AddScrollBox(build, Row, UIScrollMode_Disabled, UIScrollMode_Auto, "the scroll area going down");
+    uint64_t List = AddColumn(build, Down, 6.0f, 4.0f);
+    UIStackHint Hint = UIStackHint_Content();
+    Hint.Align = UIStackAlign_Start;
+    for (size_t Index = 0U; (Index < LIST_BUTTON_COUNT) && !HasFailed(build); Index++)
+    {
+        char Text[48];
+        snprintf(Text, sizeof(Text), "Button %zu of the list", Index + 1U);
+        AddButton(build, List, (const unsigned char*)Text, "a button in the scroll area", true, false, NULL, Hint);
+    }
+    uint64_t Both = AddScrollBox(build, Row, UIScrollMode_Always, UIScrollMode_Always, "the scroll area going both ways");
+    uint64_t Lines = AddColumn(build, Both, 6.0f, 2.0f);
+    for (size_t Index = 0U; (Index < WIDE_LINE_COUNT) && !HasFailed(build); Index++)
+    {
+        char Text[256];
+        snprintf(Text, sizeof(Text), "Line %zu: a line longer than its box, so this area scrolls across as well as down; Shift and the wheel go "
+            "across, and its bars show even with nothing to scroll. The line goes on a while longer, to be wider than the box.", Index + 1U);
+        AddLabel(build, Lines, (const unsigned char*)Text, NULL);
+    }
+}
+
+/* The page's long end, and a button at the bottom for Tab to scroll to. */
+static void BuildPageEnd(GalleryBuild* build, uint64_t page)
+{
+    AddLabel(build, page, u8"The page goes on: the wheel, its bar, Page Up and Page Down scroll it", u8"heading");
+    for (size_t Index = 0U; (Index < END_LINE_COUNT) && !HasFailed(build); Index++)
+    {
+        char Text[64];
+        snprintf(Text, sizeof(Text), "Line %zu of the page's end.", Index + 1U);
+        AddLabel(build, page, (const unsigned char*)Text, u8"hint");
+    }
+    UIStackHint Hint = UIStackHint_Content();
+    Hint.Align = UIStackAlign_Start;
+    Describe(build, AddButton(build, page, u8"The end of the page", "the button at the end of the page", true, false, NULL, Hint),
+        u8"Tab to it from above: the page scrolls as little as it takes to show it.");
+}
+
+/* The status bar: the status line of the page (a message that times out, then the hover text), with a dropdown at each end, near the
+ * window's bottom corners. */
+static void AddStatusBar(GalleryBuild* build, uint64_t root)
+{
+    UIGalleryFrame* Frame = build->Frame;
+    if (HasFailed(build))
+    {
+        return;
+    }
+    UIStatusBarOptions Options = UIStatusBarOptions_Create();
+    build->Result = UIKit_CreateStatusBar(&Frame->_kit, &Frame->_screen, root, &Options, &Frame->_statusBarId);
+    Remember(build, Frame->_statusBarId, "the status bar");
+    uint64_t Left = WIDGET_ID_INVALID;
+    uint64_t Right = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        build->Result = UIStatusBar_GetSection(&Frame->_screen, Frame->_statusBarId, UIStatusBarSection_Left, &Left);
+    }
+    if (!HasFailed(build))
+    {
+        build->Result = UIStatusBar_GetSection(&Frame->_screen, Frame->_statusBarId, UIStatusBarSection_Right, &Right);
+    }
+    Describe(build, AddDropdown(build, Left, "the dropdown at the bottom left", true, RowDropdownHint()),
+        u8"A thousand options, near the window's bottom left corner: the list opens up.");
+    Describe(build, AddDropdown(build, Right, "the dropdown at the bottom right", false, RowDropdownHint()),
+        u8"Three options, near the window's bottom right corner.");
+}
+
+/* The third page: a menu bar and dropdowns near the window's top; then, in the part that scrolls, a modal dialog, context menus,
+ * dropdowns, scroll areas and a long end; and a status bar below. */
+static void BuildPopupsPage(GalleryBuild* build)
+{
+    UIGalleryFrame* Frame = build->Frame;
+    if (HasFailed(build))
+    {
+        return;
+    }
+    uint64_t Root = AddPageRoot(build);
+    Frame->_pageIds[2] = Root;
+    AddMenuBar(build, Root);
+    AddEdgeRow(build, Root);
+    uint64_t Page = AddPageContent(build, Root);
+    AddLabel(build, Page, u8"UI gallery: scrolling, popups and menus", u8"heading");
+    AddLabel(build, Page, u8"N the next page. The whole page scrolls. Hover anything: the status bar shows its text once the last status times out.",
+        u8"hint");
+    BuildDialogButton(build, Page);
+    BuildContextBox(build, Page);
+    BuildDropdowns(build, Page);
+    BuildScrollAreas(build, Page);
+    BuildPageEnd(build, Page);
+    AddStatusBar(build, Root);
+    Widget* PageBase = NULL;
+    if (!HasFailed(build) && UIScreen_TryGetWidgetById(&Frame->_screen, Root, &PageBase))
+    {
+        build->Result = Widget_SetIsRendered(PageBase, false);
+    }
+}
+
+/* Opens the dialog: a plain panel with Yes and No, centred over a backdrop that takes every press, with Yes focused (Enter says yes)
+ * and Escape closing it (no). It is made as it opens; the popup layer destroys it when it closes. */
+static Error OpenDialog(UIGalleryFrame* frame)
+{
+    if (UIScreen_IsPopupOpen(&frame->_screen, frame->_dialogId))
+    {
+        return Error_CreateSuccess();
+    }
+    GalleryBuild Build = { .Frame = frame, .Result = Error_CreateSuccess() };
+    uint64_t Dialog = WIDGET_ID_INVALID;
+    UIPanelOptions Options = UIPanelOptions_Create();
+    Options.HasSpacing = true;
+    Options.Spacing = 10.0f;
+    Build.Result = UIKit_CreatePanel(&frame->_kit, &frame->_screen, WIDGET_ID_INVALID, &Options, &Dialog);
+    AddLabel(&Build, Dialog, u8"Discard the changes?", u8"heading");
+    AddLabel(&Build, Dialog, u8"Nothing behind this dialog takes a click. Enter says yes, Escape no.", u8"hint");
+    uint64_t Buttons = AddRow(&Build, Dialog, 8.0f);
+    uint64_t Yes = AddButton(&Build, Buttons, u8"Yes", NULL, true, false, NULL, UIStackHint_Fixed(90.0f));
+    uint64_t No = AddButton(&Build, Buttons, u8"No", NULL, true, false, NULL, UIStackHint_Fixed(90.0f));
+    if (!HasFailed(&Build))
+    {
+        UIPopupOptions Popup = UIPopupOptions_Create();
+        Popup.AnchorBox = (Rectangle){ .x = 0.0f, .y = 0.0f, .width = 1.0f, .height = 1.0f };
+        Popup.Side = UIPopupSide_Center;
+        Popup.IsModal = true;
+        Popup.OwnerId = frame->_dialogButtonId;
+        Popup.FocusId = Yes;
+        Build.Result = UIScreen_OpenPopup(&frame->_screen, Dialog, &Popup);
+    }
+    if (HasFailed(&Build))
+    {
+        Widget* DialogBase = NULL;
+        if (UIScreen_TryGetWidgetById(&frame->_screen, Dialog, &DialogBase))
+        {
+            Error Result = Widget_Destroy(DialogBase);
+            Error_Deconstruct(&Result);
+        }
+        return Build.Result;
+    }
+    frame->_dialogId = Dialog;
+    frame->_dialogYesId = Yes;
+    frame->_dialogNoId = No;
+    return Error_CreateSuccess();
+}
+
+
+// Static functions: switching pages.
 /* Shows the next page and hides the one shown. */
 static Error ShowNextPage(UIGalleryFrame* frame)
 {
@@ -933,6 +1593,65 @@ static const char* GetElementName(const UIGalleryFrame* frame, uint64_t id)
     return "an element";
 }
 
+static bool IsDropdown(const UIGalleryFrame* frame, uint64_t id)
+{
+    for (size_t Index = 0U; Index < frame->_dropdownCount; Index++)
+    {
+        if (frame->_dropdownIds[Index] == id)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* A dropdown's choice: Changed comes with Committed for the same index, so only Committed is told, with the option's text. */
+static Error ReportChoice(UIGalleryFrame* frame, const UIEvent* event)
+{
+    if (event->WidgetEventId != (int32_t)UIElementEvent_Committed)
+    {
+        return Error_CreateSuccess();
+    }
+    double Value = event->Value.Data.DoubleValue;
+    size_t Index = ((Value >= 0.0) && (Value < (double)UI_CHOICE_MAX_OPTIONS)) ? (size_t)Value : 0U;
+    GenericBuffer Text;
+    GenericBuffer_AllocateVariable(&Text, 32U, sizeof(unsigned char));
+    Error Result = UIChoice_GetText(&frame->_screen, event->WidgetId, Index, &Text);
+    char Status[STATUS_CAPACITY];
+    snprintf(Status, sizeof(Status), "%s chose %s", GetElementName(frame, event->WidgetId),
+        (Result.Code == ErrorCode_Success) ? (const char*)Text._data : "an option");
+    Error_Deconstruct(&Result);
+    Memory_Free(Text._data);
+    return Report(frame, Status);
+}
+
+/* Closes the dialog after one of its buttons, and says which. */
+static Error CloseDialog(UIGalleryFrame* frame, const char* status)
+{
+    uint64_t Dialog = frame->_dialogId;
+    frame->_dialogId = WIDGET_ID_INVALID;
+    frame->_dialogYesId = WIDGET_ID_INVALID;
+    frame->_dialogNoId = WIDGET_ID_INVALID;
+    Error Result = UIScreen_IsPopupOpen(&frame->_screen, Dialog) ? UIScreen_ClosePopup(&frame->_screen, Dialog) : Error_CreateSuccess();
+    return (Result.Code == ErrorCode_Success) ? Report(frame, status) : Result;
+}
+
+/* The dialog closed by other means than its buttons (they close it themselves and say so): Escape, or its button's page hidden. */
+static Error OnPopupClosed(UIScreen* screen, const UIEvent* event, const UserData* userData)
+{
+    UIGalleryFrame* Frame = UserData_GetPointer(userData);
+    UNUSED(screen);
+    if ((event->WidgetId != Frame->_dialogButtonId) || (Frame->_dialogId == WIDGET_ID_INVALID))
+    {
+        return Error_CreateSuccess();
+    }
+    Frame->_dialogId = WIDGET_ID_INVALID;
+    Frame->_dialogYesId = WIDGET_ID_INVALID;
+    Frame->_dialogNoId = WIDGET_ID_INVALID;
+    bool IsEscape = event->WidgetEventId == (int32_t)UIPopupCloseReason_Escape;
+    return Report(Frame, IsEscape ? "the dialog: Escape, so no, the changes stay" : "the dialog closed");
+}
+
 /* What a mouse event says, in words. */
 static void DescribeMouse(const UIEvent* event, char* outText, size_t capacity)
 {
@@ -954,6 +1673,15 @@ static void DescribeMouse(const UIEvent* event, char* outText, size_t capacity)
 static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserData* userData)
 {
     UIGalleryFrame* Frame = UserData_GetPointer(userData);
+    bool IsActivated = event->WidgetEventId == (int32_t)UIElementEvent_Activated;
+    if (IsActivated && ((event->WidgetId == Frame->_dialogYesId) || (event->WidgetId == Frame->_dialogNoId)))
+    {
+        return CloseDialog(Frame, (event->WidgetId == Frame->_dialogYesId) ? "the dialog: yes, the changes are discarded" : "the dialog: no, the changes stay");
+    }
+    if (IsDropdown(Frame, event->WidgetId) && event->HasValue && (event->Value.Type == UIPropertyType_Double))
+    {
+        return ReportChoice(Frame, event);
+    }
     static const char* const EventNames[] = { "activated", "changed", "committed", "cancelled", "pressed", "released", "double clicked", "scrolled", "context requested" };
     bool IsKnown = (event->WidgetEventId >= 0) && ((size_t)event->WidgetEventId < (sizeof(EventNames) / sizeof(EventNames[0])));
     char Value[96] = "";
@@ -975,8 +1703,12 @@ static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserDa
     Error Result = SetStatus(Frame, Status);
     if (Result.Code == ErrorCode_Success)
     {
-        bool IsSlideAgain = (event->WidgetId == Frame->_slideButtonId) && (event->WidgetEventId == (int32_t)UIElementEvent_Activated);
+        bool IsSlideAgain = (event->WidgetId == Frame->_slideButtonId) && IsActivated;
         Result = IsSlideAgain ? StartSlideIn(Frame) : Error_CreateSuccess();
+    }
+    if ((Result.Code == ErrorCode_Success) && IsActivated && (event->WidgetId == Frame->_dialogButtonId))
+    {
+        Result = OpenDialog(Frame);
     }
     if (Result.Code != ErrorCode_Success)
     {
@@ -1025,25 +1757,60 @@ static void LogLine(const UIGalleryFrame* frame, const char* format, const char*
     }
 }
 
+/* The next theme. */
+static Error ShowNextTheme(UIGalleryFrame* frame)
+{
+    frame->_themeIndex = (frame->_themeIndex + 1U) % THEME_COUNT;
+    Error Result = UIScreen_SetTheme(&frame->_screen, frame->_services->Assets, ThemeNames[frame->_themeIndex]);
+    if (Result.Code == ErrorCode_Success)
+    {
+        LogLine(frame, "the theme is %s.", (const char*)ThemeNames[frame->_themeIndex]);
+    }
+    return Result;
+}
+
+/* The next scale up or down the list, while there is one. */
+static void StepScale(UIGalleryFrame* frame, bool isUp)
+{
+    if ((isUp && ((frame->_scaleIndex + 1U) < SCALE_COUNT)) || (!isUp && (frame->_scaleIndex > 0U)))
+    {
+        frame->_scaleIndex = isUp ? (frame->_scaleIndex + 1U) : (frame->_scaleIndex - 1U);
+        UIWindowHost_SetPlayerScale(&frame->_host, Scales[frame->_scaleIndex]);
+    }
+}
+
+/* The View menu's item activated during the screen's update. */
+static Error ApplyMenuItem(UIGalleryFrame* frame)
+{
+    GalleryMenuItem Item = frame->_pendingMenuItem;
+    frame->_pendingMenuItem = GalleryMenuItem_None;
+    if ((Item == GalleryMenuItem_Larger) || (Item == GalleryMenuItem_Smaller))
+    {
+        StepScale(frame, Item == GalleryMenuItem_Larger);
+    }
+    if (Item == GalleryMenuItem_NextTheme)
+    {
+        return ShowNextTheme(frame);
+    }
+    return (Item == GalleryMenuItem_NextPage) ? ShowNextPage(frame) : Error_CreateSuccess();
+}
+
 /* The frame's own keys, from what the UI left unconsumed. */
 static Error HandleKeys(UIGalleryFrame* frame, GameInput* input)
 {
     if (GameInput_IsKeyPressed(input, GameKey_T))
     {
-        frame->_themeIndex = (frame->_themeIndex + 1U) % THEME_COUNT;
-        Error Result = UIScreen_SetTheme(&frame->_screen, frame->_services->Assets, ThemeNames[frame->_themeIndex]);
+        Error Result = ShowNextTheme(frame);
         if (Result.Code != ErrorCode_Success)
         {
             return Result;
         }
-        LogLine(frame, "the theme is %s.", (const char*)ThemeNames[frame->_themeIndex]);
     }
     bool IsScaleUp = GameInput_IsKeyPressed(input, GameKey_Equal) || GameInput_IsKeyPressed(input, GameKey_KeypadAdd);
     bool IsScaleDown = GameInput_IsKeyPressed(input, GameKey_Minus) || GameInput_IsKeyPressed(input, GameKey_KeypadSubtract);
-    if ((IsScaleUp && ((frame->_scaleIndex + 1U) < SCALE_COUNT)) || (IsScaleDown && (frame->_scaleIndex > 0U)))
+    if (IsScaleUp != IsScaleDown)
     {
-        frame->_scaleIndex = IsScaleUp ? (frame->_scaleIndex + 1U) : (frame->_scaleIndex - 1U);
-        UIWindowHost_SetPlayerScale(&frame->_host, Scales[frame->_scaleIndex]);
+        StepScale(frame, IsScaleUp);
     }
     if (GameInput_IsKeyPressed(input, GameKey_P))
     {
@@ -1082,7 +1849,7 @@ static Error HandleKeys(UIGalleryFrame* frame, GameInput* input)
 static Error UIGalleryFrame_Start(void* self, ProgramTime time)
 {
     UNUSED(time);
-    LogLine(self, "%s", "every element in every state. T the theme, + and - the scale, P the scale policy, L the event log, Escape steps out and quits.");
+    LogLine(self, "%s", "every element in every state. N the page, T the theme, + and - the scale, P the scale policy, L the event log, Escape steps out and quits.");
     return Error_CreateSuccess();
 }
 
@@ -1099,11 +1866,11 @@ static Error UIGalleryFrame_Update(void* self, ProgramTime time)
     GameInput* Input = Frame->_services->Input;
     Frame->_time = time.TotalTime;
     Error Result = UIWindowHost_Update(&Frame->_host, &Frame->_screen, time, Input);
-    if ((Result.Code != ErrorCode_Success) || (Input == NULL))
+    if ((Result.Code == ErrorCode_Success) && (Input != NULL))
     {
-        return Result;
+        Result = HandleKeys(Frame, Input);
     }
-    return HandleKeys(Frame, Input);
+    return (Result.Code == ErrorCode_Success) ? ApplyMenuItem(Frame) : Result;
 }
 
 static Error UIGalleryFrame_NoStep(void* self)
@@ -1258,6 +2025,13 @@ static Error BuildFrameContents(UIGalleryFrame* frame)
         UserData FrameData = UserData_FromPointer(frame);
         uint64_t Subscription = UI_SCREEN_ID_INVALID;
         Result = UIScreen_Subscribe(&frame->_screen, WIDGET_ID_INVALID, UI_EVENT_KIND_MASK(UIEventKind_EnteredChanged), OnEnteredChanged, &FrameData,
+            &Subscription);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        UserData FrameData = UserData_FromPointer(frame);
+        uint64_t Subscription = UI_SCREEN_ID_INVALID;
+        Result = UIScreen_Subscribe(&frame->_screen, WIDGET_ID_INVALID, UI_EVENT_KIND_MASK(UIEventKind_PopupClosed), OnPopupClosed, &FrameData,
             &Subscription);
     }
     if (Result.Code == ErrorCode_Success)

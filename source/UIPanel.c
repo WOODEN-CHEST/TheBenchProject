@@ -31,9 +31,8 @@ static Error Behaviour_Layout(void* widget, const UILayoutContext* context)
 static const UIKindBehaviour PanelBehaviour =
 {
     .Kind = UIElementKind_Panel,
-    .HasCapability = false,
-    .Capability = UIElementCapability_Look,
-    .ResolveCapability = NULL,
+    .Capabilities = NULL,
+    .CapabilityCount = 0U,
     .BaseSize = sizeof(UIPanelLookBase),
     .IsFocusable = false,
     .NeedsEntering = false,

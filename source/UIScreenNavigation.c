@@ -108,6 +108,10 @@ static void GatherCandidates(UIScreen* self, Widget* container)
             CollectCandidates(self, Widget_GetSubWidgetAt(container, Index));
         }
     }
+    else if (UIScreen_InternalGetNavigationRoot(self) != NULL)
+    {
+        CollectCandidates(self, UIScreen_InternalGetNavigationRoot(self)); // While popups are open, navigation stays in the topmost.
+    }
     else
     {
         for (size_t Index = 0; Index < UIScreen_GetRootCount(self); Index++)
@@ -133,14 +137,17 @@ static void GatherCandidates(UIScreen* self, Widget* container)
     }
 }
 
-/* The widget whose level navigation is on: the innermost entered widget, or NULL for the top level. */
+/* The widget whose level navigation is on: the innermost entered widget, or NULL for the top level (the topmost popup's, while popups
+ * are open). A group entered before the topmost popup opened lies behind it, so while the popup is open its level is the popup's. */
 static Widget* GetLevelContainer(UIScreen* self)
 {
     if (self->_navStack._count == 0U)
     {
         return NULL;
     }
-    return UIScreen_InternalResolve(self, GetNavStackAt(self, self->_navStack._count - 1U));
+    Widget* Container = UIScreen_InternalResolve(self, GetNavStackAt(self, self->_navStack._count - 1U));
+    Widget* PopupRoot = UIScreen_InternalGetNavigationRoot(self);
+    return ((Container != NULL) && (PopupRoot != NULL) && !UIScreen_InternalIsInSubtree(Container, PopupRoot)) ? NULL : Container;
 }
 
 static size_t FindCandidate(UIScreen* self, uint64_t widgetId)
@@ -437,7 +444,9 @@ static Error NavigateBack(UIScreen* self, bool* outIsActed)
     {
         return Result;
     }
-    if (self->_isNavigating && (self->_navStack._count > 0U))
+    // A group entered behind the topmost popup is not stepped back into: the focus would leave the popup.
+    bool IsLevelBehindPopup = (self->_navStack._count > 0U) && (GetLevelContainer(self) == NULL);
+    if (self->_isNavigating && (self->_navStack._count > 0U) && !IsLevelBehindPopup)
     {
         uint64_t PathIds[WIDGET_MAX_TREE_DEPTH];
         size_t PathCount = 0;
@@ -626,6 +635,18 @@ Error UIScreen_InternalRouteNavigation(UIScreen* self)
     bool IsRepeated[NAV_REPEATING_STEP_COUNT] = { false };
     bool IsEditing[NAV_REPEATING_STEP_COUNT] = { false };
     FollowNavigationKeys(self, IsRepeated, IsEditing);
+
+    // An Escape the focused widget and its ancestors left closes the topmost popup, before an entered element or navigation hears it.
+    if (UIScreen_InternalHasPopups(self) && GameInput_IsActionPressed(self->_input, GameAction_UIBack))
+    {
+        bool IsClosed = false;
+        Error PopupResult = UIScreen_InternalRoutePopupEscape(self, &IsClosed);
+        if ((PopupResult.Code != ErrorCode_Success) || IsClosed)
+        {
+            GameInput_ConsumeAction(self->_input, GameAction_UIBack);
+            return PopupResult;
+        }
+    }
 
     // An entered element's keys are the screen's, not navigation's; one that keeps them leaves them unconsumed for its reader.
     const Widget* Entered = UIScreen_InternalResolve(self, self->_enteredWidgetId);

@@ -230,6 +230,21 @@ typedef struct UIElementTextStruct
 } UIElementText;
 
 /**
+ * @brief Which way an arrow a look draws points (UIElement_DrawArrow).
+ */
+typedef enum UIArrowDirectionEnum
+{
+    /** @brief Its point at the top. */
+    UIArrowDirection_Up,
+    /** @brief Its point at the bottom. */
+    UIArrowDirection_Down,
+    /** @brief Its point at the left. */
+    UIArrowDirection_Left,
+    /** @brief Its point at the right. */
+    UIArrowDirection_Right
+} UIArrowDirection;
+
+/**
  * @brief The press behaviour a button and a toggle share: per button, a click mode, and Enter or Space while focused.
  */
 typedef struct UIPressableStruct
@@ -660,6 +675,16 @@ static inline bool UIElement_IsBoxEmpty(Rectangle box)
 {
     return !(box.width > 0.0f) || !(box.height > 0.0f);
 }
+
+/**
+ * @brief Draws a solid arrow (a triangle) pointing one way, as wide across its base as the box and centred in it, in rows (or columns)
+ *        of whole surface pixels, so it stays crisp at any size: a dropdown's, a list's scroll strips', a submenu's.
+ * @param context The widget's render context; must not be NULL.
+ * @param box Where it goes, in surface pixels; an empty box draws nothing.
+ * @param direction Which way it points.
+ * @param color Its colour; the context's tint is multiplied in.
+ */
+void UIElement_DrawArrow(UIRenderContext* context, Rectangle box, UIArrowDirection direction, Color color);
 
 /**
  * @brief Returns whether a key is one of an action's bindings (its modifiers aside): how an element answers a rebound key.
