@@ -225,7 +225,8 @@ handler (`UIMenuBarOptions.Handler`, `UIMenuBar_SetHandler`). Alt alone does not
 
 **Status bar** (`UIStatusBar.h`, kind `status_bar`). A strip with left, centre and right sections, each a row stack made with it by
 `UIKit_CreateStatusBar` (`UIStatusBar_GetSection` for calling code to add to): the left and right ones as wide as what they hold, the centre one
-filling what is between. Its line of text, at the start of the centre section and cut where the right one begins, is a message
+filling what is between; the bar is as tall as a line of text or as what its sections hold, whichever is more. Its line of text, at the start
+of the centre section and cut where the right one begins, is a message
 (`UIStatusBar_SetMessage(screen, id, text, seconds)`, 0 seconds for until it is replaced or cleared), else the hover text where the pointer rests
 (`UITooltip_GetCurrent`, before the delay too) while it shows hover text (`UIStatusBar_SetShowsHoverText`). For now it is placed like any element.
 

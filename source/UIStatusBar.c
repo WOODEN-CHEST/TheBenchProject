@@ -262,6 +262,35 @@ Error UIStatusBar_ArrangeSections(Widget* widget, const UILayoutContext* context
     return Error_CreateSuccess();
 }
 
+Error UIStatusBar_MeasureSections(Widget* widget, const UIMeasureContext* context, Vector2 padding, float spacing, Vector2* outSize)
+{
+    const UIStatusBarCapability* Self = GetCapability(widget);
+    UIScreen* Screen = Widget_GetScreen(widget);
+    float Width = 0.0f;
+    float Height = 0.0f;
+    size_t Shown = 0U;
+    for (int32_t Section = 0; Section < (int32_t)UIStatusBarSection_Count; Section++)
+    {
+        Widget* Stack = NULL;
+        if (!UIScreen_TryGetWidgetById(Screen, Self->_sectionIds[Section], &Stack))
+        {
+            continue;
+        }
+        Vector2 Size = { .x = 0.0f, .y = 0.0f };
+        Error Result = Widget_Measure(Stack, context, UI_MEASURE_UNBOUNDED_WIDTH, &Size);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+        Width += Size.x;
+        Height = Math_MaxFloat(Height, Size.y);
+        Shown += (Size.x > 0.0f) ? 1U : 0U;
+    }
+    float Gaps = (Shown > 1U) ? (spacing * (float)(Shown - 1U)) : 0.0f;
+    *outSize = (Vector2){ .x = Width + Gaps + (2.0f * padding.x), .y = Height + (2.0f * padding.y) };
+    return Error_CreateSuccess();
+}
+
 void UIStatusBar_GetTextSpan(const Widget* widget, float* outStart, float* outEnd)
 {
     const UIStatusBarCapability* Self = &((const UIStatusBarLookBase*)(const void*)widget)->StatusBar;

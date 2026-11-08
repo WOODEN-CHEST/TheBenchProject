@@ -774,7 +774,6 @@ static Error StatusBarBox_Layout(void* self, const UILayoutContext* context)
 
 static Error StatusBarBox_Measure(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
 {
-    (void)context;
     (void)availableWidth;
     StatusBarBox* Box = self;
     Error Result = UIElementText_Refresh(&Box->Text, &Box->Base.Base, UIStatusBarCapability_GetShownText(&Box->Base.StatusBar));
@@ -782,10 +781,16 @@ static Error StatusBarBox_Measure(void* self, const UIMeasureContext* context, f
     const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Screen);
     Vector2 Padding = UIThemeStyle_GetVector(Style, UIElementKind_StatusBar, UIStatusBarPart_Padding);
     Vector2 Minimum = UIThemeStyle_GetVector(Style, UIElementKind_StatusBar, UIStatusBarPart_MinSize);
-    // One line of the theme's text tall: what a message needs (the sections fit their own content).
+    // As tall as a line of the theme's text (a message) and as what its sections hold, whichever is more.
+    Vector2 Sections = { .x = 0.0f, .y = 0.0f };
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIStatusBar_MeasureSections(&Box->Base.Base, context, Padding,
+            UIThemeStyle_GetNumber(Style, UIElementKind_StatusBar, UIStatusBarPart_Spacing), &Sections);
+    }
     float Line = UITheme_GetTextSize(UIScreen_GetTheme(Screen));
-    outSize->x = Minimum.x;
-    outSize->y = Math_MaxFloat(Line + (2.0f * Padding.y), Minimum.y);
+    outSize->x = Math_MaxFloat(Minimum.x, Sections.x);
+    outSize->y = Math_MaxFloat(Math_MaxFloat(Line + (2.0f * Padding.y), Sections.y), Minimum.y);
     return Result;
 }
 

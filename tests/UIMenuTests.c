@@ -722,6 +722,18 @@ static void AStatusBarShowsMessagesAndHoverText(TestRun* run)
         TestUI_Ticks(run, &Fixture, 4U);
         Rectangle Right = TestUI_GetPixelBox(run, &Fixture, ButtonId);
         TEST_CHECK(run, fabsf((Right.x + Right.width) - (1000.0f - 6.0f)) < 0.01f);
+        // The bar asks to be as tall as what its sections hold: the 24 pixel button and the padding, more than one line of text.
+        Widget* Measured = NULL;
+        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, BarId, &Measured)))
+        {
+            RenderContext Measure;
+            RenderContext_CreateMeasuring(&Measure, (Vector2){ .x = TEST_UI_SURFACE_WIDTH, .y = TEST_UI_SURFACE_HEIGHT },
+                TEST_UI_SURFACE_WIDTH / TEST_UI_SURFACE_HEIGHT, RenderTargetPosition_Centered());
+            UIMeasureContext Sizing = { .Measure = &Measure };
+            Vector2 Size = { .x = 0.0f, .y = 0.0f };
+            TEST_CHECK_SUCCESS(run, Widget_Measure(Measured, &Sizing, UI_MEASURE_UNBOUNDED_WIDTH, &Size));
+            TEST_CHECK(run, TestUI_IsSamePixel(Size.y, 24.0f + (2.0f * 2.0f)) && (Size.x >= (60.0f + (2.0f * 6.0f))));
+        }
 
         Widget* Bar = NULL;
         UIScreen_TryGetWidgetById(&Fixture.Screen, BarId, &Bar);

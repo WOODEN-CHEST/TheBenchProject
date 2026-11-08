@@ -17,7 +17,8 @@
  * reserves its strip later.
  *
  * Its look (UIKit_RegisterLook: a struct starting with UIStatusBarLookBase) draws its background and the text
- * (UIStatusBarCapability_GetShownText) and lays its sections out (UIStatusBar_ArrangeSections).
+ * (UIStatusBarCapability_GetShownText), lays its sections out (UIStatusBar_ArrangeSections) and is at least as tall as what they hold
+ * (UIStatusBar_MeasureSections).
  */
 
 
@@ -168,6 +169,18 @@ static inline const UITextContent* UIStatusBarCapability_GetShownText(const UISt
  * @returns Success, or a section's Measure or placement error.
  */
 Error UIStatusBar_ArrangeSections(Widget* widget, const UILayoutContext* context, Vector2 padding, float spacing);
+
+/**
+ * @brief Measures what a bar's sections hold, as UIStatusBar_ArrangeSections lays them out; for a look's Measure.
+ * @param widget The bar's widget; must not be NULL.
+ * @param context The measuring context; must not be NULL.
+ * @param padding Inside the bar, in its own UI pixels.
+ * @param spacing Between the sections, in its own UI pixels.
+ * @param outSize [out] Receives the width the three sections take side by side and the height of the tallest, the padding counted, in
+ *        the bar's own UI pixels. Must not be NULL.
+ * @returns Success, or a section's Measure error.
+ */
+Error UIStatusBar_MeasureSections(Widget* widget, const UIMeasureContext* context, Vector2 padding, float spacing, Vector2* outSize);
 
 /**
  * @brief Where the text shows, as a share of the bar's box: from the end of the left section to the start of the right one, as last laid
