@@ -67,6 +67,8 @@
 // Macros.
 /** @brief Most text codepoints recorded per tick; more typed in one tick are dropped (raylib queues 16 per poll). */
 #define GAME_INPUT_MAX_TEXT_CODEPOINTS ((size_t)32)
+/** @brief Most bytes GameInput_GetClipboardText copies of the system clipboard: what a paste reads at most. */
+#define GAME_INPUT_MAX_CLIPBOARD_BYTES ((size_t)(1024U * 1024U))
 /** @brief Most bindings one action can have. */
 #define GAME_INPUT_MAX_BINDINGS_PER_ACTION ((size_t)4)
 /** @brief Longest binding text in bytes, without the terminator (e.g. "control+alt+shift+super+keypad_multiply"). */
@@ -157,13 +159,22 @@ typedef enum GameActionEnum
     /** @brief Put a value back to its default ("tbp:ui_reset"; default Backspace). Goes to the focused widget first, then to the
      *  hovered one. */
     GameAction_UIReset,
-    /** @brief Copy what the widget holds ("tbp:ui_copy"; default Ctrl+C). Goes to the focused widget first, then to the hovered
-     *  one. */
+    /** @brief Copy what the widget holds ("tbp:ui_copy"; default Ctrl+C, Ctrl+Insert). Goes to the focused widget first, then to the
+     *  hovered one. */
     GameAction_UICopy,
-    /** @brief Paste into the widget ("tbp:ui_paste"; default Ctrl+V). Goes to the focused widget first, then to the hovered one. */
+    /** @brief Paste into the widget ("tbp:ui_paste"; default Ctrl+V, Shift+Insert). Goes to the focused widget first, then to the hovered
+     *  one. */
     GameAction_UIPaste,
     /** @brief Ask for the focused widget's context menu ("tbp:ui_context_menu"; default the menu key). */
     GameAction_UIContextMenu,
+    /** @brief Cut what is selected in the widget being edited ("tbp:ui_cut"; default Ctrl+X, Shift+Delete). */
+    GameAction_UICut,
+    /** @brief Undo in the widget being edited ("tbp:ui_undo"; default Ctrl+Z). */
+    GameAction_UIUndo,
+    /** @brief Redo in the widget being edited ("tbp:ui_redo"; default Ctrl+Y, Ctrl+Shift+Z). */
+    GameAction_UIRedo,
+    /** @brief Select everything in the widget being edited ("tbp:ui_select_all"; default Ctrl+A). */
+    GameAction_UISelectAll,
 
     /** @brief One past the last engine action; equals the number of engine actions. Not an action. */
     GameAction_Count
@@ -331,6 +342,33 @@ typedef struct GameInputSampleStruct
 } GameInputSample;
 
 /**
+ * @brief The system clipboard's virtual table: what GameInput reads and writes the clipboard through, so a test or a harness can put a
+ *        clipboard of its own in its place (GameInput_SetClipboard).
+ */
+typedef struct IClipboardVTableStruct
+{
+    /** @brief Appends at most @p maxBytes of the clipboard's text to @p outText (bytes, no terminator; they may be any bytes: the clipboard
+     *  is another program's), or nothing when it holds no text. It must neither keep a pointer into what it read nor wait long: a paste
+     *  reads it. */
+    Error (*GetText)(void* self, GenericBuffer* outText, size_t maxBytes);
+    /** @brief Puts a NUL-terminated UTF-8 text on the clipboard. */
+    Error (*SetText)(void* self, const unsigned char* text);
+    /** @brief Releases what the clipboard owns; the standard one owns nothing. */
+    void (*Destroy)(void* self);
+} IClipboardVTable;
+
+/**
+ * @brief A clipboard: a virtual table and its object. A plain value; GameInput_GetStandardClipboard gives the system's.
+ */
+typedef struct IClipboardStruct
+{
+    /** @brief The behaviour; never NULL. */
+    const IClipboardVTable* VTable;
+    /** @brief The object, handed to every slot; may be NULL (the standard clipboard has none). */
+    void* Self;
+} IClipboard;
+
+/**
  * @brief The current tick's input plus consumption, the action and category registries, and the bindings.
  *
  * All fields are internal; use the GameInput_* functions. Construct in place and never move it.
@@ -377,6 +415,8 @@ typedef struct GameInputStruct
     GenericBuffer _keyIndex;
     /** @brief The controls file's entries for keys no action has now, in byte order of their keys. */
     GenericBuffer _keptEntries;
+    /** @brief What the clipboard functions go through: the system's, or one a test put in its place. Borrowed. */
+    IClipboard _clipboard;
 } GameInput;
 
 
@@ -620,6 +660,46 @@ uint32_t GameInput_GetTextCodepoint(const GameInput* self, size_t index);
  * @param self The input; must not be NULL.
  */
 void GameInput_ConsumeText(GameInput* self);
+
+
+// The clipboard.
+/**
+ * @brief Returns the system clipboard: raylib's, which needs the window, and does nothing without it (it then holds no text).
+ * @returns The clipboard.
+ */
+IClipboard GameInput_GetStandardClipboard(void);
+
+/**
+ * @brief Puts a clipboard in the place of the one the input goes through: a test's or a harness's. The input borrows it.
+ * @param self The input; must not be NULL.
+ * @param clipboard The clipboard; its VTable must not be NULL, and its object must outlive its use.
+ */
+void GameInput_SetClipboard(GameInput* self, IClipboard clipboard);
+
+/**
+ * @brief Copies the clipboard's text: at once, so nothing points into what the system lent (raylib's pointer lasts only until its next
+ *        call), and at most GAME_INPUT_MAX_CLIPBOARD_BYTES of it, cut before a codepoint that would not fit whole.
+ *
+ * The clipboard is another program's, so the bytes can be anything: very long, invalid UTF-8, any line breaks. Whoever pastes them puts
+ * them through its own rules (a text box's limits). Read it only when it is wanted (a paste): asking the system can take a round trip to
+ * the program that holds it, and on X11 GLFW waits for that program's answer with no time limit. Main thread only.
+ * @param self The input; must not be NULL.
+ * @param maxBytes The most bytes wanted (what the reader can use: a text box's UITextEdit_GetMostIncomingBytes); at most
+ *        GAME_INPUT_MAX_CLIPBOARD_BYTES are copied whatever it says.
+ * @param outText [out] The byte buffer the text is appended to (no terminator); must not be NULL.
+ * @returns Success (also with no text); ErrorCode_BufferTooLarge if the buffer could not grow.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error GameInput_GetClipboardText(const GameInput* self, size_t maxBytes, GenericBuffer* outText);
+
+/**
+ * @brief Puts a text on the clipboard. Main thread only.
+ * @param self The input; must not be NULL.
+ * @param text The NUL-terminated UTF-8 text; must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if @p text is NULL.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error GameInput_SetClipboardText(const GameInput* self, const unsigned char* text);
 
 
 // Registration.

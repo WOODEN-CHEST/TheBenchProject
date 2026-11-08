@@ -44,6 +44,15 @@
  * (any edit inside the tree), the options changed, or the last build used a font without glyphs (raylib's built-in
  * font before InitWindow). Sprite frames are read when drawing, so animation needs no rebuild.
  *
+ * CARETS. A build with TextLayoutOptions.TracksOffsets also keeps the flow's text (the text of the string and translate
+ * components in flow order, a sprite as one U+FFFC OBJECT REPLACEMENT CHARACTER) and, for every character of it that
+ * the layout shows, where its bytes start, its line and its place: what a text box needs to put a caret at a byte
+ * offset (TextLayout_GetCaretBox), find the offset nearest a point (TextLayout_HitTest), move along and between lines
+ * (TextLayout_GetLineAtOffset, TextLayout_GetLineOffsets, TextLayout_GetOffsetOnLine) and draw a selection
+ * (TextLayout_GetRangeBoxOnLine). Such a build also gives a final '\n' an empty line after it, where the caret after it
+ * stands. Without the option nothing of this is kept, so labels pay nothing for it. Bidirectional text and shaping are
+ * not handled: the characters run left to right.
+ *
  * LIFETIME. A built layout points at fonts and animation instances its document owns: never draw it after the
  * document is destroyed. Construct with TextLayout_Construct and release with TextLayout_Deconstruct; reuse one
  * layout across builds (its buffers keep their capacity). Not thread-safe.
@@ -90,6 +99,9 @@ typedef struct TextLayoutOptionsStruct
     bool IsShrinkEnabled;
     /** @brief Horizontal alignment of the lines. */
     TextLayoutAlignment Alignment;
+    /** @brief Keep the flow's text and every shown character's byte offset and place, for carets (see the file comment); a final
+     *  '\n' then has an empty line after it. */
+    bool TracksOffsets;
 } TextLayoutOptions;
 
 /**
@@ -112,6 +124,13 @@ typedef struct TextLayoutDrawArgumentsStruct
     /** @brief Clip rectangle in screen-relative [0;1] coordinates (x, y, width, height); used when @c HasScissor. It
      *         is pushed on the render context's clip stack, so it nests inside any outer clip (RenderContext_PushClip). */
     Rectangle ScissorRelative;
+    /** @brief true to draw only what can show in @c CullBox: runs that lie wholly outside it, and the glyphs of a run that do, are
+     *         skipped. For a view onto part of a long text, which then costs what shows rather than its whole length. It does not clip:
+     *         what is drawn may reach past the box (a clip, or the scissor, cuts it). */
+    bool HasCullBox;
+    /** @brief The part of the block that can show, in its layout units from its top-left corner (the units of TextLayout_GetSize and of
+     *         the caret queries), before the rotation; used when @c HasCullBox. */
+    Rectangle CullBox;
 } TextLayoutDrawArguments;
 
 /**
@@ -132,6 +151,16 @@ typedef struct TextLayoutStruct
     GenericBuffer _atoms;
     /** @brief Build scratch: every resolved glyph with its advance (private element type). */
     GenericBuffer _scratchGlyphs;
+    /** @brief Build scratch with TracksOffsets: where each resolved glyph's bytes are in the flow's text (private element type). */
+    GenericBuffer _scratchOffsets;
+    /** @brief With TracksOffsets: the flow's text, bytes of UTF-8 (no terminator counted). */
+    GenericBuffer _flowText;
+    /** @brief With TracksOffsets: every shown character in flow order, with its byte offset, line and place (private element type). */
+    GenericBuffer _characters;
+    /** @brief With TracksOffsets: how tall the caret of an empty text is (the first text's line height), normalized-fitted units. */
+    float _emptyLineHeight;
+    /** @brief With TracksOffsets: how far right a caret stands at most (the widest line with its trailing spaces), normalized-fitted. */
+    float _caretExtent;
     /** @brief The block's size in normalized-fitted units. */
     Vector2 _size;
     /** @brief Whether the layout holds a build. */
@@ -152,7 +181,7 @@ typedef struct TextLayoutStruct
 
 // Helpers.
 /**
- * @brief Default layout options: multiplier 1, no maximum width, left alignment.
+ * @brief Default layout options: multiplier 1, no maximum width, left alignment, no carets.
  * @returns The options.
  */
 static inline TextLayoutOptions TextLayoutOptions_CreateDefault(void)
@@ -164,12 +193,13 @@ static inline TextLayoutOptions TextLayoutOptions_CreateDefault(void)
         .MaxWidth = 0.0f,
         .IsWrapEnabled = false,
         .IsShrinkEnabled = false,
-        .Alignment = TextLayoutAlignment_Left
+        .Alignment = TextLayoutAlignment_Left,
+        .TracksOffsets = false
     };
 }
 
 /**
- * @brief Default draw arguments: top-left origin, no rotation, white tint, no scissor.
+ * @brief Default draw arguments: top-left origin, no rotation, white tint, no scissor, nothing culled.
  * @param position Where to place the block's top-left corner.
  * @returns The arguments.
  */
@@ -182,7 +212,9 @@ static inline TextLayoutDrawArguments TextLayoutDrawArguments_Create(RenderVecto
         .RotationRad = 0.0f,
         .Tint = RenderColor_White(),
         .HasScissor = false,
-        .ScissorRelative = (Rectangle){ .x = 0.0f, .y = 0.0f, .width = 0.0f, .height = 0.0f }
+        .ScissorRelative = (Rectangle){ .x = 0.0f, .y = 0.0f, .width = 0.0f, .height = 0.0f },
+        .HasCullBox = false,
+        .CullBox = (Rectangle){ .x = 0.0f, .y = 0.0f, .width = 0.0f, .height = 0.0f }
     };
 }
 
@@ -249,6 +281,17 @@ static inline Vector2 TextLayout_GetSize(const TextLayout* self)
 }
 
 /**
+ * @brief Returns how far right a caret can stand: the widest line with its trailing spaces, which the block's size leaves out (a view that
+ *        keeps the caret in sight scrolls this far).
+ * @param self The layout; must not be NULL.
+ * @returns The width in normalized-fitted units; 0 without a build that tracks offsets.
+ */
+static inline float TextLayout_GetCaretExtent(const TextLayout* self)
+{
+    return (self->_isBuilt && self->_options.TracksOffsets) ? self->_caretExtent : 0.0f;
+}
+
+/**
  * @brief Returns the number of laid-out lines (0 when not built or empty).
  * @param self The layout; must not be NULL.
  * @returns The line count.
@@ -304,6 +347,107 @@ static inline bool TextLayout_IsBuilt(const TextLayout* self)
 {
     return self->_isBuilt;
 }
+
+
+// Carets (a build with TextLayoutOptions.TracksOffsets).
+/**
+ * @brief Reports whether the layout holds a build that tracks offsets, which the caret functions answer from.
+ * @param self The layout; must not be NULL.
+ * @returns true after a successful TextLayout_Build with TextLayoutOptions.TracksOffsets.
+ */
+static inline bool TextLayout_HasOffsets(const TextLayout* self)
+{
+    return self->_isBuilt && self->_options.TracksOffsets;
+}
+
+/**
+ * @brief Returns the flow's text: the text of the string and translate components in flow order (a translate component's
+ *        translation, else its fallback, else its key), a sprite as one U+FFFC. Byte offsets count in it.
+ * @param self The layout; must not be NULL.
+ * @param outLength [out] Receives its length in bytes; may be NULL.
+ * @returns The bytes (UTF-8, not terminated), valid until the next build; an empty text without a build that tracks offsets.
+ */
+const unsigned char* TextLayout_GetFlowText(const TextLayout* self, size_t* outLength);
+
+/**
+ * @brief Finds where a caret at a byte offset of the flow's text stands.
+ *
+ * The box's x is where the caret stands, its top and height are its line's, and its width is how far the character after the
+ * caret reaches (0 at a line's end): what a block caret covers. An offset inside a character (or on one the layout does not show,
+ * a control character) stands before the next shown one; past the text's end, at the end. A line's end is where the caret before
+ * its '\n' stands, and so does the caret before spaces a wrap dropped, so every offset has one place. A final '\n' puts the caret
+ * after it on the empty line it has. In an empty text the caret stands at the block's left edge, as tall as the first text's line.
+ * O(log characters).
+ * @param self The layout; must not be NULL.
+ * @param byteOffset The offset.
+ * @param outBox [out] Receives the box in block-local normalized-fitted units; must not be NULL.
+ * @returns true for a build that tracks offsets; false otherwise, with an empty box.
+ */
+bool TextLayout_GetCaretBox(const TextLayout* self, size_t byteOffset, Rectangle* outBox);
+
+/**
+ * @brief Finds the caret place nearest a point: the line whose height holds it (above the first, the first; below the last, the
+ *        last), then on it the nearest place between characters (a character's left half places the caret before it, its right
+ *        half after it), never among the spaces a wrap dropped: past the line's last character it is the line's end. A tab and a
+ *        sprite are one character each. O(log lines + characters of the line).
+ * @param self The layout; must not be NULL.
+ * @param point The point in block-local normalized-fitted units.
+ * @param outByteOffset [out] Receives the byte offset; must not be NULL.
+ * @returns true for a build that tracks offsets; false otherwise, with 0.
+ */
+bool TextLayout_HitTest(const TextLayout* self, Vector2 point, size_t* outByteOffset);
+
+/**
+ * @brief Returns the line whose height holds a height in the block: the first line whose bottom lies below it (above the first line,
+ *        the first; below the last, the last). With TextLayout_GetLineBounds, what a view onto part of a long text reads to touch only
+ *        the lines it shows. O(log lines); any build.
+ * @param self The layout; must not be NULL.
+ * @param y The height in block-local normalized-fitted units.
+ * @returns The line; 0 without lines.
+ */
+size_t TextLayout_GetLineAtY(const TextLayout* self, float y);
+
+/**
+ * @brief Returns the line a caret at a byte offset stands on (as TextLayout_GetCaretBox places it).
+ * @param self The layout; must not be NULL.
+ * @param byteOffset The offset.
+ * @returns The line; 0 without lines or without a build that tracks offsets.
+ */
+size_t TextLayout_GetLineAtOffset(const TextLayout* self, size_t byteOffset);
+
+/**
+ * @brief Returns where a line starts and ends as shown: its first character, and the place before its '\n' or before the spaces
+ *        a wrap dropped (else after its last character). A final empty line starts and ends at the text's end.
+ * @param self The layout; must not be NULL.
+ * @param line The line; must be less than TextLayout_GetLineCount.
+ * @param outStart [out] Receives the start's byte offset; must not be NULL.
+ * @param outEnd [out] Receives the end's byte offset; must not be NULL.
+ * @returns true for a build that tracks offsets and a line that exists; false otherwise, with both 0.
+ */
+bool TextLayout_GetLineOffsets(const TextLayout* self, size_t line, size_t* outStart, size_t* outEnd);
+
+/**
+ * @brief Finds the caret place on a line nearest an x: Up and Down with a remembered column use it.
+ * @param self The layout; must not be NULL.
+ * @param line The line; one past the last counts as the last.
+ * @param x The x in block-local normalized-fitted units.
+ * @returns The byte offset; 0 without lines or without a build that tracks offsets.
+ */
+size_t TextLayout_GetOffsetOnLine(const TextLayout* self, size_t line, float x);
+
+/**
+ * @brief Finds the box a range of the flow's text covers on one line, for drawing a selection: from where a caret at the range's
+ *        start stands on the line (or the line's start) to where one at its end stands (or the line's end). A range that goes on past
+ *        the line's end (its '\n' selected) ends at the line's end: a look may draw a little past it to show that.
+ * @param self The layout; must not be NULL.
+ * @param line The line.
+ * @param start The range's first byte offset.
+ * @param end One past its last; above @p start.
+ * @param outBox [out] Receives the box in block-local normalized-fitted units, the line's top and height; must not be NULL.
+ * @returns true when the range touches the line (it holds some of it, or its end); false otherwise, also without a build that
+ *          tracks offsets.
+ */
+bool TextLayout_GetRangeBoxOnLine(const TextLayout* self, size_t line, size_t start, size_t end, Rectangle* outBox);
 
 
 // Drawing.

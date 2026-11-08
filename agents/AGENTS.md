@@ -310,7 +310,7 @@ Current module list:
 * Input (GameInput.md) - How the game reads input. Covers two modules:
   * GameKey - The game-wide key identity (keyboard keys and mouse buttons, room for gamepad buttons) with stable id
     strings for binding files and display names; the raylib codes stay private to the input layer.
-  * GameInput - The per-tick input snapshot (keys, mouse with its place kept through raylib's resets, wheel, typed text drained once, the window's and the monitor's sizes), the cursor's capture, polled by the frame manager
+  * GameInput - The per-tick input snapshot (keys, mouse with its place kept through raylib's resets, wheel, typed text drained once, the window's and the monitor's sizes), the cursor's capture, the clipboard (copied out at once, at most 1 MiB, through something a test replaces), polled by the frame manager
     right after PollInputEvents, with consumption (a consumed key reads as not pressed while held) and the action layer:
     actions and their categories in two registries (`tbp:input_action`, `tbp:input_category`; the engine's are the
     GameAction enum, each value its id), registered by the engine, by packs' `input_actions` assets (InputActions:
@@ -737,7 +737,7 @@ Current module list:
   * LabelWidget - The first concrete widget: displays a (possibly multi-line) rich text with per-line alignment and bound handling (cut/wrap/resize/wrap-then-resize/wrap-then-cut). Embeds a TextDocument and a TextLayout (TextDocument.md), lays out in Update, draws in Render. Auto-fits its widget box to the rendered text.
   Also adds 2D rectangle/outline/line primitives to the Renderer module.
 * UI elements (UIElements.md) - What calling code builds a UI from, sized in UI pixels, its looks data: the same elements in flat boxes or nine-slice art with no
-  element's code changing. Covers:
+  element's code changing; text boxes among them. Covers:
   * UIBoxStyle - How a box is drawn (nothing, flat, nine-slice), a colour per state; resolving a state and cutting a box into nine quads are pure.
   * UITheme - The ui_theme asset type (a standard type, JSON in ui_themes/; include/UITheme.h, source/UITheme.c, source/UIThemeDefinition.c, private source/UIThemeInternal.h): a
     font, a text size, a transition time, a hover delay, a palette of named colours ("@name", resolved when read) and per element kind its metrics, parts, custom values a
@@ -751,7 +751,7 @@ Current module list:
     the kind's behaviour (private source/UIKitInternal.h) and the look's hooks (UIKit_RegisterLook: Render and Measure, maybe Update), and UIKit_Create* makes an element
     with the look its options or the theme name, else the standard one, and gives its id. Calling code uses a kind's functions by id, never a widget type or a look.
   * UIStandardLooks - The kit's standard look, tbp:test_box, for the panel, the button, the toggle, the slider, the scroll bar, the scroll area, the dropdown's head,
-    the menu bar and the status bar (theme-driven boxes, flat or nine-slice), the widget that shows hover text (the theme's tooltip kind) and a modal popup's backdrop.
+    the menu bar, the status bar and the text box (theme-driven boxes, flat or nine-slice), the widget that shows hover text (the theme's tooltip kind) and a modal popup's backdrop.
   * StackWidget - Children in a row or a column, with padding and spacing: fixed, content or filling, aligned across; its arithmetic (UIStackLayout) shared with the panel.
   * UIPanel - A background and padding for what it holds.
   * UILabel - LabelWidget as an element of the kit: its text size in UI pixels, its font and colours from the theme.
@@ -759,9 +759,9 @@ Current module list:
   * UIToggle - A checkbox: on, off or mixed, with the same click modes.
   * UISlider - A value in a range, by a drag that goes past the window to its limit, the arrows or the wheel (only while entered or with Ctrl), with an optional step and default (the reset action); changed, committed, cancelled. An edit element: its four arrows are its own only once Enter, a press or code entered it. Its look tells it the thumb's length.
   * UIScrollable - The scrollable piece every element with content larger than its box holds: the content's and the view's sizes, the offset (always clamped), a mode
-    per axis (none, a bar while it overflows, a bar always); by-id functions to move it and reveal a descendant; its arithmetic pure.
+    per axis (none, a bar while it overflows, a bar always, scrolling with no bar); by-id functions to move it and reveal a descendant; its arithmetic pure.
   * UIScrollbar - A track and a thumb along one axis, bound to another element's scrollable: drag the thumb, press the track to page (repeating while held), a
-    minimum thumb length from its look.
+    minimum thumb length from its look; the helpers an element holding bars places them with each layout (along its edges, inside a border).
   * UIScrollArea - Content larger than its box, clipped, at its offset, with the kit's two bars by the modes; the wheel while it can scroll that way (then up the tree,
     Shift across), Page Up and Page Down, a descendant focused by the keyboard or code scrolled into view; measuring cached.
   * UIChoice - The choice piece: options as texts or from providers (a count and a text at an index), the selected one, mixed.
@@ -775,7 +775,14 @@ Current module list:
     Left and Right in a menu move to the entries beside.
   * UIStatusBar - A strip with left, centre and right sections holding any elements, and a line of text: a message that times out, else the hover text where the
     pointer rests.
-  * UIGalleryFrame - A game frame on three pages, each scrolling, started with --ui-gallery: every element in every state, the routing and the keyboard (a box to go into, whose sliders Enter enters); the scale rows, a turning panel, a panel sliding in, a second look of the button, icons; a menu bar, dropdowns near the window's edges and in the page (three options, a thousand from a provider), context menus with submenus, a modal dialog, scroll areas, a long end and a status bar; hover text on everything. N the page, T the theme (three: flat, nine-slice, another palette), + and - the scale, P the scale policy, L the event log.
+  * UITextEdit - The text piece, pure: a UTF-8 text with its limits (bytes, characters, lines, line breaks, forbidden codepoints, a filter; judged on the result), a caret
+    and a selection, words, edits with the incoming text's rules (invalid UTF-8, line endings, control characters, what does not fit cut), and an undo grouped by time and
+    count within a byte budget, with a mark to go back to.
+  * UITextBox - Text to type in, or to read and select, on one line or several (include/UITextBox.h, source/UITextBox.c, source/UITextBoxInput.c, private
+    source/UITextBoxInternal.h): an edit element (Enter, a press or code enters it; then every key is its own, the clipboard, undo and select-all through actions), the
+    mouse (drags, words and lines, a context menu), the short list when not entered, its own undo per box or per visit, scrolling with bars, a placeholder, masked and
+    read-only boxes, a component tree shown whole, style ranges set by code; its look lays the text out with carets and draws only what is in view.
+  * UIGalleryFrame - A game frame on four pages, each scrolling, started with --ui-gallery: every element in every state, the routing and the keyboard (a box to go into, whose sliders Enter enters); the scale rows, a turning panel, a panel sliding in, a second look of the button, icons; a menu bar, dropdowns near the window's edges and in the page (three options, a thousand from a provider), context menus with submenus, a modal dialog, scroll areas, a long end and a status bar; text boxes of every kind and a form; hover text on everything. N the page, T the theme (three: flat, nine-slice, another palette), + and - the scale, P the scale policy, L the event log.
 * Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text as a STRICT TREE: a parent owns
   its children, a tree has at most 64 levels, components own copies of their strings, and fonts and sprite animations
   are named, never held. Every change gives the component and its ancestors a new revision. Covers three modules (plus
@@ -791,7 +798,9 @@ Current module list:
     advances them), the default font name and the translation hook (no string tables yet).
   * TextLayout - Measures and arranges a document once (lines, wrap at spaces, shrink to width, alignment,
     bottom-aligned runs, tabs) into cached glyph and sprite runs; TextLayout_Refresh rebuilds only when the document,
-    its tree or the options changed; TextLayout_Draw draws the runs (shadows first) through RenderContext_RenderGlyph.
+    its tree or the options changed; TextLayout_Draw draws the runs (shadows first) through RenderContext_RenderGlyph,
+    only those in a cull box when given one. With TracksOffsets it keeps what carets need: the flow's text, each shown
+    character's byte offset, line and place, a caret's box, the offset nearest a point, lines and selection boxes.
 * GameJSON (GameJSON.md) - Shared parsers and writers for the game's common JSON value shapes (numbers, booleans,
   strings, colors, render colors, vectors); the asset-definition helpers, the text component codec and the property
   tables all use it so the value conventions live in one place. Raises ErrorCode_InvalidJSON for every bad value.

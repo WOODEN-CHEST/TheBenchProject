@@ -418,17 +418,27 @@ static void TheValueActionsHaveTheirDefaults(TestRun* run)
     GameInput Input;
     if (TEST_CHECK_SUCCESS(run, GameInput_Construct(&Input, &Keys, NULL, NULL)))
     {
-        const struct { GameActionId Action; GameKey Key; uint8_t Modifiers; } Cases[] =
+        // Each action's bindings in order; the text actions' second ones are the Insert and Delete forms.
+        const struct { GameActionId Action; size_t Index; size_t Count; GameKey Key; uint8_t Modifiers; } Cases[] =
         {
-            { GameAction_UIReset, GameKey_Backspace, GAME_KEY_MODIFIER_NONE },
-            { GameAction_UICopy, GameKey_C, GAME_KEY_MODIFIER_CONTROL },
-            { GameAction_UIPaste, GameKey_V, GAME_KEY_MODIFIER_CONTROL },
-            { GameAction_UIContextMenu, GameKey_Menu, GAME_KEY_MODIFIER_NONE },
+            { GameAction_UIReset, 0U, 1U, GameKey_Backspace, GAME_KEY_MODIFIER_NONE },
+            { GameAction_UICopy, 0U, 2U, GameKey_C, GAME_KEY_MODIFIER_CONTROL },
+            { GameAction_UICopy, 1U, 2U, GameKey_Insert, GAME_KEY_MODIFIER_CONTROL },
+            { GameAction_UIPaste, 0U, 2U, GameKey_V, GAME_KEY_MODIFIER_CONTROL },
+            { GameAction_UIPaste, 1U, 2U, GameKey_Insert, GAME_KEY_MODIFIER_SHIFT },
+            { GameAction_UIContextMenu, 0U, 1U, GameKey_Menu, GAME_KEY_MODIFIER_NONE },
+            { GameAction_UICut, 0U, 2U, GameKey_X, GAME_KEY_MODIFIER_CONTROL },
+            { GameAction_UICut, 1U, 2U, GameKey_Delete, GAME_KEY_MODIFIER_SHIFT },
+            { GameAction_UIUndo, 0U, 1U, GameKey_Z, GAME_KEY_MODIFIER_CONTROL },
+            { GameAction_UIRedo, 0U, 2U, GameKey_Y, GAME_KEY_MODIFIER_CONTROL },
+            { GameAction_UIRedo, 1U, 2U, GameKey_Z, GAME_KEY_MODIFIER_CONTROL | GAME_KEY_MODIFIER_SHIFT },
+            { GameAction_UISelectAll, 0U, 1U, GameKey_A, GAME_KEY_MODIFIER_CONTROL },
         };
         for (size_t Index = 0U; Index < (sizeof(Cases) / sizeof(Cases[0])); Index++)
         {
             GameInputBinding Binding;
-            TEST_CHECK(run, (GameInput_GetBindingCount(&Input, Cases[Index].Action) == 1U) && GameInput_TryGetBinding(&Input, Cases[Index].Action, 0U, &Binding));
+            TEST_CHECK(run, (GameInput_GetBindingCount(&Input, Cases[Index].Action) == Cases[Index].Count)
+                && GameInput_TryGetBinding(&Input, Cases[Index].Action, Cases[Index].Index, &Binding));
             TEST_CHECK(run, (Binding.Key == Cases[Index].Key) && (Binding.Modifiers == Cases[Index].Modifiers));
         }
         GameInputSample Sample;
@@ -655,6 +665,10 @@ static void TheEngineActionsGetTheirEnumValues(TestRun* run)
         { GameAction_UICopy, "tbp:ui_copy", GameActionCategory_Interface },
         { GameAction_UIPaste, "tbp:ui_paste", GameActionCategory_Interface },
         { GameAction_UIContextMenu, "tbp:ui_context_menu", GameActionCategory_Interface },
+        { GameAction_UICut, "tbp:ui_cut", GameActionCategory_Interface },
+        { GameAction_UIUndo, "tbp:ui_undo", GameActionCategory_Interface },
+        { GameAction_UIRedo, "tbp:ui_redo", GameActionCategory_Interface },
+        { GameAction_UISelectAll, "tbp:ui_select_all", GameActionCategory_Interface },
     };
     static const struct
     {
@@ -1137,11 +1151,13 @@ static void WithdrawnActionsKeepThePlayersBindings(TestRun* run)
                 && (strstr((const char*)Text._data, "\"g\"") != NULL) && (strstr((const char*)Text._data, "saw") == NULL)
                 && (strstr((const char*)Text._data, "drill") == NULL));
         }
-        // A file's entry for a withdrawn action is the player's binding for when it revives.
+        // A file's entry for a withdrawn action is the player's binding for when it revives: it does not enter the key index (where X
+        // has only the cut action's Ctrl+X).
+        size_t BindingsOnX = GameInput_GetKeyBindingCount(Input, GameKey_X);
         GenericBuffer_Clear(&Path);
         TEST_CHECK(run, WriteControlsFile(run, "withdrawn_load", "{ \"bindings\": { \"mymod:saw\": [\"x\"] } }", &Path)
             && TEST_CHECK_SUCCESS(run, GameInput_LoadBindingsFromFile(Input, Path._data)));
-        TEST_CHECK(run, (GameInput_GetKeyBindingCount(Input, GameKey_X) == 0U) && GameInput_IsSetByPlayer(Input, Saw));
+        TEST_CHECK(run, (GameInput_GetKeyBindingCount(Input, GameKey_X) == BindingsOnX) && GameInput_IsSetByPlayer(Input, Saw));
 
         // Revived: the same ids; the player's bindings come back, the others' new defaults apply.
         Tools = AddCategory(run, &Fixture, "mymod:tools", Pack);
@@ -1250,7 +1266,7 @@ static void TheListingShowsEveryAction(TestRun* run)
         GameInput_WithdrawSource(Input, Pack);
         GameInput_LogActions(Input);
         Fixture_CloseLog(run, &Fixture);
-        TEST_CHECK(run, CountInLog(run, &Fixture, "26 actions in 5 categories:") == 1U);
+        TEST_CHECK(run, CountInLog(run, &Fixture, "30 actions in 5 categories:") == 1U);
         TEST_CHECK(run, CountInLog(run, &Fixture, "Movement (tbp:movement, order 100):") == 2U);
         TEST_CHECK(run, CountInLog(run, &Fixture, "Tools (mymod:tools, order 500, from mymod:pack):") == 1U);
         TEST_CHECK(run, CountInLog(run, &Fixture, "tbp:move_forward \"Move Forward\": up, control+w (set by the player)") == 2U);
@@ -1258,7 +1274,7 @@ static void TheListingShowsEveryAction(TestRun* run)
         TEST_CHECK(run, CountInLog(run, &Fixture, "mymod:hammer \"Hammer\": f, from mymod:pack") == 1U);
         TEST_CHECK(run, CountInLog(run, &Fixture, "other:chisel \"Hammer\": unbound, from other:pack") == 2U);
         TEST_CHECK(run, CountInLog(run, &Fixture, "Without a category:") == 1U);
-        TEST_CHECK(run, CountInLog(run, &Fixture, "25 actions in 4 categories:") == 1U);
+        TEST_CHECK(run, CountInLog(run, &Fixture, "29 actions in 4 categories:") == 1U);
     }
     Fixture_Deconstruct(run, &Fixture);
 }
@@ -1509,6 +1525,90 @@ static void TheMonitorIsNotAskedEveryTick(TestRun* run)
 }
 
 // The toggle's defaults: Alt+Enter, not plain Enter, and F11 with anything held. It never keeps a binding by force.
+
+/* A clipboard of the tests' own: a text, and what was set on it. */
+typedef struct TestClipboardStruct
+{
+    const char* Text;
+    char Set[64];
+    size_t LastMaxBytes;
+} TestClipboard;
+
+static Error TestClipboard_GetText(void* self, GenericBuffer* outText, size_t maxBytes)
+{
+    TestClipboard* Clipboard = self;
+    Clipboard->LastMaxBytes = maxBytes;
+    return GameInputInternal_CopyLentText((const unsigned char*)Clipboard->Text, maxBytes, outText);
+}
+
+static Error TestClipboard_SetText(void* self, const unsigned char* text)
+{
+    TestClipboard* Clipboard = self;
+    snprintf(Clipboard->Set, sizeof(Clipboard->Set), "%s", (const char*)text);
+    return Error_CreateSuccess();
+}
+
+static void TestClipboard_Destroy(void* self)
+{
+    (void)self;
+}
+
+static const IClipboardVTable TestClipboardVTable = { .GetText = TestClipboard_GetText, .SetText = TestClipboard_SetText,
+    .Destroy = TestClipboard_Destroy };
+
+/* The clipboard: the system's does nothing without a window, another can take its place, and what is lent is copied at most so far, never
+ * splitting a codepoint. */
+static void TheClipboardGoesThroughWhatTheInputHolds(TestRun* run)
+{
+    KeyRegistry Keys;
+    TEST_CHECK_SUCCESS(run, KeyRegistry_Construct(&Keys));
+    GameInput Input;
+    GenericBuffer Text;
+    GenericBuffer_AllocateVariable(&Text, 0U, sizeof(unsigned char));
+    if (TEST_CHECK_SUCCESS(run, GameInput_Construct(&Input, &Keys, NULL, NULL)))
+    {
+        TEST_CHECK_SUCCESS(run, GameInput_GetClipboardText(&Input, GAME_INPUT_MAX_CLIPBOARD_BYTES, &Text));
+        TEST_CHECK(run, Text._count == 0U);
+        TEST_CHECK_SUCCESS(run, GameInput_SetClipboardText(&Input, (const unsigned char*)u8"nothing hears this"));
+
+        TestClipboard Clipboard = { .Text = "copied \xC4\x81", .Set = { 0 }, .LastMaxBytes = 0U };
+        GameInput_SetClipboard(&Input, (IClipboard){ .VTable = &TestClipboardVTable, .Self = &Clipboard });
+        TEST_CHECK_SUCCESS(run, GameInput_GetClipboardText(&Input, SIZE_MAX, &Text));
+        TEST_CHECK(run, (Text._count == 9U) && (memcmp(Text._data, "copied \xC4\x81", 9U) == 0)
+            && (Clipboard.LastMaxBytes == GAME_INPUT_MAX_CLIPBOARD_BYTES));
+        // A reader that can use less asks for less.
+        GenericBuffer_Clear(&Text);
+        TEST_CHECK_SUCCESS(run, GameInput_GetClipboardText(&Input, 8U, &Text));
+        TEST_CHECK(run, (Text._count == 7U) && (Clipboard.LastMaxBytes == 8U));
+        TEST_CHECK_SUCCESS(run, GameInput_SetClipboardText(&Input, (const unsigned char*)u8"put"));
+        TEST_CHECK(run, strcmp(Clipboard.Set, "put") == 0);
+        TEST_CHECK_ERROR(run, GameInput_SetClipboardText(&Input, NULL), ErrorCode_IllegalArgument);
+        TEST_CHECK_ERROR(run, GameInput_GetClipboardText(&Input, 1U, NULL), ErrorCode_IllegalArgument);
+        GameInput_SetClipboard(&Input, GameInput_GetStandardClipboard());
+        TEST_CHECK(run, Input._clipboard.VTable != &TestClipboardVTable);
+        TEST_CHECK_SUCCESS(run, GameInput_Deconstruct(&Input));
+    }
+    // A lent text is copied at most so far, and a cut inside a codepoint backs off to its start.
+    GenericBuffer_Clear(&Text);
+    TEST_CHECK_SUCCESS(run, GameInputInternal_CopyLentText((const unsigned char*)"ab\xE2\x82\xAC" "c", 4U, &Text));
+    TEST_CHECK(run, (Text._count == 2U) && (memcmp(Text._data, "ab", 2U) == 0));
+    GenericBuffer_Clear(&Text);
+    TEST_CHECK_SUCCESS(run, GameInputInternal_CopyLentText((const unsigned char*)"ab\xE2\x82\xAC" "c", 5U, &Text));
+    TEST_CHECK(run, Text._count == 5U);
+    GenericBuffer_Clear(&Text);
+    TEST_CHECK_SUCCESS(run, GameInputInternal_CopyLentText((const unsigned char*)"abc", 3U, &Text));
+    TEST_CHECK(run, Text._count == 3U);
+    // Bytes that are no UTF-8 are cut where the limit falls: a run of continuation bytes is never backed off past a codepoint's length.
+    GenericBuffer_Clear(&Text);
+    TEST_CHECK_SUCCESS(run, GameInputInternal_CopyLentText((const unsigned char*)"\x80\x80\x80\x80\x80\x80", 5U, &Text));
+    TEST_CHECK(run, Text._count == 5U);
+    GenericBuffer_Clear(&Text);
+    TEST_CHECK_SUCCESS(run, GameInputInternal_CopyLentText((const unsigned char*)"a\xF0\x9F\x98\x80" "b", 4U, &Text));
+    TEST_CHECK(run, (Text._count == 1U) && (Text._data != NULL) && (((unsigned char*)Text._data)[0] == 'a'));
+    Memory_Free(Text._data);
+    KeyRegistry_Deconstruct(&Keys);
+}
+
 static void TheFullscreenToggleHasItsKeys(TestRun* run)
 {
     InputFixture Fixture;
@@ -1559,6 +1659,7 @@ void GameInputTests_Run(TestRun* run)
         { "the_monitors_size_comes_with_the_sample", TheMonitorsSizeComesWithTheSample },
         { "the_monitor_is_not_asked_every_tick", TheMonitorIsNotAskedEveryTick },
         { "the_fullscreen_toggle_has_its_keys", TheFullscreenToggleHasItsKeys },
+        { "the_clipboard_goes_through_what_the_input_holds", TheClipboardGoesThroughWhatTheInputHolds },
         { "key_ids_are_unique_and_parse_back", KeyIdsAreUniqueAndParseBack },
         { "consumed_keys_stay_consumed_while_held", ConsumedKeysStayConsumedWhileHeld },
         { "wheel_text_and_pointer_are_consumed_for_one_tick", WheelTextAndPointerAreConsumedForOneTick },

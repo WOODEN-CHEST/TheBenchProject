@@ -59,6 +59,15 @@ consumption). Mouse: `GameInput_GetMousePosition` (window pixels, unclamped: pas
 and puts it at a place; both do nothing with no window, and are the only way code outside this module touches the cursor. Wheel: `GameInput_GetWheelDelta`. Text: `GameInput_GetTextCodepointCount` /
 `GameInput_GetTextCodepoint`.
 
+**The clipboard.** `GameInput_GetClipboardText(input, maxBytes, &bytes)` copies the clipboard's text into a byte buffer at once (raylib's pointer
+lasts only until its next call), at most the bytes the reader can use (a text box asks for what its limits could take) and never more than
+`GAME_INPUT_MAX_CLIPBOARD_BYTES`, cut before a codepoint that would not fit whole; `GameInput_SetClipboardText` puts a text on it. The clipboard is
+another program's: its bytes can be anything (very long, invalid UTF-8, any line breaks), so whoever pastes puts them through its own rules (a text
+box's limits). Read it only when it is wanted, a paste: asking the system can take a round trip to the program holding it, and on X11 GLFW waits for
+that program's answer with no time limit (one that never answers stalls the game). Both go through an `IClipboard` (a virtual table and its object):
+the standard one is raylib's (`GameInput_GetStandardClipboard`; without a window it holds no text), and a test or a harness puts its own in its place
+with `GameInput_SetClipboard`, so pasting runs headless.
+
 ### Consumption
 
 Whoever handles input consumes it, and every later reader in the tick sees it as not pressed:
@@ -107,8 +116,9 @@ the `GameActionCategory` enum, the same way:
 | | Next, Previous | `tbp:ui_next`, `tbp:ui_previous` | Tab, Shift+Tab |
 | | Accept | `tbp:ui_accept` | Enter, Keypad Enter |
 | | Back | `tbp:ui_back` | Escape |
-| | Reset, Copy, Paste | `tbp:ui_reset`, `tbp:ui_copy`, `tbp:ui_paste` | Backspace, Ctrl+C, Ctrl+V; a press the focused widget leaves goes on to the hovered one ([UIFramework.md](UIFramework.md), "Input") |
+| | Reset, Copy, Paste | `tbp:ui_reset`, `tbp:ui_copy`, `tbp:ui_paste` | Backspace, Ctrl+C and Ctrl+Insert, Ctrl+V and Shift+Insert; a press the focused widget leaves goes on to the hovered one ([UIFramework.md](UIFramework.md), "Input") |
 | | Context Menu | `tbp:ui_context_menu` | the Menu key |
+| | Cut, Undo, Redo, Select All | `tbp:ui_cut`, `tbp:ui_undo`, `tbp:ui_redo`, `tbp:ui_select_all` | Ctrl+X and Shift+Delete, Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z, Ctrl+A (a text box's; moving and deleting by character or word stay raw keys) |
 
 Adding an engine action: an enum value and its row in `BuiltInActions` (`GameInput.c`: key, display name, description,
 category, defaults, the keeps-a-binding flag); a new engine category likewise in `GameActionCategory` and

@@ -487,8 +487,38 @@ static void EveryRuleIsRefusedWithItsMessage(TestRun* run)
         { "{\"name\": \"t\", \"elements\": {\"tooltip\": {\"padding\": [-1, 0]}}}", "elements.tooltip.padding: each component must be within [0, 4096]" },
         { "{\"name\": \"t\", \"elements\": {\"button\": {\"min_size\": [0, -1]}}}", "elements.button.min_size: each component must be within [0, 4096]" },
         { "{\"name\": \"t\", \"elements\": {\"tooltip\": {\"background\": {}}}}", "elements.tooltip.background: it needs a \"kind\"" },
+        { "{\"name\": \"t\", \"elements\": {\"text_box\": {\"mask\": \"ab\"}}}", "elements.text_box.mask: must be a string of exactly one character" },
+        { "{\"name\": \"t\", \"elements\": {\"text_box\": {\"mask\": \"\"}}}", "elements.text_box.mask: must be a string of exactly one" },
+        { "{\"name\": \"t\", \"elements\": {\"text_box\": {\"mask\": \"\\n\"}}}", "no control character" },
+        { "{\"name\": \"t\", \"elements\": {\"text_box\": {\"mask\": 42}}}", "elements.text_box.mask" },
+        { "{\"name\": \"t\", \"elements\": {\"text_box\": {\"caret_width\": -1}}}", "elements.text_box.caret_width: -1 is outside" },
     };
     CheckRefusals(run, Refusals, sizeof(Refusals) / sizeof(Refusals[0]));
+}
+
+/* A character part: read as one codepoint, its default where a theme leaves it out, and no character for a part of another kind. */
+static void ACharacterPartIsOneCodepoint(TestRun* run)
+{
+    TestAssetFixture Fixture;
+    AssetUserID User = ASSET_USER_ID_INVALID;
+    if (TestAssetFixture_Construct(run, &Fixture))
+    {
+        const UITheme* Theme = LoadTheme(run, &Fixture,
+            "{\"name\": \"masks\", \"elements\": {\"text_box\": {\"mask\": \"\xD0\x96\", \"variants\": {\"stars\": {\"mask\": \"*\"}}}}}", "masks", &User);
+        if (TEST_CHECK(run, Theme != NULL))
+        {
+            const UIThemeStyle* Base = UITheme_FindStyle(Theme, UIElementKind_TextBox, NULL);
+            const UIThemeStyle* Stars = UITheme_FindStyle(Theme, UIElementKind_TextBox, (const unsigned char*)u8"stars");
+            TEST_CHECK(run, UIThemeStyle_GetCharacter(Base, UIElementKind_TextBox, UITextBoxPart_Mask) == 0x416U);
+            TEST_CHECK(run, UIThemeStyle_GetCharacter(Stars, UIElementKind_TextBox, UITextBoxPart_Mask) == (uint32_t)'*');
+            TEST_CHECK(run, UIThemeStyle_GetCharacter(NULL, UIElementKind_TextBox, UITextBoxPart_Mask) == 0x2022U);
+            TEST_CHECK(run, UIThemeStyle_GetCharacter(Base, UIElementKind_TextBox, UITextBoxPart_Padding) == 0U);
+            TEST_CHECK(run, UIThemeStyle_GetCharacter(Base, UIElementKind_Button, UIButtonPart_Padding) == 0U);
+            Vector2 Padding = UIThemeStyle_GetVector(Base, UIElementKind_TextBox, UITextBoxPart_Padding);
+            TEST_CHECK(run, (Padding.x == 6.0f) && (Padding.y == 4.0f));
+        }
+        TestAssetFixture_Deconstruct(run, &Fixture);
+    }
 }
 
 /* A palette's own rules, and a reference that cannot be resolved, refused with where it is. */
@@ -1086,6 +1116,16 @@ static void TheShippedThemesLoadAndResolve(TestRun* run)
             TEST_CHECK(run, UITheme_GetTooltipDelaySeconds(Themes[Index]) == 0.5f);
             TEST_CHECK(run, UIThemeStyle_GetBox(UITheme_FindStyle(Themes[Index], UIElementKind_Tooltip, NULL), UITooltipPart_Background) != NULL);
             TEST_CHECK(run, UIThemeStyle_GetColors(UITheme_FindStyle(Themes[Index], UIElementKind_Tooltip, NULL), UITooltipPart_Text) != NULL);
+            // Every text box part, so no element of the kind draws a plain box; the mask a bullet.
+            const UIThemeStyle* TextBox = UITheme_FindStyle(Themes[Index], UIElementKind_TextBox, NULL);
+            for (int32_t Part = 0; Part < (int32_t)UITextBoxPart_Count; Part++)
+            {
+                const UIThemePartDescriptor* Descriptor = UIElementKind_GetPart(UIElementKind_TextBox, Part);
+                bool IsBox = Descriptor->Kind == UIThemePartKind_Box;
+                bool IsColors = Descriptor->Kind == UIThemePartKind_Colors;
+                TEST_CHECK(run, (!IsBox || (UIThemeStyle_GetBox(TextBox, Part) != NULL)) && (!IsColors || (UIThemeStyle_GetColors(TextBox, Part) != NULL)));
+            }
+            TEST_CHECK(run, UIThemeStyle_GetCharacter(TextBox, UIElementKind_TextBox, UITextBoxPart_Mask) == 0x2022U);
         }
     }
 
@@ -1559,6 +1599,7 @@ void UIThemeTests_Run(TestRun* run)
         { "the_tooltip_delay_has_its_bounds_and_default", TheTooltipDelayHasItsBoundsAndDefault },
         { "the_tooltip_kind_has_its_parts", TheTooltipKindHasItsParts },
         { "the_shipped_themes_load_and_resolve", TheShippedThemesLoadAndResolve },
+        { "a_character_part_is_one_codepoint", ACharacterPartIsOneCodepoint },
         { "the_light_theme_is_the_flat_one_with_another_palette", TheLightThemeIsTheFlatOneWithAnotherPalette },
         { "a_nine_slice_reads_its_art_and_its_font", ANineSliceReadsItsArtAndItsFont },
         { "a_variant_can_change_a_boxs_kind", AVariantCanChangeABoxsKind },

@@ -7,6 +7,7 @@
 #include "NamespacedKey.h"
 #include "UITheme.h"
 #include "UIThemeInternal.h"
+#include "wr/WRChar.h"
 #include "wr/WRJSON.h"
 #include "wr/WRMath.h"
 #include "wr/WRMemory.h"
@@ -150,6 +151,28 @@ static Error ReadNumber(const JSONObjectValue* value, float minimum, float maxim
             (double)minimum, (double)maximum);
     }
     *outValue = Number;
+    return Error_CreateSuccess();
+}
+
+/* One character: a string of exactly one codepoint, no control character. */
+static Error ReadCharacter(const JSONObjectValue* value, const char* where, uint32_t* outCodepoint)
+{
+    unsigned char* Text = NULL;
+    Error Result = AssetJSON_ValueToOwnedString(value, &Text);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return WrapError(where, &Result);
+    }
+    size_t Length = StringUTF8_GetByteLength(Text);
+    size_t Count = (Length > 0U) ? CharUTF8_GetByteCountChar(Text) : 0U;
+    CodePoint Codepoint = (Count > 0U) ? CharUTF8_GetCodePoint(Text) : CODEPOINT_NONE;
+    Memory_Free(Text);
+    bool IsControl = (Codepoint < 0x20) || (Codepoint == 0x7F) || ((Codepoint >= 0x80) && (Codepoint <= 0x9F));
+    if ((Count == 0U) || (Count != Length) || (Codepoint == CODEPOINT_NONE) || IsControl)
+    {
+        return Refuse(where, "must be a string of exactly one character, no control character.");
+    }
+    *outCodepoint = (uint32_t)Codepoint;
     return Error_CreateSuccess();
 }
 
@@ -947,6 +970,12 @@ static Error ReadPart(ThemeRead* read, const UIThemePartDescriptor* descriptor, 
         case UIThemePartKind_Number:
         {
             Error Result = ReadNumber(value, descriptor->Minimum, descriptor->Maximum, where, &outValue->Data.Number);
+            outValue->IsSet = (Result.Code == ErrorCode_Success);
+            return Result;
+        }
+        case UIThemePartKind_Character:
+        {
+            Error Result = ReadCharacter(value, where, &outValue->Data.Character);
             outValue->IsSet = (Result.Code == ErrorCode_Success);
             return Result;
         }

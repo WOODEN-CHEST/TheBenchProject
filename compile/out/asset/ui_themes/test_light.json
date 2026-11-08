@@ -35,7 +35,9 @@
         "danger": "#f2b8b5",
         "danger_hover": "#f7cbc9",
         "danger_pressed": "#e8a19d",
-        "danger_focus": "#f4c1be"
+        "danger_focus": "#f4c1be",
+        "caret_block": "#1f232860",
+        "thumb": "#a9b0ba"
     },
     "elements": {
         "panel": {
@@ -120,7 +122,7 @@
             "min_thumb_length": 20,
             "thumb_inset": 3,
             "track": { "kind": "flat", "colors": { "normal": "@surface_sunken" } },
-            "thumb": { "kind": "flat", "colors": { "normal": "@raised_hover", "hovered": "@outline_strong", "pressed": "@accent" } }
+            "thumb": { "kind": "flat", "colors": { "normal": "@thumb", "hovered": "@outline_strong", "pressed": "@accent" } }
         },
         "scroll_area": {
             "background": { "kind": "none" }
@@ -181,6 +183,28 @@
         },
         "backdrop": {
             "background": { "kind": "flat", "colors": { "normal": "@backdrop" } }
+        },
+        "text_box": {
+            "padding": [ 6, 4 ],
+            "min_size": [ 120, 24 ],
+            "caret_width": 1,
+            "mask": "•",
+            "box": {
+                "kind": "flat",
+                "colors": { "normal": "@surface_sunken", "hovered": "@sunken_pressed", "entered": "@sunken_pressed", "disabled": "@surface", "invalid": "@danger_pressed" },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline", "hovered": "@outline_strong", "focused": "@accent", "entered": "@editing_outline", "disabled": "@outline_disabled", "invalid": "@danger_hover" } }
+            },
+            "read_only_box": {
+                "kind": "flat",
+                "colors": { "normal": "@surface", "disabled": "@surface" },
+                "outline": { "thickness": 1, "colors": { "normal": "@raised", "hovered": "@outline", "focused": "@accent", "entered": "@editing_outline", "disabled": "@outline_disabled" } }
+            },
+            "selection": { "kind": "flat", "colors": { "normal": "@selected" } },
+            "inactive_selection": { "kind": "flat", "colors": { "normal": "@inactive" } },
+            "caret": { "kind": "flat", "colors": { "normal": "@text" } },
+            "overwrite_caret": { "kind": "flat", "colors": { "normal": "@caret_block" } },
+            "text": { "normal": "@text", "disabled": "@text_disabled" },
+            "placeholder": { "normal": "@text_dim", "disabled": "@text_disabled" }
         }
     }
 }

@@ -5,12 +5,15 @@
 
 /**
  * @file UIStandardLooks.h
- * @brief The kit's standard look (UI_KIT_STANDARD_LOOK, tbp:test_box) for the panel, the button, the toggle and the slider: boxes
- *        drawn from the screen's theme, flat or nine-slice, with the theme's metrics, colours per state and fades.
+ * @brief The kit's standard look (UI_KIT_STANDARD_LOOK, tbp:test_box) for the panel, the button, the toggle, the slider, the scroll bar, the
+ *        scroll area, the dropdown's head, the menu bar, the status bar and the text box: boxes drawn from the screen's theme, flat or
+ *        nine-slice, with the theme's metrics, colours per state and fades.
  *
  * Each is a look as any other (UIKit_RegisterLook): a struct starting with its kind's look base, a UIElementLook (so variants work)
  * and what it draws its text with, and hooks for Construct, Update, Render and Measure (the panel's Layout too, for its padding).
- * The kit registers them when it is constructed; they are the example to follow for a look of one's own.
+ * The text box's look owns its document and its layout (laid out with carets) and answers the behaviour's geometry questions
+ * (UITextBoxCapability_SetGeometry); it draws only the text in view. The kit registers them when it is constructed; they are the example to
+ * follow for a look of one's own.
  */
 
 
@@ -23,7 +26,7 @@ typedef struct UIWidgetFactoryStruct UIWidgetFactory;
 
 // Functions.
 /**
- * @brief Registers the standard look for the panel, the button, the toggle and the slider with a kit (UIKit_Construct does).
+ * @brief Registers the standard look for every kind it draws with a kit (UIKit_Construct does).
  * @param kit The kit; must not be NULL.
  * @returns Success, or the first registration's error.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.

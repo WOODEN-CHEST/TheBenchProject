@@ -59,48 +59,14 @@ static Error MeasureContent(const UIScrollAreaCapability* self, Widget* widget, 
 static Error MeasureBarThickness(const UIScrollAreaCapability* self, Widget* widget, UIScrollAxis axis, const UIMeasureContext* sizing,
     float* outThickness)
 {
-    *outThickness = 0.0f;
-    Widget* Bar = NULL;
-    if (!UIScreen_TryGetWidgetById(Widget_GetScreen(widget), self->_barIds[axis], &Bar))
-    {
-        return Error_CreateSuccess();
-    }
-    Vector2 Size = { .x = 0.0f, .y = 0.0f };
-    Error Result = Widget_Measure(Bar, sizing, UI_MEASURE_UNBOUNDED_WIDTH, &Size);
-    *outThickness = (axis == UIScrollAxis_Vertical) ? Size.x : Size.y;
-    return Result;
+    return UIScrollbar_MeasureThickness(Widget_GetScreen(widget), self->_barIds[axis], axis, sizing, outThickness);
 }
 
-/* Places a bar along its edge, or with no size when it does not show. The vertical bar runs the whole height: where the horizontal
- * one meets it, the corner is the end of its track, which covers it (so the content never shows there) and its thumb never enters. */
+/* Places a bar along its edge, or with no size when it does not show. */
 static Error PlaceBar(const UIScrollAreaCapability* self, Widget* widget, UIScrollAxis axis, bool isShown, float thickness, float otherThickness)
 {
-    UIKit* Kit = UIKit_FromScreen(Widget_GetScreen(widget));
-    Widget* Bar = NULL;
-    if ((Kit == NULL) || !UIScreen_TryGetWidgetById(Widget_GetScreen(widget), self->_barIds[axis], &Bar))
-    {
-        return Error_CreateSuccess();
-    }
-    UIPlacement Placement = { .AnchorMin = { .x = 1.0f, .y = 1.0f }, .AnchorMax = { .x = 1.0f, .y = 1.0f }, .OffsetMin = { .x = 0.0f, .y = 0.0f },
-        .OffsetMax = { .x = 0.0f, .y = 0.0f } };
-    if (isShown && (axis == UIScrollAxis_Vertical))
-    {
-        Placement = (UIPlacement){ .AnchorMin = { .x = 1.0f, .y = 0.0f }, .AnchorMax = { .x = 1.0f, .y = 1.0f },
-            .OffsetMin = { .x = -thickness, .y = 0.0f }, .OffsetMax = { .x = 0.0f, .y = 0.0f } };
-    }
-    else if (isShown)
-    {
-        Placement = (UIPlacement){ .AnchorMin = { .x = 0.0f, .y = 1.0f }, .AnchorMax = { .x = 1.0f, .y = 1.0f },
-            .OffsetMin = { .x = 0.0f, .y = -thickness }, .OffsetMax = { .x = -otherThickness, .y = 0.0f } };
-    }
-    UIScrollbarCapability* Scrollbar = Widget_GetCapability(Bar, UIKit_GetCapabilityId(Kit, UIElementCapability_Scrollbar));
-    if (Scrollbar != NULL)
-    {
-        // The bar counts in its own UI pixels: the area's, less a scale of its own.
-        float Inset = (axis == UIScrollAxis_Vertical) ? otherThickness : 0.0f;
-        UIScrollbarCapability_SetEndInset(Scrollbar, Inset * (Widget_GetEffectiveScale(widget) / Widget_GetEffectiveScale(Bar)));
-    }
-    return Widget_SetPlacement(Bar, &Placement);
+    return UIScrollbar_PlaceAlongEdge(Widget_GetScreen(widget), self->_barIds[axis], axis, isShown, thickness, otherThickness,
+        UIInsets_All(0.0f), Widget_GetEffectiveScale(widget));
 }
 
 /* Decides which bars show and how large the content and the view are, starting from what the last layout decided: then an idle area

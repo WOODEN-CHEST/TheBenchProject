@@ -57,6 +57,8 @@
 #define ELEMENT_ROW_WIDTH 370.0f
 #define ELEMENT_ROW_HEIGHT 24.0f
 #define ELEMENT_ROW_SPACING 8.0f
+/** The brightness slider's width in the row, in UI pixels: the note box takes what the button and it leave. */
+#define BRIGHTNESS_SLIDER_WIDTH 110.0f
 /** The range of the brightness slider. */
 #define BRIGHTNESS_MINIMUM 0.2
 #define BRIGHTNESS_MAXIMUM 2.0
@@ -269,7 +271,7 @@ static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserDa
     return Error_CreateSuccess();
 }
 
-/* A row on the desk: the kit's button and slider. */
+/* A row on the desk: the kit's button, a text box for a note and a slider. */
 static Error BuildElements(WorldTestScreens* self)
 {
     Error Result = UIScreen_SetScale(&self->_screen, ELEMENT_SCALE);
@@ -300,12 +302,19 @@ static Error BuildElements(WorldTestScreens* self)
     }
     if (Result.Code == ErrorCode_Success)
     {
+        UITextBoxOptions Options = UITextBoxOptions_Create();
+        Options.Placeholder = u8"A note";
+        Options.Element.Hint = UIStackHint_Fill(1.0f);
+        Result = UIKit_CreateTextBox(&self->_kit, &self->_screen, Row, &Options, &self->_noteBoxId);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
         const WorldScreenComponent* Component = FindScreenComponent(self);
         UISliderOptions Options = UISliderOptions_Create();
         Options.Minimum = BRIGHTNESS_MINIMUM;
         Options.Maximum = BRIGHTNESS_MAXIMUM;
         Options.Value = (Component != NULL) ? (double)WorldScreenComponent_GetBrightness(Component) : 1.0;
-        Options.Element.Hint = UIStackHint_Fill(1.0f);
+        Options.Element.Hint = UIStackHint_Fixed(BRIGHTNESS_SLIDER_WIDTH);
         Result = UIKit_CreateSlider(&self->_kit, &self->_screen, Row, &Options, &self->_brightnessSliderId);
     }
     return Result;

@@ -25,6 +25,7 @@ typedef struct UIThemeValueStruct
         UIStateColors Colors;
         Vector2 Vector;
         float Number;
+        uint32_t Character;
     } Data;
 } UIThemeValue;
 

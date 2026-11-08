@@ -803,7 +803,8 @@ static Error List_Render(void* self, UIRenderContext* context)
     float Top = Pixels.y + RoundToPixel(Padding.y * Scale);
     float Bottom = (Pixels.y + Pixels.height) - RoundToPixel(Padding.y * Scale) - Strip;
     float Left = Pixels.x + RoundToPixel((Pixels.width - Arrow) * 0.5f);
-    Color Tint = UIStateColors_Resolve(UIThemeStyle_GetColors(Style, UIDropdownPart_Arrow), UIElementState_Normal, WHITE);
+    const UIStateColors* ArrowColors = UIThemeStyle_GetColors(Style, UIDropdownPart_Arrow);
+    Color Tint = (ArrowColors != NULL) ? UIStateColors_Resolve(ArrowColors, UIElementState_Normal, WHITE) : WHITE;
     Vector2 Range = UIScrollableCapability_GetRange(&List->Scrollable);
     if (List->Scrollable._offset.y > 0.0f)
     {

@@ -1,4 +1,5 @@
 #include "TestSuites.h"
+#include "TestUI.h"
 #include "TestAssets.h"
 #include "TestText.h"
 #include "TestWorld.h"
@@ -1815,6 +1816,92 @@ static void EscapeGoesOneLevelOutOfAnEditElement(TestRun* run)
 /* The render cache takes each model entry's screen: the surface it names (the world model's), whether it is on and its
  * glow (the surface's emission times the brightness); a surface the world model lacks is logged once however the
  * component changes otherwise, and a removed component takes the surface away. */
+/* A tick of a UI fixture's screen through a world screen host pointed at @p pointed, with the fixture's sample. */
+static void WorldBoxTick(TestRun* run, TestUIFixture* fixture, WorldScreenHost* host, const WorldScreenHit* pointed)
+{
+    GameInput_BeginTick(&fixture->Input, &fixture->Sample);
+    fixture->Time += TEST_UI_TICK_SECONDS;
+    TEST_CHECK_SUCCESS(run, WorldScreenHost_Update(host, &fixture->Screen, ProgramTime_Create(fixture->Time, TEST_UI_TICK_SECONDS),
+        &fixture->Input, pointed));
+    for (int32_t Index = 0; Index < (int32_t)GameKey_Count; Index++)
+    {
+        uint8_t State = fixture->Sample.KeyStates[Index];
+        fixture->Sample.KeyStates[Index] = ((State & GAME_INPUT_KEY_STATE_RELEASED) != 0U) ? 0U : (uint8_t)(State & GAME_INPUT_KEY_STATE_DOWN);
+    }
+    fixture->Sample.TextCodepointCount = 0U;
+}
+
+static void WorldBoxTap(TestRun* run, TestUIFixture* fixture, WorldScreenHost* host, GameKey key, const WorldScreenHit* pointed)
+{
+    TestUI_Press(fixture, key);
+    WorldBoxTick(run, fixture, host, pointed);
+    TestUI_Release(fixture, key);
+    WorldBoxTick(run, fixture, host, pointed);
+}
+
+/* A text box on a world screen: a click uses the screen and enters the box, typing reaches it and nothing below, and each Escape goes one
+ * level out: out of the box (a one-line box puts its text back), the focus cleared, the screen let go. */
+static void ATextBoxOnAWorldScreenTakesTheKeyboard(TestRun* run)
+{
+    TestUIFixture Fixture;
+    WorldScreenHost Host;
+    WorldScreenHost_Construct(&Host, 7U);
+    bool IsBuilt = TestUI_Construct(run, &Fixture) && TestUI_SetTheme(run, &Fixture,
+        "{\"name\": \"world_box\", \"font\": \"mono\", \"text_size\": 16, \"elements\": {\"text_box\": {\"box\": {\"kind\": \"flat\"}, "
+        "\"read_only_box\": {\"kind\": \"flat\"}, \"selection\": {\"kind\": \"flat\"}, \"inactive_selection\": {\"kind\": \"flat\"}, "
+        "\"caret\": {\"kind\": \"flat\"}, \"overwrite_caret\": {\"kind\": \"flat\"}, \"text\": {\"normal\": \"#ffffff\"}, "
+        "\"placeholder\": {\"normal\": \"#808080\"}}}}");
+    if (IsBuilt)
+    {
+        UITextBoxOptions Options = UITextBoxOptions_Create();
+        Options.Element.HasPlacement = true;
+        Options.Element.Placement = UIPlacement_FromTopLeft(100.0f, 100.0f, 400.0f, 24.0f);
+        uint64_t Id = WIDGET_ID_INVALID;
+        TEST_CHECK_SUCCESS(run, UIKit_CreateTextBox(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &Options, &Id));
+        WorldScreenHit OnBox = HitAt(7U, (Vector2){ 0.2f, 0.22f }, true);
+        WorldBoxTick(run, &Fixture, &Host, &OnBox);
+        WorldBoxTick(run, &Fixture, &Host, &OnBox);
+        WorldBoxTap(run, &Fixture, &Host, GameKey_MouseLeft, &OnBox);
+        TEST_CHECK(run, WorldScreenHost_IsFocused(&Host) && (UIScreen_GetEnteredWidgetId(&Fixture.Screen) == Id));
+        // Typing reaches the box, and its keys nothing below it: W does not walk.
+        TestUI_Press(&Fixture, GameKey_W);
+        Fixture.Sample.TextCodepoints[0] = (uint32_t)'w';
+        Fixture.Sample.TextCodepointCount = 1U;
+        WorldBoxTick(run, &Fixture, &Host, &OnBox);
+        TEST_CHECK(run, !GameInput_IsActionDown(&Fixture.Input, GameAction_MoveForward));
+        TestUI_Release(&Fixture, GameKey_W);
+        WorldBoxTick(run, &Fixture, &Host, &OnBox);
+        const unsigned char* Text = NULL;
+        TEST_CHECK_SUCCESS(run, UITextBox_GetText(&Fixture.Screen, Id, &Text, NULL));
+        TEST_CHECK(run, (Text != NULL) && (strcmp((const char*)Text, "w") == 0));
+        // One Escape: out of the box, its text put back, the focus kept. Two: the focus cleared. Three: the screen let go, no pause.
+        WorldBoxTap(run, &Fixture, &Host, GameKey_Escape, &OnBox);
+        TEST_CHECK_SUCCESS(run, UITextBox_GetText(&Fixture.Screen, Id, &Text, NULL));
+        TEST_CHECK(run, (UIScreen_GetEnteredWidgetId(&Fixture.Screen) == WIDGET_ID_INVALID) && (UIScreen_GetFocusedWidgetId(&Fixture.Screen) == Id)
+            && (Text[0] == 0U) && WorldScreenHost_IsFocused(&Host));
+        WorldBoxTap(run, &Fixture, &Host, GameKey_Escape, &OnBox);
+        TEST_CHECK(run, (UIScreen_GetFocusedWidgetId(&Fixture.Screen) == WIDGET_ID_INVALID) && WorldScreenHost_IsFocused(&Host));
+        TestUI_Press(&Fixture, GameKey_Escape);
+        GameInput_BeginTick(&Fixture.Input, &Fixture.Sample);
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_Update(&Host, &Fixture.Screen, ProgramTime_Create(Fixture.Time, TEST_UI_TICK_SECONDS),
+            &Fixture.Input, &OnBox));
+        TEST_CHECK(run, !WorldScreenHost_IsFocused(&Host) && !GameInput_IsActionPressed(&Fixture.Input, GameAction_Pause));
+        TestUI_Release(&Fixture, GameKey_Escape);
+        WorldBoxTick(run, &Fixture, &Host, &OnBox);
+        // Enter keeps what was typed; the screen stays in use.
+        WorldBoxTap(run, &Fixture, &Host, GameKey_MouseLeft, &OnBox);
+        Fixture.Sample.TextCodepoints[0] = (uint32_t)'k';
+        Fixture.Sample.TextCodepointCount = 1U;
+        WorldBoxTick(run, &Fixture, &Host, &OnBox);
+        WorldBoxTap(run, &Fixture, &Host, GameKey_Enter, &OnBox);
+        TEST_CHECK_SUCCESS(run, UITextBox_GetText(&Fixture.Screen, Id, &Text, NULL));
+        TEST_CHECK(run, (strcmp((const char*)Text, "k") == 0) && WorldScreenHost_IsFocused(&Host));
+        TEST_CHECK_SUCCESS(run, WorldScreenHost_Release(&Host, &Fixture.Screen));
+    }
+    WorldScreenHost_Deconstruct(&Host);
+    TestUI_Deconstruct(run, &Fixture);
+}
+
 static void TheRenderCacheTakesTheScreensSurface(TestRun* run)
 {
     GenericBuffer Directory;
@@ -3086,6 +3173,7 @@ void WorldScreenTests_Run(TestRun* run)
         { "a_focused_screen_takes_the_whole_keyboard_after_its_ui", AFocusedScreenTakesTheWholeKeyboardAfterItsUi },
         { "escape_and_pointing_away_let_go", EscapeAndPointingAwayLetGo },
         { "escape_goes_one_level_out_of_an_edit_element", EscapeGoesOneLevelOutOfAnEditElement },
+        { "a_text_box_on_a_world_screen_takes_the_keyboard", ATextBoxOnAWorldScreenTakesTheKeyboard },
         { "the_render_cache_takes_the_screens_surface", TheRenderCacheTakesTheScreensSurface },
         { "the_picture_goes_into_the_slots_material_copy_for_one_render",
             ThePictureGoesIntoTheSlotsMaterialCopyForOneRender },

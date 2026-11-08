@@ -24,3 +24,7 @@ void GameInputInternal_StoreMonitorSize(GameInput* self, Vector2 monitorSize, Ve
  *  says another. That may be long after the cursor is back: GLFW reports no movement when the cursor comes back to the very place it left from. On the
  *  window with no reset behind it (0, 0) is a real corner. The movement counts from the place that stands, but a captured cursor's stays the device's. */
 void GameInputInternal_KeepCursorPlace(GameInput* self, GameInputSample* sample);
+
+/** Copies a NUL-terminated text the system lent (the clipboard's) into @p outText: at most @p maxBytes of it, cut before a codepoint that
+ *  would not fit whole, reading no further than that. Appends the bytes, no terminator. */
+Error GameInputInternal_CopyLentText(const unsigned char* text, size_t maxBytes, GenericBuffer* outText);

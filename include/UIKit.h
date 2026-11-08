@@ -19,6 +19,7 @@
 #include "UIScrollable.h"
 #include "UISlider.h"
 #include "UIStatusBar.h"
+#include "UITextBox.h"
 #include "UITheme.h"
 #include "UIToggle.h"
 
@@ -88,6 +89,8 @@ typedef enum UIElementCapabilityEnum
     UIElementCapability_MenuBar,
     /** @brief UIStatusBarCapability (UIStatusBar.h). */
     UIElementCapability_StatusBar,
+    /** @brief UITextBoxCapability (UITextBox.h). */
+    UIElementCapability_TextBox,
     /** @brief The number of capabilities. */
     UIElementCapability_Count
 } UIElementCapability;
@@ -296,3 +299,6 @@ Error UIKit_CreateMenuBar(UIKit* self, UIScreen* screen, uint64_t parentId, cons
 /** @brief Makes a status bar (UIStatusBar.h) with its three sections, each a row stack. See the comment above for the parameters and the
  *  result. */
 Error UIKit_CreateStatusBar(UIKit* self, UIScreen* screen, uint64_t parentId, const UIStatusBarOptions* options, uint64_t* outId);
+/** @brief Makes a text box (UITextBox.h) with its two scroll bars, each of the look the screen's theme names for the scroll bar (else the
+ *  standard one), and its context menu. See the comment above for the parameters and the result. */
+Error UIKit_CreateTextBox(UIKit* self, UIScreen* screen, uint64_t parentId, const UITextBoxOptions* options, uint64_t* outId);

@@ -1,4 +1,5 @@
 #include "UIStandardLooks.h"
+#include "TextComponentFactory.h"
 #include "UIKit.h"
 #include "UIScreen.h"
 #include "UITooltip.h"
@@ -7,6 +8,12 @@
 
 
 // Macros.
+/** How long a text box's caret shows, then hides, in seconds. */
+#define CARET_BLINK_HALF_PERIOD 0.53
+/** How far past a line's end a selection over its line break reaches, as a share of the line's height. */
+#define SELECTED_BREAK_SHARE 0.3f
+/** How wide a block caret is at a line's end, where it covers no character, as a share of the line's height. */
+#define BLOCK_CARET_SHARE 0.5f
 /** How far a toggle's check stands inside its box, in UI pixels, and how much of the box's height a mixed state's bar takes. */
 #define CHECK_INSET 3.0f
 #define MIXED_BAR_SHARE 0.25f
@@ -85,6 +92,26 @@ typedef struct StatusBarBoxStruct
     UIElementLook Look;
     UIElementText Text;
 } StatusBarBox;
+
+/* The standard text box: a box (a read-only box's of its own) and, inside its padding, the text in its view, the selection behind it, the
+ * placeholder while it is empty and a blinking caret while it is being edited. Its document is built from the box's content whenever that,
+ * the mask or the plain text's colour changes. */
+typedef struct TextBoxBoxStruct
+{
+    UITextBoxLookBase Base;
+    UIElementLook Look;
+    TextDocument Document;
+    TextLayout Layout;
+    UIElementText Placeholder;
+    bool HasBuilt;
+    uint64_t BuiltContentRevision;
+    uint32_t BuiltMask;
+    Color BuiltColor;
+    bool HasAppliedTheme;
+    uint64_t AppliedThemeRevision;
+    double BlinkSeconds;
+    uint64_t SeenCaretRevision;
+} TextBoxBox;
 
 /* What lies under a modal popup: the theme's backdrop over the whole surface. A plain widget type, made by the screen (UIPopup.h) with
  * no arguments; it takes input, so presses, the wheel and hover stop at it. */
@@ -828,6 +855,374 @@ static UIElementLook* StatusBarBox_GetThemeLook(void* self)
 }
 
 
+// Static functions: the text box.
+static const UIThemeStyle* TextBoxBox_GetStyle(const TextBoxBox* box)
+{
+    return UIElementLook_GetStyle(&box->Look, Widget_GetScreen(&box->Base.Base));
+}
+
+static UIInsets TextBoxBox_GetTextInsets(const void* widget)
+{
+    const TextBoxBox* Box = widget;
+    Vector2 Padding = UIThemeStyle_GetVector(TextBoxBox_GetStyle(Box), UIElementKind_TextBox, UITextBoxPart_Padding);
+    return (UIInsets){ .Left = Padding.x, .Top = Padding.y, .Right = Padding.x, .Bottom = Padding.y };
+}
+
+static float TextBoxBox_GetLineHeight(const void* widget)
+{
+    const TextBoxBox* Box = widget;
+    return UITheme_GetTextSize(UIScreen_GetTheme(Widget_GetScreen(&Box->Base.Base)));
+}
+
+/* The box's border, which its bars stand inside: a flat box's outline, a nine-slice's margins at their size on the screen; none else. */
+static UIInsets TextBoxBox_GetBarInsets(const void* widget)
+{
+    const TextBoxBox* Box = widget;
+    int32_t Part = UITextBoxCapability_IsReadOnly(&Box->Base.TextBox) ? UITextBoxPart_ReadOnlyBox : UITextBoxPart_Box;
+    const UIBoxStyle* Style = UIThemeStyle_GetBox(TextBoxBox_GetStyle(Box), Part);
+    if ((Style != NULL) && (Style->Kind == UIBoxKind_NineSlice) && (Style->Texture != NULL))
+    {
+        float PixelScale = ((Style->PixelScale > 0.0f) && !Math_IsInfinityFloat(Style->PixelScale)) ? Style->PixelScale : 1.0f;
+        return (UIInsets){ .Left = Style->Margins.Left * PixelScale, .Top = Style->Margins.Top * PixelScale,
+            .Right = Style->Margins.Right * PixelScale, .Bottom = Style->Margins.Bottom * PixelScale };
+    }
+    if ((Style != NULL) && (Style->Kind == UIBoxKind_Flat) && Style->HasOutline)
+    {
+        return UIInsets_All(Style->OutlineThickness);
+    }
+    return UIInsets_All(0.0f);
+}
+
+/* The plain text's colour for the state the box is going to: its document holds it, so it changes only with the state. */
+static Color TextBoxBox_GetTextColor(const TextBoxBox* box)
+{
+    UIElementState State = UITextBoxCapability_GetState(&box->Base.TextBox, &box->Base.Base);
+    const UIStateColors* Colors = UIThemeStyle_GetColors(TextBoxBox_GetStyle(box), UITextBoxPart_Text);
+    return (Colors != NULL) ? UIStateColors_Resolve(Colors, State, WHITE) : WHITE;
+}
+
+static bool IsSameColor(Color a, Color b)
+{
+    return (a.r == b.r) && (a.g == b.g) && (a.b == b.b) && (a.a == b.a);
+}
+
+/* Builds the document again when the box's content, the theme's font, the mask or the plain text's colour changed. */
+static Error TextBoxBox_RefreshDocument(TextBoxBox* box)
+{
+    const UIScreen* Screen = Widget_GetScreen(&box->Base.Base);
+    uint64_t ThemeRevision = UIScreen_GetThemeRevision(Screen);
+    if (!box->HasAppliedTheme || (box->AppliedThemeRevision != ThemeRevision))
+    {
+        Error Result = TextDocument_SetDefaultFontName(&box->Document, UITheme_GetFontName(UIScreen_GetTheme(Screen)));
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+        box->HasAppliedTheme = true;
+        box->AppliedThemeRevision = ThemeRevision;
+    }
+    UITextBoxCapability* TextBox = &box->Base.TextBox;
+    uint32_t Mask = UIThemeStyle_GetCharacter(TextBoxBox_GetStyle(box), UIElementKind_TextBox, UITextBoxPart_Mask);
+    Color TextColor = TextBoxBox_GetTextColor(box);
+    bool IsCurrent = box->HasBuilt && (box->BuiltContentRevision == UITextBoxCapability_GetContentRevision(TextBox)) && (box->BuiltMask == Mask)
+        && IsSameColor(box->BuiltColor, TextColor);
+    if (IsCurrent)
+    {
+        return Error_CreateSuccess();
+    }
+    TextComponent* Root = NULL;
+    Error Result = UITextBoxCapability_BuildDocument(TextBox, TextBox->_factory, Mask, UIRenderColor_FromColor(TextColor), &Root);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = TextDocument_SetRoot(&box->Document, Root);
+        if (Result.Code != ErrorCode_Success)
+        {
+            Error Cleanup = TextComponentFactory_ReturnTree(TextBox->_factory, Root);
+            Error_Deconstruct(&Cleanup);
+        }
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        box->HasBuilt = true;
+        box->BuiltContentRevision = UITextBoxCapability_GetContentRevision(TextBox);
+        box->BuiltMask = Mask;
+        box->BuiltColor = TextColor;
+    }
+    return Result;
+}
+
+static Error TextBoxBox_LayOut(void* widget, bool isWrapped, float wrapWidth, const TextLayout** outLayout, float* outUIPixelsPerUnit)
+{
+    TextBoxBox* Box = widget;
+    *outLayout = NULL;
+    *outUIPixelsPerUnit = 0.0f;
+    Error Result = TextBoxBox_RefreshDocument(Box);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    const UIScreen* Screen = Widget_GetScreen(&Box->Base.Base);
+    float Scale = Widget_GetEffectiveScale(&Box->Base.Base);
+    TextLayoutOptions Options = TextLayoutOptions_CreateDefault();
+    Options.SizeMultiplier = Math_ClampFloat(UIScreen_PixelsToFitted(Screen, UITheme_GetTextSize(UIScreen_GetTheme(Screen)) * Scale), 0.0f,
+        TEXT_LAYOUT_SIZE_MULTIPLIER_MAX);
+    Options.TracksOffsets = true;
+    if (isWrapped)
+    {
+        Options.HasMaxWidth = true;
+        Options.MaxWidth = UIScreen_PixelsToFitted(Screen, Math_MaxFloat(0.0f, wrapWidth) * Scale);
+        Options.IsWrapEnabled = true;
+    }
+    Result = TextLayout_Refresh(&Box->Layout, &Box->Document, &Options);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    float FittedPerPixel = UIScreen_PixelsToFitted(Screen, 1.0f);
+    *outLayout = &Box->Layout;
+    *outUIPixelsPerUnit = (FittedPerPixel > 0.0f) ? ((1.0f / FittedPerPixel) / Scale) : 0.0f;
+    return Error_CreateSuccess();
+}
+
+static const UITextBoxGeometry TextBoxBoxGeometry =
+{
+    .GetTextInsets = TextBoxBox_GetTextInsets,
+    .LayOut = TextBoxBox_LayOut,
+    .GetLineHeight = TextBoxBox_GetLineHeight,
+    .GetBarInsets = TextBoxBox_GetBarInsets
+};
+
+static Error TextBoxBox_Construct(void* self, void* args)
+{
+    TextBoxBox* Box = self;
+    const UITextBoxArgs* Arguments = args;
+    Error Result = UIElementLook_Construct(&Box->Look, UIElementKind_TextBox, Arguments->Options->Element.Variant);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = TextLayout_Construct(&Box->Layout);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = TextDocument_Construct(&Box->Document, UIKit_GetTextFactory(Arguments->Kit), UIKit_GetAssets(Arguments->Kit),
+        UIKit_GetLogger(Arguments->Kit));
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error Cleanup = TextLayout_Deconstruct(&Box->Layout);
+        Error_Deconstruct(&Cleanup);
+        return Result;
+    }
+    Result = UIElementText_Construct(&Box->Placeholder, UIKit_GetTextFactory(Arguments->Kit), UIKit_GetAssets(Arguments->Kit),
+        UIKit_GetLogger(Arguments->Kit));
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error Cleanup = TextLayout_Deconstruct(&Box->Layout);
+        Error_Deconstruct(&Cleanup);
+        Cleanup = TextDocument_Deconstruct(&Box->Document);
+        Error_Deconstruct(&Cleanup);
+        return Result;
+    }
+    Box->HasBuilt = false;
+    Box->HasAppliedTheme = false;
+    Box->BlinkSeconds = 0.0;
+    Box->SeenCaretRevision = 0U;
+    UITextBoxCapability_SetGeometry(&Box->Base.TextBox, &TextBoxBoxGeometry);
+    return Error_CreateSuccess();
+}
+
+static Error TextBoxBox_Deconstruct(void* self)
+{
+    TextBoxBox* Box = self;
+    UITextBoxCapability_SetGeometry(&Box->Base.TextBox, NULL);
+    // The layout points into the document: it goes first.
+    Error First = TextLayout_Deconstruct(&Box->Layout);
+    First = KeepFirst(First, TextDocument_Deconstruct(&Box->Document));
+    return KeepFirst(First, UIElementText_Deconstruct(&Box->Placeholder));
+}
+
+static Error TextBoxBox_Update(void* self, ProgramTime time)
+{
+    TextBoxBox* Box = self;
+    UITextBoxCapability* TextBox = &Box->Base.TextBox;
+    UIElementLook_Update(&Box->Look, Widget_GetScreen(&Box->Base.Base), UITextBoxCapability_GetState(TextBox, &Box->Base.Base), time.PassedTime);
+    // The caret shows at once after an edit or a move, then blinks.
+    if (UITextBoxCapability_GetCaretRevision(TextBox) != Box->SeenCaretRevision)
+    {
+        Box->SeenCaretRevision = UITextBoxCapability_GetCaretRevision(TextBox);
+        Box->BlinkSeconds = 0.0;
+    }
+    else
+    {
+        Box->BlinkSeconds += time.PassedTime;
+    }
+    Error Result = TextDocument_Update(&Box->Document, time);
+    return (Result.Code == ErrorCode_Success) ? UIElementText_Refresh(&Box->Placeholder, &Box->Base.Base, UITextBoxCapability_GetPlaceholder(TextBox))
+        : Result;
+}
+
+static Error TextBoxBox_Measure(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
+{
+    (void)availableWidth;
+    TextBoxBox* Box = self;
+    Vector2 Minimum = UIThemeStyle_GetVector(TextBoxBox_GetStyle(Box), UIElementKind_TextBox, UITextBoxPart_MinSize);
+    return UITextBox_MeasurePreferred(&Box->Base.TextBox, &Box->Base.Base, context, Minimum, outSize);
+}
+
+/* The selection's boxes, line by line, behind the text: from where a caret at its start stands to where one at its end does, a little past a
+ * line's end where the selection goes on over its line break; lines out of the view are passed over. */
+static Error TextBoxBox_RenderSelection(const TextBoxBox* box, UIRenderContext* context, const UIThemeStyle* style, Vector2 origin,
+    float unitsToPixels, Rectangle view)
+{
+    const UITextBoxCapability* TextBox = &box->Base.TextBox;
+    size_t Start = 0U;
+    size_t End = 0U;
+    UITextBoxCapability_GetLayoutSelection(TextBox, &Start, &End);
+    if (End <= Start)
+    {
+        return Error_CreateSuccess();
+    }
+    int32_t Part = Widget_IsEntered(&box->Base.Base) ? UITextBoxPart_Selection : UITextBoxPart_InactiveSelection;
+    size_t FirstLine = TextLayout_GetLineAtOffset(&box->Layout, Start);
+    size_t LastLine = TextLayout_GetLineAtOffset(&box->Layout, End);
+    // Only the lines in view: a selection over a long text costs what shows.
+    if (unitsToPixels > 0.0f)
+    {
+        size_t TopLine = TextLayout_GetLineAtY(&box->Layout, (view.y - origin.y) / unitsToPixels);
+        size_t BottomLine = TextLayout_GetLineAtY(&box->Layout, ((view.y + view.height) - origin.y) / unitsToPixels);
+        FirstLine = (FirstLine > TopLine) ? FirstLine : TopLine;
+        LastLine = (LastLine < BottomLine) ? LastLine : BottomLine;
+    }
+    float Scale = Widget_GetEffectiveScale(&box->Base.Base);
+    for (size_t Line = FirstLine; Line <= LastLine; Line++)
+    {
+        Rectangle Range = { 0 };
+        if (!TextLayout_GetRangeBoxOnLine(&box->Layout, Line, Start, End, &Range))
+        {
+            continue;
+        }
+        size_t LineStart = 0U;
+        size_t LineEnd = 0U;
+        TextLayout_GetLineOffsets(&box->Layout, Line, &LineStart, &LineEnd);
+        float Extra = (End > LineEnd) ? (Range.height * SELECTED_BREAK_SHARE) : 0.0f;
+        Rectangle Pixels =
+        {
+            .x = RoundToPixel(origin.x + (Range.x * unitsToPixels)),
+            .y = RoundToPixel(origin.y + (Range.y * unitsToPixels)),
+            .width = RoundToPixel((Range.width + Extra) * unitsToPixels),
+            .height = RoundToPixel(Range.height * unitsToPixels)
+        };
+        bool IsInView = ((Pixels.y + Pixels.height) > view.y) && (Pixels.y < (view.y + view.height));
+        if (!IsInView || UIElement_IsBoxEmpty(Pixels))
+        {
+            continue;
+        }
+        Error Result = UIElementLook_DrawBox(&box->Look, style, Part, context, Pixels, Scale);
+        if (Result.Code != ErrorCode_Success)
+        {
+            return Result;
+        }
+    }
+    return Error_CreateSuccess();
+}
+
+/* The caret while the box is being edited and the blink shows it: a line, or a block over the character overwriting would replace. */
+static Error TextBoxBox_RenderCaret(const TextBoxBox* box, UIRenderContext* context, const UIThemeStyle* style, Vector2 origin, float unitsToPixels)
+{
+    const UITextBoxCapability* TextBox = &box->Base.TextBox;
+    bool IsBlinkShowing = Math_RemainderDouble(box->BlinkSeconds, 2.0 * CARET_BLINK_HALF_PERIOD) < CARET_BLINK_HALF_PERIOD;
+    if (!UITextBoxCapability_IsCaretShown(TextBox, &box->Base.Base) || !IsBlinkShowing)
+    {
+        return Error_CreateSuccess();
+    }
+    Rectangle Caret = { 0 };
+    if (!TextLayout_GetCaretBox(&box->Layout, UITextBoxCapability_GetLayoutCaret(TextBox), &Caret))
+    {
+        return Error_CreateSuccess();
+    }
+    float Scale = Widget_GetEffectiveScale(&box->Base.Base);
+    bool IsBlock = UITextBoxCapability_IsOverwriting(TextBox);
+    float Width = IsBlock ? Math_MaxFloat(Caret.width, Caret.height * BLOCK_CARET_SHARE) * unitsToPixels
+        : (UIThemeStyle_GetNumber(style, UIElementKind_TextBox, UITextBoxPart_CaretWidth) * Scale);
+    Rectangle Pixels =
+    {
+        .x = RoundToPixel(origin.x + (Caret.x * unitsToPixels)),
+        .y = RoundToPixel(origin.y + (Caret.y * unitsToPixels)),
+        .width = Math_MaxFloat(1.0f, RoundToPixel(Width)),
+        .height = Math_MaxFloat(1.0f, RoundToPixel(Caret.height * unitsToPixels))
+    };
+    return UIElementLook_DrawBox(&box->Look, style, IsBlock ? UITextBoxPart_OverwriteCaret : UITextBoxPart_Caret, context, Pixels, Scale);
+}
+
+static Error TextBoxBox_Render(void* self, UIRenderContext* context)
+{
+    TextBoxBox* Box = self;
+    Rectangle Pixels = UIRenderContext_GetPixelBox(context);
+    if (UIElement_IsBoxEmpty(Pixels))
+    {
+        return Error_CreateSuccess();
+    }
+    const UITextBoxCapability* TextBox = &Box->Base.TextBox;
+    const UIScreen* Screen = Widget_GetScreen(&Box->Base.Base);
+    const UIThemeStyle* Style = TextBoxBox_GetStyle(Box);
+    float Scale = Widget_GetEffectiveScale(&Box->Base.Base);
+    int32_t BoxPart = UITextBoxCapability_IsReadOnly(TextBox) ? UITextBoxPart_ReadOnlyBox : UITextBoxPart_Box;
+    Error Result = UIElementLook_DrawBox(&Box->Look, Style, BoxPart, context, Pixels, Scale);
+    Rectangle ViewBox = UITextBoxCapability_GetViewBox(TextBox);
+    Rectangle View =
+    {
+        .x = Pixels.x + RoundToPixel(ViewBox.x * Scale),
+        .y = Pixels.y + RoundToPixel(ViewBox.y * Scale),
+        .width = RoundToPixel(ViewBox.width * Scale),
+        .height = RoundToPixel(ViewBox.height * Scale)
+    };
+    if ((Result.Code != ErrorCode_Success) || UIElement_IsBoxEmpty(View))
+    {
+        return Result;
+    }
+    float FittedPerPixel = UIScreen_PixelsToFitted(Screen, 1.0f);
+    float UnitsToPixels = (FittedPerPixel > 0.0f) ? (1.0f / FittedPerPixel) : 0.0f;
+    Vector2 Offset = UITextBoxCapability_GetScrollOffset(TextBox);
+    Vector2 Origin = { .x = RoundToPixel(View.x - (Offset.x * Scale)), .y = RoundToPixel(View.y - (Offset.y * Scale)) };
+    RenderContext* Device = UIRenderContext_GetRenderContext(context);
+    RenderContext_PushClip(Device, View);
+    Result = TextBoxBox_RenderSelection(Box, context, Style, Origin, UnitsToPixels, View);
+    if (Result.Code == ErrorCode_Success)
+    {
+        if (UITextBoxCapability_IsShowingPlaceholder(TextBox))
+        {
+            Color Placeholder = UIElementLook_BlendColors(&Box->Look, UIThemeStyle_GetColors(Style, UITextBoxPart_Placeholder), GRAY);
+            Result = UIElementText_Draw(&Box->Placeholder, context, Origin.x, Origin.y, Placeholder);
+        }
+        else
+        {
+            // Only the view's part of a long text is drawn: the rest costs nothing.
+            TextLayoutDrawArguments Arguments = TextLayoutDrawArguments_Create(RenderVector2D_Window(Origin));
+            Arguments.Tint = UIRenderContext_GetTint(context);
+            Arguments.HasCullBox = UnitsToPixels > 0.0f;
+            if (Arguments.HasCullBox)
+            {
+                Arguments.CullBox = (Rectangle){ .x = (View.x - Origin.x) / UnitsToPixels, .y = (View.y - Origin.y) / UnitsToPixels,
+                    .width = View.width / UnitsToPixels, .height = View.height / UnitsToPixels };
+            }
+            Result = TextLayout_Draw(&Box->Layout, Device, &Arguments);
+        }
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = TextBoxBox_RenderCaret(Box, context, Style, Origin, UnitsToPixels);
+    }
+    RenderContext_PopClip(Device);
+    return Result;
+}
+
+static UIElementLook* TextBoxBox_GetThemeLook(void* self)
+{
+    return &((TextBoxBox*)self)->Look;
+}
+
+
 // Static functions: the backdrop.
 static Error BackdropBox_Construct(void* widget, void* args)
 {
@@ -1128,6 +1523,16 @@ static const UILookVTable StatusBarBoxLook =
     .GetThemeLook = StatusBarBox_GetThemeLook
 };
 
+static const UILookVTable TextBoxBoxLook =
+{
+    .Construct = TextBoxBox_Construct,
+    .Deconstruct = TextBoxBox_Deconstruct,
+    .Update = TextBoxBox_Update,
+    .Render = TextBoxBox_Render,
+    .Measure = TextBoxBox_Measure,
+    .GetThemeLook = TextBoxBox_GetThemeLook
+};
+
 static const UILookVTable ScrollAreaBoxLook =
 {
     .Construct = ScrollAreaBox_Construct,
@@ -1215,6 +1620,10 @@ Error UIStandardLooks_Register(UIKit* kit)
     if (Result.Code == ErrorCode_Success)
     {
         Result = UIKit_RegisterLook(kit, UIElementKind_StatusBar, UI_KIT_STANDARD_LOOK, sizeof(StatusBarBox), &StatusBarBoxLook, NULL);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIKit_RegisterLook(kit, UIElementKind_TextBox, UI_KIT_STANDARD_LOOK, sizeof(TextBoxBox), &TextBoxBoxLook, NULL);
     }
     return Result;
 }

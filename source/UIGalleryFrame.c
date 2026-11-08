@@ -51,7 +51,11 @@
 /** The keyboard box's width, in UI pixels. */
 #define KEYBOARD_BOX_WIDTH 320.0f
 /** How many pages the gallery has (N steps through them). */
-#define PAGE_COUNT ((size_t)3)
+#define PAGE_COUNT ((size_t)4)
+/** How many characters of a text box's text its events show in the status line. */
+#define SHOWN_TEXT_BYTES 40
+/** How many style ranges the fourth page's coloured box has. */
+#define CODE_RANGE_COUNT ((size_t)5)
 /** How many options the long dropdowns have, and how many dropdowns the gallery tells apart. */
 #define LONG_OPTION_COUNT ((size_t)1000)
 #define MAX_DROPDOWNS ((size_t)12)
@@ -181,6 +185,10 @@ typedef struct UIGalleryFrameStruct
     bool _isLocked;
     /** A menu item the frame acts on after the screen's update (the theme, the scale, the page), or none. */
     GalleryMenuItem _pendingMenuItem;
+    /** The fourth page's masked box: its events never show its text. */
+    uint64_t _maskedBoxId;
+    /** The fourth page's coloured code: its colours follow the theme's text. */
+    uint64_t _codeBoxId;
 } UIGalleryFrame;
 
 /* A stack that takes the wheel, as a scroll area does: its children's wheel comes up to it. */
@@ -788,6 +796,7 @@ static void BuildLayouts(GalleryBuild* build, uint64_t page)
 
 static void BuildLooksPage(GalleryBuild* build);
 static void BuildPopupsPage(GalleryBuild* build);
+static void BuildTextPage(GalleryBuild* build);
 static void DescribeEverything(GalleryBuild* build);
 
 /* The first page: a heading and two panels side by side, scrolling, over a status line; then the other pages, and hover text on
@@ -812,6 +821,7 @@ static Error BuildPage(UIGalleryFrame* frame)
     frame->_pageIds[0] = Root;
     BuildLooksPage(&Build);
     BuildPopupsPage(&Build);
+    BuildTextPage(&Build);
     DescribeEverything(&Build);
     return Build.Result;
 }
@@ -1558,6 +1568,226 @@ static Error OpenDialog(UIGalleryFrame* frame)
 }
 
 
+// Static functions: the fourth page.
+/* A box that takes only digits. */
+static bool AcceptsDigits(uint32_t codepoint, const UserData* userData)
+{
+    (void)userData;
+    return (codepoint >= (uint32_t)'0') && (codepoint <= (uint32_t)'9');
+}
+
+/* A caption over a box: a label in the column. */
+static uint64_t AddTextBox(GalleryBuild* build, uint64_t column, const unsigned char* caption, const UITextBoxOptions* options, const char* name)
+{
+    uint64_t Id = WIDGET_ID_INVALID;
+    AddLabel(build, column, caption, u8"hint");
+    if (!HasFailed(build))
+    {
+        build->Result = UIKit_CreateTextBox(&build->Frame->_kit, &build->Frame->_screen, column, options, &Id);
+        Remember(build, Id, name);
+    }
+    return Id;
+}
+
+/* The boxes of one line: plain with a placeholder, with a default, masked, filtered, limited, disabled and marked invalid. */
+static void BuildLineBoxes(GalleryBuild* build, uint64_t column)
+{
+    UITextBoxOptions Options = UITextBoxOptions_Create();
+    Options.Placeholder = u8"A name";
+    AddTextBox(build, column, u8"One line, with a placeholder while it is empty", &Options, "the one-line box");
+    Options = UITextBoxOptions_Create();
+    Options.Text = u8"The text it goes back to";
+    Options.HasDefault = true;
+    Options.Default = u8"The text it goes back to";
+    AddTextBox(build, column, u8"With a default: Backspace over it, not being edited, puts it back", &Options, "the box with a default");
+    Options = UITextBoxOptions_Create();
+    Options.Text = u8"hunter2";
+    Options.IsMasked = true;
+    build->Frame->_maskedBoxId = AddTextBox(build, column, u8"Masked, a password: copying is refused", &Options, "the masked box");
+    Options = UITextBoxOptions_Create();
+    Options.Limits.Filter = AcceptsDigits;
+    Options.Limits.HasMaxCharacters = true;
+    Options.Limits.MaxCharacters = 6U;
+    Options.Placeholder = u8"Digits only, at most six";
+    AddTextBox(build, column, u8"Filtered: digits only, at most six", &Options, "the digits box");
+    Options = UITextBoxOptions_Create();
+    Options.Text = u8"Twelve chars";
+    Options.Limits.HasMaxCharacters = true;
+    Options.Limits.MaxCharacters = 12U;
+    AddTextBox(build, column, u8"At most twelve characters: more is refused", &Options, "the limited box");
+    Options = UITextBoxOptions_Create();
+    Options.Text = u8"Disabled";
+    Options.IsEnabled = false;
+    AddTextBox(build, column, u8"Disabled", &Options, "the disabled box");
+    Options = UITextBoxOptions_Create();
+    Options.Text = u8"taken_name";
+    uint64_t Invalid = AddTextBox(build, column, u8"Marked invalid by code (a name that is taken)", &Options, "the invalid box");
+    if (!HasFailed(build))
+    {
+        build->Result = UITextBox_SetIsInvalid(&build->Frame->_screen, Invalid, true);
+    }
+}
+
+/* The code's colours for a box's text: light ones where the theme's text is light (a dark box), dark ones where it is dark. */
+static Color GetCodeColor(const UIGalleryFrame* frame, size_t kind)
+{
+    static const Color OverDark[3] = { { 198, 120, 221, 255 }, { 209, 154, 102, 255 }, { 152, 195, 121, 255 } };
+    static const Color OverLight[3] = { { 128, 40, 150, 255 }, { 150, 70, 0, 255 }, { 30, 110, 20, 255 } };
+    const UIThemeStyle* Style = UITheme_FindStyle(UIScreen_GetTheme(&frame->_screen), UIElementKind_TextBox, NULL);
+    const UIStateColors* TextColors = UIThemeStyle_GetColors(Style, UITextBoxPart_Text);
+    Color Text = (TextColors != NULL) ? UIStateColors_Resolve(TextColors, UIElementState_Normal, WHITE) : WHITE;
+    float Luminance = (0.2126f * (float)Text.r) + (0.7152f * (float)Text.g) + (0.0722f * (float)Text.b);
+    return (Luminance < 128.0f) ? OverLight[kind % 3U] : OverDark[kind % 3U];
+}
+
+/* Colours the code box's ranges for the theme's text, where they are now: edits since moved them, and emptied some. Keywords are the
+   ranges whose text starts with a letter, numbers those with a digit, strings the rest. */
+static Error ColourCodeBox(UIGalleryFrame* frame)
+{
+    UITextStyleRange Ranges[CODE_RANGE_COUNT];
+    size_t Count = 0U;
+    Error Result = UITextBox_GetStyleRange(&frame->_screen, frame->_codeBoxId, 0U, &Ranges[0], &Count);
+    Count = (Count < CODE_RANGE_COUNT) ? Count : CODE_RANGE_COUNT;
+    size_t Length = 0U;
+    const unsigned char* Text = NULL;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UITextBox_GetText(&frame->_screen, frame->_codeBoxId, &Text, &Length);
+    }
+    for (size_t Index = 0U; (Index < Count) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        Result = UITextBox_GetStyleRange(&frame->_screen, frame->_codeBoxId, Index, &Ranges[Index], NULL);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    UITextStyleRange Recoloured[CODE_RANGE_COUNT];
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        unsigned char First = (Ranges[Index].Start < Length) ? Text[Ranges[Index].Start] : (unsigned char)'"';
+        size_t Kind = ((First >= (unsigned char)'0') && (First <= (unsigned char)'9')) ? 1U : ((First == (unsigned char)'"') ? 2U : 0U);
+        TextStyle_Construct(&Recoloured[Index].Style);
+        TextStyle_SetColor(&Recoloured[Index].Style, UIRenderColor_FromColor(GetCodeColor(frame, Kind)));
+        Recoloured[Index].Start = Ranges[Index].Start;
+        Recoloured[Index].End = Ranges[Index].End;
+    }
+    Result = UITextBox_SetStyleRanges(&frame->_screen, frame->_codeBoxId, Recoloured, Count);
+    for (size_t Index = 0U; Index < Count; Index++)
+    {
+        TextStyle_Deconstruct(&Recoloured[Index].Style);
+    }
+    return Result;
+}
+
+/* A line of code with its keywords, numbers and strings coloured by code: style ranges. */
+static void BuildCodeBox(GalleryBuild* build, uint64_t column)
+{
+    static const unsigned char Code[] = u8"if (count > 10) { print(\"big\"); } else { wait(2.5); }";
+    UITextBoxOptions Options = UITextBoxOptions_Create();
+    Options.Text = Code;
+    uint64_t Id = AddTextBox(build, column, u8"Coloured by code (style ranges): they move as you type", &Options, "the coloured box");
+    if (HasFailed(build))
+    {
+        return;
+    }
+    static const struct { size_t Start; size_t End; } Spans[CODE_RANGE_COUNT] = { { 0U, 2U }, { 12U, 14U }, { 24U, 29U }, { 34U, 38U },
+        { 46U, 49U } };
+    UITextStyleRange Ranges[CODE_RANGE_COUNT];
+    for (size_t Index = 0U; Index < CODE_RANGE_COUNT; Index++)
+    {
+        TextStyle_Construct(&Ranges[Index].Style);
+        Ranges[Index].Start = Spans[Index].Start;
+        Ranges[Index].End = Spans[Index].End;
+    }
+    build->Result = UITextBox_SetStyleRanges(&build->Frame->_screen, Id, Ranges, CODE_RANGE_COUNT);
+    for (size_t Index = 0U; Index < CODE_RANGE_COUNT; Index++)
+    {
+        TextStyle_Deconstruct(&Ranges[Index].Style);
+    }
+    build->Frame->_codeBoxId = Id;
+    if (!HasFailed(build))
+    {
+        build->Result = ColourCodeBox(build->Frame);
+    }
+}
+
+/* The boxes of several lines: wrapped, not wrapped (scrolling across too, Tab typing a tab), read-only. */
+static void BuildLinesBoxes(GalleryBuild* build, uint64_t column)
+{
+    UITextBoxOptions Options = UITextBoxOptions_CreateMultiline();
+    Options.Text = u8"Several lines, wrapped at the box's width. Enter starts a new line and Ctrl+Enter keeps the text and leaves; Escape keeps "
+        u8"it too. Type a few sentences at your own speed, then undo: one Ctrl+Z takes back a run of typing, which ends at a pause of a "
+        u8"second or at twenty characters.";
+    Options.VisibleLines = 5U;
+    AddTextBox(build, column, u8"Several lines, wrapped", &Options, "the wrapped box");
+    Options = UITextBoxOptions_CreateMultiline();
+    Options.Text = u8"Not wrapped: long lines run on, and the box scrolls across as well as down.\n\tTab types a tab in this box.\n"
+        u8"line three\nline four\nline five\nline six\nline seven\nline eight, the last one";
+    Options.IsWrapped = false;
+    Options.Horizontal = UIScrollMode_Auto;
+    Options.AcceptsTab = true;
+    AddTextBox(build, column, u8"Several lines, not wrapped (Tab types a tab here)", &Options, "the unwrapped box");
+    Options = UITextBoxOptions_CreateMultiline();
+    Options.Text = u8"Read-only: select with the mouse or Ctrl+A, copy with Ctrl+C. No caret, and no typing.\nIts background is its own, so "
+        u8"it is told apart from a box to type in.\nThe arrows and the page keys scroll it once it is entered.";
+    Options.IsEditable = false;
+    Options.IsSelectable = true;
+    Options.VisibleLines = 3U;
+    AddTextBox(build, column, u8"Read-only, selectable", &Options, "the read-only box");
+}
+
+/* A form: three boxes to go through with Tab, each entered with its text selected. */
+static void BuildForm(GalleryBuild* build, uint64_t page)
+{
+    AddLabel(build, page, u8"A form: Enter the first box, type, Tab: the next one is being edited, its text selected. Escape puts a box's text back.",
+        u8"heading");
+    uint64_t Row = AddRow(build, page, 12.0f);
+    static const unsigned char* const Captions[] = { u8"First name", u8"Last name", u8"Town" };
+    static const unsigned char* const Texts[] = { u8"Anna", u8"Ozola", u8"Riga" };
+    static const char* const Names[] = { "the form's first box", "the form's second box", "the form's third box" };
+    for (size_t Index = 0U; (Index < 3U) && !HasFailed(build); Index++)
+    {
+        uint64_t Column = WIDGET_ID_INVALID;
+        UIStackOptions Stack = UIStackOptions_Create(UIStackDirection_Column);
+        Stack.Layout.Spacing = 4.0f;
+        Stack.Element.Hint = UIStackHint_Fill(1.0f);
+        build->Result = UIKit_CreateStack(&build->Frame->_kit, &build->Frame->_screen, Row, &Stack, &Column);
+        UITextBoxOptions Options = UITextBoxOptions_Create();
+        Options.Text = Texts[Index];
+        AddTextBox(build, Column, Captions[Index], &Options, Names[Index]);
+    }
+}
+
+static void BuildTextPage(GalleryBuild* build)
+{
+    UIGalleryFrame* Frame = build->Frame;
+    if (HasFailed(build))
+    {
+        return;
+    }
+    uint64_t Root = AddPageRoot(build);
+    Frame->_pageIds[3] = Root;
+    uint64_t Page = AddPageContent(build, Root);
+    AddLabel(build, Page, u8"UI gallery: text boxes", u8"heading");
+    AddLabel(build, Page, u8"N the next page (while no box is being edited). Tab to a box: typing does nothing until Enter or a click enters it. "
+        u8"Right click a box for its menu.", u8"hint");
+    uint64_t Columns = AddRow(build, Page, 12.0f);
+    uint64_t Left = AddPanel(build, Columns, UIStackHint_Fill(1.0f), NULL);
+    uint64_t Right = AddPanel(build, Columns, UIStackHint_Fill(1.0f), NULL);
+    BuildLineBoxes(build, Left);
+    BuildCodeBox(build, Left);
+    BuildLinesBoxes(build, Right);
+    BuildForm(build, Page);
+    Frame->_statusIds[3] = AddStatusLine(build, Root);
+    Widget* PageBase = NULL;
+    if (!HasFailed(build) && UIScreen_TryGetWidgetById(&Frame->_screen, Root, &PageBase))
+    {
+        build->Result = Widget_SetIsRendered(PageBase, false);
+    }
+}
+
+
 // Static functions: switching pages.
 /* Shows the next page and hides the one shown. */
 static Error ShowNextPage(UIGalleryFrame* frame)
@@ -1685,7 +1915,20 @@ static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserDa
     static const char* const EventNames[] = { "activated", "changed", "committed", "cancelled", "pressed", "released", "double clicked", "scrolled", "context requested" };
     bool IsKnown = (event->WidgetEventId >= 0) && ((size_t)event->WidgetEventId < (sizeof(EventNames) / sizeof(EventNames[0])));
     char Value[96] = "";
-    if (event->HasValue && (event->Value.Type == UIPropertyType_Double))
+    const unsigned char* Text = NULL;
+    size_t TextLength = 0U;
+    Error TextResult = UITextBox_GetText(screen, event->WidgetId, &Text, &TextLength);
+    bool IsTextBox = TextResult.Code == ErrorCode_Success;
+    Error_Deconstruct(&TextResult);
+    if (IsTextBox && event->HasValue && (event->WidgetId == Frame->_maskedBoxId))
+    {
+        snprintf(Value, sizeof(Value), ": %zu bytes, masked", TextLength);
+    }
+    else if (IsTextBox && event->HasValue)
+    {
+        snprintf(Value, sizeof(Value), ": \"%.*s%s\"", SHOWN_TEXT_BYTES, (const char*)Text, (TextLength > (size_t)SHOWN_TEXT_BYTES) ? "..." : "");
+    }
+    else if (event->HasValue && (event->Value.Type == UIPropertyType_Double))
     {
         snprintf(Value, sizeof(Value), ": %.3f", event->Value.Data.DoubleValue);
     }
@@ -1699,7 +1942,6 @@ static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserDa
     }
     char Status[STATUS_CAPACITY];
     snprintf(Status, sizeof(Status), "%s %s%s", GetElementName(Frame, event->WidgetId), IsKnown ? EventNames[event->WidgetEventId] : "posted", Value);
-    (void)screen;
     Error Result = SetStatus(Frame, Status);
     if (Result.Code == ErrorCode_Success)
     {
@@ -1765,6 +2007,7 @@ static Error ShowNextTheme(UIGalleryFrame* frame)
     if (Result.Code == ErrorCode_Success)
     {
         LogLine(frame, "the theme is %s.", (const char*)ThemeNames[frame->_themeIndex]);
+        Result = ColourCodeBox(frame);
     }
     return Result;
 }

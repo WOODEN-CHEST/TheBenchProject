@@ -345,8 +345,12 @@ void TextComponentCodecTests_Run(TestRun* run);
 /** @brief Text documents: tree ownership, font and animation bindings, fallbacks, ticking (TextDocumentTests.c). */
 void TextDocumentTests_Run(TestRun* run);
 
-/** @brief Text layout: lines, wrapping, shrinking, alignment, runs and staleness (TextLayoutTests.c). */
+/** @brief Text layout: lines, wrapping, shrinking, alignment, runs and staleness; carets: offsets, hits, lines, ranges (TextLayoutTests.c). */
 void TextLayoutTests_Run(TestRun* run);
+
+/** @brief The text piece: what comes in through the limits, editing, words, codepoint boundaries, and the grouped undo with its budget,
+ *  its step cap and its mark (UITextEditTests.c). */
+void UITextEditTests_Run(TestRun* run);
 
 /** @brief Fonts: glyph lookup, the "codepoints" key, font definitions and the shipped fonts (FontTests.c). */
 void FontTests_Run(TestRun* run);
@@ -418,6 +422,10 @@ void UITooltipTests_Run(TestRun* run);
  *  measuring at the view's width, the wheel up the tree at an end, Shift, focus scrolled into view (nested too), page keys, an idle area
  *  measuring nothing (UIScrollTests.c). */
 void UIScrollTests_Run(TestRun* run);
+
+/** @brief The text box: entering and leaving with what each gives, the keys, undo by the keys, the clipboard, the mouse, the short list, the
+ *  context menu, read-only and masked boxes, style ranges, component trees, scrolling, events (UITextBoxTests.c). */
+void UITextBoxTests_Run(TestRun* run);
 
 /** @brief The popup layer: the placement's arithmetic, opening above everything and following the anchor, closing by a press outside (going
  *  on to the widget behind), by Escape, by the owner going away, nested popups from the inside out, modal popups and their backdrop, an

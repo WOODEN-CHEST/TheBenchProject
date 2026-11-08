@@ -32,7 +32,11 @@
         "danger": "#b0503a",
         "danger_hover": "#c8604a",
         "danger_pressed": "#803828",
-        "danger_focus": "#ba5840"
+        "danger_focus": "#ba5840",
+        "caret_block": "#1e181070",
+        "paper_read_only": "#c4b894",
+        "paper_invalid": "#e6a896",
+        "selection_inactive": "#a08f68"
     },
     "elements": {
         "panel": {
@@ -192,6 +196,30 @@
         },
         "backdrop": {
             "background": { "kind": "flat", "colors": { "normal": "@backdrop" } }
+        },
+        "text_box": {
+            "padding": [ 8, 5 ],
+            "min_size": [ 120, 28 ],
+            "caret_width": 2,
+            "mask": "•",
+            "box": {
+                "kind": "nine_slice",
+                "texture": "tbp:ui_box",
+                "margins": 6,
+                "colors": { "normal": "@paper", "hovered": "@paper_hover", "entered": "@paper_hover", "disabled": "@paper_disabled", "invalid": "@paper_invalid" }
+            },
+            "read_only_box": {
+                "kind": "nine_slice",
+                "texture": "tbp:ui_box",
+                "margins": 6,
+                "colors": { "normal": "@paper_read_only", "disabled": "@paper_disabled" }
+            },
+            "selection": { "kind": "flat", "colors": { "normal": "@accent" } },
+            "inactive_selection": { "kind": "flat", "colors": { "normal": "@selection_inactive" } },
+            "caret": { "kind": "flat", "colors": { "normal": "@ink" } },
+            "overwrite_caret": { "kind": "flat", "colors": { "normal": "@caret_block" } },
+            "text": { "normal": "@ink", "disabled": "@text_disabled" },
+            "placeholder": { "normal": "@paper_disabled", "disabled": "@text_disabled" }
         }
     }
 }

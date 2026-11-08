@@ -88,3 +88,5 @@ const UIKindBehaviour* UIDropdown_GetKindBehaviour(void);
 const UIKindBehaviour* UIMenuBar_GetKindBehaviour(void);
 /** The status bar's: its message's time, what it shows, its sections laid out. */
 const UIKindBehaviour* UIStatusBar_GetKindBehaviour(void);
+/** The text box's: its text, its caret and selection, its keys and mouse, its bars and the caret kept in view. */
+const UIKindBehaviour* UITextBox_GetKindBehaviour(void);

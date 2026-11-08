@@ -82,6 +82,8 @@ typedef struct WorldTestScreensStruct
     /** The kit's button and slider on the desk. */
     uint64_t _clearButtonId;
     uint64_t _brightnessSliderId;
+    /** The note box on the desk: a one-line text box, proving the keyboard on a world screen. */
+    uint64_t _noteBoxId;
     /** The clicks on the picture and where the last one was (the UI's [0;1] space). */
     uint32_t _clickCount;
     Vector2 _lastClick;

@@ -132,6 +132,37 @@ Error UIScrollbar_SetTarget(UIScreen* screen, uint64_t widgetId, uint64_t target
 Error UIScrollbar_GetTarget(UIScreen* screen, uint64_t widgetId, uint64_t* outTargetId);
 
 
+// Helpers for the elements that hold bars (a scroll area, a text box).
+/**
+ * @brief Measures how thick a bar is across: what its look measures, in the UI pixels of the element that holds it.
+ * @param screen The bar's screen; must not be NULL.
+ * @param barId The bar; one that is gone measures 0.
+ * @param axis The bar's axis: a vertical bar's thickness is its width, a horizontal one's its height.
+ * @param sizing The measuring context; must not be NULL.
+ * @param outThickness [out] Receives the thickness; must not be NULL.
+ * @returns Success, or the bar's Measure error.
+ */
+Error UIScrollbar_MeasureThickness(UIScreen* screen, uint64_t barId, UIScrollAxis axis, const UIMeasureContext* sizing, float* outThickness);
+
+/**
+ * @brief Places a bar along the edge of the element that holds it, or with no size when it does not show: the vertical bar down the right
+ *        edge, the whole height (where the horizontal one meets it, the corner is the end of its track, which covers it and its thumb never
+ *        enters), the horizontal bar along the bottom edge, short of the vertical one. What its holder does with it each layout.
+ * @param screen The bar's screen; must not be NULL.
+ * @param barId The bar; one that is gone is left alone.
+ * @param axis The bar's axis.
+ * @param isShown Whether it shows.
+ * @param thickness Its thickness, in its holder's UI pixels.
+ * @param otherThickness The other bar's thickness while that one shows, else 0, in its holder's UI pixels.
+ * @param edgeInsets How far in from the holder's edges the bars stand, in its UI pixels: a border the bars stay inside (a text box's), else
+ *        zeros.
+ * @param holderScale The holder's effective scale (Widget_GetEffectiveScale).
+ * @returns Success, or the placement's error.
+ */
+Error UIScrollbar_PlaceAlongEdge(UIScreen* screen, uint64_t barId, UIScrollAxis axis, bool isShown, float thickness, float otherThickness,
+    UIInsets edgeInsets, float holderScale);
+
+
 // Behaviour helpers, for looks and tests.
 /**
  * @brief Constructs the capability from the kind's arguments.

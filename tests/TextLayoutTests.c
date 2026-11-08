@@ -458,6 +458,430 @@ static void RefreshRebuildsOnlyWhenSomethingChanged(TestRun* run)
     LayoutFixture_Deconstruct(run, &Fixture);
 }
 
+// Tests: carets.
+static TextLayoutOptions TrackedOptions(void)
+{
+    TextLayoutOptions Options = TextLayoutOptions_CreateDefault();
+    Options.TracksOffsets = true;
+    return Options;
+}
+
+// Builds a single string with offsets tracked.
+static bool BuildTracked(TestRun* run, LayoutFixture* fixture, const char* text, const TextLayoutOptions* options)
+{
+    return (SetText(run, fixture, text) != NULL) && TEST_CHECK_SUCCESS(run, TextLayout_Build(&fixture->Layout, &fixture->Document, options));
+}
+
+static bool IsCaret(const TextLayout* layout, size_t offset, float x, float y, float width, float height)
+{
+    Rectangle Box = { 0 };
+    return TextLayout_GetCaretBox(layout, offset, &Box) && IsNear(Box.x, x) && IsNear(Box.y, y) && IsNear(Box.width, width)
+        && IsNear(Box.height, height);
+}
+
+static size_t HitAt(const TextLayout* layout, float x, float y)
+{
+    size_t Offset = 9999U;
+    return TextLayout_HitTest(layout, (Vector2){ .x = x, .y = y }, &Offset) ? Offset : 9999U;
+}
+
+static void CaretsStandBetweenCharacters(TestRun* run)
+{
+    LayoutFixture Fixture;
+    TextLayoutOptions Options = TrackedOptions();
+    if (LayoutFixture_Construct(run, &Fixture) && BuildTracked(run, &Fixture, "abc", &Options))
+    {
+        const TextLayout* Layout = &Fixture.Layout;
+        TEST_CHECK(run, TextLayout_HasOffsets(Layout));
+        size_t Length = 0U;
+        const unsigned char* Flow = TextLayout_GetFlowText(Layout, &Length);
+        TEST_CHECK(run, (Length == 3U) && (Flow[0] == 'a') && (Flow[2] == 'c'));
+        // Each caret stands where its character starts and is as wide as it; the end's has no width.
+        TEST_CHECK(run, IsCaret(Layout, 0U, 0.0f, 0.0f, GLYPH_WIDTH, LINE_HEIGHT));
+        TEST_CHECK(run, IsCaret(Layout, 1U, GLYPH_WIDTH, 0.0f, GLYPH_WIDTH, LINE_HEIGHT));
+        TEST_CHECK(run, IsCaret(Layout, 2U, 2.0f * GLYPH_WIDTH, 0.0f, GLYPH_WIDTH, LINE_HEIGHT));
+        TEST_CHECK(run, IsCaret(Layout, 3U, 3.0f * GLYPH_WIDTH, 0.0f, 0.0f, LINE_HEIGHT));
+        TEST_CHECK(run, IsCaret(Layout, 99U, 3.0f * GLYPH_WIDTH, 0.0f, 0.0f, LINE_HEIGHT));
+        // The run's box spans the carets from its first character to the end.
+        Rectangle Run = TextLayout_GetRunBounds(Layout, 0U);
+        TEST_CHECK(run, IsNear(Run.x, 0.0f) && IsNear(Run.x + Run.width, 3.0f * GLYPH_WIDTH));
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void MultiByteCodepointsCountTheirBytes(TestRun* run)
+{
+    LayoutFixture Fixture;
+    TextLayoutOptions Options = TrackedOptions();
+    // "a", U+0101 (two bytes), "b", U+0416 (two bytes).
+    if (LayoutFixture_Construct(run, &Fixture) && BuildTracked(run, &Fixture, "a\xC4\x81" "b\xD0\x96", &Options))
+    {
+        const TextLayout* Layout = &Fixture.Layout;
+        TEST_CHECK(run, IsCaret(Layout, 1U, GLYPH_WIDTH, 0.0f, GLYPH_WIDTH, LINE_HEIGHT));
+        TEST_CHECK(run, IsCaret(Layout, 3U, 2.0f * GLYPH_WIDTH, 0.0f, GLYPH_WIDTH, LINE_HEIGHT));
+        TEST_CHECK(run, IsCaret(Layout, 6U, 4.0f * GLYPH_WIDTH, 0.0f, 0.0f, LINE_HEIGHT));
+        // An offset inside a codepoint stands before the next one.
+        TEST_CHECK(run, IsCaret(Layout, 2U, 2.0f * GLYPH_WIDTH, 0.0f, GLYPH_WIDTH, LINE_HEIGHT));
+        TEST_CHECK(run, HitAt(Layout, 1.6f * GLYPH_WIDTH, 0.05f) == 3U);
+        TEST_CHECK(run, HitAt(Layout, 3.6f * GLYPH_WIDTH, 0.05f) == 6U);
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void ATabIsOneWideCharacter(TestRun* run)
+{
+    LayoutFixture Fixture;
+    TextLayoutOptions Options = TrackedOptions();
+    if (LayoutFixture_Construct(run, &Fixture) && BuildTracked(run, &Fixture, "a\tb", &Options))
+    {
+        const TextLayout* Layout = &Fixture.Layout;
+        float Tab = 4.0f * GLYPH_WIDTH;
+        TEST_CHECK(run, IsCaret(Layout, 1U, GLYPH_WIDTH, 0.0f, Tab, LINE_HEIGHT));
+        TEST_CHECK(run, IsCaret(Layout, 2U, GLYPH_WIDTH + Tab, 0.0f, GLYPH_WIDTH, LINE_HEIGHT));
+        // Its left half places the caret before it, its right half after it.
+        TEST_CHECK(run, HitAt(Layout, GLYPH_WIDTH + (0.4f * Tab), 0.05f) == 1U);
+        TEST_CHECK(run, HitAt(Layout, GLYPH_WIDTH + (0.6f * Tab), 0.05f) == 2U);
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void AWrapsDroppedSpacesStandAtTheLineEnd(TestRun* run)
+{
+    LayoutFixture Fixture;
+    TextLayoutOptions Options = WrapOptions(4.0f * GLYPH_WIDTH, true, false);
+    Options.TracksOffsets = true;
+    // "aaa  bbb" wraps after "aaa": both spaces are dropped.
+    if (LayoutFixture_Construct(run, &Fixture) && BuildTracked(run, &Fixture, "aaa  bbb", &Options))
+    {
+        const TextLayout* Layout = &Fixture.Layout;
+        TEST_CHECK(run, TextLayout_GetLineCount(Layout) == 2U);
+        TEST_CHECK(run, IsCaret(Layout, 3U, 3.0f * GLYPH_WIDTH, 0.0f, 0.0f, LINE_HEIGHT));
+        TEST_CHECK(run, IsCaret(Layout, 4U, 3.0f * GLYPH_WIDTH, 0.0f, 0.0f, LINE_HEIGHT));
+        TEST_CHECK(run, IsCaret(Layout, 5U, 0.0f, LINE_HEIGHT, GLYPH_WIDTH, LINE_HEIGHT));
+        TEST_CHECK(run, TextLayout_GetLineAtOffset(Layout, 4U) == 0U);
+        TEST_CHECK(run, TextLayout_GetLineAtOffset(Layout, 5U) == 1U);
+        size_t Start = 0U;
+        size_t End = 0U;
+        TEST_CHECK(run, TextLayout_GetLineOffsets(Layout, 0U, &Start, &End) && (Start == 0U) && (End == 3U));
+        TEST_CHECK(run, TextLayout_GetLineOffsets(Layout, 1U, &Start, &End) && (Start == 5U) && (End == 8U));
+        TEST_CHECK(run, !TextLayout_GetLineOffsets(Layout, 2U, &Start, &End));
+        // Past the line's last character is its end, never a dropped space; the next line starts at its first character.
+        TEST_CHECK(run, HitAt(Layout, 1.0f, 0.05f) == 3U);
+        TEST_CHECK(run, HitAt(Layout, 0.0f, 0.15f) == 5U);
+        // A selection over the break covers the end of the first line and the start of the second.
+        Rectangle Box = { 0 };
+        TEST_CHECK(run, TextLayout_GetRangeBoxOnLine(Layout, 0U, 2U, 6U, &Box) && IsNear(Box.x, 2.0f * GLYPH_WIDTH)
+            && IsNear(Box.width, GLYPH_WIDTH));
+        TEST_CHECK(run, TextLayout_GetRangeBoxOnLine(Layout, 1U, 2U, 6U, &Box) && IsNear(Box.x, 0.0f) && IsNear(Box.width, GLYPH_WIDTH)
+            && IsNear(Box.y, LINE_HEIGHT));
+        // To the text's end: past the last character.
+        TEST_CHECK(run, TextLayout_GetRangeBoxOnLine(Layout, 1U, 5U, 8U, &Box) && IsNear(Box.x, 0.0f) && IsNear(Box.width, 3.0f * GLYPH_WIDTH));
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void ALinesEndIsNotTheNextLinesStart(TestRun* run)
+{
+    LayoutFixture Fixture;
+    TextLayoutOptions Options = TrackedOptions();
+    if (LayoutFixture_Construct(run, &Fixture) && BuildTracked(run, &Fixture, "ab\ncd", &Options))
+    {
+        const TextLayout* Layout = &Fixture.Layout;
+        TEST_CHECK(run, IsCaret(Layout, 2U, 2.0f * GLYPH_WIDTH, 0.0f, 0.0f, LINE_HEIGHT));
+        TEST_CHECK(run, IsCaret(Layout, 3U, 0.0f, LINE_HEIGHT, GLYPH_WIDTH, LINE_HEIGHT));
+        size_t Start = 0U;
+        size_t End = 0U;
+        TEST_CHECK(run, TextLayout_GetLineOffsets(Layout, 0U, &Start, &End) && (Start == 0U) && (End == 2U));
+        TEST_CHECK(run, TextLayout_GetLineOffsets(Layout, 1U, &Start, &End) && (Start == 3U) && (End == 5U));
+        // The line break alone selected: the box stands at the first line's end, and does not touch the second line.
+        Rectangle Box = { 0 };
+        TEST_CHECK(run, TextLayout_GetRangeBoxOnLine(Layout, 0U, 2U, 3U, &Box) && IsNear(Box.x, 2.0f * GLYPH_WIDTH) && IsNear(Box.width, 0.0f));
+        TEST_CHECK(run, !TextLayout_GetRangeBoxOnLine(Layout, 1U, 2U, 3U, &Box));
+        TEST_CHECK(run, !TextLayout_GetRangeBoxOnLine(Layout, 0U, 3U, 5U, &Box));
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void AFinalNewlineHasAnEmptyLine(TestRun* run)
+{
+    LayoutFixture Fixture;
+    TextLayoutOptions Options = TrackedOptions();
+    if (LayoutFixture_Construct(run, &Fixture) && BuildTracked(run, &Fixture, "ab\n", &Options))
+    {
+        const TextLayout* Layout = &Fixture.Layout;
+        TEST_CHECK(run, TextLayout_GetLineCount(Layout) == 2U);
+        TEST_CHECK(run, IsNear(TextLayout_GetSize(Layout).y, 2.0f * LINE_HEIGHT));
+        TEST_CHECK(run, IsCaret(Layout, 3U, 0.0f, LINE_HEIGHT, 0.0f, LINE_HEIGHT));
+        TEST_CHECK(run, TextLayout_GetLineAtOffset(Layout, 3U) == 1U);
+        size_t Start = 0U;
+        size_t End = 0U;
+        TEST_CHECK(run, TextLayout_GetLineOffsets(Layout, 1U, &Start, &End) && (Start == 3U) && (End == 3U));
+        TEST_CHECK(run, HitAt(Layout, 0.3f, 0.5f) == 3U);
+        TEST_CHECK(run, TextLayout_GetOffsetOnLine(Layout, 1U, 0.3f) == 3U);
+    }
+    // Two breaks: an empty line between them, and one at the end.
+    if (Fixture.IsReady && BuildTracked(run, &Fixture, "\n\n", &Options))
+    {
+        TEST_CHECK(run, TextLayout_GetLineCount(&Fixture.Layout) == 3U);
+        TEST_CHECK(run, IsCaret(&Fixture.Layout, 1U, 0.0f, LINE_HEIGHT, 0.0f, LINE_HEIGHT));
+        TEST_CHECK(run, IsCaret(&Fixture.Layout, 2U, 0.0f, 2.0f * LINE_HEIGHT, 0.0f, LINE_HEIGHT));
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void AnEmptyTextHasACaret(TestRun* run)
+{
+    LayoutFixture Fixture;
+    TextLayoutOptions Options = TrackedOptions();
+    if (LayoutFixture_Construct(run, &Fixture) && BuildTracked(run, &Fixture, "", &Options))
+    {
+        const TextLayout* Layout = &Fixture.Layout;
+        TEST_CHECK(run, TextLayout_GetLineCount(Layout) == 0U);
+        TEST_CHECK(run, IsCaret(Layout, 0U, 0.0f, 0.0f, 0.0f, LINE_HEIGHT));
+        TEST_CHECK(run, HitAt(Layout, 0.4f, 0.4f) == 0U);
+        TEST_CHECK(run, TextLayout_GetOffsetOnLine(Layout, 0U, 0.4f) == 0U);
+        Rectangle Box = { 0 };
+        TEST_CHECK(run, !TextLayout_GetRangeBoxOnLine(Layout, 0U, 0U, 1U, &Box));
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void HitsFindTheNearestPlace(TestRun* run)
+{
+    LayoutFixture Fixture;
+    TextLayoutOptions Options = TrackedOptions();
+    if (LayoutFixture_Construct(run, &Fixture) && BuildTracked(run, &Fixture, "abc\nde", &Options))
+    {
+        const TextLayout* Layout = &Fixture.Layout;
+        TEST_CHECK(run, HitAt(Layout, 0.4f * GLYPH_WIDTH, 0.05f) == 0U);
+        TEST_CHECK(run, HitAt(Layout, 0.6f * GLYPH_WIDTH, 0.05f) == 1U);
+        TEST_CHECK(run, HitAt(Layout, -1.0f, 0.05f) == 0U);
+        TEST_CHECK(run, HitAt(Layout, 1.0f, 0.05f) == 3U);
+        // Above the first line is the first line; below the last, the last.
+        TEST_CHECK(run, HitAt(Layout, 1.6f * GLYPH_WIDTH, -1.0f) == 2U);
+        TEST_CHECK(run, HitAt(Layout, 1.6f * GLYPH_WIDTH, 5.0f) == 6U);
+        TEST_CHECK(run, HitAt(Layout, 0.0f, LINE_HEIGHT) == 4U);
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void AlignmentMovesTheCarets(TestRun* run)
+{
+    LayoutFixture Fixture;
+    TextLayoutOptions Options = TrackedOptions();
+    Options.Alignment = TextLayoutAlignment_Center;
+    if (LayoutFixture_Construct(run, &Fixture) && BuildTracked(run, &Fixture, "ab\nabcd", &Options))
+    {
+        const TextLayout* Layout = &Fixture.Layout;
+        TEST_CHECK(run, IsCaret(Layout, 0U, GLYPH_WIDTH, 0.0f, GLYPH_WIDTH, LINE_HEIGHT));
+        TEST_CHECK(run, IsCaret(Layout, 2U, 3.0f * GLYPH_WIDTH, 0.0f, 0.0f, LINE_HEIGHT));
+        TEST_CHECK(run, HitAt(Layout, 0.0f, 0.05f) == 0U);
+        TEST_CHECK(run, IsNear(TextLayout_GetRunBounds(Layout, 0U).x, GLYPH_WIDTH));
+    }
+    Options.Alignment = TextLayoutAlignment_Right;
+    if (Fixture.IsReady && BuildTracked(run, &Fixture, "ab\nabcd", &Options))
+    {
+        TEST_CHECK(run, IsCaret(&Fixture.Layout, 0U, 2.0f * GLYPH_WIDTH, 0.0f, GLYPH_WIDTH, LINE_HEIGHT));
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void TheRememberedColumnCrossesShortLines(TestRun* run)
+{
+    LayoutFixture Fixture;
+    TextLayoutOptions Options = TrackedOptions();
+    if (LayoutFixture_Construct(run, &Fixture) && BuildTracked(run, &Fixture, "abcdef\nab\nabcdef", &Options))
+    {
+        const TextLayout* Layout = &Fixture.Layout;
+        Rectangle Caret = { 0 };
+        TEST_CHECK(run, TextLayout_GetCaretBox(Layout, 5U, &Caret));
+        // The short middle line's end, then the same column on the long line below it.
+        TEST_CHECK(run, TextLayout_GetOffsetOnLine(Layout, 1U, Caret.x) == 9U);
+        TEST_CHECK(run, TextLayout_GetOffsetOnLine(Layout, 2U, Caret.x) == 15U);
+        TEST_CHECK(run, TextLayout_GetOffsetOnLine(Layout, 7U, Caret.x) == 15U);
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void SpritesAreOneObjectCharacter(TestRun* run)
+{
+    LayoutFixture Fixture;
+    if (LayoutFixture_Construct(run, &Fixture))
+    {
+        StringComponent* Root = SetText(run, &Fixture, "a");
+        SpriteComponent* Coin = NULL;
+        bool IsBuilt = (Root != NULL)
+            && TEST_CHECK_SUCCESS(run, TextComponentFactory_CreateSprite(&Fixture.Factory, (const unsigned char*)u8"coin_spin", &Coin))
+            && TEST_CHECK_SUCCESS(run, SpriteComponent_SetSize(Coin, (Vector2){ 0.2f, 0.1f }))
+            && TEST_CHECK_SUCCESS(run, TextComponent_AddSubComponent(StringComponent_AsComponent(Root), SpriteComponent_AsComponent(Coin)))
+            && (TestText_AddString(run, &Fixture.Factory, StringComponent_AsComponent(Root), "b") != NULL);
+        if (!IsBuilt && (Coin != NULL) && (TextComponent_GetParent(SpriteComponent_AsComponent(Coin)) == NULL))
+        {
+            TEST_CHECK_SUCCESS(run, TextComponentFactory_ReturnTree(&Fixture.Factory, SpriteComponent_AsComponent(Coin)));
+        }
+        TextLayoutOptions Options = TrackedOptions();
+        if (IsBuilt && TEST_CHECK_SUCCESS(run, TextLayout_Build(&Fixture.Layout, &Fixture.Document, &Options)))
+        {
+            size_t Length = 0U;
+            const unsigned char* Flow = TextLayout_GetFlowText(&Fixture.Layout, &Length);
+            TEST_CHECK(run, (Length == 5U) && (Flow[1] == 0xEFU) && (Flow[2] == 0xBFU) && (Flow[3] == 0xBCU) && (Flow[4] == 'b'));
+            TEST_CHECK(run, IsCaret(&Fixture.Layout, 1U, GLYPH_WIDTH, 0.0f, 0.2f, LINE_HEIGHT));
+            TEST_CHECK(run, IsCaret(&Fixture.Layout, 4U, GLYPH_WIDTH + 0.2f, 0.0f, GLYPH_WIDTH, LINE_HEIGHT));
+            Rectangle Sprite = TextLayout_GetRunBounds(&Fixture.Layout, 1U);
+            TEST_CHECK(run, IsNear(Sprite.x, GLYPH_WIDTH) && IsNear(Sprite.width, 0.2f));
+        }
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void TranslationsAndControlCharactersInTheFlow(TestRun* run)
+{
+    LayoutFixture Fixture;
+    TextLayoutOptions Options = TrackedOptions();
+    if (LayoutFixture_Construct(run, &Fixture))
+    {
+        TranslateComponent* Translate = NULL;
+        if (TEST_CHECK_SUCCESS(run, TextComponentFactory_CreateTranslate(&Fixture.Factory, (const unsigned char*)u8"menu.title",
+            (const unsigned char*)u8"Hi", &Translate)))
+        {
+            if (TEST_CHECK_SUCCESS(run, TextDocument_SetRoot(&Fixture.Document, TranslateComponent_AsComponent(Translate)))
+                && TEST_CHECK_SUCCESS(run, TextLayout_Build(&Fixture.Layout, &Fixture.Document, &Options)))
+            {
+                size_t Length = 0U;
+                const unsigned char* Flow = TextLayout_GetFlowText(&Fixture.Layout, &Length);
+                TEST_CHECK(run, (Length == 2U) && (Flow[0] == 'H') && (Flow[1] == 'i'));
+            }
+        }
+    }
+    // A control character keeps its byte in the flow but has no place: a caret there stands before the next character.
+    if (Fixture.IsReady && BuildTracked(run, &Fixture, "a\x01" "b", &Options))
+    {
+        size_t Length = 0U;
+        TextLayout_GetFlowText(&Fixture.Layout, &Length);
+        TEST_CHECK(run, Length == 3U);
+        TEST_CHECK(run, IsCaret(&Fixture.Layout, 1U, GLYPH_WIDTH, 0.0f, GLYPH_WIDTH, LINE_HEIGHT));
+        TEST_CHECK(run, IsCaret(&Fixture.Layout, 2U, GLYPH_WIDTH, 0.0f, GLYPH_WIDTH, LINE_HEIGHT));
+        TEST_CHECK(run, HitAt(&Fixture.Layout, 1.6f * GLYPH_WIDTH, 0.05f) == 3U);
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void ShrinkingScalesTheCarets(TestRun* run)
+{
+    LayoutFixture Fixture;
+    TextLayoutOptions Options = WrapOptions(5.0f * GLYPH_WIDTH, false, true);
+    Options.TracksOffsets = true;
+    if (LayoutFixture_Construct(run, &Fixture) && BuildTracked(run, &Fixture, "aaaaaaaaaa", &Options))
+    {
+        // Ten glyphs shrunk into five glyphs' width: each is half as wide, and the line half as tall.
+        TEST_CHECK(run, IsCaret(&Fixture.Layout, 2U, GLYPH_WIDTH, 0.0f, 0.5f * GLYPH_WIDTH, 0.5f * LINE_HEIGHT));
+        TEST_CHECK(run, IsCaret(&Fixture.Layout, 10U, 5.0f * GLYPH_WIDTH, 0.0f, 0.0f, 0.5f * LINE_HEIGHT));
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void CaretsFollowTheRunsAcrossStyles(TestRun* run)
+{
+    LayoutFixture Fixture;
+    if (LayoutFixture_Construct(run, &Fixture))
+    {
+        // "aa " in mono, then "bb" in the wide font at size 0.1 (each glyph 0.1 wide), wrapped so "bb" moves down.
+        StringComponent* Root = SetText(run, &Fixture, "aa ");
+        StringComponent* Wide = (Root != NULL) ? TestText_AddString(run, &Fixture.Factory, StringComponent_AsComponent(Root), "bb") : NULL;
+        TextLayoutOptions Options = WrapOptions(3.0f * GLYPH_WIDTH, true, false);
+        Options.TracksOffsets = true;
+        if ((Wide != NULL) && TEST_CHECK_SUCCESS(run, StringComponent_SetFontName(Wide, (const unsigned char*)u8"wide"))
+            && TEST_CHECK_SUCCESS(run, TextLayout_Build(&Fixture.Layout, &Fixture.Document, &Options)))
+        {
+            const TextLayout* Layout = &Fixture.Layout;
+            TEST_CHECK(run, TextLayout_GetLineCount(Layout) == 2U);
+            // Every run starts where the caret before its first character stands.
+            for (size_t Index = 0U; Index < TextLayout_GetRunCount(Layout); Index++)
+            {
+                Rectangle Run = TextLayout_GetRunBounds(Layout, Index);
+                size_t Offset = 9999U;
+                TEST_CHECK(run, TextLayout_HitTest(Layout, (Vector2){ .x = Run.x + 0.001f, .y = Run.y + (0.5f * Run.height) }, &Offset));
+                Rectangle Caret = { 0 };
+                TEST_CHECK(run, TextLayout_GetCaretBox(Layout, Offset, &Caret) && IsNear(Caret.x, Run.x) && IsNear(Caret.y, Run.y));
+            }
+            TEST_CHECK(run, IsCaret(Layout, 4U, 2.0f * GLYPH_WIDTH, LINE_HEIGHT, 2.0f * GLYPH_WIDTH, LINE_HEIGHT));
+        }
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void ABuildWithoutTrackingKeepsNoCarets(TestRun* run)
+{
+    LayoutFixture Fixture;
+    TextLayoutOptions Options = TextLayoutOptions_CreateDefault();
+    if (LayoutFixture_Construct(run, &Fixture) && BuildTracked(run, &Fixture, "ab\n", &Options))
+    {
+        const TextLayout* Layout = &Fixture.Layout;
+        Rectangle Box = { 1.0f, 1.0f, 1.0f, 1.0f };
+        size_t Offset = 7U;
+        size_t Length = 7U;
+        TEST_CHECK(run, !TextLayout_HasOffsets(Layout) && !TextLayout_GetCaretBox(Layout, 0U, &Box) && IsNear(Box.height, 0.0f));
+        TEST_CHECK(run, !TextLayout_HitTest(Layout, (Vector2){ 0.0f, 0.0f }, &Offset) && (Offset == 0U));
+        TEST_CHECK(run, (TextLayout_GetFlowText(Layout, &Length)[0] == 0U) && (Length == 0U));
+        TEST_CHECK(run, TextLayout_GetLineCount(Layout) == 1U);
+        // The option counts for being up to date.
+        TextLayoutOptions Tracked = TrackedOptions();
+        TEST_CHECK(run, !TextLayout_IsUpToDate(Layout, &Fixture.Document, &Tracked));
+        TEST_CHECK(run, TextLayout_IsUpToDate(Layout, &Fixture.Document, &Options));
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void TheCaretExtentCountsTrailingSpaces(TestRun* run)
+{
+    LayoutFixture Fixture;
+    TextLayoutOptions Options = TrackedOptions();
+    if (LayoutFixture_Construct(run, &Fixture) && BuildTracked(run, &Fixture, "ab   \nc", &Options))
+    {
+        // The block's size leaves trailing spaces out; a caret after them still stands there.
+        const TextLayout* Layout = &Fixture.Layout;
+        TEST_CHECK(run, IsNear(TextLayout_GetSize(Layout).x, 2.0f * GLYPH_WIDTH));
+        TEST_CHECK(run, IsNear(TextLayout_GetCaretExtent(Layout), 5.0f * GLYPH_WIDTH));
+        TEST_CHECK(run, IsCaret(Layout, 5U, 5.0f * GLYPH_WIDTH, 0.0f, 0.0f, LINE_HEIGHT));
+    }
+    TextLayoutOptions Untracked = TextLayoutOptions_CreateDefault();
+    if (BuildTracked(run, &Fixture, "ab   ", &Untracked))
+    {
+        TEST_CHECK(run, TextLayout_GetCaretExtent(&Fixture.Layout) == 0.0f);
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+}
+
+static void TheLineAtAHeightIsTheFirstReachingBelowIt(TestRun* run)
+{
+    LayoutFixture Fixture;
+    TextLayoutOptions Options = TextLayoutOptions_CreateDefault();
+    if (LayoutFixture_Construct(run, &Fixture) && BuildTracked(run, &Fixture, "a\nb\nc", &Options))
+    {
+        // Any build answers, carets or not: above the first line the first, below the last the last, a line's bottom the next one's.
+        const TextLayout* Layout = &Fixture.Layout;
+        TEST_CHECK(run, TextLayout_GetLineAtY(Layout, -5.0f) == 0U);
+        TEST_CHECK(run, TextLayout_GetLineAtY(Layout, 0.5f * LINE_HEIGHT) == 0U);
+        TEST_CHECK(run, TextLayout_GetLineAtY(Layout, LINE_HEIGHT) == 1U);
+        TEST_CHECK(run, TextLayout_GetLineAtY(Layout, 2.5f * LINE_HEIGHT) == 2U);
+        TEST_CHECK(run, TextLayout_GetLineAtY(Layout, 50.0f * LINE_HEIGHT) == 2U);
+        // A hit test finds the same line.
+        TextLayoutOptions Tracked = TrackedOptions();
+        if (BuildTracked(run, &Fixture, "a\nb\nc", &Tracked))
+        {
+            TEST_CHECK(run, HitAt(Layout, 0.0f, 1.5f * LINE_HEIGHT) == 2U);
+        }
+    }
+    LayoutFixture_Deconstruct(run, &Fixture);
+    // Without lines, 0.
+    TextLayout Empty;
+    if (TEST_CHECK_SUCCESS(run, TextLayout_Construct(&Empty)))
+    {
+        TEST_CHECK(run, TextLayout_GetLineAtY(&Empty, 3.0f) == 0U);
+        TEST_CHECK_SUCCESS(run, TextLayout_Deconstruct(&Empty));
+    }
+}
+
 
 // Public functions.
 void TextLayoutTests_Run(TestRun* run)
@@ -477,6 +901,23 @@ void TextLayoutTests_Run(TestRun* run)
         { "control_characters_are_skipped", ControlCharactersAreSkipped },
         { "shadows_use_the_font_offset_unless_set", ShadowsUseTheFontOffsetUnlessSet },
         { "builds_with_the_empty_built_in_font_stay_stale", BuildsWithTheEmptyBuiltInFontStayStale },
+        { "carets_stand_between_characters", CaretsStandBetweenCharacters },
+        { "multi_byte_codepoints_count_their_bytes", MultiByteCodepointsCountTheirBytes },
+        { "a_tab_is_one_wide_character", ATabIsOneWideCharacter },
+        { "a_wraps_dropped_spaces_stand_at_the_line_end", AWrapsDroppedSpacesStandAtTheLineEnd },
+        { "a_lines_end_is_not_the_next_lines_start", ALinesEndIsNotTheNextLinesStart },
+        { "a_final_newline_has_an_empty_line", AFinalNewlineHasAnEmptyLine },
+        { "an_empty_text_has_a_caret", AnEmptyTextHasACaret },
+        { "hits_find_the_nearest_place", HitsFindTheNearestPlace },
+        { "alignment_moves_the_carets", AlignmentMovesTheCarets },
+        { "the_remembered_column_crosses_short_lines", TheRememberedColumnCrossesShortLines },
+        { "sprites_are_one_object_character", SpritesAreOneObjectCharacter },
+        { "translations_and_control_characters_in_the_flow", TranslationsAndControlCharactersInTheFlow },
+        { "shrinking_scales_the_carets", ShrinkingScalesTheCarets },
+        { "carets_follow_the_runs_across_styles", CaretsFollowTheRunsAcrossStyles },
+        { "a_build_without_tracking_keeps_no_carets", ABuildWithoutTrackingKeepsNoCarets },
+        { "the_line_at_a_height_is_the_first_reaching_below_it", TheLineAtAHeightIsTheFirstReachingBelowIt },
+        { "the_caret_extent_counts_trailing_spaces", TheCaretExtentCountsTrailingSpaces },
     };
     TestRun_RunSuite(run, "TextLayout", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

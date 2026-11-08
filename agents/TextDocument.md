@@ -52,7 +52,7 @@ nothing (AGENTS.md rule 3). A layout must not be drawn after its document is des
 
 ### Layout rules
 - Flow: a component's own content first, then its children in order. `\n` ends a line; a final `\n` does not add an
-  empty line. A tab is a gap of `TEXT_LAYOUT_TAB_SPACE_COUNT` (4) spaces; other control characters (C0, DEL and C1,
+  empty line (unless the build tracks offsets: then the caret after it has a line to stand on). A tab is a gap of `TEXT_LAYOUT_TAB_SPACE_COUNT` (4) spaces; other control characters (C0, DEL and C1,
   U+0080-U+009F) are skipped.
 - Each glyph is resolved once, through the font's sorted glyph table (O(log n)); a codepoint the font lacks draws as
   `?`. A glyph advances by its font advance plus the component's spacing, never by less than nothing (a negative
@@ -68,20 +68,40 @@ nothing (AGENTS.md rule 3). A layout must not be drawn after its document is des
   - `IsWrapEnabled`: break at the last space or tab that follows content on the line, dropping the spaces at the
     break; words made of several components stay together; a word that does not fit on its own line overflows;
   - `IsShrinkEnabled`: scale every line still wider than `MaxWidth` down to fit (applied after wrapping);
-  - `Alignment`: left, center or right within the block's width (the widest line).
+  - `Alignment`: left, center or right within the block's width (the widest line);
+  - `TracksOffsets`: keep what carets need (below). Off by default, so labels pay nothing for it.
 - Units: normalized-fitted, where 1.0 is the height of the render target area on both axes. A string's size is its
   line height; a sprite's size is its box.
-- Queries: `TextLayout_GetSize`, `GetLineCount`, `GetLineBounds(i)`, `GetRunCount`, `GetRunBounds(i)` (block-local
-  boxes, for hit-testing or a caret later), `GetRunShadowOffset(i)` (how far a run's shadow is drawn from it, so how
-  far drawn text reaches past its bounds).
+- Queries: `TextLayout_GetSize`, `GetLineCount`, `GetLineBounds(i)`, `GetLineAtY(y)` (the line at a height, by a
+  binary search: what a view onto part of a long text reads to touch only the lines it shows), `GetRunCount`,
+  `GetRunBounds(i)` (block-local boxes), `GetRunShadowOffset(i)` (how far a run's shadow is drawn from it, so how far
+  drawn text reaches past its bounds).
+
+### Carets
+A build with `TracksOffsets` also keeps the **flow's text** (`TextLayout_GetFlowText`: the string and translate
+components' text in flow order, a sprite as one U+FFFC OBJECT REPLACEMENT CHARACTER) and, for every character the
+layout shows, where its bytes start, its line and its place. Offsets are bytes of the flow's text.
+- `TextLayout_GetCaretBox(offset)`: where a caret before that byte stands, as wide as the character it stands before
+  (an overwrite caret's block; none at a line's end). An offset inside a codepoint stands before the next one.
+- `TextLayout_HitTest(point)`: the caret place nearest a point: the line whose height holds it, then the nearest place
+  between characters (a character's left half before it, its right half after it), never among the spaces a wrap
+  dropped. A tab and a sprite are one character each.
+- `GetLineAtOffset`, `GetLineOffsets` (a line's start and end as shown: a wrapped line ends before the spaces the wrap
+  dropped, so a line's end is never the next one's start), `GetOffsetOnLine(line, x)` (Up and Down with a remembered
+  column), `GetRangeBoxOnLine` (a selection's box on one line), `GetCaretExtent` (how far right a caret can stand: the
+  widest line with its trailing spaces, which the block's size leaves out; what a view keeping the caret in sight scrolls to).
+Characters run left to right: bidirectional text and shaping are not handled.
 
 ### Drawing
 `TextLayoutDrawArguments` (from `TextLayoutDrawArguments_Create(position)`): the position of the block's origin, the
 origin within the block (normalized; also the rotation pivot), a rotation of the whole block, a tint multiplied into
-every color, and an optional scissor (screen-relative; pushed on the render context's clip stack, so it nests inside
-any outer clip, e.g. a parent widget's). All shadows are drawn first, then text, underlines and strikethroughs, and sprites. Glyphs are drawn one quad
+every color, an optional scissor (screen-relative; pushed on the render context's clip stack, so it nests inside
+any outer clip, e.g. a parent widget's) and an optional cull box (`HasCullBox`, `CullBox`: the part of the block that
+can show, in its own units before the rotation). All shadows are drawn first, then text, underlines and strikethroughs, and sprites. Glyphs are drawn one quad
 each through `RenderContext_RenderGlyph` (Renderer.md) with the indices cached at build time, so drawing does no
-codepoint lookups.
+codepoint lookups. With a cull box, runs wholly outside it and the glyphs of a run outside it are skipped (with a
+margin of two font sizes for wide glyphs, bearings and underlines): a view onto part of a long text (a text box)
+costs what shows, not the text's length. It does not clip: pair it with a scissor or a clip.
 
 ## Example
 

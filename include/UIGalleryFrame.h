@@ -12,10 +12,11 @@
  * scroll area, so it works at small window sizes. The first page holds the elements in their states; the second elements of their
  * own scale, a turning panel whose button and slider work where they show, a row that slides in, buttons with icons and a second
  * look of the button; the third a menu bar, dropdowns near the window's edges and in the page (three options, a thousand from a
- * provider), context menus with submenus, a modal dialog, scroll areas and a long end, over a status bar. Every element shows hover
- * text.
+ * provider), context menus with submenus, a modal dialog, scroll areas and a long end, over a status bar; the fourth text boxes (one
+ * line with a placeholder, a default, masked, filtered, limited, disabled, invalid, a line of code coloured by style ranges; several
+ * lines wrapped, not wrapped and read-only; a form of three to Tab through). Every element shows hover text.
  *
- * Its keys: N switches the page, T the theme (the same elements in flat boxes, nine-slice art and the flat boxes with another
+ * Its keys, while no text box is being edited: N switches the page, T the theme (the same elements in flat boxes, nine-slice art and the flat boxes with another
  * palette, with no element's code changing), + and - scale the UI, P the scale policy, L stops and starts logging each element's
  * events, Escape quits.
  *

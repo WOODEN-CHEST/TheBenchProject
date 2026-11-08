@@ -56,6 +56,8 @@ static const UIKindBehaviour* GetBehaviour(UIElementKind kind)
         // TODO: the label's, the tooltip's, the menu's and the backdrop's looks are not replaceable: the label is LabelWidget itself,
         // and the tooltip's box, a menu's list and items and a modal popup's backdrop are plain types of the kit's (the tooltip's and the
         // backdrop's named to the factory). Each needs a behaviour of its own split out first.
+        case UIElementKind_TextBox:
+            return UITextBox_GetKindBehaviour();
         case UIElementKind_Label:
         case UIElementKind_Tooltip:
         case UIElementKind_Menu:
@@ -366,6 +368,7 @@ static const unsigned char* const KindTypeNames[UIElementKind_Count] =
     [UIElementKind_MenuBar] = u8"MenuBar",
     [UIElementKind_StatusBar] = u8"StatusBar",
     [UIElementKind_Backdrop] = u8"Backdrop",
+    [UIElementKind_TextBox] = u8"TextBox",
 };
 
 
@@ -897,5 +900,47 @@ Error UIKit_CreateScrollArea(UIKit* self, UIScreen* screen, uint64_t parentId, c
     // Every scroll area look's struct starts with UIScrollAreaLookBase (UIKit_RegisterLook checks its size).
     UIScrollArea_SetBars(&((UIScrollAreaLookBase*)(void*)Area)->Area, BarIds[UIScrollAxis_Horizontal], BarIds[UIScrollAxis_Vertical]);
     *outId = AreaId;
+    return Error_CreateSuccess();
+}
+
+Error UIKit_CreateTextBox(UIKit* self, UIScreen* screen, uint64_t parentId, const UITextBoxOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL) || (outId == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateTextBox: self, screen, options and outId must not be NULL.");
+    }
+    UITextBoxArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_TextBox, options->Element.Look);
+    uint64_t BoxId = WIDGET_ID_INVALID;
+    Error Result = CreateElement(self, screen, parentId, TypeId, &Arguments, &BoxId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        *outId = WIDGET_ID_INVALID;
+        return Result;
+    }
+    uint64_t BarIds[UIScrollAxis_Count] = { WIDGET_ID_INVALID, WIDGET_ID_INVALID };
+    Result = CreateAreaBar(self, screen, BoxId, UIScrollAxis_Horizontal, &BarIds[UIScrollAxis_Horizontal]);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = CreateAreaBar(self, screen, BoxId, UIScrollAxis_Vertical, &BarIds[UIScrollAxis_Vertical]);
+    }
+    Widget* Box = NULL;
+    if ((Result.Code == ErrorCode_Success) && !UIScreen_TryGetWidgetById(screen, BoxId, &Box))
+    {
+        Result = Error_Construct2(ErrorCode_InvalidOperation, "UIKit_CreateTextBox: a hook took the box away.");
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        // Every text box look's struct starts with UITextBoxLookBase (UIKit_RegisterLook checks its size).
+        UITextBox_SetBars(&((UITextBoxLookBase*)(void*)Box)->TextBox, BarIds[UIScrollAxis_Horizontal], BarIds[UIScrollAxis_Vertical]);
+        Result = UITextBox_AttachContextMenu(screen, BoxId);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        DestroyPartlyMade(screen, BoxId);
+        *outId = WIDGET_ID_INVALID;
+        return Result;
+    }
+    *outId = BoxId;
     return Error_CreateSuccess();
 }

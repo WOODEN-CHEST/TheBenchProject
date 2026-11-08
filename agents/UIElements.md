@@ -1,7 +1,7 @@
 # UI elements: the kit, themes and looks
 
 The elements calling code builds a UI from: panels, labels, buttons, toggles, sliders, stacks, scroll areas and scroll bars,
-dropdowns, menus, menu bars and status bars, sized in UI pixels and drawn through a theme. They stand on the framework in [UIFramework.md](UIFramework.md) (screens, widgets, input routing,
+dropdowns, menus, menu bars, status bars and text boxes, sized in UI pixels and drawn through a theme. They stand on the framework in [UIFramework.md](UIFramework.md) (screens, widgets, input routing,
 notifications).
 
 | Module | Files | What it is |
@@ -11,7 +11,7 @@ notifications).
 | UITheme | `include/UITheme.h`, `source/UITheme.c`, `source/UIThemeDefinition.c`, private `source/UIThemeInternal.h` | The `ui_theme` asset type: the look of every element kind as data. |
 | UIElement | `include/UIElement.h`, `source/UIElement.c` | What every element kind shares: its options, its events and cues, plain text content, icons, the press behaviour, and the helpers looks draw with. |
 | UIKit | `include/UIKit.h`, `source/UIKit.c`, private `source/UIKitInternal.h` | The one way to make elements, over one widget factory: capabilities, the looks registered by kind and name, the widget types it composes. |
-| UIStandardLooks | `include/UIStandardLooks.h`, `source/UIStandardLooks.c` | The kit's standard look (`tbp:test_box`) for the panel, the button, the toggle, the slider, the scroll bar, the scroll area, the dropdown's head, the menu bar and the status bar; the widget that shows hover text; a modal popup's backdrop. |
+| UIStandardLooks | `include/UIStandardLooks.h`, `source/UIStandardLooks.c` | The kit's standard look (`tbp:test_box`) for the panel, the button, the toggle, the slider, the scroll bar, the scroll area, the dropdown's head, the menu bar, the status bar and the text box; the widget that shows hover text; a modal popup's backdrop. |
 | StackWidget | `include/StackWidget.h`, `source/StackWidget.c` | Children in a row or a column. Its arithmetic (`UIStackLayout`) is shared with the panel. |
 | UIPanel | `include/UIPanel.h`, `source/UIPanel.c` | A background and padding for what it holds. |
 | UILabel | `include/UILabel.h`, `source/UILabel.c`, with `LabelWidget` | `LabelWidget` as an element of the kit. |
@@ -23,6 +23,8 @@ notifications).
 | UIDropdown | `include/UIDropdown.h`, `source/UIDropdown.c` | One choice of several: a head and a list in a popup. |
 | UIMenu | `include/UIMenu.h`, `source/UIMenu.c`, private `source/UIMenuInternal.h` | Menus as data, each open level a popup list of items. |
 | UIMenuBar, UIStatusBar | `include/UI<Kind>.h`, `source/UI<Kind>.c` | A strip of entries opening menus; a strip of sections and a line of text. |
+| UITextEdit | `include/UITextEdit.h`, `source/UITextEdit.c` | The text piece, pure: a UTF-8 text with its limits, a caret and a selection, words, edits with the incoming text's rules, and a grouped undo with a budget. |
+| UITextBox | `include/UITextBox.h`, `source/UITextBox.c`, `source/UITextBoxInput.c`, private `source/UITextBoxInternal.h` | Text to type in or to read and select, on one line or several: the keys, the mouse, the clipboard, undo, scrolling, a placeholder, masked and read-only boxes, style ranges. |
 | UIGalleryFrame | `include/UIGalleryFrame.h`, `source/UIGalleryFrame.c` | Every element in every state: `--ui-gallery`. |
 
 ## Using it
@@ -79,8 +81,8 @@ A variant costs, from cheapest:
 3. **A look of its own** (below): Render and Measure, maybe Update.
 
 **Looks.** A look is a struct that starts with its kind's look base (`UIPanelLookBase`, `UIButtonLookBase`, `UIToggleLookBase`,
-`UISliderLookBase`, `UIScrollbarLookBase`, `UIScrollAreaLookBase`, `UIDropdownLookBase`, `UIMenuBarLookBase`, `UIStatusBarLookBase`: the `Widget`, then the
-capability) and a `UILookVTable`:
+`UISliderLookBase`, `UIScrollbarLookBase`, `UIScrollAreaLookBase`, `UIDropdownLookBase`, `UIMenuBarLookBase`, `UIStatusBarLookBase`, `UITextBoxLookBase`: the
+`Widget`, then the capability) and a `UILookVTable`:
 
 | Slot | | What it does |
 |---|---|---|
@@ -105,6 +107,13 @@ kinds): `UIKit_RegisterLook` refuses the label, the tooltip, the menu and the ba
 A slider look also tells the behaviour how long its thumb is (`UISliderCapability_SetThumbLength`, in its own UI pixels, from its Update): a press within
 the thumb holds it where it was grabbed, and the thumb's centre travels the track less its length. A look that never says has a thumb of no length: the
 pointer is the value.
+
+A text box look tells the behaviour where its text is (`UITextBoxCapability_SetGeometry`, in its Construct): its text's insets, a layout of the text with
+carets at a wrap width (`TextLayoutOptions.TracksOffsets`; the look owns the document and the layout, so the capability holds no laid-out text), a line's
+height and the border its bars stand inside. The behaviour asks it to place the caret under the pointer, to move a line up or down, to keep the caret in view
+and to decide its bars. It builds its document from the box's content (`UITextBoxCapability_BuildDocument`, again when the content's revision, the mask or
+the text colour moves: the colour is baked into the components, so style ranges keep theirs) and draws only the view's part of the text
+(`TextLayoutDrawArguments.CullBox`): a long text costs little more than what shows.
 
 **Finding the kit.** `UIKit_FromScreen` goes through the screen's factory, which is how the by-id functions find their capability
 ids. A second kit over a factory is refused.
@@ -176,8 +185,8 @@ tick); a press never scrolls, so the content does not jump under the pointer. It
 measures nothing.
 
 The **scrollable piece** (`UIScrollable.h`) is what every element whose content can be larger than its box holds (the scroll area, the dropdown's
-list; later the text box, the list, the windows): the content's and the view's sizes in its own UI pixels, the offset (clamped to [0, content - view]
-whenever either changes) and a mode per axis. Calling code moves it by id: `UIScrollable_SetOffset`, `_ScrollBy`, `_EnsureVisible` (a box of the
+list, the text box; later the list, the windows): the content's and the view's sizes in its own UI pixels, the offset (clamped to [0, content - view]
+whenever either changes) and a mode per axis (`UIScrollMode_Hidden` scrolls with no bar: a one-line text box across). Calling code moves it by id: `UIScrollable_SetOffset`, `_ScrollBy`, `_EnsureVisible` (a box of the
 content), `_RevealWidget` (a descendant), `_GetOffset`, `_GetRange`, `_GetSizes`, `_SetModes`, `_SetWheelStep`. The arithmetic on the struct is pure.
 Offsets are floats: content past about 16 million UI pixels scrolls in steps larger than a pixel.
 
@@ -185,7 +194,8 @@ Offsets are floats: content past about 16 million UI pixels scrolls in steps lar
 (`UIScrollbarOptions.TargetId`, `UIScrollbar_SetTarget`). The thumb's length is the view's share of the content, never shorter than the look's
 minimum (`min_thumb_length`); a left press on the thumb holds it where it was grabbed and a drag moves it, past the window too; a press on the track
 pages toward the pointer, and holding it pages again after `UI_SCROLLBAR_PAGE_DELAY_SECONDS` until the thumb reaches the pointer. The wheel over it
-scrolls along its axis. With nothing to scroll the thumb fills the track and presses do nothing. It is not focusable.
+scrolls along its axis. With nothing to scroll the thumb fills the track and presses do nothing. It is not focusable. An element holding bars places them
+each layout with `UIScrollbar_MeasureThickness` and `UIScrollbar_PlaceAlongEdge` (inside a border, for a text box).
 
 **Dropdown** (`UIDropdown.h`, kind `dropdown`). One choice of several, through the **choice piece** (`UIChoice.h`): options as a list of texts
 (`UIChoice_SetOptions`) or from providers, a count and the text at an index (`UIChoice_SetProvider`, for long or changing lists; the rows in view
@@ -230,6 +240,66 @@ of the centre section and cut where the right one begins, is a message
 (`UIStatusBar_SetMessage(screen, id, text, seconds)`, 0 seconds for until it is replaced or cleared), else the hover text where the pointer rests
 (`UITooltip_GetCurrent`, before the delay too) while it shows hover text (`UIStatusBar_SetShowsHoverText`). For now it is placed like any element.
 
+**Text box** (`UITextBox.h`, kind `text_box`, `UIKit_CreateTextBox`). Text to type in, or to read and select, on one line
+(`UITextBoxOptions_Create`) or several (`UITextBoxOptions_CreateMultiline`). The text and its rules are the **text piece** (`UITextEdit.h`, pure): limits
+judged on the result (`MaxBytes`, 64 KiB by default and `UI_TEXT_EDIT_MAX_BYTES` at most; `MaxCharacters`, `MaxLines`, `AllowsNewlines`, forbidden
+codepoints, a filter callback), incoming text cleaned the same way for typing, pasting and code (invalid UTF-8 as U+FFFD, `\r\n` and `\r` as `\n`,
+control characters dropped but the line break and the tab, a line break as a space where none may go, what does not fit cut and refused with the `Refused`
+cue), words (letters and digits, spaces, punctuation), and the undo.
+- **An edit element:** focused, it hears only Enter and the short list (below), so typing on a focused box does nothing; Enter, a press or code enters
+  it. Entered by a key, a one-line box selects everything and a box of several lines puts the caret at the end; by a press the caret goes where it landed;
+  by code it stays. Entered, it hears every key first: the arrows (Ctrl by words, Shift extending), Home and End of the line as shown (wrapped lines
+  too), Ctrl+Home and Ctrl+End, the page keys, Backspace and Delete (Ctrl by words), Insert for overwrite (a block caret, until the box is left), the
+  actions `tbp:ui_copy` (Ctrl+C, Ctrl+Insert), `tbp:ui_cut` (Ctrl+X, Shift+Delete), `tbp:ui_paste` (Ctrl+V, Shift+Insert), `tbp:ui_undo` (Ctrl+Z),
+  `tbp:ui_redo` (Ctrl+Y, Ctrl+Shift+Z) and `tbp:ui_select_all` (Ctrl+A), Enter as a line break where line breaks are allowed (refused, with the cue,
+  at the line limit) and Tab as a tab with `AcceptsTab`. Before any action it claims every press that types text: a letter alone or with Shift, with
+  Ctrl and Alt together, or with the right Alt alone (AltGr as GLFW reports it), so an action bound to a letter types the letter and AltGr's
+  characters never select all or paste; the left Alt is a shortcut. It leaves Up, Down and the page keys on a box that shows one line (it holds no
+  line break and does not wrap) and Ctrl+Enter to whoever is around it; the screen's rules do the rest: Enter keeps and leaves, Escape leaves (putting
+  back the text it had at entering with `EscapeReverts`, on by default for one line and off for several), Tab keeps and carries on into the next box,
+  selected.
+- **Events:** every edit posts `Changed`; leaving after a visit that changed the text posts `Committed` once; a revert of a changed text posts
+  `Cancelled`. They carry the text's length in bytes as a double: the text is read by id (`UITextBox_GetText`). An edit while the box is not entered
+  (the short list's paste and reset) is a whole change, `Changed` then `Committed`. Its own context menu does not end a visit: the menu takes the
+  focus and gives it back, its item acts within the visit (so a field's visit undo and Escape's revert cover it), and a press elsewhere that closes
+  the menu ends the visit there. Code setting the text posts nothing. A filter or validator must not change the box: its edits are refused while
+  they run.
+- **The mouse:** a press places the caret, a drag selects (past an edge the text scrolls, faster further out), Shift with a press extends, a double
+  click selects a word and a triple click a line, and a drag after them goes by words or lines. A right press outside the selection moves the caret
+  first; a right click opens the box's context menu (Undo, Redo, Cut, Copy, Paste, Delete, Select all, each disabled when it cannot act), which calling
+  code can replace with a provider of its own. The wheel scrolls it and then goes up the tree. The pointer is an I-beam over it.
+- **The short list**, focused or hovered and not entered: copy the whole text (refused when masked), paste over the whole text (one change and one undo
+  step), reset to the default (`HasDefault`).
+- **Undo:** typing groups into one step until a pause (`UI_TEXT_EDIT_DEFAULT_UNDO_PAUSE_SECONDS`), twenty characters, a caret move or another kind of
+  edit; a paste, a cut, a word deletion and an edit by code are steps of their own. The list keeps at most `UI_TEXT_EDIT_MAX_UNDO_STEPS` steps within
+  its byte budget (256 KiB by default), dropping the oldest; a step larger than the budget empties it. Undo and redo are never refused for space. While
+  the box is entered the undo keys are always its own (the `Refused` cue with nothing to undo), never something behind it; not entered, they are not its.
+  The list lives as long as the box (`UITextBoxUndoScope_Box`) or starts empty at each visit (`UITextBoxUndoScope_Visit`, for an editor's field whose
+  own history records the `Committed`). `UITextBox_SetText` and a change of limits empty it; `UITextBox_ReplaceRange` is undoable.
+- **Showing:** a blinking caret a line tall (in an empty box too), a selection in the theme's colour while entered and in its inactive colour
+  otherwise, a placeholder while empty, the scroll bars by the modes (inside the box's border; one line scrolls across with no bar), the caret kept in
+  view (trailing spaces count). Wrapped, lines break at the view's width and the box scrolls down, and across with no bar only to a word longer than a
+  line (words are not broken); not wrapped, both ways. **Masked** (`IsMasked`): one mask character per character (the theme's `mask`), copy
+  and cut refused, the whole text one word. **Read-only** (`IsEditable` false): its own box (`read_only_box`), no caret; selectable, it is an edit
+  element whose keys scroll it and copy; not selectable, it takes no focus. It can show a whole text component tree (`UITextBox_SetComponent`: translate
+  and sprite nodes, a sprite one object character in the selection and left out when copied); such a box changes by a new tree or a text, never a
+  range of it (`UITextBox_ReplaceRange` refuses), keeps it whole through new limits, masks it when masked, and made editable keeps its text without
+  the sprites. Disabled, it swallows presses and takes no focus.
+- **Style ranges** (`UITextBox_SetStyleRanges`, at most `UI_TEXT_BOX_MAX_STYLE_RANGES`): byte ranges with a `TextStyle` (a colour, a font, a size
+  relative to the box's text, a shadow, underline, strikethrough, spacing), later ones over earlier ones, moved by every edit, undo and redo (an
+  insertion inside a range grows it, one at its end does not); an edit that empties a range removes it, and undo does not put back an end an edit cut
+  (code that colours a text sets its ranges again after a change). A style a string component would refuse (a size or a spacing out of bounds) is
+  refused when set. A masked box ignores them.
+- **Cost:** a keystroke builds the document and the layout again, in time proportional to the text (about 5 ms at 64 KiB in an optimized build) and
+  to the style ranges over each piece of it (disjoint ranges little, deeply nested ones the square of their count); an idle box costs nothing, and
+  drawing skips what lies out of view (it still steps over the rest: a tenth of a millisecond at 64 KiB). That is what the default `MaxBytes` is set
+  from. A paste reads no more of the clipboard than the limits could take (`UITextEdit_GetMostIncomingBytes`).
+- **Not built:** formatting the user chooses and that is stored (colours, fonts and sizes picked on a selection, images inline, saved as text
+  components: a paper editor); the user types plain text and style ranges come from code. Nor input methods (IME composition), right-to-left text and
+  shaping, middle-click paste, dragging selected text, breaking a word longer than a line, or incremental layout, which a far larger text (a script
+  editor) needs. Reading another program's clipboard goes through GLFW, which waits for that program to answer: one that never does stalls the
+  game during the paste (X11).
+
 **Context menus** are a service of the screen ([UIFramework.md](UIFramework.md), "Context menus"): a provider set on a widget answers a right click or
 the menu key on it or on anything inside it that has no provider of its own, and opens a menu with `UIMenu_OpenAt`.
 
@@ -256,9 +326,9 @@ Elements post through `UIScreen_PostWidgetEvent`, or `UIScreen_PostWidgetMouseEv
 | Event | Posted | Carries |
 |---|---|---|
 | `Activated` | a button's click, by its click mode, or its key | mouse data |
-| `Changed` | the value moved and may go on: during a drag, at each key step; a dropdown's choice (with `Committed`) | bool or double (a dropdown's index) |
-| `Committed` | the change is done: the release, the key's release, the press lost; what an undo history records. Not posted when the value ends where it began | bool or double |
-| `Cancelled` | Escape (the `ui_back` action's keys) during a change, or disabling it: the value at its start is back | double |
+| `Changed` | the value moved and may go on: during a drag, at each key step; a dropdown's choice (with `Committed`); a text box's edit | bool or double (a dropdown's index, a text box's length in bytes) |
+| `Committed` | the change is done: the release, the key's release, the press lost, a text box left after a visit that changed it; what an undo history records. Not posted when the value ends where it began | bool or double |
+| `Cancelled` | Escape (the `ui_back` action's keys) during a change, or disabling it: the value at its start is back (a text box's text at entering) | double |
 | `Pressed` | a press of any button reached the element | mouse data |
 | `Released` | that press's release, or another's let go over it (`ReleaseOver`) | mouse data; `IsOverWidget` says whether it was over the element |
 | `DoubleClicked` | after `Pressed`, at the second press in a row (`ClickCount` 2, not 3) | mouse data |
@@ -270,7 +340,8 @@ widget.
 
 **Cues** (`UIEventKind_Cue`, [UIFramework.md](UIFramework.md), "Notifications"): elements post named sound cues for what they do, which nothing plays yet and which
 cost nothing while nobody subscribes. The kinds post `Hover` (the pointer came onto it), `Press` (a press on it while enabled; `Refused` while disabled), `Release`,
-`Activate` (a button's activation, a toggle's change) and `ValueStep` (a slider's arrow step, wheel notch or reset); the screen posts `Enter` and `Leave` for an edit element.
+`Activate` (a button's activation, a toggle's change) and `ValueStep` (a slider's arrow step, wheel notch or reset); a text box posts `Refused` for what its limits
+or a masked box refuse and for an undo or redo with nothing left; the screen posts `Enter` and `Leave` for an edit element.
 `UIElement_PostCue` and `UIElement_PostMouseCues` are the helpers a new kind uses. For a key's activation `Button` is the key. A disabled element posts none of these, and a toggle and a slider tell the input events as a button does.
 
 A toggle's activation, a wheel notch and a reset are whole changes: `Changed` then `Committed` in one update. Code setting a value posts nothing, and
@@ -336,7 +407,7 @@ UI is scaled, and at 28 both go away while 14 pixels stays sharp enough to read 
 
 ## The gallery
 
-`sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test, on three pages (N switches), each in a scroll area, so the
+`sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test, on four pages (N switches), each in a scroll area, so the
 whole page scrolls at small window sizes while its status line stays below it. It keeps its pixels
 (`UIScalePolicy_ConstantPixels`): drag the window's edges, and the controls keep their size with more room around them. P switches to following the
 window's height and back, to compare them. T switches the theme (`tbp:test_flat`, `tbp:test_nine_slice`, whose art `asset_source/scripts/placeholder_ui.py`
@@ -365,6 +436,11 @@ no), dropdowns of three options and of a thousand from a provider, showing four 
 with forty buttons to Tab through; both ways with its bars always shown), and a long end with a button at the bottom for Tab to scroll to. A status bar
 closes the page: its message is the status line, for five seconds, then the hover text where the pointer rests; a dropdown stands at each of its ends,
 near the window's bottom corners.
+
+The fourth page: text boxes. On one line: with a placeholder, with a default (Backspace over it, not entered, puts it back), masked, filtered to six digits,
+limited to twelve characters, disabled, marked invalid by code, and a line of code coloured by style ranges (the colours follow the theme's text, light
+or dark). Of several lines: wrapped, not wrapped (Tab types a tab, it scrolls both ways) and read-only. A form of three boxes to Tab through. Every edit
+shows in the status line with the text (a masked box's only as its length).
 
 ## Rules for a new element
 

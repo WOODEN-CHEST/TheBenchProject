@@ -96,6 +96,7 @@ int main(void)
     TextComponentCodecTests_Run(&Run);
     TextDocumentTests_Run(&Run);
     TextLayoutTests_Run(&Run);
+    UITextEditTests_Run(&Run);
     FontTests_Run(&Run);
     LabelWidgetTests_Run(&Run);
     GameInputTests_Run(&Run);
@@ -117,6 +118,7 @@ int main(void)
     UIPopupTests_Run(&Run);
     UIDropdownTests_Run(&Run);
     UIMenuTests_Run(&Run);
+    UITextBoxTests_Run(&Run);
     GameWindowStateTests_Run(&Run);
     GameWindowTests_Run(&Run);
     UITestFrameTests_Run(&Run);

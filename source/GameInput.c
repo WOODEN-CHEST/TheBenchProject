@@ -230,14 +230,27 @@ static const BuiltInAction BuiltInActions[GameAction_Count] =
         .Description = u8"Puts the value under the pointer back to its default.", .Category = GameActionCategory_Interface,
         .Defaults = { BINDING(GameKey_Backspace, GAME_KEY_MODIFIER_NONE) }, .DefaultCount = 1 },
     [GameAction_UICopy] = { .Key = u8"tbp:ui_copy", .DisplayName = u8"Copy Value",
-        .Description = u8"Copies the value under the pointer.", .Category = GameActionCategory_Interface,
-        .Defaults = { BINDING(GameKey_C, GAME_KEY_MODIFIER_CONTROL) }, .DefaultCount = 1 },
+        .Description = u8"Copies the value under the pointer, or the selected text.", .Category = GameActionCategory_Interface,
+        .Defaults = { BINDING(GameKey_C, GAME_KEY_MODIFIER_CONTROL), BINDING(GameKey_Insert, GAME_KEY_MODIFIER_CONTROL) }, .DefaultCount = 2 },
     [GameAction_UIPaste] = { .Key = u8"tbp:ui_paste", .DisplayName = u8"Paste Value",
-        .Description = u8"Pastes into the value under the pointer.", .Category = GameActionCategory_Interface,
-        .Defaults = { BINDING(GameKey_V, GAME_KEY_MODIFIER_CONTROL) }, .DefaultCount = 1 },
+        .Description = u8"Pastes into the value under the pointer, or into the text being edited.", .Category = GameActionCategory_Interface,
+        .Defaults = { BINDING(GameKey_V, GAME_KEY_MODIFIER_CONTROL), BINDING(GameKey_Insert, GAME_KEY_MODIFIER_SHIFT) }, .DefaultCount = 2 },
     [GameAction_UIContextMenu] = { .Key = u8"tbp:ui_context_menu", .DisplayName = u8"Context Menu",
         .Description = u8"Asks for the focused item's context menu.", .Category = GameActionCategory_Interface,
         .Defaults = { BINDING(GameKey_Menu, GAME_KEY_MODIFIER_NONE) }, .DefaultCount = 1 },
+    [GameAction_UICut] = { .Key = u8"tbp:ui_cut", .DisplayName = u8"Cut",
+        .Description = u8"Cuts the selected text.", .Category = GameActionCategory_Interface,
+        .Defaults = { BINDING(GameKey_X, GAME_KEY_MODIFIER_CONTROL), BINDING(GameKey_Delete, GAME_KEY_MODIFIER_SHIFT) }, .DefaultCount = 2 },
+    [GameAction_UIUndo] = { .Key = u8"tbp:ui_undo", .DisplayName = u8"Undo",
+        .Description = u8"Takes back the last change to the text being edited.", .Category = GameActionCategory_Interface,
+        .Defaults = { BINDING(GameKey_Z, GAME_KEY_MODIFIER_CONTROL) }, .DefaultCount = 1 },
+    [GameAction_UIRedo] = { .Key = u8"tbp:ui_redo", .DisplayName = u8"Redo",
+        .Description = u8"Puts back the change to the text being edited that was last taken back.", .Category = GameActionCategory_Interface,
+        .Defaults = { BINDING(GameKey_Y, GAME_KEY_MODIFIER_CONTROL), BINDING(GameKey_Z, GAME_KEY_MODIFIER_CONTROL | GAME_KEY_MODIFIER_SHIFT) },
+        .DefaultCount = 2 },
+    [GameAction_UISelectAll] = { .Key = u8"tbp:ui_select_all", .DisplayName = u8"Select All",
+        .Description = u8"Selects the whole text being edited.", .Category = GameActionCategory_Interface,
+        .Defaults = { BINDING(GameKey_A, GAME_KEY_MODIFIER_CONTROL) }, .DefaultCount = 1 },
 };
 
 /* The modifiers in the order a binding's text form lists them. */
@@ -1237,6 +1250,7 @@ Error GameInput_Construct(GameInput* self, KeyRegistry* keys, RegistryRoot* root
     GameInputSample_Clear(&self->_sample);
     self->_keys = keys;
     self->_logger = logger;
+    self->_clipboard = GameInput_GetStandardClipboard();
     GenericBuffer_AllocateVariable(&self->_actionStates, INITIAL_ACTION_CAPACITY, sizeof(ActionState));
     GenericBuffer_AllocateVariable(&self->_categoryStates, GameActionCategory_Count, sizeof(CategoryState));
     GenericBuffer_AllocateVariable(&self->_keyIndex, INITIAL_ACTION_CAPACITY, sizeof(KeyIndexEntry));
@@ -1604,6 +1618,101 @@ uint32_t GameInput_GetTextCodepoint(const GameInput* self, size_t index)
 void GameInput_ConsumeText(GameInput* self)
 {
     self->_isTextConsumed = true;
+}
+
+
+// Public functions: the clipboard.
+/* raylib's clipboard: it needs the window, and its pointer lasts only until its next call, so it is copied at once, at most maxBytes, cut
+ * before a codepoint that would not fit whole. */
+static Error StandardClipboard_GetText(void* self, GenericBuffer* outText, size_t maxBytes)
+{
+    UNUSED(self);
+    if (!IsWindowReady())
+    {
+        return Error_CreateSuccess();
+    }
+    const unsigned char* Text = (const unsigned char*)GetClipboardText();
+    return (Text != NULL) ? GameInputInternal_CopyLentText(Text, maxBytes, outText) : Error_CreateSuccess();
+}
+
+Error GameInputInternal_CopyLentText(const unsigned char* text, size_t maxBytes, GenericBuffer* outText)
+{
+    size_t Length = 0U;
+    while ((Length < maxBytes) && (text[Length] != 0U))
+    {
+        Length++;
+    }
+    if ((Length == maxBytes) && (text[Length] != 0U))
+    {
+        // Cut short: back off a codepoint the cut fell inside, to its lead byte (at most three continuation bytes before the cut). Bytes
+        // that are no UTF-8 are cut where they are: whoever reads them replaces them.
+        size_t Lead = Length;
+        while ((Lead > 0U) && ((Length - Lead) < 3U) && ((text[Lead] & 0xC0U) == 0x80U))
+        {
+            Lead--;
+        }
+        unsigned char First = text[Lead];
+        size_t Expected = ((First & 0xE0U) == 0xC0U) ? 2U : (((First & 0xF0U) == 0xE0U) ? 3U : (((First & 0xF8U) == 0xF0U) ? 4U : 1U));
+        bool IsSplit = ((text[Length] & 0xC0U) == 0x80U) && (Expected > (Length - Lead));
+        Length = IsSplit ? Lead : Length;
+    }
+    // AppendRangeBytes only reads its source; the API is just not declared const.
+    if ((Length > 0U) && !GenericBuffer_AppendRangeBytes(outText, (unsigned char*)text, Length))
+    {
+        return Error_Construct2(ErrorCode_BufferTooLarge, "GameInput_GetClipboardText: the buffer could not grow.");
+    }
+    return Error_CreateSuccess();
+}
+
+static Error StandardClipboard_SetText(void* self, const unsigned char* text)
+{
+    UNUSED(self);
+    if (IsWindowReady())
+    {
+        SetClipboardText((const char*)text);
+    }
+    return Error_CreateSuccess();
+}
+
+static void StandardClipboard_Destroy(void* self)
+{
+    UNUSED(self);
+}
+
+static const IClipboardVTable StandardClipboardVTable =
+{
+    .GetText = StandardClipboard_GetText,
+    .SetText = StandardClipboard_SetText,
+    .Destroy = StandardClipboard_Destroy
+};
+
+IClipboard GameInput_GetStandardClipboard(void)
+{
+    return (IClipboard){ .VTable = &StandardClipboardVTable, .Self = NULL };
+}
+
+void GameInput_SetClipboard(GameInput* self, IClipboard clipboard)
+{
+    self->_clipboard = clipboard;
+}
+
+Error GameInput_GetClipboardText(const GameInput* self, size_t maxBytes, GenericBuffer* outText)
+{
+    if (outText == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "GameInput_GetClipboardText: outText must not be NULL.");
+    }
+    size_t MaxBytes = (maxBytes < GAME_INPUT_MAX_CLIPBOARD_BYTES) ? maxBytes : GAME_INPUT_MAX_CLIPBOARD_BYTES;
+    return self->_clipboard.VTable->GetText(self->_clipboard.Self, outText, MaxBytes);
+}
+
+Error GameInput_SetClipboardText(const GameInput* self, const unsigned char* text)
+{
+    if (text == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "GameInput_SetClipboardText: text must not be NULL.");
+    }
+    return self->_clipboard.VTable->SetText(self->_clipboard.Self, text);
 }
 
 

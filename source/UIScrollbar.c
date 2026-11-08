@@ -279,6 +279,52 @@ Error UIScrollbar_GetTarget(UIScreen* screen, uint64_t widgetId, uint64_t* outTa
     return Result;
 }
 
+Error UIScrollbar_MeasureThickness(UIScreen* screen, uint64_t barId, UIScrollAxis axis, const UIMeasureContext* sizing, float* outThickness)
+{
+    *outThickness = 0.0f;
+    Widget* Bar = NULL;
+    if (!UIScreen_TryGetWidgetById(screen, barId, &Bar))
+    {
+        return Error_CreateSuccess();
+    }
+    Vector2 Size = { .x = 0.0f, .y = 0.0f };
+    Error Result = Widget_Measure(Bar, sizing, UI_MEASURE_UNBOUNDED_WIDTH, &Size);
+    *outThickness = (axis == UIScrollAxis_Vertical) ? Size.x : Size.y;
+    return Result;
+}
+
+Error UIScrollbar_PlaceAlongEdge(UIScreen* screen, uint64_t barId, UIScrollAxis axis, bool isShown, float thickness, float otherThickness,
+    UIInsets edgeInsets, float holderScale)
+{
+    UIKit* Kit = UIKit_FromScreen(screen);
+    Widget* Bar = NULL;
+    if ((Kit == NULL) || !UIScreen_TryGetWidgetById(screen, barId, &Bar))
+    {
+        return Error_CreateSuccess();
+    }
+    UIPlacement Placement = { .AnchorMin = { .x = 1.0f, .y = 1.0f }, .AnchorMax = { .x = 1.0f, .y = 1.0f }, .OffsetMin = { .x = 0.0f, .y = 0.0f },
+        .OffsetMax = { .x = 0.0f, .y = 0.0f } };
+    if (isShown && (axis == UIScrollAxis_Vertical))
+    {
+        Placement = (UIPlacement){ .AnchorMin = { .x = 1.0f, .y = 0.0f }, .AnchorMax = { .x = 1.0f, .y = 1.0f },
+            .OffsetMin = { .x = -thickness - edgeInsets.Right, .y = edgeInsets.Top }, .OffsetMax = { .x = -edgeInsets.Right, .y = -edgeInsets.Bottom } };
+    }
+    else if (isShown)
+    {
+        Placement = (UIPlacement){ .AnchorMin = { .x = 0.0f, .y = 1.0f }, .AnchorMax = { .x = 1.0f, .y = 1.0f },
+            .OffsetMin = { .x = edgeInsets.Left, .y = -thickness - edgeInsets.Bottom },
+            .OffsetMax = { .x = -otherThickness - edgeInsets.Right, .y = -edgeInsets.Bottom } };
+    }
+    UIScrollbarCapability* Scrollbar = Widget_GetCapability(Bar, UIKit_GetCapabilityId(Kit, UIElementCapability_Scrollbar));
+    if (Scrollbar != NULL)
+    {
+        // The bar counts in its own UI pixels: its holder's, less a scale of its own.
+        float Inset = (axis == UIScrollAxis_Vertical) ? otherThickness : 0.0f;
+        UIScrollbarCapability_SetEndInset(Scrollbar, Inset * (holderScale / Widget_GetEffectiveScale(Bar)));
+    }
+    return Widget_SetPlacement(Bar, &Placement);
+}
+
 
 // Public functions: behaviour helpers.
 Error UIScrollbarCapability_Construct(UIScrollbarCapability* self, Widget* widget, const UIScrollbarArgs* args)

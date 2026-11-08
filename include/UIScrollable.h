@@ -12,8 +12,8 @@
  *
  * Every element whose content can be larger than its box holds one (a scroll area, a dropdown's open list, later a text box, a
  * list, a window): the content's size and the view's in UI pixels (the element's own), the offset of the view into the content,
- * and per axis a mode: the axis does not scroll, it scrolls with a bar while the content is longer than the view, or it scrolls with
- * a bar always. The offset is always within [0, content - view] per axis: it clamps whenever the content or the view changes. The
+ * and per axis a mode: the axis does not scroll, it scrolls with a bar while the content is longer than the view, it scrolls with
+ * a bar always, or it scrolls with no bar. The offset is always within [0, content - view] per axis: it clamps whenever the content or the view changes. The
  * element that holds the piece measures and places its content and tells the piece the sizes each layout; calling code moves the
  * view by widget id (UIScrollable_SetOffset, _ScrollBy, _EnsureVisible, _RevealWidget). Scroll bars (UIScrollbar.h) read and move it.
  *
@@ -59,7 +59,9 @@ typedef enum UIScrollModeEnum
     /** @brief It scrolls, with a bar while the content is longer than the view. */
     UIScrollMode_Auto,
     /** @brief It scrolls, with a bar always (its thumb fills the track while nothing scrolls). */
-    UIScrollMode_Always
+    UIScrollMode_Always,
+    /** @brief It scrolls, with no bar ever: by the wheel, the keys and what the element keeps in view (a one-line text box's text). */
+    UIScrollMode_Hidden
 } UIScrollMode;
 
 /**

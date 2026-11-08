@@ -1764,6 +1764,7 @@ The look of the UI's elements as data (`agents/UIElements.md`): a JSON file in `
         "button": {
             "look": namespaced key,      // [OPTIONAL] the code that draws the kind's elements; see below
             "padding": [8, 4],           // metrics: UI pixels, each number in [0;4096] (the tooltip's offset in [-4096;4096]); the table below has each kind's and its default
+                                         // (one metric is a character instead: the text box's "mask", a string of exactly one character)
             "background": box,           // parts: a box or a colour per state; see below
             "text": colors,
             "custom": { ... },           // [OPTIONAL] values for the look, by key; see below
@@ -1791,6 +1792,7 @@ The look of the UI's elements as data (`agents/UIElements.md`): a JSON file in `
 | `menu` | `padding` [2, 2], `item_height` 22, `item_padding` [8, 0], `check_width` 18 (the column at an item's left for its check or icon), `separator_height` 7, `separator_thickness` 1 | `background`: a box, the menu; `item`: a box per item (`hovered` and `focused` under the pointer or the keyboard, `selected` the one whose submenu is open, `disabled`); `text`: colors, the label, the check and the submenu arrow; `shortcut`: colors; `separator`: a box, its line |
 | `menu_bar` | `padding` [2, 0], `entry_padding` [8, 3] (around an entry's text), `min_size` [0, 22] | `background`: a box, the bar; `entry`: a box per entry (`hovered` under the pointer, `selected` while its menu is open); `text`: colors |
 | `status_bar` | `padding` [6, 2], `spacing` 8 (between its sections' elements), `min_size` [0, 22] | `background`: a box, the bar; `text`: colors, its message or the hover text |
+| `text_box` | `padding` [6, 4] (between the box's edges and its text), `min_size` [120, 24], `caret_width` 1 (the caret's line), `mask` "•" (the character a masked box shows for each of its own: a string of exactly one character, no control character) | `box`: a box (`entered` while being edited, `invalid` marked so by code); `read_only_box`: a box, a read-only one's; `selection`: a box behind selected text while the box is entered; `inactive_selection`: a box behind it otherwise; `caret`: a box, the caret's line; `overwrite_caret`: a box over the character overwriting replaces (a translucent colour lets it show); `text`: colors, the text's (its state's colour is baked into the text, so code's style ranges keep their own); `placeholder`: colors, what shows while it is empty. Its scroll bars are `scrollbar`s, inside the box's border: a flat box's outline, a nine-slice's margins |
 | `backdrop` | | `background`: a box over the whole surface behind a modal popup (a translucent colour dims what lies behind) |
 
 A part a theme leaves out draws a plain box and is logged once; `"kind": "none"` leaves a box empty on purpose. The looks of a menu, of a dropdown's open list, of a menu bar's entries and of the backdrop are the kit's own for now, so a `"look"` in those blocks changes nothing; the open list is drawn with its head's variant, menus and entries with their kind's own values.

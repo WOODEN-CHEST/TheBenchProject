@@ -276,7 +276,7 @@ void UIScrollableCapability_Construct(UIScrollableCapability* self, UIScrollMode
 
 bool UIScrollMode_IsValid(UIScrollMode mode)
 {
-    return ((int32_t)mode >= (int32_t)UIScrollMode_Disabled) && ((int32_t)mode <= (int32_t)UIScrollMode_Always);
+    return ((int32_t)mode >= (int32_t)UIScrollMode_Disabled) && ((int32_t)mode <= (int32_t)UIScrollMode_Hidden);
 }
 
 Vector2 UIScrollableCapability_GetRange(const UIScrollableCapability* self)

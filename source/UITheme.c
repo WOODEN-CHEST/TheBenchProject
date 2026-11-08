@@ -7,16 +7,19 @@
 /** A metric row of a part table: a vector with its default, or a number with its default, each within [0, UI_THEME_MAX_METRIC]; or a
  *  vector whose components may also be negative, within [-UI_THEME_MAX_METRIC, UI_THEME_MAX_METRIC]: an offset that points either way. */
 #define VECTOR_PART(key, x, y) { .Key = u8##key, .Kind = UIThemePartKind_Vector, .DefaultVector = { (x), (y) }, .DefaultNumber = 0.0f, \
-    .Minimum = 0.0f, .Maximum = UI_THEME_MAX_METRIC }
+    .Minimum = 0.0f, .Maximum = UI_THEME_MAX_METRIC, .DefaultCharacter = 0U }
 #define NUMBER_PART(key, value) { .Key = u8##key, .Kind = UIThemePartKind_Number, .DefaultVector = { 0.0f, 0.0f }, .DefaultNumber = (value), \
-    .Minimum = 0.0f, .Maximum = UI_THEME_MAX_METRIC }
+    .Minimum = 0.0f, .Maximum = UI_THEME_MAX_METRIC, .DefaultCharacter = 0U }
 #define SIGNED_VECTOR_PART(key, x, y) { .Key = u8##key, .Kind = UIThemePartKind_Vector, .DefaultVector = { (x), (y) }, .DefaultNumber = 0.0f, \
-    .Minimum = -UI_THEME_MAX_METRIC, .Maximum = UI_THEME_MAX_METRIC }
+    .Minimum = -UI_THEME_MAX_METRIC, .Maximum = UI_THEME_MAX_METRIC, .DefaultCharacter = 0U }
 /** A part's row: a box or a colour per state (no bounds: they are no metric). */
 #define BOX_PART(key) { .Key = u8##key, .Kind = UIThemePartKind_Box, .DefaultVector = { 0.0f, 0.0f }, .DefaultNumber = 0.0f, .Minimum = 0.0f, \
-    .Maximum = 0.0f }
+    .Maximum = 0.0f, .DefaultCharacter = 0U }
 #define COLORS_PART(key) { .Key = u8##key, .Kind = UIThemePartKind_Colors, .DefaultVector = { 0.0f, 0.0f }, .DefaultNumber = 0.0f, \
-    .Minimum = 0.0f, .Maximum = 0.0f }
+    .Minimum = 0.0f, .Maximum = 0.0f, .DefaultCharacter = 0U }
+/** A character's row: one codepoint, with its default. */
+#define CHARACTER_PART(key, codepoint) { .Key = u8##key, .Kind = UIThemePartKind_Character, .DefaultVector = { 0.0f, 0.0f }, .DefaultNumber = 0.0f, \
+    .Minimum = 0.0f, .Maximum = 0.0f, .DefaultCharacter = (codepoint) }
 
 
 // Fields.
@@ -128,6 +131,21 @@ static const UIThemePartDescriptor BackdropParts[UIBackdropPart_Count] =
 {
     [UIBackdropPart_Background] = BOX_PART("background"),
 };
+static const UIThemePartDescriptor TextBoxParts[UITextBoxPart_Count] =
+{
+    [UITextBoxPart_Padding] = VECTOR_PART("padding", 6.0f, 4.0f),
+    [UITextBoxPart_MinSize] = VECTOR_PART("min_size", 120.0f, 24.0f),
+    [UITextBoxPart_CaretWidth] = NUMBER_PART("caret_width", 1.0f),
+    [UITextBoxPart_Mask] = CHARACTER_PART("mask", 0x2022U),
+    [UITextBoxPart_Box] = BOX_PART("box"),
+    [UITextBoxPart_ReadOnlyBox] = BOX_PART("read_only_box"),
+    [UITextBoxPart_Selection] = BOX_PART("selection"),
+    [UITextBoxPart_InactiveSelection] = BOX_PART("inactive_selection"),
+    [UITextBoxPart_Caret] = BOX_PART("caret"),
+    [UITextBoxPart_OverwriteCaret] = BOX_PART("overwrite_caret"),
+    [UITextBoxPart_Text] = COLORS_PART("text"),
+    [UITextBoxPart_Placeholder] = COLORS_PART("placeholder"),
+};
 
 static const struct
 {
@@ -150,6 +168,7 @@ Kinds[UIElementKind_Count] =
     [UIElementKind_MenuBar] = { u8"menu_bar", MenuBarParts, UIMenuBarPart_Count },
     [UIElementKind_StatusBar] = { u8"status_bar", StatusBarParts, UIStatusBarPart_Count },
     [UIElementKind_Backdrop] = { u8"backdrop", BackdropParts, UIBackdropPart_Count },
+    [UIElementKind_TextBox] = { u8"text_box", TextBoxParts, UITextBoxPart_Count },
 };
 
 
@@ -307,6 +326,16 @@ float UIThemeStyle_GetNumber(const UIThemeStyle* self, UIElementKind kind, int32
     }
     const UIThemeValue* Value = GetSetValue(self, part, UIThemePartKind_Number);
     return (Value != NULL) ? Value->Data.Number : Kinds[kind].Parts[part].DefaultNumber;
+}
+
+uint32_t UIThemeStyle_GetCharacter(const UIThemeStyle* self, UIElementKind kind, int32_t part)
+{
+    if (!IsPartOfKind(kind, part, UIThemePartKind_Character))
+    {
+        return 0U;
+    }
+    const UIThemeValue* Value = GetSetValue(self, part, UIThemePartKind_Character);
+    return (Value != NULL) ? Value->Data.Character : Kinds[kind].Parts[part].DefaultCharacter;
 }
 
 float UIThemeStyle_FindCustomNumber(const UIThemeStyle* self, const unsigned char* key, float defaultValue)

@@ -107,6 +107,8 @@ typedef enum UIElementKindEnum
     UIElementKind_StatusBar,
     /** @brief What lies behind a modal popup: it takes every press. */
     UIElementKind_Backdrop,
+    /** @brief Text to type in, or to read and select: one line or several, writable or read-only. */
+    UIElementKind_TextBox,
     /** @brief The number of kinds. */
     UIElementKind_Count
 } UIElementKind;
@@ -338,6 +340,37 @@ typedef enum UIBackdropPartEnum
     UIBackdropPart_Count
 } UIBackdropPart;
 
+/** @brief A text box's values in a theme. */
+typedef enum UITextBoxPartEnum
+{
+    /** @brief "padding": between the box's edges and its text, horizontal and vertical, UI pixels. */
+    UITextBoxPart_Padding,
+    /** @brief "min_size": UI pixels; the box is as tall as its lines at least. */
+    UITextBoxPart_MinSize,
+    /** @brief "caret_width": how wide the caret's line is, UI pixels. */
+    UITextBoxPart_CaretWidth,
+    /** @brief "mask": the character a masked box shows for each of its own. */
+    UITextBoxPart_Mask,
+    /** @brief "box": a box behind a writable box's text. */
+    UITextBoxPart_Box,
+    /** @brief "read_only_box": a box behind a read-only box's text, so the two are told apart. */
+    UITextBoxPart_ReadOnlyBox,
+    /** @brief "selection": a box behind the selected text while the box is being edited. */
+    UITextBoxPart_Selection,
+    /** @brief "inactive_selection": a box behind the selected text while it is not. */
+    UITextBoxPart_InactiveSelection,
+    /** @brief "caret": a box, the caret's line. */
+    UITextBoxPart_Caret,
+    /** @brief "overwrite_caret": a box, the caret in overwrite mode: a block over the character it would replace. */
+    UITextBoxPart_OverwriteCaret,
+    /** @brief "text": colors. */
+    UITextBoxPart_Text,
+    /** @brief "placeholder": colors, the text shown while the box is empty. */
+    UITextBoxPart_Placeholder,
+    /** @brief The number of a text box's values. */
+    UITextBoxPart_Count
+} UITextBoxPart;
+
 /**
  * @brief What a value of an element kind is.
  */
@@ -350,7 +383,9 @@ typedef enum UIThemePartKindEnum
     /** @brief Two numbers (an array or a compound), each within the part's bounds. */
     UIThemePartKind_Vector,
     /** @brief One number within the part's bounds. */
-    UIThemePartKind_Number
+    UIThemePartKind_Number,
+    /** @brief One character: a string of exactly one codepoint, no control character. */
+    UIThemePartKind_Character
 } UIThemePartKind;
 
 /**
@@ -372,6 +407,8 @@ typedef struct UIThemePartDescriptorStruct
     float Minimum;
     /** @brief The largest such a value may be: UI_THEME_MAX_METRIC. */
     float Maximum;
+    /** @brief The default of a UIThemePartKind_Character, a codepoint. */
+    uint32_t DefaultCharacter;
 } UIThemePartDescriptor;
 
 
@@ -492,6 +529,15 @@ Vector2 UIThemeStyle_GetVector(const UIThemeStyle* self, UIElementKind kind, int
  * @returns The metric, or the kind's default when left out or @p self is NULL; zero when @p part is no number.
  */
 float UIThemeStyle_GetNumber(const UIThemeStyle* self, UIElementKind kind, int32_t part);
+
+/**
+ * @brief Returns a character part of a style.
+ * @param self The style, or NULL.
+ * @param kind The style's element kind (for the default).
+ * @param part The part's index.
+ * @returns The character's codepoint, or the kind's default when left out or @p self is NULL; 0 when @p part is no character.
+ */
+uint32_t UIThemeStyle_GetCharacter(const UIThemeStyle* self, UIElementKind kind, int32_t part);
 
 /**
  * @brief Finds a custom number of a style: a value its "custom" block (or, for a variant, its kind's) wrote as a JSON number.
