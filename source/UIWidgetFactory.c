@@ -166,6 +166,7 @@ Error UIWidgetFactory_Construct(UIWidgetFactory* self)
     self->_kit = NULL;
     self->_tooltipTypeId = WIDGET_TYPE_ID_INVALID;
     self->_backdropTypeId = WIDGET_TYPE_ID_INVALID;
+    self->_dragGhostTypeId = WIDGET_TYPE_ID_INVALID;
     return Error_CreateSuccess();
 }
 

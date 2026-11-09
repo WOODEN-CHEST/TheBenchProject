@@ -405,6 +405,57 @@ static void NestedPopupsCloseFromTheInsideOut(TestRun* run)
     TestUI_Deconstruct(run, &Fixture);
 }
 
+static void APopupClosedWithItsOwnLeavesTheOthers(TestRun* run)
+{
+    TestUIFixture Fixture;
+    ClosedRecord Closed;
+    if (Construct(run, &Fixture))
+    {
+        RecordClosedEvents(run, &Fixture, &Closed);
+        uint64_t AnchorId = AddButtonAt(run, &Fixture, WIDGET_ID_INVALID, 100.0f, 100.0f, 60.0f, 20.0f);
+        uint64_t OtherAnchorId = AddButtonAt(run, &Fixture, WIDGET_ID_INVALID, 400.0f, 100.0f, 60.0f, 20.0f);
+        // The first popup; one opened from inside it (its owner the first's item); and one with an owner outside, above them both.
+        uint64_t FirstId = AddPopupPanel(run, &Fixture);
+        uint64_t ItemId = AddButtonAt(run, &Fixture, FirstId, 0.0f, 0.0f, 120.0f, 24.0f);
+        uint64_t NestedId = AddPopupPanel(run, &Fixture);
+        uint64_t OtherId = AddPopupPanel(run, &Fixture);
+        uint64_t OtherItemId = AddButtonAt(run, &Fixture, OtherId, 0.0f, 0.0f, 120.0f, 24.0f);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(&Fixture.Screen, Get(&Fixture, AnchorId)));
+        UIPopupOptions First = BelowWidget(AnchorId);
+        First.FocusId = ItemId;
+        TEST_CHECK_SUCCESS(run, UIScreen_OpenPopup(&Fixture.Screen, FirstId, &First));
+        TestUI_Ticks(run, &Fixture, 2U);
+        UIPopupOptions Nested = BelowWidget(ItemId);
+        Nested.Side = UIPopupSide_Right;
+        Nested.MovesFocus = false;
+        TEST_CHECK_SUCCESS(run, UIScreen_OpenPopup(&Fixture.Screen, NestedId, &Nested));
+        TestUI_Ticks(run, &Fixture, 2U);
+        UIPopupOptions Other = BelowWidget(OtherAnchorId);
+        Other.FocusId = OtherItemId; // Its focus would go back to the first's item.
+        TEST_CHECK_SUCCESS(run, UIScreen_OpenPopup(&Fixture.Screen, OtherId, &Other));
+        TestUI_Ticks(run, &Fixture, 2U);
+        TEST_CHECK(run, UIScreen_GetPopupCount(&Fixture.Screen) == 3U);
+        // Closed with its own: the first and the nested one go (the nested one's owner went with the first, so only the first's owner
+        // hears), and the other stays where it was, focused.
+        Closed.Count = 0U;
+        TEST_CHECK_SUCCESS(run, UIScreen_ClosePopupAndItsOwn(&Fixture.Screen, FirstId));
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, !UIScreen_IsPopupOpen(&Fixture.Screen, FirstId) && !UIScreen_IsPopupOpen(&Fixture.Screen, NestedId)
+            && UIScreen_IsPopupOpen(&Fixture.Screen, OtherId) && (UIScreen_GetPopupCount(&Fixture.Screen) == 1U));
+        TEST_CHECK(run, (Closed.Count == 1U) && (Closed.Owners[0] == AnchorId));
+        TEST_CHECK(run, UIScreen_GetFocusedWidgetId(&Fixture.Screen) == OtherItemId);
+        // The other closed: the focus goes back where the first would have given it, not to its item that is gone.
+        TEST_CHECK_SUCCESS(run, UIScreen_ClosePopup(&Fixture.Screen, OtherId));
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, UIScreen_GetFocusedWidgetId(&Fixture.Screen) == AnchorId);
+        TEST_CHECK_ERROR(run, UIScreen_ClosePopupAndItsOwn(&Fixture.Screen, OtherId), ErrorCode_InvalidOperation);
+        TEST_CHECK_ERROR(run, UIScreen_ClosePopupAndItsOwn(NULL, OtherId), ErrorCode_IllegalArgument);
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+
 static void TheOwnerGoingAwayClosesIt(TestRun* run)
 {
     TestUIFixture Fixture;
@@ -964,6 +1015,7 @@ void UIPopupTests_Run(TestRun* run)
         { "a_press_outside_closes_it_and_goes_on", APressOutsideClosesItAndGoesOn },
         { "escape_closes_the_topmost_and_the_focus_comes_back", EscapeClosesTheTopmostAndTheFocusComesBack },
         { "nested_popups_close_from_the_inside_out", NestedPopupsCloseFromTheInsideOut },
+    { "a_popup_closed_with_its_own_leaves_the_others", APopupClosedWithItsOwnLeavesTheOthers },
         { "the_owner_going_away_closes_it", TheOwnerGoingAwayClosesIt },
         { "a_modal_popup_takes_every_press", AModalPopupTakesEveryPress },
         { "a_press_on_an_owner_that_counts_as_inside_is_the_owners", APressOnAnOwnerThatCountsAsInsideIsTheOwners },

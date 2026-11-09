@@ -40,7 +40,7 @@
 /** @brief The most different textures one theme may name. */
 #define UI_THEME_MAX_TEXTURES ((size_t)64)
 /** @brief The most parts and metrics one element kind may have. */
-#define UI_THEME_MAX_PARTS ((size_t)12)
+#define UI_THEME_MAX_PARTS ((size_t)16)
 /** @brief The largest metric a theme may give, in UI pixels. */
 #define UI_THEME_MAX_METRIC 4096.0f
 /** @brief The bounds of a theme's text size, in UI pixels, and its default. */
@@ -119,6 +119,18 @@ typedef enum UIElementKindEnum
     UIElementKind_CompoundSlider,
     /** @brief Two to four property boxes in a row, each with an axis tag. */
     UIElementKind_VectorRow,
+    /** @brief Rows of data, only those in view made: a selection, a current row, icons and toggle cells. */
+    UIElementKind_List,
+    /** @brief A list whose rows nest: a row per shown node, indented, with an expander. */
+    UIElementKind_Tree,
+    /** @brief A modal dialog: a title, a message, content and a row of buttons. */
+    UIElementKind_Dialog,
+    /** @brief A colour picker: a swatch, and a popup with a square, strips and fields. */
+    UIElementKind_ColorPicker,
+    /** @brief A strip of icon buttons and separators. */
+    UIElementKind_Toolbar,
+    /** @brief What a drag shows: what is dragged beside the pointer, and a frame over the target that would take it. */
+    UIElementKind_Drag,
     /** @brief The number of kinds. */
     UIElementKind_Count
 } UIElementKind;
@@ -459,6 +471,171 @@ typedef enum UIVectorRowPartEnum
     /** @brief The number of a row of fields' values. */
     UIVectorRowPart_Count
 } UIVectorRowPart;
+
+/** @brief A list's values in a theme (its bar is a scroll bar's). */
+typedef enum UIListPartEnum
+{
+    /** @brief "padding": inside the list's box, around its rows, horizontal and vertical, UI pixels. */
+    UIListPart_Padding,
+    /** @brief "row_height": a row's height, UI pixels. */
+    UIListPart_RowHeight,
+    /** @brief "row_padding": a row's inset at its sides and the gaps between its icon, its text and its cells, UI pixels. */
+    UIListPart_RowPadding,
+    /** @brief "cell_size": a toggle cell's side, UI pixels. */
+    UIListPart_CellSize,
+    /** @brief "insertion_thickness": how thick the line where a drop would go is, UI pixels. */
+    UIListPart_InsertionThickness,
+    /** @brief "background": a box, the list. */
+    UIListPart_Background,
+    /** @brief "row": a box per row; hovered under the pointer, selected while selected, disabled while the list is. */
+    UIListPart_Row,
+    /** @brief "current": a box drawn over the current row (where the keys act) while the list has the focus; entered while it is entered. */
+    UIListPart_Current,
+    /** @brief "text": a colour per state, a row's text and icon. */
+    UIListPart_Text,
+    /** @brief "cell": a box per toggle cell; selected while on, hovered under the pointer. */
+    UIListPart_Cell,
+    /** @brief "cell_text": a colour per state, a toggle cell's letter. */
+    UIListPart_CellText,
+    /** @brief "insertion": a box, the line where a drop would go. */
+    UIListPart_Insertion,
+    /** @brief The number of a list's values. */
+    UIListPart_Count
+} UIListPart;
+
+/** @brief A tree's values in a theme (its bar is a scroll bar's). */
+typedef enum UITreePartEnum
+{
+    /** @brief "padding": inside the tree's box, around its rows, horizontal and vertical, UI pixels. */
+    UITreePart_Padding,
+    /** @brief "row_height": a row's height, UI pixels. */
+    UITreePart_RowHeight,
+    /** @brief "row_padding": a row's inset at its sides and the gaps between its expander, icon, text and cells, UI pixels. */
+    UITreePart_RowPadding,
+    /** @brief "indent": how far each level of nesting moves a row's content in, UI pixels; the expander is as wide. */
+    UITreePart_Indent,
+    /** @brief "cell_size": a toggle cell's side, UI pixels. */
+    UITreePart_CellSize,
+    /** @brief "insertion_thickness": how thick the line where a drop would go is, UI pixels. */
+    UITreePart_InsertionThickness,
+    /** @brief "background": a box, the tree. */
+    UITreePart_Background,
+    /** @brief "row": a box per row; hovered under the pointer, selected while selected, disabled while the tree is. */
+    UITreePart_Row,
+    /** @brief "current": a box drawn over the current row while the tree has the focus; entered while it is entered. */
+    UITreePart_Current,
+    /** @brief "text": a colour per state, a row's text and icon. */
+    UITreePart_Text,
+    /** @brief "expander": a colour per state, the arrow of a node with children (pointing right while collapsed, down while expanded). */
+    UITreePart_Expander,
+    /** @brief "cell": a box per toggle cell; selected while on, hovered under the pointer. */
+    UITreePart_Cell,
+    /** @brief "cell_text": a colour per state, a toggle cell's letter. */
+    UITreePart_CellText,
+    /** @brief "insertion": a box, the line where a drop would go; for a drop into a row, the same line along the row's four edges. */
+    UITreePart_Insertion,
+    /** @brief The number of a tree's values. */
+    UITreePart_Count
+} UITreePart;
+
+/** @brief A dialog's values in a theme (its title and message are labels, its buttons buttons). */
+typedef enum UIDialogPartEnum
+{
+    /** @brief "padding": inside the dialog's box, horizontal and vertical, UI pixels. */
+    UIDialogPart_Padding,
+    /** @brief "spacing": between the title, the message, the content and the buttons, UI pixels. */
+    UIDialogPart_Spacing,
+    /** @brief "button_spacing": between two buttons, UI pixels. */
+    UIDialogPart_ButtonSpacing,
+    /** @brief "button_width": the least width of a button, UI pixels. */
+    UIDialogPart_ButtonWidth,
+    /** @brief "min_size": UI pixels. */
+    UIDialogPart_MinSize,
+    /** @brief "max_width": the widest the dialog grows to fit its message, which wraps past it, UI pixels. */
+    UIDialogPart_MaxWidth,
+    /** @brief "background": a box, the dialog. */
+    UIDialogPart_Background,
+    /** @brief The number of a dialog's values. */
+    UIDialogPart_Count
+} UIDialogPart;
+
+/** @brief A colour picker's values in a theme: its swatch, and the popup it opens (whose fields are property boxes and a text box). */
+typedef enum UIColorPickerPartEnum
+{
+    /** @brief "min_size": the swatch's least size, UI pixels. */
+    UIColorPickerPart_MinSize,
+    /** @brief "checker_size": the side of the squares a colour with alpha is drawn over, UI pixels. */
+    UIColorPickerPart_CheckerSize,
+    /** @brief "padding": inside the popup's box, horizontal and vertical, UI pixels. */
+    UIColorPickerPart_Padding,
+    /** @brief "spacing": between the popup's parts, UI pixels. */
+    UIColorPickerPart_Spacing,
+    /** @brief "square_size": the side of the square of saturation (across) and value (up), UI pixels. */
+    UIColorPickerPart_SquareSize,
+    /** @brief "strip_width": how wide the hue strip and the alpha strip are, UI pixels. */
+    UIColorPickerPart_StripWidth,
+    /** @brief "field_width": how wide the channels' fields are, UI pixels. */
+    UIColorPickerPart_FieldWidth,
+    /** @brief "swatch": a box drawn over the colour, the swatch's frame; pressed while its popup is open. */
+    UIColorPickerPart_Swatch,
+    /** @brief "checker_light": a colour, the lighter squares behind a colour with alpha. */
+    UIColorPickerPart_CheckerLight,
+    /** @brief "checker_dark": a colour, the darker squares. */
+    UIColorPickerPart_CheckerDark,
+    /** @brief "mixed": a colour per state, the hyphen the swatch shows while several colours differ. */
+    UIColorPickerPart_Mixed,
+    /** @brief "popup": a box, behind the popup. */
+    UIColorPickerPart_Popup,
+    /** @brief "frame": a box around the square and each strip; hovered under the pointer, pressed while dragged. */
+    UIColorPickerPart_Frame,
+    /** @brief "marker": a box, where the colour lies on the square. */
+    UIColorPickerPart_Marker,
+    /** @brief "strip_marker": a box, where the hue or the alpha lies on its strip. */
+    UIColorPickerPart_StripMarker,
+    /** @brief The number of a colour picker's values. */
+    UIColorPickerPart_Count
+} UIColorPickerPart;
+
+/** @brief A tool bar's values in a theme (its buttons are buttons, of the variant its options name). */
+typedef enum UIToolbarPartEnum
+{
+    /** @brief "padding": inside the bar, horizontal and vertical, UI pixels. */
+    UIToolbarPart_Padding,
+    /** @brief "spacing": between two buttons, UI pixels. */
+    UIToolbarPart_Spacing,
+    /** @brief "button_size": each button's size, UI pixels. */
+    UIToolbarPart_ButtonSize,
+    /** @brief "separator_thickness": how thick a separator's line is, UI pixels. */
+    UIToolbarPart_SeparatorThickness,
+    /** @brief "separator_spacing": the room a separator takes along the bar, its line in the middle, UI pixels. */
+    UIToolbarPart_SeparatorSpacing,
+    /** @brief "background": a box, the bar. */
+    UIToolbarPart_Background,
+    /** @brief "separator": a box, a separator's line. */
+    UIToolbarPart_Separator,
+    /** @brief The number of a tool bar's values. */
+    UIToolbarPart_Count
+} UIToolbarPart;
+
+/** @brief What a drag shows, in a theme. */
+typedef enum UIDragPartEnum
+{
+    /** @brief "padding": around the dragged item's text, horizontal and vertical, UI pixels. */
+    UIDragPart_Padding,
+    /** @brief "offset": where the dragged item's top-left sits from the pointer, UI pixels; negative components put it left of or above
+     *  the pointer. */
+    UIDragPart_Offset,
+    /** @brief "max_width": the widest the dragged item is; its text is cut past it, UI pixels. */
+    UIDragPart_MaxWidth,
+    /** @brief "ghost": a box, the dragged item; selected while over a target that would take it, disabled over one that would not. */
+    UIDragPart_Ghost,
+    /** @brief "text": a colour per state, the dragged item's text. */
+    UIDragPart_Text,
+    /** @brief "target": a box drawn over the target that would take the drop, inside the area it is drawn in. */
+    UIDragPart_Target,
+    /** @brief The number of what a drag shows. */
+    UIDragPart_Count
+} UIDragPart;
 
 /**
  * @brief What a value of an element kind is.

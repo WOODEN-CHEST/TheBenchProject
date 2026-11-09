@@ -1426,5 +1426,9 @@ Error UIStandardLooks_Register(UIKit* kit)
     {
         Result = UIKit_RegisterLook(kit, UIElementKind_TextBox, UI_KIT_STANDARD_LOOK, sizeof(TextBoxBox), &TextBoxBoxLook, NULL);
     }
-    return (Result.Code == ErrorCode_Success) ? UIStandardValueLooks_Register(kit) : Result;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIStandardValueLooks_Register(kit);
+    }
+    return (Result.Code == ErrorCode_Success) ? UIStandardEditorLooks_Register(kit) : Result;
 }

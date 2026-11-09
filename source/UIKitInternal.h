@@ -100,3 +100,13 @@ const UIKindBehaviour* UIForm_GetKindBehaviour(void);
 const UIKindBehaviour* UICompoundSlider_GetKindBehaviour(void);
 /** The row of fields': its fields laid out after their tags. */
 const UIKindBehaviour* UIVectorRow_GetKindBehaviour(void);
+/** The list's: its data, its selection, its rows recycled, its keys and mouse. */
+const UIKindBehaviour* UIList_GetKindBehaviour(void);
+/** The tree's: its data walked into rows, its selection by node, its rows recycled, expanding, its keys and mouse. */
+const UIKindBehaviour* UITree_GetKindBehaviour(void);
+/** The dialog's: its parts laid out, its answer by a button, Enter or Escape, the focus kept inside it. */
+const UIKindBehaviour* UIDialog_GetKindBehaviour(void);
+/** The colour picker's: its swatch opening its popup. */
+const UIKindBehaviour* UIColorPicker_GetKindBehaviour(void);
+/** The tool bar's: its items, its buttons' clicks turned into its events, its buttons laid out. */
+const UIKindBehaviour* UIToolbar_GetKindBehaviour(void);

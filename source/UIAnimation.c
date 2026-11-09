@@ -75,6 +75,7 @@ static UIPropertyData InterpolateValue(UIPropertyType type, const UIPropertyData
             break;
         case UIPropertyType_Bool:
         case UIPropertyType_Double:
+        case UIPropertyType_UInt64:
             break; // Refused before any blending: they do not interpolate.
     }
     return Value;
@@ -92,6 +93,7 @@ bool UIPropertyType_IsValid(UIPropertyType type)
         case UIPropertyType_RenderColor:
         case UIPropertyType_Bool:
         case UIPropertyType_Double:
+        case UIPropertyType_UInt64:
             return true;
     }
     return false;
@@ -108,6 +110,7 @@ bool UIPropertyType_IsAnimatable(UIPropertyType type)
             return true;
         case UIPropertyType_Bool:
         case UIPropertyType_Double:
+        case UIPropertyType_UInt64:
             return false;
     }
     return false;
@@ -129,6 +132,8 @@ bool UIPropertyValue_IsFinite(const UIPropertyValue* value)
             return true;
         case UIPropertyType_Double:
             return !Math_IsNaNDouble(value->Data.DoubleValue) && !Math_IsInfinityDouble(value->Data.DoubleValue);
+        case UIPropertyType_UInt64:
+            return true;
     }
     return false;
 }

@@ -151,6 +151,8 @@ typedef struct UIWidgetFactoryStruct
     uint64_t _tooltipTypeId;
     /** @brief The widget type screens put under a modal popup (UIPopup.h), or WIDGET_TYPE_ID_INVALID for none. */
     uint64_t _backdropTypeId;
+    /** @brief The widget type screens show a drag with (UIDragDrop.h), or WIDGET_TYPE_ID_INVALID for none. */
+    uint64_t _dragGhostTypeId;
 } UIWidgetFactory;
 
 
@@ -305,6 +307,28 @@ static inline void UIWidgetFactory_SetBackdropType(UIWidgetFactory* self, uint64
 static inline uint64_t UIWidgetFactory_GetBackdropType(const UIWidgetFactory* self)
 {
     return self->_backdropTypeId;
+}
+
+/**
+ * @brief Names the widget type screens show a drag with (UIDragDrop.h; the kit registers one): a screen makes one, with NULL arguments,
+ *        the first time a drag starts, as a root in its overlay layer. The type's widget reads the drag with UIDragDrop_GetSession and
+ *        places itself.
+ * @param self The factory; must not be NULL.
+ * @param typeId The type, or WIDGET_TYPE_ID_INVALID for none (a drag then shows only through its target's look).
+ */
+static inline void UIWidgetFactory_SetDragGhostType(UIWidgetFactory* self, uint64_t typeId)
+{
+    self->_dragGhostTypeId = typeId;
+}
+
+/**
+ * @brief Returns the widget type screens show a drag with.
+ * @param self The factory; must not be NULL.
+ * @returns The type, or WIDGET_TYPE_ID_INVALID for none.
+ */
+static inline uint64_t UIWidgetFactory_GetDragGhostType(const UIWidgetFactory* self)
+{
+    return self->_dragGhostTypeId;
 }
 
 /**

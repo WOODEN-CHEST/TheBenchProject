@@ -1,8 +1,9 @@
 # UI elements: the kit, themes and looks
 
 The elements calling code builds a UI from: panels, labels, buttons, toggles, sliders, stacks, scroll areas and scroll bars,
-dropdowns, menus, menu bars, status bars, text boxes, property boxes and the compounds final screens use (labelled rows, forms, compound
-sliders, rows of fields), sized in UI pixels and drawn through a theme. They stand on the framework in [UIFramework.md](UIFramework.md) (screens, widgets, input routing,
+dropdowns, menus, menu bars, status bars, text boxes, property boxes, the compounds final screens use (labelled rows, forms, compound
+sliders, rows of fields) and what an editor's windows are built from (lists, trees, modal dialogs, colour pickers, tool bars, drag and drop),
+sized in UI pixels and drawn through a theme. They stand on the framework in [UIFramework.md](UIFramework.md) (screens, widgets, input routing,
 notifications).
 
 | Module | Files | What it is |
@@ -12,7 +13,7 @@ notifications).
 | UITheme | `include/UITheme.h`, `source/UITheme.c`, `source/UIThemeDefinition.c`, private `source/UIThemeInternal.h` | The `ui_theme` asset type: the look of every element kind as data. |
 | UIElement | `include/UIElement.h`, `source/UIElement.c` | What every element kind shares: its options, its events and cues, plain text content, icons, the press behaviour, and the helpers looks draw with. |
 | UIKit | `include/UIKit.h`, `source/UIKit.c`, private `source/UIKitInternal.h` | The one way to make elements, over one widget factory: capabilities, the looks registered by kind and name, the widget types it composes. |
-| UIStandardLooks | `include/UIStandardLooks.h`, `source/UIStandardLooks.c`, `source/UIStandardValueLooks.c`, private `source/UIStandardLooksInternal.h` and `source/UITypingView.{h,c}` | The kit's standard look (`tbp:test_box`) for every kind but the label's; the widget that shows hover text; a modal popup's backdrop. `UITypingView` is what the text box's and the property box's looks draw typing with. |
+| UIStandardLooks | `include/UIStandardLooks.h`, `source/UIStandardLooks.c`, `source/UIStandardValueLooks.c`, `source/UIStandardEditorLooks.c`, private `source/UIStandardLooksInternal.h` and `source/UITypingView.{h,c}` | The kit's standard look (`tbp:test_box`) for every kind but the label's; the widget that shows hover text; a modal popup's backdrop; the widget that shows a drag. `UITypingView` is what the text box's and the property box's looks draw typing with. |
 | StackWidget | `include/StackWidget.h`, `source/StackWidget.c` | Children in a row or a column. Its arithmetic (`UIStackLayout`) is shared with the panel. |
 | UIPanel | `include/UIPanel.h`, `source/UIPanel.c` | A background and padding for what it holds. |
 | UILabel | `include/UILabel.h`, `source/UILabel.c`, with `LabelWidget` | `LabelWidget` as an element of the kit. |
@@ -31,7 +32,12 @@ notifications).
 | UIMenuBar, UIStatusBar | `include/UI<Kind>.h`, `source/UI<Kind>.c` | A strip of entries opening menus; a strip of sections and a line of text. |
 | UITextEdit | `include/UITextEdit.h`, `source/UITextEdit.c` | The text piece, pure: a UTF-8 text with its limits, a caret and a selection, words, edits with the incoming text's rules, and a grouped undo with a budget. |
 | UITextBox | `include/UITextBox.h`, `source/UITextBox.c`, `source/UITextBoxInput.c`, private `source/UITextBoxInternal.h` | Text to type in or to read and select, on one line or several: the keys, the mouse, the clipboard, undo, scrolling, a placeholder, masked and read-only boxes, style ranges. |
-| UIGalleryFrame | `include/UIGalleryFrame.h`, `source/UIGalleryFrame.c` | Every element in every state, on five pages: `--ui-gallery`. |
+| UIList | `include/UIList.h`, `source/UIList.c`, private `source/UIListRow.{h,c}` (the rows a list and a tree recycle) | Rows of the caller's data, only those in view made: selection by data index, toggle cells, keys once entered, a drag source and a drop target. |
+| UITree | `include/UITree.h`, `source/UITree.c` | Nodes of the caller's, walked into nesting rows: expanding by the caller's state, selection by node, the list's keys and rows. |
+| UIDialog | `include/UIDialog.h`, `source/UIDialog.c` | A modal question: a title, a message, content, buttons with an answer each; Enter and Escape in one press from an entered field. |
+| UIColorPicker | `include/UIColorPicker.h`, `source/UIColorPicker.c` | A swatch and the popup that picks a `Color` or a `RenderColor`: a square, strips, channel fields and hex; its HSV conversions pure. |
+| UIToolbar | `include/UIToolbar.h`, `source/UIToolbar.c` | A strip of the kit's buttons from a list: buttons, toggles, choices of a group and separators, across or upright. |
+| UIGalleryFrame | `include/UIGalleryFrame.h`, `source/UIGalleryFrame.c` | Every element in every state, on six pages: `--ui-gallery`. |
 
 ## Using it
 
@@ -88,8 +94,8 @@ A variant costs, from cheapest:
 
 **Looks.** A look is a struct that starts with its kind's look base (`UIPanelLookBase`, `UIButtonLookBase`, `UIToggleLookBase`,
 `UISliderLookBase`, `UIScrollbarLookBase`, `UIScrollAreaLookBase`, `UIDropdownLookBase`, `UIMenuBarLookBase`, `UIStatusBarLookBase`, `UITextBoxLookBase`,
-`UIPropertyBoxLookBase`, `UILabelledLookBase`, `UIFormLookBase`, `UICompoundSliderLookBase`, `UIVectorRowLookBase`: the `Widget`, then the capability) and a
-`UILookVTable`:
+`UIPropertyBoxLookBase`, `UILabelledLookBase`, `UIFormLookBase`, `UICompoundSliderLookBase`, `UIVectorRowLookBase`, `UIListLookBase`, `UITreeLookBase`,
+`UIDialogLookBase`, `UIColorPickerLookBase`, `UIToolbarLookBase`: the `Widget`, then the capability) and a `UILookVTable`:
 
 | Slot | | What it does |
 |---|---|---|
@@ -108,8 +114,9 @@ kit registers its standard look for every kind under `UI_KIT_STANDARD_LOOK` (`UI
 follow). An element is made with the look its options name (`UIElementOptions.Look`), else the one the screen's theme names for its kind (`"look"` in
 the kind's block), else the standard one; a name no look answers gets the standard look and is logged once (per name). **Looks are fixed at
 creation:** swapping the theme changes the values a look reads, never an element's widget type. The looks of the label, the tooltip, a menu
-(its list and items), a dropdown's open list and rows, a menu bar's entries and the backdrop are not replaceable yet (`// TODO:` in `UIKit.c`'s
-kinds): `UIKit_RegisterLook` refuses the label, the tooltip, the menu and the backdrop kinds, and the other parts are the kit's own widget types.
+(its list and items), a dropdown's open list and rows, a menu bar's entries, the backdrop, a list's and a tree's rows, a colour picker's popup (its square,
+strips and fields' box) and what shows a drag are not replaceable yet (`// TODO:` in `UIKit.c`'s kinds): `UIKit_RegisterLook` refuses the label, the tooltip,
+the menu, the backdrop and the drag kinds, and the other parts are the kit's own widget types.
 
 A slider look also tells the behaviour how long its thumb is (`UISliderCapability_SetThumbLength`, in its own UI pixels, from its Update): a press within
 the thumb holds it where it was grabbed, and the thumb's centre travels the track less its length. A look that never says has a thumb of no length: the
@@ -121,7 +128,9 @@ A property box look gives its text box the same geometry (its look base holds a 
 (`UIPropertyBoxCapability_GetShownText`), the unit (`_GetUnit`, when `_ShowsUnit`) and the fill bar (`_ShowsFill`, `_GetFillShare`). A compound's look tells its
 behaviour the theme's metrics from its Update (`UILabelledCapability_SetSpacing`, `UIFormCapability_SetMetrics`, `UICompoundSliderCapability_SetMetrics`,
 `UIVectorRowCapability_SetMetrics`) and measures through the kind (`UILabelled_Measure`, `UIForm_Measure`, `UICompoundSlider_Measure`,
-`UIVectorRow_Measure`); the kind lays its parts out.
+`UIVectorRow_Measure`); the kind lays its parts out. The list, the tree and the dialog are told their metrics the same way (`UIListCapability_SetMetrics`,
+`UITreeCapability_SetMetrics`, `UIDialogCapability_SetMetrics`) and measure through the kind; a tool bar look lays its buttons out and measures them through
+`UIToolbar_Arrange` and `UIToolbar_Measure` with the theme's metrics, and draws its separators where its entries say (`UIToolbarCapability_GetEntryAt`).
 
 A text box look tells the behaviour where its text is (`UITextBoxCapability_SetGeometry`, in its Construct): its text's insets, a layout of the text with
 carets at a wrap width (`TextLayoutOptions.TracksOffsets`; the look owns the document and the layout, so the capability holds no laid-out text), a line's
@@ -404,6 +413,76 @@ cue), words (letters and digits, spaces, punctuation), and the undo.
   editor) needs. Reading another program's clipboard goes through GLFW, which waits for that program to answer: one that never does stalls the
   game during the paste (X11).
 
+**List** (`UIList.h`, kind `list`, `UIKit_CreateList`). Rows of the caller's data, at a fixed row height (the theme's `row_height`), through two providers: a
+count, and what a row shows (`UIListRowData`: a text, an icon, dimmed, up to `UI_LIST_MAX_CELLS` toggle cells' states). Only the rows in view have widgets,
+reused as the view moves (the row recycler), so a hundred thousand rows cost what the rows on screen cost: memory and time follow the view, never the data,
+and an idle list allocates nothing. It reads its count when it is made, so code can select and reveal rows at once. Calling code says what changed:
+`UIList_Refresh` (rows show something else), `UIList_InsertRows` and `UIList_RemoveRows`
+(the selection, the current row and the anchor move with their rows; a removed selected row drops out), `UIList_SetProvider` (other data altogether); a count
+that changed with no word is taken as it is.
+- **Selection** by data index (`UISelectionMode`: none, one, several), kept as sorted runs (`UIListRanges_*`, pure): a click selects only its row, Ctrl toggles
+  it, Shift selects from the anchor (the last row clicked without Shift), Ctrl and Shift add that range; a press on a selected row of several waits for its
+  release, so the press can drag them; a right press keeps a selection it lands in; a click on no row clears it. Each user change is `Changed` then `Committed`
+  with the number selected; code's (`UIList_SetSelected`, `_SetRangeSelected`, `_ClearSelection`) post nothing. `UIList_GetSelection` and
+  `UIList_GetSelectionRange` read the runs.
+- **Keys**: an edit element. Focused, it takes Enter (which enters it) and nothing else of its own; a press on it enters it too. Entered: Up and Down move
+  the current row (the keyboard's cursor, outlined while it has the focus) and select the row they reach (Page Up and Down by a view, Home and End to the
+  ends), with Shift selecting from the anchor and with Ctrl moving only the current row; Space selects the current row (Ctrl+Space toggles it), the
+  select-all action every row; Enter opens the current row (`Activated`); Escape and Tab leave.
+- **Events** carry the row as a `UInt64` value (`UIPropertyType_UInt64`, the data index): `Activated` (Enter, a double click), `DoubleClicked`,
+  `ContextRequested` (a right click on a row, or the menu key on the current row; `UIList_GetItemAt` and `UIList_GetCurrent` for a menu provider), and
+  `CellToggled` (its index the cell): a cell's state is the caller's data, which the caller flips and refreshes.
+- **Drags**: made a drag source (`UIListOptions.IsDragSource` and `DragKind`, `UIList_SetDragSource`), a press on a selected row moved past the drag distance
+  drags the selection (a press on a toggle cell, or a tree's expander, never drags), the payload's value the pressed row, its text the row's or how many
+  go. Made a target (`UIDragDrop_SetTarget`), it draws a line
+  where a drop would go while it would take it, scrolls when the pointer nears its top or bottom, and `UIList_GetDropIndex` says where a dropped point
+  falls. While a drag is on, no row looks hovered.
+- The wheel scrolls it and then goes on up; its bar is a `scrollbar`. Disabled, it swallows presses, takes no focus and dims its rows.
+
+**Tree** (`UITree.h`, kind `tree`, `UIKit_CreateTree`). Nodes that live with the caller, named by 64-bit ids, through a provider (`UITreeProvider`, every hook
+required): a node's children (the root's with `isRoot`), whether one is expanded and setting it (the caller keeps that state, so two trees over the same
+data can differ, or agree), what a node shows (as a list's row), and whether a node still exists. The tree walks the expanded nodes into rows (at most
+`UI_TREE_MAX_ROWS`, `UI_TREE_MAX_DEPTH` deep) when told the data changed (`UITree_Refresh`) or at once when the user folds one, and shows them as a list
+does, each row's content indented by its depth after its expander. Selection is by node and survives folding; `UITree_Refresh` drops nodes that are gone.
+Folding a node with the current row inside moves the current row to it. The keys are the list's, and Left folds the current node (or goes to its parent),
+Right unfolds it (or goes to its first child); a click on an expander folds or unfolds. Events carry the node as a `UInt64` value. A drag source as a list is
+(its payload's value the pressed node); as a target, `UITree_GetDropPlace` says above, below or into which row a point falls, shown by the line or a box
+around the row.
+
+**Modal dialog** (`UIDialog.h`, kind `dialog`, `UIKit_CreateDialog`). A title (a label of the `heading` variant), a message that wraps at the theme's
+`max_width`, a column for content calling code fills (`UIDialog_GetContentId`), and buttons from a list (`UIDialogButton`: an answer id, a text, at most one
+default and one cancel). It is made shut and opened once (`UIDialog_Open`, centred in the popup layer over a backdrop that takes every press), with the
+focus on a field given (entered at once) or on the default button when it can take the focus, else the first button that can; closed, it is
+destroyed, so each question makes a new one. A button's activation answers
+with its id: `Activated` under the dialog's id, the answer its index. **Enter answers with the default and Escape with the cancel in one press, even from
+inside an entered field**: the dialog is the field's ancestor, so it hears what the field leaves unused, and leaves the field itself first (Enter keeping,
+Escape cancelling). Enter on a field only focused enters it (the screen takes that press first). It closes at the first update after its answer was
+delivered, so a handler reads its fields by id, and closes alone (`UIScreen_ClosePopupAndItsOwn`): a dialog its answer opened stays. With no cancel button,
+Escape is swallowed; a disabled default or cancel button is as none (a rename's OK disabled until a name is typed answers nothing). While topmost it keeps
+the focus inside it, on a button that can take it; it closes unanswered when its owner goes or by `UIDialog_Close`.
+
+**Colour picker** (`UIColorPicker.h`, kind `color_picker`, `UIKit_CreateColorPicker`). A swatch (a press element: its click, Enter or Space opens the popup)
+showing a `Color` or a `RenderColor` (`UIColorKind`: four channels, or a tint, a brightness and an opacity) over a checkerboard where it is not opaque, a
+hyphen while several colours differ (`UIColorPicker_SetMixed`). The popup (below the swatch, above with no room) has a square of saturation (across) and
+value (up), a hue strip, an alpha strip with `HasAlpha`, a property box per channel and a hex text box ("#rrggbb" or "#rrggbbaa", applied as typed, put
+back if it reads as no colour when left); it opens with the hex field entered. The square and the strips are edit elements: drags, and the arrows by 0.01
+(0.001 with Shift) once entered. They are drawn from quads with a colour at each corner (`UIRenderContext_RenderPixelGradient`), the square from
+`UI_COLOR_PICKER_SQUARE_CELLS` across and down: no shader of its own. `Changed` comes with each move, `Committed` when the popup closes with another colour
+than it opened with, and Escape puts the first colour back (`Cancelled`) and closes it, in one press from an entered field. The conversions
+(`UIColorHsv_FromRgb`, `UIColorHsv_ToRgb`, `UIColor_ToHsv`, `UIColor_FromHsv`, `UIColor_TryParseHex`, `UIColor_WriteHex`) are pure and round-trip every
+`Color`; saturation or value at 0 keeps the hue, so a grey can be dragged back into colour.
+
+**Tool bar** (`UIToolbar.h`, kind `toolbar`, `UIKit_CreateToolbar`). A strip of buttons from a list (`UIToolbarItem`: buttons, toggles, choices of a group,
+separators), across or upright (`UIToolbar_SetDirection`); the editor makes its bars from its actions. Each item but a separator is a kit button of the
+variant its options name (`tool` by default) with the item's icon, a text if it has one (an action with no icon yet), and its name as hover text. The bar
+posts under its own id, the item's id as the index: `Activated` for a button, `Changed` then `Committed` with the new state for a toggle or a choice (a
+choice taken lets go of the others of its group; a click on the one taken posts nothing). `UIToolbar_SetIsToggled`, `_SetIsEnabled` and `_GetButtonId` work
+by item id, and code's changes post nothing. Each button is at least the theme's `button_size`, as wide across as the widest; a separator takes
+`separator_spacing` with its line in the middle. A bar shorter than its items cuts the last ones off: neither drawn nor hit past its end.
+
+**Drag and drop** is a service of the screen ([UIFramework.md](UIFramework.md), "Drag and drop"): a list and a tree are sources and targets through it, and
+any widget can be one.
+
 **Context menus** are a service of the screen ([UIFramework.md](UIFramework.md), "Context menus"): a provider set on a widget answers a right click or
 the menu key on it or on anything inside it that has no provider of its own, and opens a menu with `UIMenu_OpenAt`.
 
@@ -438,10 +517,13 @@ Elements post through `UIScreen_PostWidgetEvent`, or `UIScreen_PostWidgetMouseEv
 | `DoubleClicked` | after `Pressed`, at the second press in a row (`ClickCount` 2, not 3) | mouse data |
 | `Scrolled` | a button with `TakesWheel` | mouse data with `ScrollDelta` |
 | `ContextRequested` | a right press let go on the element, or the context menu action's key (`tbp:ui_context_menu`): then `Button` is the key, the place the element's middle, and `IsOverWidget` false | mouse data |
+| `CellToggled` | a toggle cell of a list's or a tree's row was clicked | the row as a `UInt64` (a list's data index, a tree's node); the cell as the index |
 
 The mouse data is in the event by value (`UIEvent.HasMouse`, `UIEvent.Mouse`: button, modifiers, screen position, scroll delta, whether over the element), so a handler needs no
 widget. A compound's parts post their value events under the compound's id, and a row of fields' under the row's with the field's axis as the event's index
-(`UIEvent.HasIndex`, `UIEvent.Index`, posted with `UIScreen_PostWidgetIndexedEvent`).
+(`UIEvent.HasIndex`, `UIEvent.Index`, posted with `UIScreen_PostWidgetIndexedEvent`). A dialog's answer and a tool bar's item come the same way: the answer
+or the item's id is the index. A list's and a tree's `Activated`, `DoubleClicked` and `ContextRequested` carry the row as a `UInt64` value (an id a double
+cannot hold), and their selection's `Changed` and `Committed` the number selected; a colour picker's value events carry a `Color` or a `RenderColor`.
 
 **Cues** (`UIEventKind_Cue`, [UIFramework.md](UIFramework.md), "Notifications"): elements post named sound cues for what they do, which nothing plays yet and which
 cost nothing while nobody subscribes. The kinds post `Hover` (the pointer came onto it), `Press` (a press on it while enabled; `Refused` while disabled), `Release`,
@@ -512,7 +594,7 @@ UI is scaled, and at 28 both go away while 14 pixels stays sharp enough to read 
 
 ## The gallery
 
-`sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test, on five pages (N switches), each in a scroll area, so the
+`sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test, on six pages (N switches), each in a scroll area, so the
 whole page scrolls at small window sizes while its status line stays below it. It keeps its pixels
 (`UIScalePolicy_ConstantPixels`): drag the window's edges, and the controls keep their size with more room around them. P switches to following the
 window's height and back, to compare them. T switches the theme (`tbp:test_flat`, `tbp:test_nine_slice`, whose art `asset_source/scripts/placeholder_ui.py`
@@ -552,6 +634,14 @@ property boxes with no limits and a unit, in a range with a fill, with a soft ra
 of a float's value and of a string; compound sliders across (named, and with no name) and upright; a form of labelled rows (a dropdown, a toggle, a text box,
 a property box, and a stacked one); rows of fields (a position, a rotation, a size of two, four for a quaternion, and one whose Y is mixed), whose events
 show their axis.
+
+The sixth page: what an editor's windows are built from. A tool bar across the page (buttons, two toggles, four choices of one group, a button with a text and
+a disabled one) and an upright one beside the tree; a list of a hundred thousand rows with two toggle cells each (shown, locked: the page's own data,
+flipped by `CellToggled`), every seventh row dimmed; a tree twelve levels deep whose nodes are worked out from their ids, its expanded state the page's,
+whose nodes drag but no list takes them (the refused look); two lists, the desk and the tray, that drag things between them and within one (the moved
+rows land selected where the line was); colour pickers with alpha, opaque, a light's `RenderColor`, mixed and disabled; and three dialogs: unsaved changes
+(Save the default, Cancel the cancel), a rename with its field entered and the old name selected, and a long message that wraps. The status line tells each
+selection, opened row, toggled cell, colour, answer and drop.
 
 ## Rules for a new element
 

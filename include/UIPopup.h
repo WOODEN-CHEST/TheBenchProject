@@ -198,6 +198,19 @@ Error UIScreen_OpenPopup(UIScreen* screen, uint64_t rootWidgetId, const UIPopupO
 Error UIScreen_ClosePopup(UIScreen* screen, uint64_t rootWidgetId);
 
 /**
+ * @brief Closes a popup and the popups opened from inside it (each whose owner lies in its subtree, or in one of theirs), from the top down
+ *        (UIPopupCloseReason_Code), and leaves every other popup open where it is: a dialog closing after its answer keeps the dialog its
+ *        answer opened. A popup left open whose focus would go back into the closed one gives it back where the closed one would have.
+ *        Safe from hooks and handlers.
+ * @param screen The screen; must not be NULL.
+ * @param rootWidgetId An open popup's root.
+ * @returns Success; ErrorCode_IllegalArgument if @p screen is NULL; ErrorCode_InvalidOperation if no open popup has that root; otherwise
+ *          a hook's error.
+ * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.
+ */
+Error UIScreen_ClosePopupAndItsOwn(UIScreen* screen, uint64_t rootWidgetId);
+
+/**
  * @brief Closes every open popup, from the top down (UIPopupCloseReason_Code). Safe from hooks and handlers.
  * @param screen The screen; must not be NULL.
  * @returns Success (also with none open); ErrorCode_IllegalArgument if @p screen is NULL; otherwise a hook's error.

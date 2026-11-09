@@ -14,6 +14,7 @@
 #include "ProgramTime.h"
 #include "GameInput.h"
 #include "UIAnimation.h"
+#include "UIDragDrop.h"
 #include "UIInput.h"
 #include "UIWidgetFactory.h"
 
@@ -196,7 +197,10 @@ typedef enum UIEventKindEnum
     UIEventKind_Cue,
     /** @brief A popup the widget owns closed (UIPopup.h; WidgetEventId is the UIPopupCloseReason). Like a state change, it is dropped
      *  when the owner is destroyed before delivery (a submenu's item going with its menu). */
-    UIEventKind_PopupClosed
+    UIEventKind_PopupClosed,
+    /** @brief A drag ended (UIDragDrop.h; WidgetEventId is the UIDragEvent, Drag the drag's record): dropped on the widget, delivered from
+     *  it, or cancelled. Like a widget's own event, delivered even if the widget was destroyed after it was posted. */
+    UIEventKind_Drag
 } UIEventKind;
 
 /**
@@ -272,6 +276,10 @@ typedef struct UIEventStruct
     bool HasIndex;
     /** @brief For UIEventKind_Widget: the part, when HasIndex (a row of fields' axis). */
     int32_t Index;
+    /** @brief For UIEventKind_Drag: whether Drag tells of the drag. */
+    bool HasDrag;
+    /** @brief For UIEventKind_Drag: the drag's record, when HasDrag. */
+    UIDragRecord Drag;
 } UIEvent;
 
 /**
@@ -307,6 +315,8 @@ typedef struct UIScreenButtonTrackingStruct
     Vector2 LastPosition;
     /** @brief How many presses in a row this one is (WidgetMouseInputArgs.ClickCount). */
     uint32_t ClickCount;
+    /** @brief Whether its widget's drag source was asked and dragged nothing (it is asked once per press, UIDragDrop.h). */
+    bool IsDragRefused;
 } UIScreenButtonTracking;
 
 /**
@@ -455,6 +465,12 @@ typedef struct UIScreenStruct
     GenericBuffer _popups;
     /** @brief Context menus' side table (UIContextMenu.h; a private element type), one entry per widget with a provider. Owned. */
     GenericBuffer _contextMenus;
+    /** @brief Drag sources' and drop targets' side tables (UIDragDrop.h; a private element type), one entry per widget that declared
+     *  itself one. Owned. */
+    GenericBuffer _dragSources;
+    GenericBuffer _dragTargets;
+    /** @brief The drag in progress (UIDragDrop.h). */
+    UIScreenDrag _drag;
 
     /** @brief True while UIScreen_Update runs. */
     bool _isUpdating;

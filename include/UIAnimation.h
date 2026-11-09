@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 // Color and Vector2 (animatable value kinds) come from raylib; RenderColor (a tint value kind) comes from the
 // renderer. All three are part of a property value, so these includes are unavoidable here.
 #include "raylib/raylib.h"
@@ -92,7 +93,10 @@ typedef enum UIPropertyTypeEnum
     /** @brief A bool: an event's or a property's plain value. Nothing interpolates it, so keyframes refuse it. */
     UIPropertyType_Bool,
     /** @brief A double: an event's or a property's plain value. Nothing interpolates it, so keyframes refuse it. */
-    UIPropertyType_Double
+    UIPropertyType_Double,
+    /** @brief A 64-bit unsigned integer: an event's or a property's plain value, an id a double cannot hold exactly (a tree's node, a
+     *  world object). Nothing interpolates it, so keyframes refuse it. */
+    UIPropertyType_UInt64
 } UIPropertyType;
 
 /**
@@ -112,6 +116,8 @@ typedef union UIPropertyDataUnion
     bool BoolValue;
     /** @brief The value when the type is UIPropertyType_Double. */
     double DoubleValue;
+    /** @brief The value when the type is UIPropertyType_UInt64. */
+    uint64_t UInt64Value;
 } UIPropertyData;
 
 /**
@@ -235,6 +241,16 @@ static inline UIPropertyValue UIPropertyValue_FromDouble(double value)
 }
 
 /**
+ * @brief Makes a 64-bit unsigned integer property value: an id.
+ * @param value The value.
+ * @returns The typed value.
+ */
+static inline UIPropertyValue UIPropertyValue_FromUInt64(uint64_t value)
+{
+    return (UIPropertyValue){ .Type = UIPropertyType_UInt64, .Data.UInt64Value = value };
+}
+
+/**
  * @brief Returns whether @p type is one of the UIPropertyType values.
  * @param type The type.
  * @returns true if valid.
@@ -242,7 +258,7 @@ static inline UIPropertyValue UIPropertyValue_FromDouble(double value)
 bool UIPropertyType_IsValid(UIPropertyType type);
 
 /**
- * @brief Returns whether keyframes can drive a property of @p type: the values that blend, not a bool or a double.
+ * @brief Returns whether keyframes can drive a property of @p type: the values that blend, not a bool, a double or an id.
  * @param type The type.
  * @returns true if animations of the type are accepted.
  */
@@ -250,7 +266,7 @@ bool UIPropertyType_IsAnimatable(UIPropertyType type);
 
 /**
  * @brief Returns whether every number in a value is finite (a float or a double, vector components, a render color's
- *        brightness and opacity; Colors and bools are always finite). A value with an invalid type is not finite.
+ *        brightness and opacity; colours, bools and ids are always finite). A value with an invalid type is not finite.
  * @param value The value; must not be NULL.
  * @returns true if finite.
  */

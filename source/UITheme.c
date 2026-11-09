@@ -185,6 +185,86 @@ static const UIThemePartDescriptor VectorRowParts[UIVectorRowPart_Count] =
     [UIVectorRowPart_TagText] = COLORS_PART("tag_text"),
 };
 
+static const UIThemePartDescriptor ListParts[UIListPart_Count] =
+{
+    [UIListPart_Padding] = VECTOR_PART("padding", 1.0f, 1.0f),
+    [UIListPart_RowHeight] = NUMBER_PART("row_height", 22.0f),
+    [UIListPart_RowPadding] = NUMBER_PART("row_padding", 6.0f),
+    [UIListPart_CellSize] = NUMBER_PART("cell_size", 14.0f),
+    [UIListPart_InsertionThickness] = NUMBER_PART("insertion_thickness", 2.0f),
+    [UIListPart_Background] = BOX_PART("background"),
+    [UIListPart_Row] = BOX_PART("row"),
+    [UIListPart_Current] = BOX_PART("current"),
+    [UIListPart_Text] = COLORS_PART("text"),
+    [UIListPart_Cell] = BOX_PART("cell"),
+    [UIListPart_CellText] = COLORS_PART("cell_text"),
+    [UIListPart_Insertion] = BOX_PART("insertion"),
+};
+static const UIThemePartDescriptor TreeParts[UITreePart_Count] =
+{
+    [UITreePart_Padding] = VECTOR_PART("padding", 1.0f, 1.0f),
+    [UITreePart_RowHeight] = NUMBER_PART("row_height", 22.0f),
+    [UITreePart_RowPadding] = NUMBER_PART("row_padding", 6.0f),
+    [UITreePart_Indent] = NUMBER_PART("indent", 16.0f),
+    [UITreePart_CellSize] = NUMBER_PART("cell_size", 14.0f),
+    [UITreePart_InsertionThickness] = NUMBER_PART("insertion_thickness", 2.0f),
+    [UITreePart_Background] = BOX_PART("background"),
+    [UITreePart_Row] = BOX_PART("row"),
+    [UITreePart_Current] = BOX_PART("current"),
+    [UITreePart_Text] = COLORS_PART("text"),
+    [UITreePart_Expander] = COLORS_PART("expander"),
+    [UITreePart_Cell] = BOX_PART("cell"),
+    [UITreePart_CellText] = COLORS_PART("cell_text"),
+    [UITreePart_Insertion] = BOX_PART("insertion"),
+};
+static const UIThemePartDescriptor DialogParts[UIDialogPart_Count] =
+{
+    [UIDialogPart_Padding] = VECTOR_PART("padding", 14.0f, 12.0f),
+    [UIDialogPart_Spacing] = NUMBER_PART("spacing", 10.0f),
+    [UIDialogPart_ButtonSpacing] = NUMBER_PART("button_spacing", 8.0f),
+    [UIDialogPart_ButtonWidth] = NUMBER_PART("button_width", 80.0f),
+    [UIDialogPart_MinSize] = VECTOR_PART("min_size", 240.0f, 0.0f),
+    [UIDialogPart_MaxWidth] = NUMBER_PART("max_width", 480.0f),
+    [UIDialogPart_Background] = BOX_PART("background"),
+};
+static const UIThemePartDescriptor ColorPickerParts[UIColorPickerPart_Count] =
+{
+    [UIColorPickerPart_MinSize] = VECTOR_PART("min_size", 40.0f, 22.0f),
+    [UIColorPickerPart_CheckerSize] = NUMBER_PART("checker_size", 6.0f),
+    [UIColorPickerPart_Padding] = VECTOR_PART("padding", 8.0f, 8.0f),
+    [UIColorPickerPart_Spacing] = NUMBER_PART("spacing", 6.0f),
+    [UIColorPickerPart_SquareSize] = NUMBER_PART("square_size", 160.0f),
+    [UIColorPickerPart_StripWidth] = NUMBER_PART("strip_width", 16.0f),
+    [UIColorPickerPart_FieldWidth] = NUMBER_PART("field_width", 52.0f),
+    [UIColorPickerPart_Swatch] = BOX_PART("swatch"),
+    [UIColorPickerPart_CheckerLight] = COLORS_PART("checker_light"),
+    [UIColorPickerPart_CheckerDark] = COLORS_PART("checker_dark"),
+    [UIColorPickerPart_Mixed] = COLORS_PART("mixed"),
+    [UIColorPickerPart_Popup] = BOX_PART("popup"),
+    [UIColorPickerPart_Frame] = BOX_PART("frame"),
+    [UIColorPickerPart_Marker] = BOX_PART("marker"),
+    [UIColorPickerPart_StripMarker] = BOX_PART("strip_marker"),
+};
+static const UIThemePartDescriptor ToolbarParts[UIToolbarPart_Count] =
+{
+    [UIToolbarPart_Padding] = VECTOR_PART("padding", 3.0f, 3.0f),
+    [UIToolbarPart_Spacing] = NUMBER_PART("spacing", 2.0f),
+    [UIToolbarPart_ButtonSize] = VECTOR_PART("button_size", 26.0f, 26.0f),
+    [UIToolbarPart_SeparatorThickness] = NUMBER_PART("separator_thickness", 1.0f),
+    [UIToolbarPart_SeparatorSpacing] = NUMBER_PART("separator_spacing", 9.0f),
+    [UIToolbarPart_Background] = BOX_PART("background"),
+    [UIToolbarPart_Separator] = BOX_PART("separator"),
+};
+static const UIThemePartDescriptor DragParts[UIDragPart_Count] =
+{
+    [UIDragPart_Padding] = VECTOR_PART("padding", 6.0f, 3.0f),
+    [UIDragPart_Offset] = SIGNED_VECTOR_PART("offset", 14.0f, 10.0f),
+    [UIDragPart_MaxWidth] = NUMBER_PART("max_width", 240.0f),
+    [UIDragPart_Ghost] = BOX_PART("ghost"),
+    [UIDragPart_Text] = COLORS_PART("text"),
+    [UIDragPart_Target] = BOX_PART("target"),
+};
+
 static const struct
 {
     const unsigned char* Name;
@@ -212,6 +292,12 @@ Kinds[UIElementKind_Count] =
     [UIElementKind_Form] = { u8"form", FormParts, UIFormPart_Count },
     [UIElementKind_CompoundSlider] = { u8"compound_slider", CompoundSliderParts, UICompoundSliderPart_Count },
     [UIElementKind_VectorRow] = { u8"vector_row", VectorRowParts, UIVectorRowPart_Count },
+    [UIElementKind_List] = { u8"list", ListParts, UIListPart_Count },
+    [UIElementKind_Tree] = { u8"tree", TreeParts, UITreePart_Count },
+    [UIElementKind_Dialog] = { u8"dialog", DialogParts, UIDialogPart_Count },
+    [UIElementKind_ColorPicker] = { u8"color_picker", ColorPickerParts, UIColorPickerPart_Count },
+    [UIElementKind_Toolbar] = { u8"toolbar", ToolbarParts, UIToolbarPart_Count },
+    [UIElementKind_Drag] = { u8"drag", DragParts, UIDragPart_Count },
 };
 
 

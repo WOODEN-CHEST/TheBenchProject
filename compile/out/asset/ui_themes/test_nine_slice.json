@@ -86,6 +86,10 @@
             },
             "text": { "normal": "@ink", "disabled": "@text_disabled" },
             "variants": {
+                "tool": {
+                    "padding": [ 5, 5 ],
+                    "min_size": [ 28, 28 ]
+                },
                 "danger": {
                     "background": { "colors": { "normal": "@danger", "hovered": "@danger_hover", "pressed": "@danger_pressed", "focused": "@danger_focus" } }
                 }
@@ -265,6 +269,79 @@
             "z_tag": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@axis_z" } },
             "w_tag": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@axis_w" } },
             "tag_text": { "normal": "@axis_text" }
+        },
+        "list": {
+            "padding": [ 4, 4 ],
+            "row_height": 24,
+            "row_padding": 6,
+            "cell_size": 16,
+            "insertion_thickness": 2,
+            "background": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@paper", "hovered": "@paper_hover", "focused": "@paper_hover", "entered": "@paper_hover", "disabled": "@paper_disabled" } },
+            "row": { "kind": "flat", "colors": { "normal": "#00000000", "hovered": "@paper_pressed", "selected": "@accent", "disabled": "#00000000" } },
+            "current": { "kind": "flat", "colors": { "normal": "#00000000" }, "outline": { "thickness": 1, "colors": { "normal": "@ink_dim", "entered": "@ink" } } },
+            "text": { "normal": "@ink", "disabled": "@text_disabled" },
+            "cell": { "kind": "flat", "colors": { "normal": "#00000000", "hovered": "@paper_hover", "selected": "@paper_fill" } },
+            "cell_text": { "normal": "@paper_disabled", "hovered": "@ink_dim", "selected": "@ink" },
+            "insertion": { "kind": "flat", "colors": { "normal": "@danger" } }
+        },
+        "tree": {
+            "padding": [ 4, 4 ],
+            "row_height": 24,
+            "row_padding": 6,
+            "indent": 16,
+            "cell_size": 16,
+            "insertion_thickness": 2,
+            "background": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@paper", "hovered": "@paper_hover", "focused": "@paper_hover", "entered": "@paper_hover", "disabled": "@paper_disabled" } },
+            "row": { "kind": "flat", "colors": { "normal": "#00000000", "hovered": "@paper_pressed", "selected": "@accent", "disabled": "#00000000" } },
+            "current": { "kind": "flat", "colors": { "normal": "#00000000" }, "outline": { "thickness": 1, "colors": { "normal": "@ink_dim", "entered": "@ink" } } },
+            "text": { "normal": "@ink", "disabled": "@text_disabled" },
+            "expander": { "normal": "@ink_dim", "hovered": "@ink", "disabled": "@text_disabled" },
+            "cell": { "kind": "flat", "colors": { "normal": "#00000000", "hovered": "@paper_hover", "selected": "@paper_fill" } },
+            "cell_text": { "normal": "@paper_disabled", "hovered": "@ink_dim", "selected": "@ink" },
+            "insertion": { "kind": "flat", "colors": { "normal": "@danger" } }
+        },
+        "dialog": {
+            "padding": [ 16, 14 ],
+            "spacing": 10,
+            "button_spacing": 8,
+            "button_width": 84,
+            "min_size": [ 260, 0 ],
+            "max_width": 500,
+            "background": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@surface" } }
+        },
+        "color_picker": {
+            "min_size": [ 44, 26 ],
+            "checker_size": 6,
+            "padding": [ 10, 10 ],
+            "spacing": 6,
+            "square_size": 160,
+            "strip_width": 18,
+            "field_width": 56,
+            "swatch": { "kind": "flat", "colors": { "normal": "#00000000" }, "outline": { "thickness": 2, "colors": { "normal": "@raised", "hovered": "@accent", "pressed": "@accent_bright", "focused": "@raised_focus", "disabled": "@raised_disabled" } } },
+            "checker_light": { "normal": "@paper" },
+            "checker_dark": { "normal": "@paper_pressed" },
+            "mixed": { "normal": "@ink", "disabled": "@text_disabled" },
+            "popup": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@surface" } },
+            "frame": { "kind": "flat", "colors": { "normal": "#00000000" }, "outline": { "thickness": 1, "colors": { "normal": "@surface_sunken", "hovered": "@accent", "pressed": "@accent_bright", "focused": "@accent", "entered": "@editing" } } },
+            "marker": { "kind": "flat", "colors": { "normal": "#00000000" }, "outline": { "thickness": 2, "colors": { "normal": "#ffffff" } } },
+            "strip_marker": { "kind": "flat", "colors": { "normal": "#00000000" }, "outline": { "thickness": 2, "colors": { "normal": "#ffffff" } } }
+        },
+        "toolbar": {
+            "padding": [ 4, 4 ],
+            "spacing": 3,
+            "button_size": [ 28, 28 ],
+            "separator_thickness": 2,
+            "separator_spacing": 11,
+            "background": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@surface_sunken" } },
+            "separator": { "kind": "flat", "colors": { "normal": "@surface" } }
+        },
+        "drag": {
+            "padding": [ 8, 4 ],
+            "offset": [ 14, 10 ],
+            "max_width": 240,
+            "ghost": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@paper", "selected": "@selected", "disabled": "@paper_disabled" } },
+            "text": { "normal": "@ink", "disabled": "@text_disabled" },
+            "target": { "kind": "flat", "colors": { "normal": "#00000000" }, "outline": { "thickness": 2, "colors": { "normal": "@accent_bright" } } }
         }
     }
 }

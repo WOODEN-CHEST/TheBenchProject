@@ -55,3 +55,15 @@ Error UIStandardLooks_RegisterTooltip(UIKit* kit, UIWidgetFactory* factory, uint
  * @returns Success, or the factory's error.
  */
 Error UIStandardLooks_RegisterBackdrop(UIKit* kit, UIWidgetFactory* factory, uint64_t* outTypeId);
+
+/**
+ * @brief Registers the widget type a screen shows a drag with (UIDragDrop.h): over the whole surface in the overlay layer, the dragged
+ *        item's text in the theme's drag kind's ghost box at its offset from the pointer (kept on the surface), and the target's frame over
+ *        the target that would take the drop, clipped as the target is. A plain widget type made with no arguments; the kit names it to
+ *        the factory (UIWidgetFactory_SetDragGhostType).
+ * @param kit The kit, whose capabilities exist already; must not be NULL.
+ * @param factory The kit's factory; must not be NULL.
+ * @param outTypeId [out] Receives the type's id. Must not be NULL.
+ * @returns Success, or the factory's error.
+ */
+Error UIStandardLooks_RegisterDragGhost(UIKit* kit, UIWidgetFactory* factory, uint64_t* outTypeId);

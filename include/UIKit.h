@@ -8,11 +8,14 @@
 #include "StackWidget.h"
 #include "UIButton.h"
 #include "UIChoice.h"
+#include "UIColorPicker.h"
 #include "UICompoundSlider.h"
+#include "UIDialog.h"
 #include "UIDropdown.h"
 #include "UIElement.h"
 #include "UILabel.h"
 #include "UILabelled.h"
+#include "UIList.h"
 #include "UIMenu.h"
 #include "UIMenuBar.h"
 #include "UIPanel.h"
@@ -25,6 +28,8 @@
 #include "UITextBox.h"
 #include "UITheme.h"
 #include "UIToggle.h"
+#include "UIToolbar.h"
+#include "UITree.h"
 #include "UIValue.h"
 #include "UIVectorRow.h"
 
@@ -108,6 +113,16 @@ typedef enum UIElementCapabilityEnum
     UIElementCapability_CompoundSlider,
     /** @brief UIVectorRowCapability (UIVectorRow.h). */
     UIElementCapability_VectorRow,
+    /** @brief UIListCapability (UIList.h). */
+    UIElementCapability_List,
+    /** @brief UITreeCapability (UITree.h). */
+    UIElementCapability_Tree,
+    /** @brief UIDialogCapability (UIDialog.h). */
+    UIElementCapability_Dialog,
+    /** @brief UIColorPickerCapability (UIColorPicker.h). */
+    UIElementCapability_ColorPicker,
+    /** @brief UIToolbarCapability (UIToolbar.h). */
+    UIElementCapability_Toolbar,
     /** @brief The number of capabilities. */
     UIElementCapability_Count
 } UIElementCapability;
@@ -166,6 +181,12 @@ typedef struct UIKitStruct
     uint64_t _menuListType;
     uint64_t _menuItemType;
     uint64_t _menuBarEntryType;
+    /** @brief The kit's own widget type a list's and a tree's rows are. */
+    uint64_t _listRowType;
+    /** @brief The kit's own widget types a colour picker's popup is made of: the popup, the square, a strip. */
+    uint64_t _colorPopupType;
+    uint64_t _colorSquareType;
+    uint64_t _colorStripType;
     /** @brief The registered looks (a private element type): kind, name, widget type, hooks. Owned. */
     GenericBuffer _looks;
     /** @brief Per factory type id less one, the index + 1 of its look in _looks (uint32_t), 0 for a type that is no look. Owned. */
@@ -332,3 +353,27 @@ Error UIKit_CreateCompoundSlider(UIKit* self, UIScreen* screen, uint64_t parentI
 /** @brief Makes a row of fields (UIVectorRow.h) with its property boxes, each of the look the theme names for the property box. See the
  *  comment above for the parameters and the result. */
 Error UIKit_CreateVectorRow(UIKit* self, UIScreen* screen, uint64_t parentId, const UIVectorRowOptions* options, uint64_t* outId);
+/** @brief Makes a list (UIList.h) with the box that cuts its rows and its scroll bar (of the look the theme names for the scroll bar), its count
+ *  read from its provider, a drag source when its options say so (IsDragSource). See the comment above for the parameters and the result. */
+Error UIKit_CreateList(UIKit* self, UIScreen* screen, uint64_t parentId, const UIListOptions* options, uint64_t* outId);
+/** @brief Makes a tree (UITree.h) with the box that cuts its rows and its scroll bar (of the look the theme names for the scroll bar), a drag
+ *  source when its options say so (IsDragSource). See the comment above for the parameters and the result. */
+Error UIKit_CreateTree(UIKit* self, UIScreen* screen, uint64_t parentId, const UITreeOptions* options, uint64_t* outId);
+/**
+ * @brief Makes a modal dialog (UIDialog.h), shut: neither a root nor a child until UIDialog_Open opens it as a popup. Its title (a label of
+ *        the theme's "heading" variant), its message (a label that wraps), an empty column for content and its buttons (each of the look the
+ *        theme names for the button) are made with it.
+ * @param self The kit; must not be NULL.
+ * @param screen The screen; must not be NULL.
+ * @param options The options; must not be NULL. Read for the call.
+ * @param outId [out] Receives the dialog's id, or WIDGET_ID_INVALID on a failure (nothing stays behind). Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if a pointer is NULL; ErrorCode_ArgumentOutOfRange for options that are not valid
+ *          (UIDialogOptions_IsValid); otherwise the first error of making it or its parts.
+ */
+Error UIKit_CreateDialog(UIKit* self, UIScreen* screen, const UIDialogOptions* options, uint64_t* outId);
+/** @brief Makes a colour picker (UIColorPicker.h): its swatch; its popup is made each time it opens. See the comment above for the parameters
+ *  and the result. */
+Error UIKit_CreateColorPicker(UIKit* self, UIScreen* screen, uint64_t parentId, const UIColorPickerOptions* options, uint64_t* outId);
+/** @brief Makes a tool bar (UIToolbar.h) with a button for each item but its separators (each of the look the theme names for the button,
+ *  of the variant its options name, its name its hover text). See the comment above for the parameters and the result. */
+Error UIKit_CreateToolbar(UIKit* self, UIScreen* screen, uint64_t parentId, const UIToolbarOptions* options, uint64_t* outId);

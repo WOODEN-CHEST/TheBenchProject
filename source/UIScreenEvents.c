@@ -35,11 +35,12 @@ static bool IsMatch(const Subscription* subscription, const UIEvent* event)
 }
 
 /* A state change describes a widget that exists: once the widget is destroyed it is dropped. A widget's own event (a
- * button's "activated") is delivered even if the widget was destroyed after posting it, since it carries everything by
+ * button's "activated") and a drag's are delivered even if the widget was destroyed after posting it, since they carry everything by
  * value. */
 static bool IsDeliverable(const UIScreen* self, const UIEvent* event)
 {
-    return (event->Kind == UIEventKind_Widget) || (event->Kind == UIEventKind_Cue) || (UIScreen_InternalResolve(self, event->WidgetId) != NULL);
+    return (event->Kind == UIEventKind_Widget) || (event->Kind == UIEventKind_Cue) || (event->Kind == UIEventKind_Drag)
+        || (UIScreen_InternalResolve(self, event->WidgetId) != NULL);
 }
 
 static void RemoveMarkedSubscriptions(UIScreen* self)

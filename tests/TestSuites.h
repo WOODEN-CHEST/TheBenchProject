@@ -383,6 +383,37 @@ void UIPropertyBoxTests_Run(TestRun* run);
  *  Tab along it and mixed per axis (UICompoundTests.c). */
 void UICompoundTests_Run(TestRun* run);
 
+/** @brief The list: the selection's runs, a hundred thousand rows costing the rows in view with no allocation while idle, the selection by
+ *  clicks with Ctrl and Shift, a press waiting for its release, the modes, the keys only once entered, Enter and the double click, the
+ *  context menu of a row, rows inserted, removed and counted anew under the selection, toggle cells, the wheel, disabled, where a point
+ *  falls (UIListTests.c). */
+void UIListTests_Run(TestRun* run);
+
+/** @brief The tree: the walk of what is expanded (and its depth limit), a hundred thousand nodes costing the rows in view, the expander and
+ *  the side keys, selected nodes outliving a collapse but not a removal, events naming their node whole, where a drop would go
+ *  (UITreeTests.c). */
+void UITreeTests_Run(TestRun* run);
+
+/** @brief The modal dialog: Enter and Escape answering from an entered field in one press (the field's own events first), Enter entering a
+ *  field only focused, the focus moving in and coming back and kept inside, a destroyed owner, buttons by the mouse and the backdrop, no
+ *  cancel, a typed value committed before the answer, options refused (UIDialogTests.c). */
+void UIDialogTests_Run(TestRun* run);
+
+/** @brief The colour picker: every colour back through HSV, hex read and written, dragging changing and closing committing, Escape putting
+ *  the colour back, the hex field and a bad hex, a channel field, mixed, a RenderColor's brightness and opacity, disabled and a destroyed
+ *  swatch (UIColorPickerTests.c). */
+void UIColorPickerTests_Run(TestRun* run);
+
+/** @brief Drag and drop: the distance a press moves before it drags, a target that takes it and one that refuses (the pointer's shape, what
+ *  shows the drag), the drop to both and its record, Escape, a target and a source going, a drag across a scroll area into a list that
+ *  scrolls, a plain widget as a source, a payload's text cut (UIDragDropTests.c). */
+void UIDragDropTests_Run(TestRun* run);
+
+/** @brief The tool bar: its items laid out in a row and a column, its buttons' clicks as its events (a button, a toggle, a choice of a
+ *  group, a disabled item, the keyboard), states set by calling code without events, its names as hover text, bad items refused
+ *  (UIToolbarTests.c). */
+void UIToolbarTests_Run(TestRun* run);
+
 /** @brief Easing, keyframe validation and evaluation of typed values (UIAnimationTests.c). */
 void UIAnimationTests_Run(TestRun* run);
 

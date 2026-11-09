@@ -30,12 +30,14 @@ The elements calling code builds a UI from (the kit, panels, buttons, stacks, th
 - **UIScreen** (`UIScreen.h`, split by job into `source/UIScreen.c` (registry, roots, draw order, destruction,
   update/render, layout, hit testing and coordinates through render transforms), `UIScreenInput.c` (pointer, buttons, wheel, keys,
   text, focus), `UIScreenNavigation.c`, `UIScreenAnimation.c`, `UIScreenEvents.c` (notifications and cues), `UIScreenTooltips.c`
-  (hover text), `UIScreenPopups.c` (the popup layer) and `UIScreenContextMenus.c` (context menu providers), sharing the private
-  `source/UIInternal.h`).
+  (hover text), `UIScreenPopups.c` (the popup layer), `UIScreenContextMenus.c` (context menu providers) and `UIScreenDragDrop.c` (drag
+  sessions), sharing the private `source/UIInternal.h`).
 - **UITooltip** (`UITooltip.h`, implemented in `source/UIScreenTooltips.c`): hover text, a service of the screen (below, "Hover text").
 - **UIPopup** (`UIPopup.h`, implemented in `source/UIScreenPopups.c`): the popup layer, a service of the screen (below, "Popups").
 - **UIContextMenu** (`UIContextMenu.h`, implemented in `source/UIScreenContextMenus.c`): who answers a context request, a service of the
   screen (below, "Context menus").
+- **UIDragDrop** (`UIDragDrop.h`, implemented in `source/UIScreenDragDrop.c`): drag and drop, a service of the screen (below, "Drag and
+  drop").
 - **LabelWidget** (`LabelWidget.h/.c`): the first concrete widget (below).
 - **UITestFrame** (`UITestFrame.h/.c`): a debug game frame running a screen over the world test (see
   [WorldRuntime.md](WorldRuntime.md)).
@@ -384,7 +386,8 @@ for it. A box of no size holds no point.
 
 ## Notifications
 
-State changes (`UIEventKind_HoverChanged`, `FocusChanged`, `TabChanged`, `ActiveChanged`, `EnteredChanged`), a popup closing (`UIEventKind_PopupClosed`, "Popups" above), sound cues (`UIEventKind_Cue`, below) and a widget type's own events
+State changes (`UIEventKind_HoverChanged`, `FocusChanged`, `TabChanged`, `ActiveChanged`, `EnteredChanged`), a popup closing (`UIEventKind_PopupClosed`, "Popups" above), a drag's end
+(`UIEventKind_Drag`, "Drag and drop" below), sound cues (`UIEventKind_Cue`, below) and a widget type's own events
 (`UIScreen_PostWidgetEvent`, `UIEventKind_Widget` with a type-defined id and an optional `UIPropertyValue`; `UIScreen_PostWidgetMouseEvent` adds the mouse's data by value,
 `UIEvent.HasMouse` and `UIEvent.Mouse`: button, modifiers, screen position, scroll delta, whether over the widget; `UIScreen_PostWidgetIndexedEvent` adds an index saying
 which of the widget's parts it is about, `UIEvent.HasIndex` and `UIEvent.Index`, as a row of fields says its axis) are
@@ -428,7 +431,9 @@ reads `UITooltip_GetCurrent` in its Update and places itself in its Layout. With
 
 Things that open above everything (a dropdown's list, a menu, a modal dialog) are roots of the `Popup` layer opened through the screen
 (`UIPopup.h`): `UIScreen_OpenPopup(screen, rootId, &options)` takes an initialized widget that is detached or a root, and
-`UIScreen_ClosePopup(screen, rootId)` closes it with every popup opened above it. `UIScreen_CloseAllPopups`, `UIScreen_IsPopupOpen`,
+`UIScreen_ClosePopup(screen, rootId)` closes it with every popup opened above it; `UIScreen_ClosePopupAndItsOwn` closes it with only the popups
+opened from inside it (each whose owner lies in it, or in one of those), leaving the others open, and a popup left open whose focus would go
+back into it gives it back where the closed one would have (a dialog closing after its answer keeps the next question its answer opened). `UIScreen_CloseAllPopups`, `UIScreen_IsPopupOpen`,
 `UIScreen_GetPopupCount` and `UIScreen_GetPopupAt` are the rest. All are safe from hooks and handlers; a popup opened in a tick takes input
 from the next.
 
@@ -446,7 +451,8 @@ from the next.
   the owner decides). Escape closes the topmost popup when it `ClosesOnEscape`; a topmost popup that refuses Escape keeps every popup under
   it open too. A popup closes when its owner (`OwnerId`) is destroyed,
   detached or hidden, and when its root goes. Popups nest, and close from the inside out. A popup's root is **destroyed** when it closes: open
-  a new one each time. It posts the `Close` cue (`Open` when it opens).
+  a new one each time. An element entered inside it is left first, keeping what it holds (`UILeaveReason_Keep`: a typed value counts; Escape's
+  close has cancelled it already). It posts the `Close` cue (`Open` when it opens).
 - **Its owner is told:** `UIEventKind_PopupClosed`, delivered under the owner's id with the `UIPopupCloseReason` as the `WidgetEventId`
   (code, a press outside, Escape, the owner gone). Like a state change, it is dropped when the owner is destroyed before delivery.
 - **Modal** (`IsModal`): a backdrop under it, a root of the same layer over the whole surface, takes every press, the wheel and hover
@@ -469,6 +475,31 @@ widget, the widget the request is for, the place in normalized screen coordinate
 usually `UIMenu_OpenAt` ([UIElements.md](UIElements.md), "Menus"); with no provider up the tree nothing happens. Requests come from a right
 press let go over the widget it began on (the pointer's place), from the context menu action on the focused widget when nothing used it (the
 widget's middle), and from an element's `UIElement_OnContextKey`. The element's `ContextRequested` event is posted either way.
+
+## Drag and drop
+
+One drag at a time per screen (`UIDragDrop.h`), from a widget that declared itself a source to one that declared itself a target, wherever they
+stand (two scroll areas, two windows on the screen), in side tables emptied of a widget at its teardown: what does not drag costs nothing.
+
+- **Sources**: `UIDragDrop_SetSource(screen, id, provider, userData)`. When a press on the source, or on anything inside it that is not a source
+  of its own, moves `UI_DRAG_START_DISTANCE` UI pixels, the provider is asked once, from the place the press began, what it would drag: a
+  `UIDragPayload` (a kind the caller chooses, a value saying which one, a text, `UIDragPayload_SetText` or `_SetTextCount` for "3 rows") and
+  whether anything drags at all (a press on a part that does not). A hidden-cursor drag never becomes one.
+- **The drag takes the press over**: its holder hears `OnPressLost` (a button pressed to start a drag does not activate), and the press stays
+  held with no widget, so nothing else takes the pointer. Each update after the input the screen finds the target under the pointer: the
+  top-most widget there that declared itself one (`UIDragDrop_SetTarget(screen, id, acceptor, userData)`) or its nearest such ancestor, and asks
+  its acceptor whether it would take the payload there (`UIDragQuery`: the payload, both ids, the place, the modifiers).
+  `UIDragDrop_GetTargetState(screen, id)` tells a widget whether it is the target and would take it (a list draws where the drop would go);
+  `UIDragDrop_GetSession` tells the whole drag. The pointer shows the arrow over a target that would take it, the not-allowed shape elsewhere.
+- **What shows it** is a widget of the type the factory names (`UIWidgetFactory_SetDragGhostType`; the kit registers a theme-driven one, the
+  `drag` kind), made once at the first drag as a root of the overlay layer: the payload's text beside the pointer, and a frame over the target
+  that would take it, cut where the target is cut.
+- **It ends** at the press's release: over a target that would take it, `UIEventKind_Drag` notifications go to the target
+  (`UIDragEvent_Dropped`) and to the source (`UIDragEvent_Delivered`), each with the drag's record by value (`UIEvent.HasDrag`, `UIEvent.Drag`:
+  the payload's kind and value, both ids, the place and the modifiers held); anywhere else `UIDragEvent_Cancelled` goes to the source. Escape
+  (consumed: the game does not get it), `UIDragDrop_Cancel` and the source going (destroyed, detached, hidden) cancel it; a target that goes is
+  forgotten and the pointer's place picks another. Like a widget's own events, these are delivered even when their widget was destroyed after
+  posting them.
 
 ## Update order
 
@@ -519,8 +550,9 @@ Properties are typed. Every widget has the base properties (`WidgetBaseProperty_
 (float), `RenderTint` (RenderColor), `Scale` (float), the render transform's `Rotation` (float), `Pivot`, `VisualOffset` and `VisualScale` (Vector2), each
 validated by its setter); a type declares its own in its descriptor (`WidgetPropertyDescriptor`: id below
 `WIDGET_BASE_PROPERTY_START`, type, name). `Widget_GetProperty` / `Widget_SetProperty` take `UIPropertyValue`s and
-reject a value of the wrong type; `Widget_TryGetPropertyType` looks a property up. A value is a float, a vector, a colour, a render colour, a bool or a
-double; nothing blends the last two, so keyframes refuse them (they travel in events and plain properties).
+reject a value of the wrong type; `Widget_TryGetPropertyType` looks a property up. A value is a float, a vector, a colour, a render colour, a bool, a
+double or a 64-bit unsigned integer (`UIPropertyType_UInt64`: an id a double cannot hold, a tree's node, a world object); nothing blends the last three,
+so keyframes refuse them (they travel in events and plain properties).
 
 `UIScreen_StartAnimation(screen, widgetId, propertyId, type, keyframes, count, options, &id)` validates the keyframes
 (times finite, >= 0 and non-decreasing; values finite; a custom curve present when used) and the property's type, copies
@@ -559,5 +591,5 @@ never write state in `Render`.
 The program-wide factory owns every widget's storage (per-type pools). A screen borrows the factory and owns its
 registry, queues and widgets' lifetimes. Teardown order at program end: screens (they destroy their widgets) → factory.
 Nothing allocates per tick in steady state: the snapshot, navigation candidates, event queue, keyframe storage, hover text's
-buffer (which a provider writes into) and the popup and context menu tables are reused; childless widgets allocate no child lists. Opening a
-popup makes its widgets then (a menu copies its items once, when it opens).
+buffer (which a provider writes into) and the popup, context menu and drag tables are reused; childless widgets allocate no child lists. Opening a
+popup makes its widgets then (a menu copies its items once, when it opens); what shows a drag is made at the first drag and kept.

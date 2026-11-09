@@ -339,6 +339,26 @@ typedef struct RectangleRenderArgumentsStruct
 } RectangleRenderArguments;
 
 /**
+ * @brief The full set of parameters for drawing an axis-aligned 2D rectangle with a colour at each corner.
+ *
+ * The colours blend across the rectangle as two triangles do (the top-left to bottom-right diagonal is their shared edge): exact for colours
+ * that change along one axis only, and close to a bilinear blend over a small rectangle, so a grid of them draws a smooth gradient with no
+ * shader of its own.
+ */
+typedef struct RectangleGradientRenderArgumentsStruct
+{
+    /** @brief The rectangle's top-left corner. */
+    RenderVector2D Position;
+    /** @brief Size of the rectangle in the tagged coordinate space. */
+    RenderVector2D Size;
+    /** @brief The colour at each corner. */
+    RenderColor TopLeft;
+    RenderColor TopRight;
+    RenderColor BottomLeft;
+    RenderColor BottomRight;
+} RectangleGradientRenderArguments;
+
+/**
  * @brief The full set of parameters for drawing an axis-aligned 2D rectangle outline (border).
  *
  * The border is drawn inside the rectangle bounds with the given thickness. @c Thickness is a tagged
@@ -701,6 +721,16 @@ void RenderContext_RenderMeshInstanced(RenderContext* self, const MeshInstancedR
  * @param args The rectangle draw parameters; must not be NULL.
  */
 void RenderContext_RenderRectangle(RenderContext* self, const RectangleRenderArguments* args);
+
+/**
+ * @brief Draws an axis-aligned 2D rectangle with a colour at each corner through the render context (raylib's DrawRectangleGradientEx).
+ *
+ * Converts the position and size from their tagged coordinate spaces into pixels, resolves each corner's colour and increments the
+ * primitive draw counter. A transform pushed on the context turns it as everything else.
+ * @param self The render context to draw with; must not be NULL.
+ * @param args The gradient's parameters; must not be NULL.
+ */
+void RenderContext_RenderRectangleGradient(RenderContext* self, const RectangleGradientRenderArguments* args);
 
 /**
  * @brief Draws an axis-aligned 2D rectangle outline through the render context using the given arguments.

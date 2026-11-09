@@ -528,6 +528,17 @@ void RenderContext_RenderRectangle(RenderContext* self, const RectangleRenderArg
     self->_primitiveDrawCount++;
 }
 
+void RenderContext_RenderRectangleGradient(RenderContext* self, const RectangleGradientRenderArguments* args)
+{
+    Vector2 PixelPosition = RenderContext_GetPixelVector(self, args->Position, true);
+    Vector2 PixelSize = RenderContext_GetPixelVector(self, args->Size, false);
+    Rectangle Destination = { .x = PixelPosition.x, .y = PixelPosition.y, .width = PixelSize.x, .height = PixelSize.y };
+    // raylib's corners go counter-clockwise from the top-left.
+    DrawRectangleGradientEx(Destination, RenderColor_GetFinalColor(args->TopLeft), RenderColor_GetFinalColor(args->BottomLeft),
+        RenderColor_GetFinalColor(args->BottomRight), RenderColor_GetFinalColor(args->TopRight));
+    self->_primitiveDrawCount++;
+}
+
 void RenderContext_RenderRectangleOutline(RenderContext* self, const RectangleOutlineRenderArguments* args)
 {
     Vector2 PixelPosition = RenderContext_GetPixelVector(self, args->Position, true);

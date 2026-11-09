@@ -209,6 +209,18 @@ Rectangle UIRenderContext_GetPixelBox(UIRenderContext* self);
 void UIRenderContext_RenderPixelRectangle(UIRenderContext* self, Rectangle box, Color color);
 
 /**
+ * @brief Draws a rectangle given in surface pixels with a colour at each corner (RenderContext_RenderRectangleGradient), each multiplied
+ *        with the accumulated tint.
+ * @param self The context; must not be NULL.
+ * @param box The rectangle in surface pixels.
+ * @param topLeft The colour at the top-left corner; its alpha is the opacity.
+ * @param topRight The colour at the top-right corner.
+ * @param bottomLeft The colour at the bottom-left corner.
+ * @param bottomRight The colour at the bottom-right corner.
+ */
+void UIRenderContext_RenderPixelGradient(UIRenderContext* self, Rectangle box, Color topLeft, Color topRight, Color bottomLeft, Color bottomRight);
+
+/**
  * @brief Draws a rectangle's outline given in surface pixels, inside its bounds, its color multiplied with the accumulated
  *        tint.
  * @param self The context; must not be NULL.

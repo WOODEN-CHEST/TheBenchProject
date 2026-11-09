@@ -84,7 +84,10 @@ typedef enum UIElementEventEnum
     /** @brief The wheel moved over an element that takes it. The mouse data tells the delta and the modifiers. */
     UIElementEvent_Scrolled,
     /** @brief A right press and release on it, or the context menu's key while it is focused. The mouse data tells the position. */
-    UIElementEvent_ContextRequested
+    UIElementEvent_ContextRequested,
+    /** @brief A toggle cell of a list's or a tree's row was clicked: the event's value names the row (UIPropertyType_UInt64: a list's data
+     *  index, a tree's node), its index the cell. The cell's state is the caller's data: the caller changes it and refreshes the rows. */
+    UIElementEvent_CellToggled
 } UIElementEvent;
 
 /**

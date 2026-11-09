@@ -5,6 +5,7 @@
 #include "UIMenuInternal.h"
 #include "UIScreen.h"
 #include "UIStandardLooks.h"
+#include "UITooltip.h"
 #include "UIWidgetFactory.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
@@ -53,9 +54,9 @@ static const UIKindBehaviour* GetBehaviour(UIElementKind kind)
             return UIMenuBar_GetKindBehaviour();
         case UIElementKind_StatusBar:
             return UIStatusBar_GetKindBehaviour();
-        // TODO: the label's, the tooltip's, the menu's and the backdrop's looks are not replaceable: the label is LabelWidget itself,
-        // and the tooltip's box, a menu's list and items and a modal popup's backdrop are plain types of the kit's (the tooltip's and the
-        // backdrop's named to the factory). Each needs a behaviour of its own split out first.
+        // TODO: the label's, the tooltip's, the menu's, the backdrop's and the drag's looks are not replaceable: the label is LabelWidget
+        // itself, and the tooltip's box, a menu's list and items, a modal popup's backdrop and what shows a drag are plain types of the kit's
+        // (the tooltip's, the backdrop's and the drag's named to the factory). Each needs a behaviour of its own split out first.
         case UIElementKind_TextBox:
             return UITextBox_GetKindBehaviour();
         case UIElementKind_PropertyBox:
@@ -68,10 +69,21 @@ static const UIKindBehaviour* GetBehaviour(UIElementKind kind)
             return UICompoundSlider_GetKindBehaviour();
         case UIElementKind_VectorRow:
             return UIVectorRow_GetKindBehaviour();
+        case UIElementKind_List:
+            return UIList_GetKindBehaviour();
+        case UIElementKind_Tree:
+            return UITree_GetKindBehaviour();
+        case UIElementKind_Dialog:
+            return UIDialog_GetKindBehaviour();
+        case UIElementKind_ColorPicker:
+            return UIColorPicker_GetKindBehaviour();
+        case UIElementKind_Toolbar:
+            return UIToolbar_GetKindBehaviour();
         case UIElementKind_Label:
         case UIElementKind_Tooltip:
         case UIElementKind_Menu:
         case UIElementKind_Backdrop:
+        case UIElementKind_Drag:
         case UIElementKind_Count:
             return NULL;
     }
@@ -384,6 +396,12 @@ static const unsigned char* const KindTypeNames[UIElementKind_Count] =
     [UIElementKind_Form] = u8"Form",
     [UIElementKind_CompoundSlider] = u8"CompoundSlider",
     [UIElementKind_VectorRow] = u8"VectorRow",
+    [UIElementKind_List] = u8"List",
+    [UIElementKind_Tree] = u8"Tree",
+    [UIElementKind_Dialog] = u8"Dialog",
+    [UIElementKind_ColorPicker] = u8"ColorPicker",
+    [UIElementKind_Toolbar] = u8"Toolbar",
+    [UIElementKind_Drag] = u8"DragGhost",
 };
 
 
@@ -443,6 +461,15 @@ static Error RegisterEverything(UIKit* self)
     {
         Result = AddStandardType(self, UIElementKind_Backdrop, BackdropType);
     }
+    uint64_t DragGhostType = WIDGET_TYPE_ID_INVALID;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIStandardLooks_RegisterDragGhost(self, self->_factory, &DragGhostType);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = AddStandardType(self, UIElementKind_Drag, DragGhostType);
+    }
     if (Result.Code == ErrorCode_Success)
     {
         Result = UIDropdown_RegisterTypes(self, self->_factory);
@@ -454,6 +481,14 @@ static Error RegisterEverything(UIKit* self)
     if (Result.Code == ErrorCode_Success)
     {
         Result = UIMenuBar_RegisterTypes(self, self->_factory);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIList_RegisterTypes(self, self->_factory);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIColorPicker_RegisterTypes(self, self->_factory);
     }
     return Result;
 }
@@ -569,6 +604,7 @@ Error UIKit_Construct(UIKit* self, UIWidgetFactory* factory, TextComponentFactor
     UIWidgetFactory_SetKit(factory, self);
     UIWidgetFactory_SetTooltipType(factory, UIKit_GetElementType(self, UIElementKind_Tooltip));
     UIWidgetFactory_SetBackdropType(factory, UIKit_GetElementType(self, UIElementKind_Backdrop));
+    UIWidgetFactory_SetDragGhostType(factory, UIKit_GetElementType(self, UIElementKind_Drag));
     return Error_CreateSuccess();
 }
 
@@ -590,6 +626,7 @@ Error UIKit_Deconstruct(UIKit* self)
     UIWidgetFactory_SetKit(self->_factory, NULL);
     UIWidgetFactory_SetTooltipType(self->_factory, WIDGET_TYPE_ID_INVALID);
     UIWidgetFactory_SetBackdropType(self->_factory, WIDGET_TYPE_ID_INVALID);
+    UIWidgetFactory_SetDragGhostType(self->_factory, WIDGET_TYPE_ID_INVALID);
     self->_factory = NULL;
     ReleaseTables(self);
     return Error_CreateSuccess();
@@ -1140,5 +1177,256 @@ Error UIKit_CreateVectorRow(UIKit* self, UIScreen* screen, uint64_t parentId, co
         return Result;
     }
     *outId = RowId;
+    return Error_CreateSuccess();
+}
+
+/* Makes one of the kit's own widgets as a child of an element: a part its look does not stand for (the box that cuts a list's rows). */
+static Error CreateOwnPart(UIKit* self, UIScreen* screen, uint64_t parentId, uint64_t typeId, void* args, uint64_t* outId)
+{
+    *outId = WIDGET_ID_INVALID;
+    Widget* Made = NULL;
+    Error Result = UIWidgetFactory_CreateWidget(self->_factory, screen, typeId, args, &Made);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    uint64_t Id = Widget_GetId(Made);
+    Result = Widget_InitializeWidget(Made);
+    Widget* Parent = NULL;
+    if ((Result.Code == ErrorCode_Success) && UIScreen_TryGetWidgetById(screen, parentId, &Parent) && UIScreen_TryGetWidgetById(screen, Id, &Made))
+    {
+        Result = Widget_AddSubWidget(Parent, Made);
+    }
+    else if (Result.Code == ErrorCode_Success)
+    {
+        Result = Error_Construct2(ErrorCode_InvalidOperation, "UIKit: an element's part lost its parent while it was made.");
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        DestroyPartlyMade(screen, Id);
+        return Result;
+    }
+    *outId = Id;
+    return Error_CreateSuccess();
+}
+
+Error UIKit_CreateList(UIKit* self, UIScreen* screen, uint64_t parentId, const UIListOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL) || (outId == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateList: self, screen, options and outId must not be NULL.");
+    }
+    UIListArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_List, options->Element.Look);
+    uint64_t ListId = WIDGET_ID_INVALID;
+    Error Result = CreateElement(self, screen, parentId, TypeId, &Arguments, &ListId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        *outId = WIDGET_ID_INVALID;
+        return Result;
+    }
+    uint64_t RowsBoxId = WIDGET_ID_INVALID;
+    uint64_t BarId = WIDGET_ID_INVALID;
+    Result = CreateOwnPart(self, screen, ListId, self->_clipType, NULL, &RowsBoxId);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = CreateAreaBar(self, screen, ListId, UIScrollAxis_Vertical, &BarId);
+    }
+    Widget* List = NULL;
+    if ((Result.Code == ErrorCode_Success) && !UIScreen_TryGetWidgetById(screen, ListId, &List))
+    {
+        Result = Error_Construct2(ErrorCode_InvalidOperation, "UIKit_CreateList: a hook took the list away.");
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIList_SetParts(screen, ListId, RowsBoxId, BarId);
+    }
+    if ((Result.Code == ErrorCode_Success) && options->IsDragSource)
+    {
+        Result = UIList_SetDragSource(screen, ListId, true, options->DragKind);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        DestroyPartlyMade(screen, ListId);
+        *outId = WIDGET_ID_INVALID;
+        return Result;
+    }
+    *outId = ListId;
+    return Error_CreateSuccess();
+}
+
+Error UIKit_CreateTree(UIKit* self, UIScreen* screen, uint64_t parentId, const UITreeOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL) || (outId == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateTree: self, screen, options and outId must not be NULL.");
+    }
+    UITreeArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Tree, options->Element.Look);
+    uint64_t TreeId = WIDGET_ID_INVALID;
+    Error Result = CreateElement(self, screen, parentId, TypeId, &Arguments, &TreeId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        *outId = WIDGET_ID_INVALID;
+        return Result;
+    }
+    uint64_t RowsBoxId = WIDGET_ID_INVALID;
+    uint64_t BarId = WIDGET_ID_INVALID;
+    Result = CreateOwnPart(self, screen, TreeId, self->_clipType, NULL, &RowsBoxId);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = CreateAreaBar(self, screen, TreeId, UIScrollAxis_Vertical, &BarId);
+    }
+    Widget* Tree = NULL;
+    if ((Result.Code == ErrorCode_Success) && !UIScreen_TryGetWidgetById(screen, TreeId, &Tree))
+    {
+        Result = Error_Construct2(ErrorCode_InvalidOperation, "UIKit_CreateTree: a hook took the tree away.");
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        // Every tree look's struct starts with UITreeLookBase (UIKit_RegisterLook checks its size).
+        UITree_SetParts(&((UITreeLookBase*)(void*)Tree)->Tree, RowsBoxId, BarId);
+        if (options->IsDragSource)
+        {
+            Result = UITree_SetDragSource(screen, TreeId, true, options->DragKind);
+        }
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        DestroyPartlyMade(screen, TreeId);
+        *outId = WIDGET_ID_INVALID;
+        return Result;
+    }
+    *outId = TreeId;
+    return Error_CreateSuccess();
+}
+
+Error UIKit_CreateDialog(UIKit* self, UIScreen* screen, const UIDialogOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL) || (outId == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateDialog: self, screen, options and outId must not be NULL.");
+    }
+    *outId = WIDGET_ID_INVALID;
+    // Made shut: neither a root nor a child, until it opens as a popup.
+    UIDialogArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Dialog, options->Element.Look);
+    Widget* Made = NULL;
+    Error Result = UIWidgetFactory_CreateWidget(self->_factory, screen, TypeId, &Arguments, &Made);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    uint64_t DialogId = Widget_GetId(Made);
+    Result = Widget_InitializeWidget(Made);
+    UILabelOptions Title = UILabelOptions_Create((options->Title != NULL) ? options->Title : (const unsigned char*)u8"");
+    Title.Element = MakePartElement();
+    Title.Element.Variant = u8"heading";
+    uint64_t TitleId = WIDGET_ID_INVALID;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIKit_CreateLabel(self, screen, DialogId, &Title, &TitleId);
+    }
+    UILabelOptions Message = UILabelOptions_Create((options->Message != NULL) ? options->Message : (const unsigned char*)u8"");
+    Message.Element = MakePartElement();
+    Message.IsWrapped = true;
+    uint64_t MessageId = WIDGET_ID_INVALID;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIKit_CreateLabel(self, screen, DialogId, &Message, &MessageId);
+    }
+    const UIThemeStyle* Style = UITheme_FindStyle(UIScreen_GetTheme(screen), UIElementKind_Dialog, options->Element.Variant);
+    UIStackOptions Content = UIStackOptions_Create(UIStackDirection_Column);
+    Content.Element = MakePartElement();
+    Content.Layout.Spacing = UIThemeStyle_GetNumber(Style, UIElementKind_Dialog, UIDialogPart_Spacing);
+    uint64_t ContentId = WIDGET_ID_INVALID;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIKit_CreateStack(self, screen, DialogId, &Content, &ContentId);
+    }
+    uint64_t ButtonIds[UI_DIALOG_MAX_BUTTONS];
+    size_t ButtonCount = 0U;
+    for (; (ButtonCount < options->ButtonCount) && (ButtonCount < UI_DIALOG_MAX_BUTTONS) && (Result.Code == ErrorCode_Success); ButtonCount++)
+    {
+        UIButtonOptions Button = UIButtonOptions_Create(options->Buttons[ButtonCount].Text);
+        Button.Element = MakePartElement();
+        Result = UIKit_CreateButton(self, screen, DialogId, &Button, &ButtonIds[ButtonCount]);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIDialog_SetParts(screen, DialogId, TitleId, MessageId, ContentId, ButtonIds, options->Buttons, ButtonCount);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        DestroyPartlyMade(screen, DialogId);
+        return Result;
+    }
+    *outId = DialogId;
+    return Error_CreateSuccess();
+}
+
+Error UIKit_CreateColorPicker(UIKit* self, UIScreen* screen, uint64_t parentId, const UIColorPickerOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL) || (outId == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateColorPicker: self, screen, options and outId must not be NULL.");
+    }
+    UIColorPickerArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_ColorPicker, options->Element.Look);
+    Error Result = CreateElement(self, screen, parentId, TypeId, &Arguments, outId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = UIColorPicker_Attach(screen, *outId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        DestroyPartlyMade(screen, *outId);
+        *outId = WIDGET_ID_INVALID;
+    }
+    return Result;
+}
+
+Error UIKit_CreateToolbar(UIKit* self, UIScreen* screen, uint64_t parentId, const UIToolbarOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL) || (outId == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateToolbar: self, screen, options and outId must not be NULL.");
+    }
+    UIToolbarArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Toolbar, options->Element.Look);
+    uint64_t BarId = WIDGET_ID_INVALID;
+    Error Result = CreateElement(self, screen, parentId, TypeId, &Arguments, &BarId);
+    for (size_t Index = 0U; (Index < options->ItemCount) && (Result.Code == ErrorCode_Success); Index++)
+    {
+        const UIToolbarItem* Item = &options->Items[Index];
+        if (Item->Kind == UIToolbarItemKind_Separator)
+        {
+            continue;
+        }
+        UIButtonOptions Button = UIButtonOptions_Create(Item->Text);
+        Button.Element = MakePartElement();
+        Button.Element.Variant = options->ButtonVariant;
+        Button.Icon = Item->Icon;
+        Button.IsEnabled = Item->IsEnabled;
+        Button.IsToggled = (Item->Kind != UIToolbarItemKind_Button) && Item->IsToggled;
+        uint64_t ButtonId = WIDGET_ID_INVALID;
+        Result = UIKit_CreateButton(self, screen, BarId, &Button, &ButtonId);
+        if ((Result.Code == ErrorCode_Success) && (Item->Name != NULL) && (Item->Name[0] != 0U))
+        {
+            Result = UITooltip_Set(screen, ButtonId, Item->Name);
+        }
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = UIToolbar_AttachButton(screen, BarId, Index, ButtonId);
+        }
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        DestroyPartlyMade(screen, BarId);
+        *outId = WIDGET_ID_INVALID;
+        return Result;
+    }
+    *outId = BarId;
     return Error_CreateSuccess();
 }

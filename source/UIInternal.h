@@ -217,6 +217,36 @@ void UIScreen_InternalReleaseContextMenus(UIScreen* self);
 void UIScreen_InternalRemoveWidgetContextMenu(UIScreen* self, uint64_t widgetId);
 
 
+// Screen: drag and drop (UIScreenDragDrop.c).
+/** Allocates the sources' and targets' tables (screen construction). */
+void UIScreen_InternalInitializeDrag(UIScreen* self);
+
+/** Frees them (screen teardown). */
+void UIScreen_InternalReleaseDrag(UIScreen* self);
+
+/** Forgets a widget's source and target entries (it is being torn down). */
+void UIScreen_InternalRemoveWidgetDrag(UIScreen* self, uint64_t widgetId);
+
+/** Whether the drag in progress holds a button's press. */
+bool UIScreen_InternalIsDragButton(const UIScreen* self, size_t buttonIndex);
+
+/** A held press moved: starts a drag when it passed the distance on a source that drags something from where it began. The press's widget
+ *  hears OnPressLost; @p outIsStarted is set when it started. */
+Error UIScreen_InternalTryStartDrag(UIScreen* self, size_t buttonIndex, bool* outIsStarted);
+
+/** The drag's press this tick: follows the pointer to its target, and at @p isReleased drops or cancels. */
+Error UIScreen_InternalFollowDrag(UIScreen* self, bool isReleased);
+
+/** After the input: cancels a drag whose source went, looks its target up again and makes the widget that shows it. */
+Error UIScreen_InternalUpdateDrag(UIScreen* self);
+
+/** Escape (the back action's press) during a drag cancels it and is consumed. */
+Error UIScreen_InternalRouteDragEscape(UIScreen* self);
+
+/** The pointer's shape a drag asks for; false with no drag. */
+bool UIScreen_InternalTryGetDragCursorShape(const UIScreen* self, UICursorShape* outShape);
+
+
 // Screen: notifications (UIScreenEvents.c).
 /** Allocates the notification module's buffers (screen construction). */
 void UIScreen_InternalInitializeEvents(UIScreen* self);

@@ -44,7 +44,9 @@
         "axis_y": "#4f8a3c",
         "axis_z": "#3d6aa8",
         "axis_w": "#6a6f78",
-        "axis_text": "#f2f3f5"
+        "axis_text": "#f2f3f5",
+        "checker_light": "#8a9099",
+        "checker_dark": "#5c626b"
     },
     "elements": {
         "panel": {
@@ -84,6 +86,14 @@
             },
             "text": { "normal": "@text", "disabled": "@text_disabled" },
             "variants": {
+                "tool": {
+                    "padding": [ 4, 4 ],
+                    "min_size": [ 26, 26 ],
+                    "background": {
+                        "colors": { "normal": "#00000000", "pressed": "@sunken_pressed", "disabled": "#00000000" },
+                        "outline": { "colors": { "normal": "#00000000", "disabled": "#00000000", "selected": "@accent" } }
+                    }
+                },
                 "danger": {
                     "background": { "colors": { "normal": "@danger", "hovered": "@danger_hover", "pressed": "@danger_pressed", "focused": "@danger_focus" } }
                 }
@@ -248,6 +258,111 @@
             "z_tag": { "kind": "flat", "colors": { "normal": "@axis_z" } },
             "w_tag": { "kind": "flat", "colors": { "normal": "@axis_w" } },
             "tag_text": { "normal": "@axis_text" }
+        },
+        "list": {
+            "padding": [ 1, 1 ],
+            "row_height": 22,
+            "row_padding": 6,
+            "cell_size": 14,
+            "insertion_thickness": 2,
+            "background": {
+                "kind": "flat",
+                "colors": { "normal": "@surface_sunken", "disabled": "@surface" },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline", "hovered": "@outline_strong", "focused": "@accent", "entered": "@editing_outline", "disabled": "@outline_disabled" } }
+            },
+            "row": { "kind": "flat", "colors": { "normal": "#00000000", "hovered": "@raised_hover", "selected": "@selected", "disabled": "#00000000" } },
+            "current": { "kind": "flat", "colors": { "normal": "#00000000" }, "outline": { "thickness": 1, "colors": { "normal": "@accent", "entered": "@editing_outline" } } },
+            "text": { "normal": "@text", "disabled": "@text_disabled" },
+            "cell": { "kind": "flat", "colors": { "normal": "#00000000", "hovered": "@pressed", "selected": "@raised" } },
+            "cell_text": { "normal": "@text_disabled", "hovered": "@text_dim", "selected": "@text" },
+            "insertion": { "kind": "flat", "colors": { "normal": "@accent" } }
+        },
+        "tree": {
+            "padding": [ 1, 1 ],
+            "row_height": 22,
+            "row_padding": 6,
+            "indent": 16,
+            "cell_size": 14,
+            "insertion_thickness": 2,
+            "background": {
+                "kind": "flat",
+                "colors": { "normal": "@surface_sunken", "disabled": "@surface" },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline", "hovered": "@outline_strong", "focused": "@accent", "entered": "@editing_outline", "disabled": "@outline_disabled" } }
+            },
+            "row": { "kind": "flat", "colors": { "normal": "#00000000", "hovered": "@raised_hover", "selected": "@selected", "disabled": "#00000000" } },
+            "current": { "kind": "flat", "colors": { "normal": "#00000000" }, "outline": { "thickness": 1, "colors": { "normal": "@accent", "entered": "@editing_outline" } } },
+            "text": { "normal": "@text", "disabled": "@text_disabled" },
+            "expander": { "normal": "@text_dim", "hovered": "@text", "disabled": "@text_disabled" },
+            "cell": { "kind": "flat", "colors": { "normal": "#00000000", "hovered": "@pressed", "selected": "@raised" } },
+            "cell_text": { "normal": "@text_disabled", "hovered": "@text_dim", "selected": "@text" },
+            "insertion": { "kind": "flat", "colors": { "normal": "@accent" } }
+        },
+        "dialog": {
+            "padding": [ 14, 12 ],
+            "spacing": 10,
+            "button_spacing": 8,
+            "button_width": 80,
+            "min_size": [ 240, 0 ],
+            "max_width": 480,
+            "background": {
+                "kind": "flat",
+                "colors": { "normal": "@surface" },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline_strong" } }
+            }
+        },
+        "color_picker": {
+            "min_size": [ 40, 22 ],
+            "checker_size": 6,
+            "padding": [ 8, 8 ],
+            "spacing": 6,
+            "square_size": 160,
+            "strip_width": 16,
+            "field_width": 52,
+            "swatch": {
+                "kind": "flat",
+                "colors": { "normal": "#00000000" },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline", "hovered": "@outline_strong", "pressed": "@accent", "focused": "@accent", "disabled": "@outline_disabled" } }
+            },
+            "checker_light": { "normal": "@checker_light" },
+            "checker_dark": { "normal": "@checker_dark" },
+            "mixed": { "normal": "@text", "disabled": "@text_disabled" },
+            "popup": {
+                "kind": "flat",
+                "colors": { "normal": "@surface" },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline_strong" } }
+            },
+            "frame": {
+                "kind": "flat",
+                "colors": { "normal": "#00000000" },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline", "hovered": "@outline_strong", "pressed": "@accent", "focused": "@accent", "entered": "@editing_outline" } }
+            },
+            "marker": { "kind": "flat", "colors": { "normal": "#00000000" }, "outline": { "thickness": 2, "colors": { "normal": "#ffffff" } } },
+            "strip_marker": { "kind": "flat", "colors": { "normal": "#00000000" }, "outline": { "thickness": 2, "colors": { "normal": "#ffffff" } } }
+        },
+        "toolbar": {
+            "padding": [ 3, 3 ],
+            "spacing": 2,
+            "button_size": [ 26, 26 ],
+            "separator_thickness": 1,
+            "separator_spacing": 9,
+            "background": {
+                "kind": "flat",
+                "colors": { "normal": "@surface" },
+                "outline": { "thickness": 1, "colors": { "normal": "@raised" } }
+            },
+            "separator": { "kind": "flat", "colors": { "normal": "@outline" } }
+        },
+        "drag": {
+            "padding": [ 6, 3 ],
+            "offset": [ 14, 10 ],
+            "max_width": 240,
+            "ghost": {
+                "kind": "flat",
+                "colors": { "normal": "@raised", "selected": "@selected", "disabled": "@raised_disabled" },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline", "selected": "@accent", "disabled": "@danger_pressed" } }
+            },
+            "text": { "normal": "@text", "disabled": "@text_dim" },
+            "target": { "kind": "flat", "colors": { "normal": "#00000000" }, "outline": { "thickness": 2, "colors": { "normal": "@accent" } } }
         }
     }
 }

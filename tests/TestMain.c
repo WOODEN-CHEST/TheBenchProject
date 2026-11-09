@@ -123,6 +123,12 @@ int main(void)
     UISliderTests_Run(&Run);
     UIPropertyBoxTests_Run(&Run);
     UICompoundTests_Run(&Run);
+    UIListTests_Run(&Run);
+    UITreeTests_Run(&Run);
+    UIDialogTests_Run(&Run);
+    UIColorPickerTests_Run(&Run);
+    UIDragDropTests_Run(&Run);
+    UIToolbarTests_Run(&Run);
     GameWindowStateTests_Run(&Run);
     GameWindowTests_Run(&Run);
     UITestFrameTests_Run(&Run);

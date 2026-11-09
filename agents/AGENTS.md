@@ -718,10 +718,14 @@ Current module list:
     overlay layer; UITooltip_GetCurrent for a status bar.
   * UIPopup - The popup layer as a service of the screen (UIPopup.h, source/UIScreenPopups.c): a root opened above everything, placed against an anchor box or widget
     each update (flipped, shrunk, centred, kept on the surface; the placement arithmetic pure), nested, closed from the inside out by a press outside (which goes on),
-    Escape, its owner going or code, and destroyed then; a modal one stands on a backdrop of the type the factory names; focus moves in and comes back, entered again
+    Escape, its owner going or code (with every popup above it, or with only those opened from inside it), and destroyed then; a modal one stands on a backdrop of the type the factory names; focus moves in and comes back, entered again
     if it was; navigation stays in the topmost; its owner hears UIEventKind_PopupClosed with the reason.
   * UIContextMenu - Context menus as a service of the screen (UIContextMenu.h, source/UIScreenContextMenus.c): a provider per widget in a side table emptied at a
     widget's teardown; a right press let go on its widget or the context menu key asks, walking up to the first provider, which opens the menu itself (UIMenu_OpenAt).
+  * UIDragDrop - Drag and drop as a service of the screen (UIDragDrop.h, source/UIScreenDragDrop.c): sources and targets in side tables emptied at a widget's
+    teardown; a press on a source moved past a few pixels drags what its provider says (a kind, a value, a text), taking the press over; the target under the
+    pointer (or its nearest ancestor that is one) says whether it takes it; the pointer's shape and a widget of the type the factory names show it; a release
+    posts UIEventKind_Drag Dropped to the target and Delivered to the source, else Cancelled; Escape and the source going cancel it.
   * UIPlacement - Where a widget sits in UI pixels: placements (anchors and offsets, counted in the parent's effective scale), insets and a stack's hints, with their
     pure arithmetic, each edge a whole surface pixel; and the render transform (a turn, a visual offset and a visual scale about a pivot: its matrix in surface pixels,
     a point through it and back). Placements are applied in the layout pass; a widget's preferred size is its Measure hook, cached (UIFramework.md, "UI pixels").
@@ -737,7 +741,7 @@ Current module list:
   * LabelWidget - The first concrete widget: displays a (possibly multi-line) rich text with per-line alignment and bound handling (cut/wrap/resize/wrap-then-resize/wrap-then-cut). Embeds a TextDocument and a TextLayout (TextDocument.md), lays out in Update, draws in Render. Auto-fits its widget box to the rendered text.
   Also adds 2D rectangle/outline/line primitives to the Renderer module.
 * UI elements (UIElements.md) - What calling code builds a UI from, sized in UI pixels, its looks data: the same elements in flat boxes or nine-slice art with no
-  element's code changing; text boxes, property boxes and the compounds final screens use among them. Covers:
+  element's code changing; text boxes, property boxes, the compounds final screens use, and lists, trees, dialogs, colour pickers and tool bars among them. Covers:
   * UIBoxStyle - How a box is drawn (nothing, flat, nine-slice), a colour per state; resolving a state and cutting a box into nine quads are pure.
   * UITheme - The ui_theme asset type (a standard type, JSON in ui_themes/; include/UITheme.h, source/UITheme.c, source/UIThemeDefinition.c, private source/UIThemeInternal.h): a
     font, a text size, a transition time, a hover delay, a palette of named colours ("@name", resolved when read) and per element kind its metrics, parts, custom values a
@@ -751,8 +755,8 @@ Current module list:
     the kind's behaviour (private source/UIKitInternal.h) and the look's hooks (UIKit_RegisterLook: Render and Measure, maybe Update), and UIKit_Create* makes an element
     with the look its options or the theme name, else the standard one, and gives its id. Calling code uses a kind's functions by id, never a widget type or a look.
   * UIStandardLooks - The kit's standard look, tbp:test_box, for every kind but the label (theme-driven boxes, flat or nine-slice; the value elements' in
-    source/UIStandardValueLooks.c, the typing a text box and a property box draw shared in the private source/UITypingView.{h,c}), the widget that shows hover text
-    (the theme's tooltip kind) and a modal popup's backdrop.
+    source/UIStandardValueLooks.c, the editor elements' in source/UIStandardEditorLooks.c, the typing a text box and a property box draw shared in the private
+    source/UITypingView.{h,c}), the widget that shows hover text (the theme's tooltip kind), a modal popup's backdrop and the widget that shows a drag.
   * StackWidget - Children in a row or a column, with padding and spacing: fixed, content or filling, aligned across; its arithmetic (UIStackLayout) shared with the panel.
   * UIPanel - A background and padding for what it holds.
   * UILabel - LabelWidget as an element of the kit: its text size in UI pixels, its font and colours from the theme.
@@ -766,8 +770,8 @@ Current module list:
   * UIScrollArea - Content larger than its box, clipped, at its offset, with the kit's two bars by the modes; the wheel while it can scroll that way (then up the tree,
     Shift across), Page Up and Page Down, a descendant focused by the keyboard or code scrolled into view; measuring cached.
   * UIChoice - The choice piece: options as texts or from providers (a count and a text at an index), the selected one, mixed.
-  * UIRowRecycler - Widgets for the rows in view only, bound in the owner's Update and placed in its Layout, reused as the view scrolls: what the dropdown's list, and
-    later the list and the tree, stand on.
+  * UIRowRecycler - Widgets for the rows in view only, bound in the owner's Update and placed in its Layout, reused as the view scrolls: what the dropdown's list, the
+    list and the tree stand on.
   * UIDropdown - One choice of several: a head (a press element; the arrows pass it while closed, Ctrl and the wheel step it) and a list in a popup, entered as it
     opens (the arrows, Home, End, a page, a letter, Enter), VisibleCount rows, opening where there is room or forced, recycled rows, scroll strips and a bar.
   * UIMenu - Menus as data, copied when opened: items with an icon, a shortcut text, a check, a submenu (items, or a provider's), separators, disabled ones; one popup
@@ -795,7 +799,20 @@ Current module list:
   * UICompoundSlider - A name, a slider and a property box sharing one value (kind compound_slider): either part moves the other, the parts' value events are the
     compound's own.
   * UIVectorRow - Two to four property boxes after axis tags (kind vector_row), each field's events under the row's id with the axis as the event's index.
-  * UIGalleryFrame - A game frame on five pages, each scrolling, started with --ui-gallery: every element in every state, the routing and the keyboard (a box to go into, whose sliders Enter enters); the scale rows, a turning panel, a panel sliding in, a second look of the button, icons; a menu bar, dropdowns near the window's edges and in the page (three options, a thousand from a provider), context menus with submenus, a modal dialog, scroll areas, a long end and a status bar; text boxes of every kind and a form; sliders of every conversion and upright, property boxes of every kind, compound sliders, a form of labelled rows and rows of fields; hover text on everything. N the page, T the theme (three: flat, nine-slice, another palette), + and - the scale, P the scale policy, L the event log.
+  * UIList - Rows of the caller's data through a count and a row provider (include/UIList.h, source/UIList.c, the rows in the private source/UIListRow.{h,c}), only
+    the rows in view made and reused (a hundred thousand rows cost what the view does): selection by data index (none, one, several; Ctrl, Shift, keys) kept as
+    runs, a current row, data changes told by the caller, toggle cells, an edit element's keys, events by data index (a UInt64 value), a drag source and a drop
+    target with an insertion line.
+  * UITree - Nodes of the caller's (64-bit ids) through a provider: children, the caller's expanded state, what a node shows, whether it still exists; walked into
+    nesting rows only when needed, recycled as a list's; selection by node surviving folds; expanders, Left and Right; a drag source and a target (above, below,
+    into).
+  * UIDialog - A modal question (kind dialog): a title, a wrapped message, content calling code adds, buttons with answer ids; Enter takes the default and Escape the
+    cancel in one press from inside an entered field; the answer is Activated with its id as the index; it closes after the answer's delivery, so its fields are read.
+  * UIColorPicker - A swatch and a popup picking a Color or a RenderColor (kind color_picker): a saturation and value square, hue and alpha strips drawn from corner
+    gradients, channel fields and a hex field; Changed while moving, Committed on close, Escape cancels; mixed; its HSV conversions pure and round-tripping.
+  * UIToolbar - A strip of the kit's buttons from a list (kind toolbar): buttons, toggles, choices of a group, separators, across or upright; names as hover text;
+    events under the bar's id with the item's id as the index.
+  * UIGalleryFrame - A game frame on six pages, each scrolling, started with --ui-gallery: every element in every state, the routing and the keyboard (a box to go into, whose sliders Enter enters); the scale rows, a turning panel, a panel sliding in, a second look of the button, icons; a menu bar, dropdowns near the window's edges and in the page (three options, a thousand from a provider), context menus with submenus, a modal dialog, scroll areas, a long end and a status bar; text boxes of every kind and a form; sliders of every conversion and upright, property boxes of every kind, compound sliders, a form of labelled rows and rows of fields; tool bars, a list of a hundred thousand rows, a tree twelve deep, a drag between two lists, colour pickers and dialogs; hover text on everything. N the page, T the theme (three: flat, nine-slice, another palette), + and - the scale, P the scale policy, L the event log.
 * Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text as a STRICT TREE: a parent owns
   its children, a tree has at most 64 levels, components own copies of their strings, and fonts and sprite animations
   are named, never held. Every change gives the component and its ancestors a new revision. Covers three modules (plus

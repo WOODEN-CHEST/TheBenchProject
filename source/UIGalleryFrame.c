@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include "UIGalleryFrame.h"
 #include "Config.h"
 #include "GameFrame.h"
@@ -11,7 +12,10 @@
 #include "GameKey.h"
 #include "StackWidget.h"
 #include "UIChoice.h"
+#include "UIColorPicker.h"
 #include "UIContextMenu.h"
+#include "UIDialog.h"
+#include "UIDragDrop.h"
 #include "UIDropdown.h"
 #include "UIKit.h"
 #include "UIMenu.h"
@@ -20,7 +24,10 @@
 #include "UIScreen.h"
 #include "UIScrollArea.h"
 #include "UIStatusBar.h"
+#include "UITextBox.h"
+#include "UIToolbar.h"
 #include "UITooltip.h"
+#include "UITree.h"
 #include "UIWidget.h"
 #include "UIWidgetFactory.h"
 #include "UIWindowHost.h"
@@ -51,7 +58,7 @@
 /** The keyboard box's width, in UI pixels. */
 #define KEYBOARD_BOX_WIDTH 320.0f
 /** How many pages the gallery has (N steps through them). */
-#define PAGE_COUNT ((size_t)5)
+#define PAGE_COUNT ((size_t)6)
 /** How many characters of a text box's text its events show in the status line. */
 #define SHOWN_TEXT_BYTES 40
 /** How many style ranges the fourth page's coloured box has. */
@@ -72,6 +79,19 @@
 #define TURN_SECONDS 20.0
 #define SLIDE_DISTANCE 360.0f
 #define SLIDE_SECONDS 0.45
+/** The sixth page's long list: how many rows, and how many of them a list shows. */
+#define LONG_LIST_ROWS ((size_t)100000)
+#define EDITOR_VISIBLE_ROWS ((size_t)14)
+/** The sixth page's deep tree: how deep it goes (a node's level sits above the 48 bits of its path, two bits a level), and how many nodes
+ *  can be expanded at once. */
+#define TREE_MAX_DEPTH 12U
+#define TREE_PATH_BITS 48U
+#define MAX_EXPANDED_NODES ((size_t)4096)
+/** The things the two lists of the sixth page hand back and forth, and what a drag of them or of the tree's nodes is. */
+#define DESK_ITEM_COUNT ((size_t)24)
+#define DESK_ITEMS_STARTING_IN_THE_TRAY ((size_t)3)
+#define DRAG_KIND_DESK_ITEM 1U
+#define DRAG_KIND_TREE_NODE 2U
 /** The diamond look's size, in its own UI pixels. */
 #define DIAMOND_SIZE 28.0f
 #define PI_F 3.14159265f
@@ -189,6 +209,28 @@ typedef struct UIGalleryFrameStruct
     uint64_t _maskedBoxId;
     /** The fourth page's coloured code: its colours follow the theme's text. */
     uint64_t _codeBoxId;
+    /** The sixth page's long list and its rows' two toggle cells (bit 0 shown, bit 1 locked), the caller's data. */
+    uint64_t _longListId;
+    uint8_t _rowCells[LONG_LIST_ROWS];
+    /** The deep tree and its expanded nodes, the caller's data. */
+    uint64_t _treeId;
+    uint64_t _expandedNodes[MAX_EXPANDED_NODES];
+    size_t _expandedCount;
+    /** The two lists a drag moves things between, and what each holds (indices into DeskItemNames). */
+    uint64_t _deskListId;
+    uint64_t _trayListId;
+    uint8_t _deskItems[DESK_ITEM_COUNT];
+    size_t _deskCount;
+    uint8_t _trayItems[DESK_ITEM_COUNT];
+    size_t _trayCount;
+    /** The tool bars, and the buttons that open the dialogs, and the open dialog with its field (WIDGET_ID_INVALID while none is). */
+    uint64_t _toolbarId;
+    uint64_t _sideToolbarId;
+    uint64_t _askButtonId;
+    uint64_t _renameButtonId;
+    uint64_t _aboutButtonId;
+    uint64_t _openDialogId;
+    uint64_t _renameFieldId;
 } UIGalleryFrame;
 
 /* A stack that takes the wheel, as a scroll area does: its children's wheel comes up to it. */
@@ -798,7 +840,9 @@ static void BuildLooksPage(GalleryBuild* build);
 static void BuildPopupsPage(GalleryBuild* build);
 static void BuildTextPage(GalleryBuild* build);
 static void BuildValuePage(GalleryBuild* build);
+static void BuildEditorPage(GalleryBuild* build);
 static void DescribeEverything(GalleryBuild* build);
+static const char* GetElementName(const UIGalleryFrame* frame, uint64_t id);
 
 /* The first page: a heading and two panels side by side, scrolling, over a status line; then the other pages, and hover text on
  * everything. */
@@ -824,6 +868,7 @@ static Error BuildPage(UIGalleryFrame* frame)
     BuildPopupsPage(&Build);
     BuildTextPage(&Build);
     BuildValuePage(&Build);
+    BuildEditorPage(&Build);
     DescribeEverything(&Build);
     return Build.Result;
 }
@@ -2137,6 +2182,764 @@ static void BuildValuePage(GalleryBuild* build)
 }
 
 
+// Static functions: the sixth page.
+/* What the two lists hand back and forth. */
+static const unsigned char* const DeskItemNames[DESK_ITEM_COUNT] =
+{
+    u8"Stapler", u8"Ink pad", u8"Rubber stamp", u8"Paper clips", u8"Folder", u8"Envelopes", u8"Ledger", u8"Pencil", u8"Eraser", u8"Ruler",
+    u8"Scissors", u8"Tape", u8"Glue", u8"Index cards", u8"Notebook", u8"Calendar", u8"Binder", u8"Fountain pen", u8"Highlighter",
+    u8"Sticky notes", u8"Hole punch", u8"Letter opener", u8"Desk lamp", u8"Coffee mug"
+};
+
+/* The tool bars' items. */
+enum
+{
+    TOOL_NEW = 1,
+    TOOL_OPEN,
+    TOOL_SAVE,
+    TOOL_GRID,
+    TOOL_SNAP,
+    TOOL_SELECT,
+    TOOL_MOVE,
+    TOOL_TURN,
+    TOOL_SCALE,
+    TOOL_PLAY,
+    TOOL_BAKE,
+    TOOL_SOLID,
+    TOOL_WIRE,
+    TOOL_LIT,
+    TOOL_HIDDEN
+};
+
+/* The dialogs' answers. */
+enum
+{
+    ANSWER_SAVE = 1,
+    ANSWER_DISCARD,
+    ANSWER_CANCEL,
+    ANSWER_OK
+};
+
+/* The long list: a hundred thousand rows, each a text, an icon by its kind, and two cells; every seventh dimmed (made at run time). */
+static size_t CountLongRows(UIScreen* screen, uint64_t listId, const UserData* userData)
+{
+    UNUSED(screen);
+    UNUSED(listId);
+    UNUSED(userData);
+    return LONG_LIST_ROWS;
+}
+
+static Error WriteLongRow(UIScreen* screen, uint64_t listId, const UserData* userData, size_t index, UIListRowData* outRow)
+{
+    UNUSED(screen);
+    UNUSED(listId);
+    const UIGalleryFrame* Frame = UserData_GetPointer(userData);
+    static const char* const Kinds[] = { "Form", "Stamp", "Letter", "Ledger page" };
+    static const uint32_t Letters[] = { 'F', 'S', 'L', 'P' };
+    size_t Kind = index % (sizeof(Kinds) / sizeof(Kinds[0]));
+    char Text[48];
+    int Length = snprintf(Text, sizeof(Text), "%s %06zu", Kinds[Kind], index);
+    if ((Length < 0) || !GenericBuffer_AddLastRange(outRow->Text, Text, (size_t)Length))
+    {
+        return Error_Construct2(ErrorCode_BufferTooLarge, "UIGallery: a row's text did not fit.");
+    }
+    outRow->Icon = UIElementIcon_FromLetter(Letters[Kind]);
+    outRow->IsDimmed = (index % 7U) == 6U;
+    outRow->Cells[0] = (Frame->_rowCells[index] & 1U) != 0U;
+    outRow->Cells[1] = (Frame->_rowCells[index] & 2U) != 0U;
+    return Error_CreateSuccess();
+}
+
+/* The deep tree's nodes: a node's level above its path, two bits a level, the last level's in the lowest bits. Every node above the
+ * deepest level has four children, but one whose last step is the fourth is a leaf. */
+static uint64_t MakeTreeNode(uint32_t level, uint64_t path)
+{
+    return ((uint64_t)level << TREE_PATH_BITS) | path;
+}
+
+static uint32_t GetTreeLevel(uint64_t node)
+{
+    return (uint32_t)(node >> TREE_PATH_BITS);
+}
+
+static uint64_t GetTreePath(uint64_t node)
+{
+    return node & ((1ULL << TREE_PATH_BITS) - 1U);
+}
+
+static bool IsTreeLeaf(uint64_t node)
+{
+    return (GetTreeLevel(node) >= TREE_MAX_DEPTH) || ((GetTreePath(node) & 3U) == 3U);
+}
+
+static size_t CountTreeChildren(UIScreen* screen, uint64_t treeId, const UserData* userData, bool isRoot, uint64_t node)
+{
+    UNUSED(screen);
+    UNUSED(treeId);
+    UNUSED(userData);
+    return (isRoot || !IsTreeLeaf(node)) ? 4U : 0U;
+}
+
+static uint64_t GetTreeChild(UIScreen* screen, uint64_t treeId, const UserData* userData, bool isRoot, uint64_t node, size_t index)
+{
+    UNUSED(screen);
+    UNUSED(treeId);
+    UNUSED(userData);
+    return isRoot ? MakeTreeNode(1U, (uint64_t)index) : MakeTreeNode(GetTreeLevel(node) + 1U, (GetTreePath(node) << 2U) | (uint64_t)index);
+}
+
+static bool IsTreeNodeExpanded(UIScreen* screen, uint64_t treeId, const UserData* userData, uint64_t node)
+{
+    UNUSED(screen);
+    UNUSED(treeId);
+    const UIGalleryFrame* Frame = UserData_GetPointer(userData);
+    for (size_t Index = 0U; Index < Frame->_expandedCount; Index++)
+    {
+        if (Frame->_expandedNodes[Index] == node)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void SetTreeNodeExpanded(UIScreen* screen, uint64_t treeId, const UserData* userData, uint64_t node, bool isExpanded)
+{
+    UIGalleryFrame* Frame = UserData_GetPointer(userData);
+    bool IsExpanded = IsTreeNodeExpanded(screen, treeId, userData, node);
+    if (isExpanded && !IsExpanded && (Frame->_expandedCount < MAX_EXPANDED_NODES))
+    {
+        Frame->_expandedNodes[Frame->_expandedCount++] = node; // Past the room, it stays shut.
+    }
+    for (size_t Index = 0U; !isExpanded && IsExpanded && (Index < Frame->_expandedCount); Index++)
+    {
+        if (Frame->_expandedNodes[Index] == node)
+        {
+            Frame->_expandedNodes[Index] = Frame->_expandedNodes[--Frame->_expandedCount];
+            break;
+        }
+    }
+}
+
+/* A node's name: a drawer for one with children, a form for a leaf, and its steps from the top. */
+static void WriteTreePath(uint64_t node, char* outText, size_t capacity)
+{
+    uint32_t Level = GetTreeLevel(node);
+    uint64_t Path = GetTreePath(node);
+    size_t Used = (size_t)snprintf(outText, capacity, "%s ", IsTreeLeaf(node) ? "Form" : "Drawer");
+    for (uint32_t Step = Level; (Step > 0U) && (Used < capacity); Step--)
+    {
+        int Written = snprintf(outText + Used, capacity - Used, "%s%u", (Step == Level) ? "" : ".", (unsigned)((Path >> (2U * (Step - 1U))) & 3U) + 1U);
+        Used += (Written > 0) ? (size_t)Written : 0U;
+    }
+}
+
+static Error WriteTreeNode(UIScreen* screen, uint64_t treeId, const UserData* userData, uint64_t node, UIListRowData* outRow)
+{
+    UNUSED(screen);
+    UNUSED(treeId);
+    UNUSED(userData);
+    char Text[64];
+    WriteTreePath(node, Text, sizeof(Text));
+    if (!GenericBuffer_AddLastRange(outRow->Text, Text, strlen(Text)))
+    {
+        return Error_Construct2(ErrorCode_BufferTooLarge, "UIGallery: a node's text did not fit.");
+    }
+    outRow->Icon = UIElementIcon_FromLetter(IsTreeLeaf(node) ? 'F' : 'D');
+    return Error_CreateSuccess();
+}
+
+static bool HasTreeNode(UIScreen* screen, uint64_t treeId, const UserData* userData, uint64_t node)
+{
+    UNUSED(screen);
+    UNUSED(treeId);
+    UNUSED(userData);
+    uint32_t Level = GetTreeLevel(node);
+    uint64_t Path = GetTreePath(node);
+    if ((Level == 0U) || (Level > TREE_MAX_DEPTH) || (Path >= (1ULL << (2U * Level))))
+    {
+        return false;
+    }
+    for (uint32_t Step = 1U; Step < Level; Step++)
+    {
+        if (((Path >> (2U * Step)) & 3U) == 3U)
+        {
+            return false; // Under a leaf.
+        }
+    }
+    return true;
+}
+
+static const UITreeProvider DeepTreeProvider =
+{
+    .GetChildCount = CountTreeChildren,
+    .GetChild = GetTreeChild,
+    .IsExpanded = IsTreeNodeExpanded,
+    .SetExpanded = SetTreeNodeExpanded,
+    .WriteNode = WriteTreeNode,
+    .HasNode = HasTreeNode
+};
+
+/* The two lists a drag moves things between: which one, and what it holds. */
+static bool GetDeskList(UIGalleryFrame* frame, uint64_t listId, uint8_t** outItems, size_t** outCount)
+{
+    if (listId == frame->_deskListId)
+    {
+        *outItems = frame->_deskItems;
+        *outCount = &frame->_deskCount;
+        return true;
+    }
+    if (listId == frame->_trayListId)
+    {
+        *outItems = frame->_trayItems;
+        *outCount = &frame->_trayCount;
+        return true;
+    }
+    return false;
+}
+
+static size_t CountDeskRows(UIScreen* screen, uint64_t listId, const UserData* userData)
+{
+    UNUSED(screen);
+    UIGalleryFrame* Frame = UserData_GetPointer(userData);
+    uint8_t* Items = NULL;
+    size_t* Count = NULL;
+    return GetDeskList(Frame, listId, &Items, &Count) ? *Count : 0U;
+}
+
+static Error WriteDeskRow(UIScreen* screen, uint64_t listId, const UserData* userData, size_t index, UIListRowData* outRow)
+{
+    UNUSED(screen);
+    UIGalleryFrame* Frame = UserData_GetPointer(userData);
+    uint8_t* Items = NULL;
+    size_t* Count = NULL;
+    if (!GetDeskList(Frame, listId, &Items, &Count) || (index >= *Count))
+    {
+        return Error_CreateSuccess();
+    }
+    const unsigned char* Name = DeskItemNames[Items[index]];
+    if (!GenericBuffer_AddLastRange(outRow->Text, (void*)Name, strlen((const char*)Name)))
+    {
+        return Error_Construct2(ErrorCode_BufferTooLarge, "UIGallery: a row's text did not fit.");
+    }
+    outRow->Icon = UIElementIcon_FromLetter(Name[0]);
+    return Error_CreateSuccess();
+}
+
+/* Both lists take things from the desk, never the tree's nodes. */
+static bool AcceptsDeskItems(UIScreen* screen, const UIDragQuery* query, const UserData* userData)
+{
+    UNUSED(screen);
+    UNUSED(userData);
+    return query->Payload->Kind == DRAG_KIND_DESK_ITEM;
+}
+
+/* A drop on one of the two lists: the source's selected rows go where the drop fell, selected there. */
+static Error MoveDeskItems(UIGalleryFrame* frame, const UIDragRecord* drag)
+{
+    UIScreen* Screen = &frame->_screen;
+    uint8_t* SourceItems = NULL;
+    size_t* SourceCount = NULL;
+    uint8_t* TargetItems = NULL;
+    size_t* TargetCount = NULL;
+    if (!GetDeskList(frame, drag->SourceId, &SourceItems, &SourceCount) || !GetDeskList(frame, drag->TargetId, &TargetItems, &TargetCount))
+    {
+        return Error_CreateSuccess();
+    }
+    size_t Place = 0U;
+    size_t Selected = 0U;
+    size_t Runs = 0U;
+    Error Result = UIList_GetDropIndex(Screen, drag->TargetId, drag->ScreenPosition, &Place);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIList_GetSelection(Screen, drag->SourceId, &Selected, &Runs);
+    }
+    uint8_t Moved[DESK_ITEM_COUNT];
+    size_t MovedCount = 0U;
+    // Taken out last run first, so the earlier runs keep their places; a run above the drop in the same list moves the drop up.
+    for (size_t Run = Runs; (Run > 0U) && (Result.Code == ErrorCode_Success); Run--)
+    {
+        UIListRange Range = { .Start = 0U, .Count = 0U };
+        Result = UIList_GetSelectionRange(Screen, drag->SourceId, Run - 1U, &Range);
+        if ((Result.Code != ErrorCode_Success) || ((Range.Start + Range.Count) > *SourceCount) || ((MovedCount + Range.Count) > DESK_ITEM_COUNT))
+        {
+            break;
+        }
+        Memory_Move(Moved, Moved + Range.Count, MovedCount);
+        Memory_Copy(SourceItems + Range.Start, Moved, Range.Count);
+        MovedCount += Range.Count;
+        Memory_Move(SourceItems + Range.Start + Range.Count, SourceItems + Range.Start, *SourceCount - Range.Start - Range.Count);
+        *SourceCount -= Range.Count;
+        Result = UIList_RemoveRows(Screen, drag->SourceId, Range.Start, Range.Count);
+        if ((drag->SourceId == drag->TargetId) && (Range.Start < Place))
+        {
+            Place -= Math_MinSizeT(Range.Count, Place - Range.Start);
+        }
+    }
+    if ((Result.Code != ErrorCode_Success) || (MovedCount == 0U))
+    {
+        return Result;
+    }
+    Place = Math_MinSizeT(Place, *TargetCount);
+    Memory_Move(TargetItems + Place, TargetItems + Place + MovedCount, *TargetCount - Place);
+    Memory_Copy(Moved, TargetItems + Place, MovedCount);
+    *TargetCount += MovedCount;
+    Result = UIList_InsertRows(Screen, drag->TargetId, Place, MovedCount);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIList_ClearSelection(Screen, drag->TargetId);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIList_SetRangeSelected(Screen, drag->TargetId, Place, MovedCount, true);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIList_SetCurrent(Screen, drag->TargetId, Place);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        char Status[STATUS_CAPACITY];
+        snprintf(Status, sizeof(Status), "%zu %s to the %s, at row %zu", MovedCount, (MovedCount == 1U) ? "thing went" : "things went",
+            (drag->TargetId == frame->_deskListId) ? "desk" : "tray", Place);
+        Result = Report(frame, Status);
+    }
+    return Result;
+}
+
+/* A drag ended: a drop on a list moves the things; a cancelled drag says so. */
+static Error OnDragEvent(UIScreen* screen, const UIEvent* event, const UserData* userData)
+{
+    UNUSED(screen);
+    UIGalleryFrame* Frame = UserData_GetPointer(userData);
+    if (!event->HasDrag)
+    {
+        return Error_CreateSuccess();
+    }
+    if (event->WidgetEventId == (int32_t)UIDragEvent_Dropped)
+    {
+        return MoveDeskItems(Frame, &event->Drag);
+    }
+    return (event->WidgetEventId == (int32_t)UIDragEvent_Cancelled) ? Report(Frame, "the drag was cancelled: nothing moved") : Error_CreateSuccess();
+}
+
+static uint64_t AddListOf(GalleryBuild* build, uint64_t parent, const char* name, UIListCountProvider count, UIListRowProvider row,
+    UIStackHint hint, bool isDeskList)
+{
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIListOptions Options = UIListOptions_Create();
+        Options.SelectionMode = UISelectionMode_Multiple;
+        Options.CountProvider = count;
+        Options.RowProvider = row;
+        Options.ProviderData = UserData_FromPointer(build->Frame);
+        Options.VisibleRows = EDITOR_VISIBLE_ROWS;
+        Options.Element.Hint = hint;
+        Options.IsDragSource = isDeskList;
+        Options.DragKind = DRAG_KIND_DESK_ITEM;
+        if (!isDeskList)
+        {
+            Options.CellCount = 2U;
+            Options.CellIcons[0] = UIElementIcon_FromLetter('V');
+            Options.CellIcons[1] = UIElementIcon_FromLetter('L');
+        }
+        build->Result = UIKit_CreateList(&build->Frame->_kit, &build->Frame->_screen, parent, &Options, &Id);
+        Remember(build, Id, name);
+    }
+    if (!HasFailed(build) && isDeskList)
+    {
+        build->Result = UIDragDrop_SetTarget(&build->Frame->_screen, Id, AcceptsDeskItems, NULL);
+    }
+    return Id;
+}
+
+static uint64_t AddToolbar(GalleryBuild* build, uint64_t parent, const char* name, UIStackDirection direction, const UIToolbarItem* items,
+    size_t count)
+{
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIToolbarOptions Options = UIToolbarOptions_Create();
+        Options.Direction = direction;
+        Options.Items = items;
+        Options.ItemCount = count;
+        Options.Element.Hint = UIStackHint_Content();
+        Options.Element.Hint.Align = UIStackAlign_Start;
+        build->Result = UIKit_CreateToolbar(&build->Frame->_kit, &build->Frame->_screen, parent, &Options, &Id);
+        Remember(build, Id, name);
+    }
+    return Id;
+}
+
+/* The tool bar across the page and the upright one beside the tree. */
+static void BuildToolbars(GalleryBuild* build, uint64_t page, uint64_t treeRow)
+{
+    UIToolbarItem Items[] =
+    {
+        UIToolbarItem_CreateButton(TOOL_NEW, UIElementIcon_FromLetter('N'), u8"New"),
+        UIToolbarItem_CreateButton(TOOL_OPEN, UIElementIcon_FromLetter('O'), u8"Open"),
+        UIToolbarItem_CreateButton(TOOL_SAVE, UIElementIcon_FromLetter('S'), u8"Save"),
+        UIToolbarItem_CreateSeparator(),
+        UIToolbarItem_CreateToggle(TOOL_GRID, UIElementIcon_FromLetter('G'), u8"Show the grid", true),
+        UIToolbarItem_CreateToggle(TOOL_SNAP, UIElementIcon_FromLetter('A'), u8"Snap to the grid", false),
+        UIToolbarItem_CreateSeparator(),
+        UIToolbarItem_CreateChoice(TOOL_SELECT, UIElementIcon_FromLetter('Q'), u8"Select", 1U, true),
+        UIToolbarItem_CreateChoice(TOOL_MOVE, UIElementIcon_FromLetter('W'), u8"Move", 1U, false),
+        UIToolbarItem_CreateChoice(TOOL_TURN, UIElementIcon_FromLetter('E'), u8"Turn", 1U, false),
+        UIToolbarItem_CreateChoice(TOOL_SCALE, UIElementIcon_FromLetter('R'), u8"Scale", 1U, false),
+        UIToolbarItem_CreateSeparator(),
+        UIToolbarItem_CreateButton(TOOL_PLAY, UIElementIcon_FromLetter('P'), u8"Play the story from here"),
+        UIToolbarItem_CreateButton(TOOL_BAKE, UIElementIcon_FromLetter('B'), u8"Bake the lighting (nothing to bake)")
+    };
+    Items[12].Text = u8"Play";
+    Items[13].IsEnabled = false;
+    build->Frame->_toolbarId = AddToolbar(build, page, "the tool bar", UIStackDirection_Row, Items, sizeof(Items) / sizeof(Items[0]));
+    const UIToolbarItem Side[] =
+    {
+        UIToolbarItem_CreateChoice(TOOL_SOLID, UIElementIcon_FromLetter('S'), u8"Solid", 2U, true),
+        UIToolbarItem_CreateChoice(TOOL_WIRE, UIElementIcon_FromLetter('W'), u8"Wire frame", 2U, false),
+        UIToolbarItem_CreateChoice(TOOL_LIT, UIElementIcon_FromLetter('L'), u8"Lit", 2U, false),
+        UIToolbarItem_CreateSeparator(),
+        UIToolbarItem_CreateToggle(TOOL_HIDDEN, UIElementIcon_FromLetter('H'), u8"Show hidden things", false)
+    };
+    build->Frame->_sideToolbarId = AddToolbar(build, treeRow, "the upright tool bar", UIStackDirection_Column, Side, sizeof(Side) / sizeof(Side[0]));
+}
+
+/* A labelled colour picker in a row of its panel. */
+static void AddColorPicker(GalleryBuild* build, uint64_t panel, const unsigned char* label, const char* name, const UIColorPickerOptions* options)
+{
+    uint64_t Row = AddRow(build, panel, 8.0f);
+    uint64_t Label = AddLabel(build, Row, label, NULL);
+    if (!HasFailed(build))
+    {
+        UIStackHint Centred = UIStackHint_Content();
+        Centred.Align = UIStackAlign_Center;
+        build->Result = StackWidget_SetChildHint(&build->Frame->_screen, Label, &Centred);
+    }
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        build->Result = UIKit_CreateColorPicker(&build->Frame->_kit, &build->Frame->_screen, Row, options, &Id);
+        Remember(build, Id, name);
+    }
+}
+
+static void BuildColorPickers(GalleryBuild* build, uint64_t panel)
+{
+    AddLabel(build, panel, u8"Colours: Enter or a click opens one; Escape puts the colour back", u8"heading");
+    UIColorPickerOptions Options = UIColorPickerOptions_Create();
+    Options.Color = (Color){ 46, 139, 87, 160 };
+    Options.HasAlpha = true;
+    AddColorPicker(build, panel, u8"With alpha", "the colour with alpha", &Options);
+    Options.Color = (Color){ 210, 105, 30, 255 };
+    Options.HasAlpha = false;
+    AddColorPicker(build, panel, u8"Opaque", "the opaque colour", &Options);
+    Options.Kind = UIColorKind_RenderColor;
+    Options.RenderColor = (RenderColor){ .Tint = { 255, 214, 170, 255 }, .Brightness = 0.8f, .Opacity = 1.0f };
+    Options.HasAlpha = true;
+    AddColorPicker(build, panel, u8"A light's colour (tint, brightness, opacity)", "the light's colour", &Options);
+    Options = UIColorPickerOptions_Create();
+    Options.Color = (Color){ 120, 120, 200, 255 };
+    Options.IsMixed = true;
+    AddColorPicker(build, panel, u8"Three objects' colours, which differ", "the mixed colour", &Options);
+    Options.IsMixed = false;
+    Options.IsEnabled = false;
+    AddColorPicker(build, panel, u8"Disabled", "the disabled colour", &Options);
+}
+
+static void BuildDialogButtons(GalleryBuild* build, uint64_t panel)
+{
+    AddLabel(build, panel, u8"Dialogs: Enter takes the default, Escape the cancel, even from inside the field", u8"heading");
+    uint64_t Row = AddRow(build, panel, 8.0f);
+    UIStackHint Hint = UIStackHint_Content();
+    build->Frame->_askButtonId = AddButton(build, Row, u8"Close the notes...", "the unsaved changes button", true, false, NULL, Hint);
+    build->Frame->_renameButtonId = AddButton(build, Row, u8"Rename...", "the rename button", true, false, NULL, Hint);
+    build->Frame->_aboutButtonId = AddButton(build, Row, u8"About this page...", "the about button", true, false, NULL, Hint);
+    AddWrappedLabel(build, panel, u8"The answer shows in the status line. Each opens over a backdrop that takes every press.", u8"hint");
+}
+
+/* Opens one of the three dialogs, made anew each time (a closed one is destroyed). */
+static Error OpenEditorDialog(UIGalleryFrame* frame, uint64_t buttonId)
+{
+    if (UIScreen_IsPopupOpen(&frame->_screen, frame->_openDialogId))
+    {
+        return Error_CreateSuccess();
+    }
+    static const UIDialogButton AskButtons[] =
+    {
+        { .Id = ANSWER_SAVE, .Text = u8"Save", .IsDefault = true, .IsCancel = false },
+        { .Id = ANSWER_DISCARD, .Text = u8"Don't save", .IsDefault = false, .IsCancel = false },
+        { .Id = ANSWER_CANCEL, .Text = u8"Cancel", .IsDefault = false, .IsCancel = true }
+    };
+    static const UIDialogButton RenameButtons[] =
+    {
+        { .Id = ANSWER_OK, .Text = u8"Rename", .IsDefault = true, .IsCancel = false },
+        { .Id = ANSWER_CANCEL, .Text = u8"Cancel", .IsDefault = false, .IsCancel = true }
+    };
+    static const UIDialogButton AboutButtons[] = { { .Id = ANSWER_OK, .Text = u8"Close", .IsDefault = true, .IsCancel = true } };
+    UIDialogOptions Options = UIDialogOptions_Create(u8"Save the changes to notes.txt?");
+    Options.OwnerId = buttonId;
+    Options.Message = u8"What you changed is lost if you don't save it.";
+    Options.Buttons = AskButtons;
+    Options.ButtonCount = sizeof(AskButtons) / sizeof(AskButtons[0]);
+    if (buttonId == frame->_renameButtonId)
+    {
+        Options.Title = u8"Rename";
+        Options.Message = u8"The object's new name:";
+        Options.Buttons = RenameButtons;
+        Options.ButtonCount = sizeof(RenameButtons) / sizeof(RenameButtons[0]);
+    }
+    else if (buttonId == frame->_aboutButtonId)
+    {
+        Options.Title = u8"About this page";
+        Options.Message = u8"The lists and the tree make widgets only for the rows in view, so the hundred thousand rows cost what the fourteen on "
+            u8"screen cost. The tool bars, the colour pickers and these dialogs are what an editor's windows are built from. This message is "
+            u8"long so that it wraps at the dialog's widest.";
+        Options.Buttons = AboutButtons;
+        Options.ButtonCount = 1U;
+    }
+    uint64_t Dialog = WIDGET_ID_INVALID;
+    Error Result = UIKit_CreateDialog(&frame->_kit, &frame->_screen, &Options, &Dialog);
+    uint64_t Field = WIDGET_ID_INVALID;
+    if ((Result.Code == ErrorCode_Success) && (buttonId == frame->_renameButtonId))
+    {
+        uint64_t Content = WIDGET_ID_INVALID;
+        Result = UIDialog_GetContentId(&frame->_screen, Dialog, &Content);
+        UITextBoxOptions FieldOptions = UITextBoxOptions_Create();
+        FieldOptions.Text = u8"Paper clips";
+        if (Result.Code == ErrorCode_Success)
+        {
+            Result = UIKit_CreateTextBox(&frame->_kit, &frame->_screen, Content, &FieldOptions, &Field);
+        }
+        if (Result.Code == ErrorCode_Success)
+        {
+            // The old name selected: typing replaces it, an arrow keeps it.
+            Result = UITextBox_SetSelection(&frame->_screen, Field, 0U, strlen((const char*)FieldOptions.Text));
+        }
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIDialog_Open(&frame->_screen, Dialog, Field);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        Widget* Made = NULL;
+        if (UIScreen_TryGetWidgetById(&frame->_screen, Dialog, &Made))
+        {
+            Error Cleanup = Widget_Destroy(Made);
+            Error_Deconstruct(&Cleanup);
+        }
+        return Result;
+    }
+    frame->_openDialogId = Dialog;
+    frame->_renameFieldId = Field;
+    return Error_CreateSuccess();
+}
+
+/* A dialog's answer: what it was, and the field's text for the rename. */
+static Error ReportDialogAnswer(UIGalleryFrame* frame, const UIEvent* event)
+{
+    char Status[STATUS_CAPACITY];
+    const unsigned char* Text = NULL;
+    size_t Length = 0U;
+    if ((event->Index == ANSWER_OK) && (frame->_renameFieldId != WIDGET_ID_INVALID)
+        && (UITextBox_GetText(&frame->_screen, frame->_renameFieldId, &Text, &Length).Code == ErrorCode_Success))
+    {
+        snprintf(Status, sizeof(Status), "the dialog: renamed to \"%.*s\"", SHOWN_TEXT_BYTES, (const char*)Text);
+    }
+    else
+    {
+        static const char* const Answers[] = { "", "save", "don't save", "cancel", "close" };
+        bool IsKnown = (event->Index > 0) && ((size_t)event->Index < (sizeof(Answers) / sizeof(Answers[0])));
+        snprintf(Status, sizeof(Status), "the dialog's answer: %s", IsKnown ? Answers[event->Index] : "unknown");
+    }
+    frame->_openDialogId = WIDGET_ID_INVALID;
+    frame->_renameFieldId = WIDGET_ID_INVALID;
+    return Report(frame, Status);
+}
+
+/* A tool bar's item, by its id, for the status line. */
+static const char* GetToolName(int32_t id)
+{
+    static const char* const Names[] = { "", "New", "Open", "Save", "the grid", "snapping", "Select", "Move", "Turn", "Scale", "Play", "Bake", "Solid",
+        "Wire frame", "Lit", "hidden things" };
+    return ((id > 0) && ((size_t)id < (sizeof(Names) / sizeof(Names[0])))) ? Names[id] : "an item";
+}
+
+/* A colour's value in words. */
+static void DescribeColor(const UIPropertyValue* value, char* outText, size_t capacity)
+{
+    if (value->Type == UIPropertyType_RenderColor)
+    {
+        const RenderColor* Value = &value->Data.RenderColorValue;
+        snprintf(outText, capacity, ": tint #%02x%02x%02x, brightness %.2f, opacity %.2f", Value->Tint.r, Value->Tint.g, Value->Tint.b,
+            (double)Value->Brightness, (double)Value->Opacity);
+        return;
+    }
+    const Color* Value = &value->Data.ColorValue;
+    snprintf(outText, capacity, ": #%02x%02x%02x%02x", Value->r, Value->g, Value->b, Value->a);
+}
+
+/* The sixth page's elements' events, in words; *outIsHandled false for what the shared reporting tells. */
+static Error ReportEditorEvent(UIGalleryFrame* frame, const UIEvent* event, bool* outIsHandled)
+{
+    char Status[STATUS_CAPACITY];
+    UIElementEvent Kind = (UIElementEvent)event->WidgetEventId;
+    bool IsList = (event->WidgetId == frame->_longListId) || (event->WidgetId == frame->_deskListId) || (event->WidgetId == frame->_trayListId);
+    bool IsTree = event->WidgetId == frame->_treeId;
+    bool IsToolbar = (event->WidgetId == frame->_toolbarId) || (event->WidgetId == frame->_sideToolbarId);
+    bool HasItem = event->HasValue && (event->Value.Type == UIPropertyType_UInt64);
+    *outIsHandled = true;
+    if ((event->WidgetId == frame->_openDialogId) && (Kind == UIElementEvent_Activated) && event->HasIndex)
+    {
+        return ReportDialogAnswer(frame, event);
+    }
+    if ((event->WidgetId == frame->_askButtonId) || (event->WidgetId == frame->_renameButtonId) || (event->WidgetId == frame->_aboutButtonId))
+    {
+        *outIsHandled = Kind == UIElementEvent_Activated;
+        return *outIsHandled ? OpenEditorDialog(frame, event->WidgetId) : Error_CreateSuccess();
+    }
+    if (IsToolbar && event->HasIndex && (Kind != UIElementEvent_Changed))
+    {
+        bool IsOn = event->HasValue && event->Value.Data.BoolValue;
+        snprintf(Status, sizeof(Status), "%s: %s%s", GetElementName(frame, event->WidgetId), GetToolName(event->Index),
+            (Kind == UIElementEvent_Activated) ? "" : (IsOn ? " on" : " off"));
+        return Report(frame, Status);
+    }
+    if ((IsList || IsTree) && (Kind == UIElementEvent_CellToggled) && HasItem && (event->WidgetId == frame->_longListId)
+        && (event->Value.Data.UInt64Value < LONG_LIST_ROWS) && event->HasIndex && (event->Index >= 0) && (event->Index < 2))
+    {
+        size_t Row = (size_t)event->Value.Data.UInt64Value;
+        frame->_rowCells[Row] = (uint8_t)(frame->_rowCells[Row] ^ (1U << (uint32_t)event->Index));
+        snprintf(Status, sizeof(Status), "row %zu is %s %s", Row, ((frame->_rowCells[Row] & (1U << (uint32_t)event->Index)) != 0U) ? "now" : "no longer",
+            (event->Index == 0) ? "shown" : "locked");
+        Error Result = UIList_Refresh(&frame->_screen, frame->_longListId);
+        return (Result.Code == ErrorCode_Success) ? Report(frame, Status) : Result;
+    }
+    if ((IsList || IsTree) && HasItem)
+    {
+        char Item[48];
+        if (IsTree)
+        {
+            WriteTreePath(event->Value.Data.UInt64Value, Item, sizeof(Item));
+        }
+        else
+        {
+            snprintf(Item, sizeof(Item), "row %llu", (unsigned long long)event->Value.Data.UInt64Value);
+        }
+        static const char* const Verbs[] = { "opened", "", "", "", "", "", "double clicked", "", "asked for a menu on" };
+        bool IsKnown = (event->WidgetEventId >= 0) && ((size_t)event->WidgetEventId < (sizeof(Verbs) / sizeof(Verbs[0])))
+            && (Verbs[event->WidgetEventId][0] != 0);
+        snprintf(Status, sizeof(Status), "%s %s %s", GetElementName(frame, event->WidgetId), IsKnown ? Verbs[event->WidgetEventId] : "posted for", Item);
+        return Report(frame, Status);
+    }
+    if ((IsList || IsTree) && (Kind == UIElementEvent_Committed) && event->HasValue && (event->Value.Type == UIPropertyType_Double))
+    {
+        snprintf(Status, sizeof(Status), "%s: %.0f selected", GetElementName(frame, event->WidgetId), event->Value.Data.DoubleValue);
+        return Report(frame, Status);
+    }
+    if ((IsList || IsTree) && (Kind == UIElementEvent_Changed))
+    {
+        return Error_CreateSuccess(); // Committed follows with the same.
+    }
+    if (event->HasValue && ((event->Value.Type == UIPropertyType_Color) || (event->Value.Type == UIPropertyType_RenderColor)))
+    {
+        static const char* const ValueVerbs[] = { "", "changed", "committed", "cancelled" };
+        char Value[96];
+        DescribeColor(&event->Value, Value, sizeof(Value));
+        bool IsKnown = (event->WidgetEventId > 0) && ((size_t)event->WidgetEventId < (sizeof(ValueVerbs) / sizeof(ValueVerbs[0])));
+        snprintf(Status, sizeof(Status), "%s %s%s", GetElementName(frame, event->WidgetId), IsKnown ? ValueVerbs[event->WidgetEventId] : "posted", Value);
+        return (Kind == UIElementEvent_Changed) ? SetStatus(frame, Status) : Report(frame, Status);
+    }
+    *outIsHandled = false;
+    return Error_CreateSuccess();
+}
+
+static void BuildEditorPage(GalleryBuild* build)
+{
+    UIGalleryFrame* Frame = build->Frame;
+    if (HasFailed(build))
+    {
+        return;
+    }
+    for (size_t Row = 0U; Row < LONG_LIST_ROWS; Row++)
+    {
+        Frame->_rowCells[Row] = (uint8_t)(1U | (((Row % 5U) == 4U) ? 2U : 0U));
+    }
+    for (size_t Item = 0U; Item < DESK_ITEM_COUNT; Item++)
+    {
+        bool IsInTray = Item < DESK_ITEMS_STARTING_IN_THE_TRAY;
+        if (IsInTray)
+        {
+            Frame->_trayItems[Frame->_trayCount++] = (uint8_t)Item;
+        }
+        else
+        {
+            Frame->_deskItems[Frame->_deskCount++] = (uint8_t)Item;
+        }
+    }
+    Frame->_openDialogId = WIDGET_ID_INVALID;
+    Frame->_renameFieldId = WIDGET_ID_INVALID;
+    uint64_t Root = AddPageRoot(build);
+    Frame->_pageIds[5] = Root;
+    uint64_t Page = AddPageContent(build, Root);
+    AddLabel(build, Page, u8"UI gallery: lists, trees, colours, dialogs, drags and tool bars", u8"heading");
+    AddWrappedLabel(build, Page, u8"N the next page (while nothing is entered). A list or the tree: a click or Enter enters it, then the arrows, "
+        u8"Page Up and Down, Home and End move, Shift and Ctrl select more, Space selects, Ctrl+A all, Enter opens a row, Left and Right fold the "
+        u8"tree, Escape leaves. Drag things between the desk and the tray.", u8"hint");
+    uint64_t Tools = AddRow(build, Page, 8.0f);
+    uint64_t Lists = AddRow(build, Page, 12.0f);
+    uint64_t LongPanel = AddPanel(build, Lists, UIStackHint_Fill(1.0f), NULL);
+    AddLabel(build, LongPanel, u8"100 000 rows: V shown, L locked", u8"heading");
+    Frame->_longListId = AddListOf(build, LongPanel, "the long list", CountLongRows, WriteLongRow, UIStackHint_Content(), false);
+    Describe(build, Frame->_longListId, u8"A hundred thousand rows: only the ones in view have widgets. Every seventh is dimmed.");
+    uint64_t TreePanel = AddPanel(build, Lists, UIStackHint_Fill(1.0f), NULL);
+    AddLabel(build, TreePanel, u8"A tree twelve levels deep", u8"heading");
+    uint64_t TreeRow = AddRow(build, TreePanel, 6.0f);
+    BuildToolbars(build, Tools, TreeRow);
+    if (!HasFailed(build))
+    {
+        UITreeOptions Options = UITreeOptions_Create();
+        Options.SelectionMode = UISelectionMode_Multiple;
+        Options.Provider = &DeepTreeProvider;
+        Options.ProviderData = UserData_FromPointer(Frame);
+        Options.VisibleRows = EDITOR_VISIBLE_ROWS;
+        Options.Element.Hint = UIStackHint_Fill(1.0f);
+        Options.IsDragSource = true;
+        Options.DragKind = DRAG_KIND_TREE_NODE;
+        build->Result = UIKit_CreateTree(&Frame->_kit, &Frame->_screen, TreeRow, &Options, &Frame->_treeId);
+        Remember(build, Frame->_treeId, "the tree");
+        Describe(build, Frame->_treeId, u8"Drawers hold four things each, twelve deep; a node dragged to the lists is refused.");
+    }
+    uint64_t DragPanel = AddPanel(build, Lists, UIStackHint_Fill(1.0f), NULL);
+    AddLabel(build, DragPanel, u8"Drag between the desk and the tray", u8"heading");
+    uint64_t DragRow = AddRow(build, DragPanel, 6.0f);
+    Frame->_deskListId = AddListOf(build, DragRow, "the desk", CountDeskRows, WriteDeskRow, UIStackHint_Fill(1.0f), true);
+    Frame->_trayListId = AddListOf(build, DragRow, "the tray", CountDeskRows, WriteDeskRow, UIStackHint_Fill(1.0f), true);
+    Describe(build, Frame->_deskListId, u8"Select things, drag them to the tray or to another place on the desk. Escape cancels a drag.");
+    Describe(build, Frame->_trayListId, u8"Things dropped here stay selected.");
+    uint64_t Lower = AddRow(build, Page, 12.0f);
+    uint64_t ColorPanel = AddPanel(build, Lower, UIStackHint_Fill(1.0f), NULL);
+    BuildColorPickers(build, ColorPanel);
+    uint64_t DialogPanel = AddPanel(build, Lower, UIStackHint_Fill(1.0f), NULL);
+    BuildDialogButtons(build, DialogPanel);
+    Frame->_statusIds[5] = AddStatusLine(build, Root);
+    if (!HasFailed(build))
+    {
+        UserData FrameData = UserData_FromPointer(Frame);
+        uint64_t Subscription = UI_SCREEN_ID_INVALID;
+        build->Result = UIScreen_Subscribe(&Frame->_screen, WIDGET_ID_INVALID, UI_EVENT_KIND_MASK(UIEventKind_Drag), OnDragEvent, &FrameData,
+            &Subscription);
+    }
+    Widget* PageBase = NULL;
+    if (!HasFailed(build) && UIScreen_TryGetWidgetById(&Frame->_screen, Root, &PageBase))
+    {
+        build->Result = Widget_SetIsRendered(PageBase, false);
+    }
+}
+
+
 // Static functions: switching pages.
 /* Shows the next page and hides the one shown. */
 static Error ShowNextPage(UIGalleryFrame* frame)
@@ -2253,6 +3056,12 @@ static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserDa
 {
     UIGalleryFrame* Frame = UserData_GetPointer(userData);
     bool IsActivated = event->WidgetEventId == (int32_t)UIElementEvent_Activated;
+    bool IsEditorEvent = false;
+    Error EditorResult = ReportEditorEvent(Frame, event, &IsEditorEvent);
+    if (IsEditorEvent || (EditorResult.Code != ErrorCode_Success))
+    {
+        return EditorResult;
+    }
     if (IsActivated && ((event->WidgetId == Frame->_dialogYesId) || (event->WidgetId == Frame->_dialogNoId)))
     {
         return CloseDialog(Frame, (event->WidgetId == Frame->_dialogYesId) ? "the dialog: yes, the changes are discarded" : "the dialog: no, the changes stay");
@@ -2261,7 +3070,8 @@ static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserDa
     {
         return ReportChoice(Frame, event);
     }
-    static const char* const EventNames[] = { "activated", "changed", "committed", "cancelled", "pressed", "released", "double clicked", "scrolled", "context requested" };
+    static const char* const EventNames[] = { "activated", "changed", "committed", "cancelled", "pressed", "released", "double clicked", "scrolled", "context requested",
+        "cell toggled" };
     bool IsKnown = (event->WidgetEventId >= 0) && ((size_t)event->WidgetEventId < (sizeof(EventNames) / sizeof(EventNames[0])));
     char Value[96] = "";
     const unsigned char* Text = NULL;

@@ -1026,14 +1026,15 @@ static void TheTooltipKindHasItsParts(TestRun* run)
         TEST_CHECK(run, (Descriptor != NULL) && (strcmp((const char*)Descriptor->Key, Parts[Index].Key) == 0)
             && (Descriptor->Kind == Parts[Index].Kind));
     }
-    // The offset points either way; every other metric of every kind counts from 0.
+    // The offsets (hover text's, a drag's item's) point either way; every other metric of every kind counts from 0.
     for (int32_t Kind = 0; Kind < (int32_t)UIElementKind_Count; Kind++)
     {
         for (size_t Part = 0U; Part < UIElementKind_GetPartCount((UIElementKind)Kind); Part++)
         {
             const UIThemePartDescriptor* Descriptor = UIElementKind_GetPart((UIElementKind)Kind, (int32_t)Part);
             bool IsMetric = (Descriptor->Kind == UIThemePartKind_Vector) || (Descriptor->Kind == UIThemePartKind_Number);
-            bool IsOffset = (Kind == (int32_t)UIElementKind_Tooltip) && (Part == (size_t)UITooltipPart_Offset);
+            bool IsOffset = ((Kind == (int32_t)UIElementKind_Tooltip) && (Part == (size_t)UITooltipPart_Offset))
+                || ((Kind == (int32_t)UIElementKind_Drag) && (Part == (size_t)UIDragPart_Offset));
             TEST_CHECK(run, !IsMetric || (Descriptor->Maximum == UI_THEME_MAX_METRIC));
             TEST_CHECK(run, !IsMetric || (Descriptor->Minimum == (IsOffset ? -UI_THEME_MAX_METRIC : 0.0f)));
         }
@@ -1116,15 +1117,23 @@ static void TheShippedThemesLoadAndResolve(TestRun* run)
             TEST_CHECK(run, UITheme_GetTooltipDelaySeconds(Themes[Index]) == 0.5f);
             TEST_CHECK(run, UIThemeStyle_GetBox(UITheme_FindStyle(Themes[Index], UIElementKind_Tooltip, NULL), UITooltipPart_Background) != NULL);
             TEST_CHECK(run, UIThemeStyle_GetColors(UITheme_FindStyle(Themes[Index], UIElementKind_Tooltip, NULL), UITooltipPart_Text) != NULL);
-            // Every text box part, so no element of the kind draws a plain box; the mask a bullet.
-            const UIThemeStyle* TextBox = UITheme_FindStyle(Themes[Index], UIElementKind_TextBox, NULL);
-            for (int32_t Part = 0; Part < (int32_t)UITextBoxPart_Count; Part++)
+            // Every box and colour of every kind, so no element draws a plain box; the text box's mask a bullet.
+            for (int32_t Kind = 0; Kind < (int32_t)UIElementKind_Count; Kind++)
             {
-                const UIThemePartDescriptor* Descriptor = UIElementKind_GetPart(UIElementKind_TextBox, Part);
-                bool IsBox = Descriptor->Kind == UIThemePartKind_Box;
-                bool IsColors = Descriptor->Kind == UIThemePartKind_Colors;
-                TEST_CHECK(run, (!IsBox || (UIThemeStyle_GetBox(TextBox, Part) != NULL)) && (!IsColors || (UIThemeStyle_GetColors(TextBox, Part) != NULL)));
+                const UIThemeStyle* Style = UITheme_FindStyle(Themes[Index], (UIElementKind)Kind, NULL);
+                for (size_t Part = 0U; Part < UIElementKind_GetPartCount((UIElementKind)Kind); Part++)
+                {
+                    const UIThemePartDescriptor* Descriptor = UIElementKind_GetPart((UIElementKind)Kind, (int32_t)Part);
+                    bool IsBox = Descriptor->Kind == UIThemePartKind_Box;
+                    bool IsColors = Descriptor->Kind == UIThemePartKind_Colors;
+                    bool IsSet = (Style != NULL) && (!IsBox || (UIThemeStyle_GetBox(Style, (int32_t)Part) != NULL))
+                        && (!IsColors || (UIThemeStyle_GetColors(Style, (int32_t)Part) != NULL));
+                    char Message[192];
+                    snprintf(Message, sizeof(Message), "%s sets \"%s\" of element kind %d", Files[Index], (const char*)Descriptor->Key, (int)Kind);
+                    TestRun_Check(run, IsSet, Message, __FILE__, __LINE__);
+                }
             }
+            const UIThemeStyle* TextBox = UITheme_FindStyle(Themes[Index], UIElementKind_TextBox, NULL);
             TEST_CHECK(run, UIThemeStyle_GetCharacter(TextBox, UIElementKind_TextBox, UITextBoxPart_Mask) == 0x2022U);
         }
     }

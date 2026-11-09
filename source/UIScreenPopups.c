@@ -138,8 +138,9 @@ static void DestroyIfAlive(UIScreen* self, uint64_t widgetId)
     }
 }
 
-/* Closes one popup whose entry is already off the list: its cue, the focus back when it was inside it or nowhere (unless a press is about
- * to put the focus where it lands: @p returnsFocus false), its owner told, its widgets destroyed. */
+/* Closes one popup whose entry is already off the list: its cue, an element entered inside it left keeping, the focus back when it was
+ * inside it or nowhere (unless a press is about to put the focus where it lands: @p returnsFocus false), its owner told, its widgets
+ * destroyed. */
 static Error CloseEntry(UIScreen* self, const PopupEntry* entry, UIPopupCloseReason reason, bool returnsFocus)
 {
     Error FirstError = Error_CreateSuccess();
@@ -148,6 +149,15 @@ static Error CloseEntry(UIScreen* self, const PopupEntry* entry, UIPopupCloseRea
     {
         Error CueResult = UIScreen_PostCue(self, entry->RootId, UIElementCue_Close);
         KeepFirstError(&FirstError, &CueResult);
+    }
+    // An element entered inside it is left keeping what was done, as focus moving away leaves it (Escape left it with a cancel already):
+    // what was typed in a popup's field is not lost to its closing.
+    Widget* Entered = UIScreen_InternalResolve(self, self->_enteredWidgetId);
+    Root = UIScreen_InternalResolve(self, entry->RootId);
+    if ((Entered != NULL) && (Root != NULL) && UIScreen_InternalIsInSubtree(Entered, Root))
+    {
+        Error LeaveResult = UIScreen_InternalLeave(self, UILeaveReason_Keep);
+        KeepFirstError(&FirstError, &LeaveResult);
     }
     Widget* Focused = UIScreen_InternalResolve(self, self->_focusedWidgetId);
     Root = UIScreen_InternalResolve(self, entry->RootId);
@@ -556,6 +566,64 @@ Error UIScreen_ClosePopup(UIScreen* screen, uint64_t rootWidgetId)
         return Error_Construct2(ErrorCode_InvalidOperation, "UIScreen_ClosePopup: no open popup has that root.");
     }
     return CloseFrom(screen, Index, UIPopupCloseReason_Code, true);
+}
+
+Error UIScreen_ClosePopupAndItsOwn(UIScreen* screen, uint64_t rootWidgetId)
+{
+    if (screen == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_ClosePopupAndItsOwn: screen must not be NULL.");
+    }
+    size_t Index = FindEntry(screen, rootWidgetId);
+    if (Index == GENERIC_BUFFER_INDEX_INVALID)
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "UIScreen_ClosePopupAndItsOwn: no open popup has that root.");
+    }
+    // Its own: the popup, then each above it whose owner lies in one already counted. Taken first, so a hook meanwhile changes nothing.
+    uint64_t Roots[UI_SCREEN_MAX_POPUPS];
+    size_t Count = 0U;
+    Roots[Count++] = rootWidgetId;
+    for (size_t Above = Index + 1U; (Above < screen->_popups._count) && (Count < UI_SCREEN_MAX_POPUPS); Above++)
+    {
+        const PopupEntry* Entry = GetEntryAt(screen, Above);
+        const Widget* Owner = UIScreen_InternalResolve(screen, Entry->Options.OwnerId);
+        bool IsOwn = false;
+        for (size_t Known = 0U; (Known < Count) && !IsOwn && (Owner != NULL); Known++)
+        {
+            const Widget* Root = UIScreen_InternalResolve(screen, Roots[Known]);
+            IsOwn = (Root != NULL) && UIScreen_InternalIsInSubtree(Owner, Root);
+        }
+        if (IsOwn)
+        {
+            Roots[Count++] = Entry->RootId;
+        }
+    }
+    Error FirstError = Error_CreateSuccess();
+    for (size_t Step = Count; Step-- > 0U;)
+    {
+        size_t At = FindEntry(screen, Roots[Step]);
+        if (At == GENERIC_BUFFER_INDEX_INVALID)
+        {
+            continue;
+        }
+        PopupEntry Closing = *GetEntryAt(screen, At);
+        GenericBuffer_RemoveAt(&screen->_popups, At);
+        // A popup left open above it whose focus would go back inside it gives it back where this one would have.
+        const Widget* ClosingRoot = UIScreen_InternalResolve(screen, Closing.RootId);
+        for (size_t Left = At; (Left < screen->_popups._count) && (ClosingRoot != NULL); Left++)
+        {
+            PopupEntry* Entry = GetEntryAt(screen, Left);
+            const Widget* Return = UIScreen_InternalResolve(screen, Entry->ReturnFocusId);
+            if ((Return != NULL) && UIScreen_InternalIsInSubtree(Return, ClosingRoot))
+            {
+                Entry->ReturnFocusId = Closing.ReturnFocusId;
+                Entry->WasReturnEntered = Closing.WasReturnEntered;
+            }
+        }
+        Error Result = CloseEntry(screen, &Closing, UIPopupCloseReason_Code, true);
+        KeepFirstError(&FirstError, &Result);
+    }
+    return FirstError;
 }
 
 Error UIScreen_CloseAllPopups(UIScreen* screen)

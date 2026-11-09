@@ -249,6 +249,7 @@ static Error TeardownSubtree(UIScreen* self, Widget* widget)
     UIScreen_InternalRemoveWidgetSubscriptions(self, Id);
     UIScreen_InternalRemoveWidgetTooltip(self, Id);
     UIScreen_InternalRemoveWidgetContextMenu(self, Id);
+    UIScreen_InternalRemoveWidgetDrag(self, Id);
     size_t SlotIndex = 0;
     if (FindSlot(self, Id, &SlotIndex) != NULL)
     {
@@ -651,6 +652,10 @@ static Error RunUpdate(UIScreen* self, ProgramTime time, const UIScreenInput* in
     }
     if (Result.Code == ErrorCode_Success)
     {
+        Result = UIScreen_InternalUpdateDrag(self);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
         Result = UIScreen_InternalUpdateTooltip(self, time);
     }
     if (Result.Code == ErrorCode_Success)
@@ -1042,6 +1047,7 @@ Error UIScreen_Construct(UIScreen* self, UIWidgetFactory* factory, Logger* logge
     UIScreen_InternalInitializeTooltips(self);
     UIScreen_InternalInitializePopups(self);
     UIScreen_InternalInitializeContextMenus(self);
+    UIScreen_InternalInitializeDrag(self);
 
     self->_nextSequence = 1U;
     return Error_CreateSuccess();
@@ -1086,6 +1092,7 @@ Error UIScreen_Deconstruct(UIScreen* self)
     UIScreen_InternalReleaseTooltips(self);
     UIScreen_InternalReleasePopups(self);
     UIScreen_InternalReleaseContextMenus(self);
+    UIScreen_InternalReleaseDrag(self);
     Memory_Free(self->_slots._data);
     Memory_Free(self->_roots._data);
     Memory_Free(self->_rootDrawOrder._data);

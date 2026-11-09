@@ -476,9 +476,20 @@ static Error FollowPressedButton(UIScreen* self, ProgramTime time, GameKey butto
 {
     uint8_t Raw = GameInput_GetRawKeyState(self->_input, button);
     bool IsReleased = ((Raw & GAME_INPUT_KEY_STATE_RELEASED) != 0) || ((Raw & GAME_INPUT_KEY_STATE_DOWN) == 0);
+    if (UIScreen_InternalIsDragButton(self, index))
+    {
+        return UIScreen_InternalFollowDrag(self, IsReleased);
+    }
     if (motion->IsDrag)
     {
-        Error Result = DeliverMove(self, time, button, index, motion);
+        // A press that moved far enough on a drag source becomes a drag, which takes the press over from its widget.
+        bool IsDragStarted = false;
+        Error Result = motion->IsRelative ? Error_CreateSuccess() : UIScreen_InternalTryStartDrag(self, index, &IsDragStarted);
+        if ((Result.Code != ErrorCode_Success) || IsDragStarted)
+        {
+            return (Result.Code == ErrorCode_Success) ? UIScreen_InternalFollowDrag(self, IsReleased) : Result;
+        }
+        Result = DeliverMove(self, time, button, index, motion);
         if ((Result.Code != ErrorCode_Success) || !self->_buttons[index].IsPressed)
         {
             return Result; // The hook may have taken the press away.
@@ -747,6 +758,10 @@ Error UIScreen_InternalRouteInput(UIScreen* self, ProgramTime time, const UIScre
     }
     if ((Result.Code == ErrorCode_Success) && self->_hasKeyboardFocus)
     {
+        Result = UIScreen_InternalRouteDragEscape(self);
+    }
+    if ((Result.Code == ErrorCode_Success) && self->_hasKeyboardFocus)
+    {
         Result = RouteKeys(self);
     }
     if ((Result.Code == ErrorCode_Success) && self->_hasKeyboardFocus)
@@ -990,6 +1005,11 @@ void UIScreen_ReleasePointerCapture(UIScreen* self)
 
 UICursorShape UIScreen_GetCursorShape(const UIScreen* self)
 {
+    UICursorShape DragShape = UICursorShape_Arrow;
+    if (UIScreen_InternalTryGetDragCursorShape(self, &DragShape))
+    {
+        return DragShape;
+    }
     for (size_t Index = 0; Index < UI_SCREEN_MOUSE_BUTTON_COUNT; Index++)
     {
         const Widget* Holder = UIScreen_InternalResolve(self, self->_buttons[Index].TargetWidgetId);
