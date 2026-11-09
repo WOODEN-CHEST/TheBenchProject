@@ -119,6 +119,10 @@ int main(void)
     UIDropdownTests_Run(&Run);
     UIMenuTests_Run(&Run);
     UITextBoxTests_Run(&Run);
+    UIValueTests_Run(&Run);
+    UISliderTests_Run(&Run);
+    UIPropertyBoxTests_Run(&Run);
+    UICompoundTests_Run(&Run);
     GameWindowStateTests_Run(&Run);
     GameWindowTests_Run(&Run);
     UITestFrameTests_Run(&Run);

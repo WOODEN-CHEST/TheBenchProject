@@ -9,7 +9,7 @@
 
 
 /*
- * Private to the kit and its element kinds (UIKit.c, UIPanel.c, UIButton.c, UIToggle.c, UISlider.c): how the kit composes a widget
+ * Private to the kit and its element kinds (UIKit.c and each kind's module): how the kit composes a widget
  * type from a kind's behaviour and a look.
  *
  * A KIND gives its behaviour as data: its capability's place in a look's struct (right after the Widget), the capability calling
@@ -90,3 +90,13 @@ const UIKindBehaviour* UIMenuBar_GetKindBehaviour(void);
 const UIKindBehaviour* UIStatusBar_GetKindBehaviour(void);
 /** The text box's: its text, its caret and selection, its keys and mouse, its bars and the caret kept in view. */
 const UIKindBehaviour* UITextBox_GetKindBehaviour(void);
+/** The property box's: showing, scrubbing, and typing in a text box of its own. */
+const UIKindBehaviour* UIPropertyBox_GetKindBehaviour(void);
+/** The labelled element's: its label and element laid out. */
+const UIKindBehaviour* UILabelled_GetKindBehaviour(void);
+/** The form's: its rows laid out, the labelled ones lined up. */
+const UIKindBehaviour* UIForm_GetKindBehaviour(void);
+/** The compound slider's: its parts laid out, its value kept in step with theirs. */
+const UIKindBehaviour* UICompoundSlider_GetKindBehaviour(void);
+/** The row of fields': its fields laid out after their tags. */
+const UIKindBehaviour* UIVectorRow_GetKindBehaviour(void);

@@ -233,7 +233,8 @@ Error UIScreen_Unsubscribe(UIScreen* self, uint64_t subscriptionId)
 }
 
 /* Queues a widget type's own event, with what it carries. */
-static Error PostWidgetEvent(UIScreen* self, uint64_t widgetId, int32_t widgetEventId, const UIPropertyValue* value, const UIEventMouse* mouse)
+static Error PostWidgetEvent(UIScreen* self, uint64_t widgetId, int32_t widgetEventId, const UIPropertyValue* value, const UIEventMouse* mouse,
+    const int32_t* index)
 {
     Widget* Source = UIScreen_InternalResolve(self, widgetId);
     if (Source == NULL)
@@ -251,7 +252,9 @@ static Error PostWidgetEvent(UIScreen* self, uint64_t widgetId, int32_t widgetEv
         .HasValue = (value != NULL),
         .Value = (value != NULL) ? *value : UIPropertyValue_FromFloat(0.0f),
         .HasMouse = (mouse != NULL),
-        .Mouse = (mouse != NULL) ? *mouse : (UIEventMouse){ .Button = GameKey_Unknown }
+        .Mouse = (mouse != NULL) ? *mouse : (UIEventMouse){ .Button = GameKey_Unknown },
+        .HasIndex = (index != NULL),
+        .Index = (index != NULL) ? *index : 0
     };
     if (!UIScreen_InternalPostEvent(self, &Event))
     {
@@ -266,7 +269,7 @@ Error UIScreen_PostWidgetEvent(UIScreen* self, uint64_t widgetId, int32_t widget
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_PostWidgetEvent: self must not be NULL.");
     }
-    return PostWidgetEvent(self, widgetId, widgetEventId, value, NULL);
+    return PostWidgetEvent(self, widgetId, widgetEventId, value, NULL, NULL);
 }
 
 Error UIScreen_PostWidgetMouseEvent(UIScreen* self, uint64_t widgetId, int32_t widgetEventId, const UIEventMouse* mouse)
@@ -275,7 +278,16 @@ Error UIScreen_PostWidgetMouseEvent(UIScreen* self, uint64_t widgetId, int32_t w
     {
         return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_PostWidgetMouseEvent: self and mouse must not be NULL.");
     }
-    return PostWidgetEvent(self, widgetId, widgetEventId, NULL, mouse);
+    return PostWidgetEvent(self, widgetId, widgetEventId, NULL, mouse, NULL);
+}
+
+Error UIScreen_PostWidgetIndexedEvent(UIScreen* self, uint64_t widgetId, int32_t widgetEventId, const UIPropertyValue* value, int32_t index)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_PostWidgetIndexedEvent: self must not be NULL.");
+    }
+    return PostWidgetEvent(self, widgetId, widgetEventId, value, NULL, &index);
 }
 
 /* Whether a live subscription asks for cues of a widget: one to it, or one to every widget. */

@@ -109,6 +109,16 @@ typedef enum UIElementKindEnum
     UIElementKind_Backdrop,
     /** @brief Text to type in, or to read and select: one line or several, writable or read-only. */
     UIElementKind_TextBox,
+    /** @brief A value in a box: typed in, or dragged sideways if it is a number. */
+    UIElementKind_PropertyBox,
+    /** @brief A label and any element beside it or above it. */
+    UIElementKind_Labelled,
+    /** @brief A column whose labelled rows share one label width. */
+    UIElementKind_Form,
+    /** @brief A slider, a property box and a name, one value. */
+    UIElementKind_CompoundSlider,
+    /** @brief Two to four property boxes in a row, each with an axis tag. */
+    UIElementKind_VectorRow,
     /** @brief The number of kinds. */
     UIElementKind_Count
 } UIElementKind;
@@ -370,6 +380,85 @@ typedef enum UITextBoxPartEnum
     /** @brief The number of a text box's values. */
     UITextBoxPart_Count
 } UITextBoxPart;
+
+/** @brief A property box's values in a theme. */
+typedef enum UIPropertyBoxPartEnum
+{
+    /** @brief "padding": between the box's edges and its text, horizontal and vertical, UI pixels. */
+    UIPropertyBoxPart_Padding,
+    /** @brief "min_size": UI pixels; the box is as tall as a line at least. */
+    UIPropertyBoxPart_MinSize,
+    /** @brief "caret_width": how wide the caret's line is while typing, UI pixels. */
+    UIPropertyBoxPart_CaretWidth,
+    /** @brief "unit_spacing": between a number and its unit, UI pixels. */
+    UIPropertyBoxPart_UnitSpacing,
+    /** @brief "box": a box behind everything. */
+    UIPropertyBoxPart_Box,
+    /** @brief "fill": a box behind the number from the box's start as far as the value's share of its range (a number that shows it). */
+    UIPropertyBoxPart_Fill,
+    /** @brief "selection": a box behind the selected text while typing. */
+    UIPropertyBoxPart_Selection,
+    /** @brief "caret": a box, the caret's line while typing. */
+    UIPropertyBoxPart_Caret,
+    /** @brief "text": colors, the number or the string. */
+    UIPropertyBoxPart_Text,
+    /** @brief "unit": colors, the unit after a number. */
+    UIPropertyBoxPart_Unit,
+    /** @brief The number of a property box's values. */
+    UIPropertyBoxPart_Count
+} UIPropertyBoxPart;
+
+/** @brief A labelled element's values in a theme (its label is a label's). */
+typedef enum UILabelledPartEnum
+{
+    /** @brief "spacing": between the label and the element, UI pixels. */
+    UILabelledPart_Spacing,
+    /** @brief The number of a labelled element's values. */
+    UILabelledPart_Count
+} UILabelledPart;
+
+/** @brief A form's values in a theme. */
+typedef enum UIFormPartEnum
+{
+    /** @brief "padding": around its rows, horizontal and vertical, UI pixels. */
+    UIFormPart_Padding,
+    /** @brief "spacing": between its rows, UI pixels. */
+    UIFormPart_Spacing,
+    /** @brief The number of a form's values. */
+    UIFormPart_Count
+} UIFormPart;
+
+/** @brief A compound slider's values in a theme (its parts are a label's, a slider's and a property box's). */
+typedef enum UICompoundSliderPartEnum
+{
+    /** @brief "spacing": between its parts, UI pixels. */
+    UICompoundSliderPart_Spacing,
+    /** @brief "box_width": how wide the property box beside a slider across is, UI pixels. */
+    UICompoundSliderPart_BoxWidth,
+    /** @brief The number of a compound slider's values. */
+    UICompoundSliderPart_Count
+} UICompoundSliderPart;
+
+/** @brief A row of fields' values in a theme (its fields are property boxes). */
+typedef enum UIVectorRowPartEnum
+{
+    /** @brief "spacing": between one field and the next tag, UI pixels. */
+    UIVectorRowPart_Spacing,
+    /** @brief "tag_width": how wide an axis tag is, UI pixels. */
+    UIVectorRowPart_TagWidth,
+    /** @brief "x_tag": a box, the first axis's tag. */
+    UIVectorRowPart_XTag,
+    /** @brief "y_tag": a box, the second axis's tag. */
+    UIVectorRowPart_YTag,
+    /** @brief "z_tag": a box, the third axis's tag. */
+    UIVectorRowPart_ZTag,
+    /** @brief "w_tag": a box, the fourth axis's tag. */
+    UIVectorRowPart_WTag,
+    /** @brief "tag_text": colors, the axis's letter on its tag. */
+    UIVectorRowPart_TagText,
+    /** @brief The number of a row of fields' values. */
+    UIVectorRowPart_Count
+} UIVectorRowPart;
 
 /**
  * @brief What a value of an element kind is.

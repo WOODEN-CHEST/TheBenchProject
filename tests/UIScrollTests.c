@@ -537,7 +537,7 @@ static void TheWheelOverElementsScrollsAndNeverChangesASlider(TestRun* run)
         uint64_t PageId = AddColumn(run, &Fixture, AreaId);
         AddButton(run, &Fixture, PageId, u8"button", 40.0f);
         UISliderOptions Slider = UISliderOptions_Create();
-        Slider.Value = 0.5;
+        Slider.Value.Value = 0.5;
         Slider.Element.Hint = UIStackHint_Fixed(30.0f);
         uint64_t SliderId = WIDGET_ID_INVALID;
         TEST_CHECK_SUCCESS(run, UIKit_CreateSlider(&Fixture.UI.Kit, &Fixture.UI.Screen, PageId, &Slider, &SliderId));
@@ -558,7 +558,7 @@ static void TheWheelOverElementsScrollsAndNeverChangesASlider(TestRun* run)
         TestUI_Wheel(&Fixture.UI, -1.0f);
         TestUI_Tick(run, &Fixture.UI);
         double Value = 0.0;
-        TEST_CHECK_SUCCESS(run, UISlider_GetValue(&Fixture.UI.Screen, SliderId, &Value));
+        TEST_CHECK_SUCCESS(run, UIValue_Get(&Fixture.UI.Screen, SliderId, &Value));
         TEST_CHECK(run, (Value == 0.5) && (GetOffset(run, &Fixture, AreaId).y == UI_SCROLLABLE_DEFAULT_WHEEL_STEP));
     }
     Deconstruct(run, &Fixture);

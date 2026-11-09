@@ -36,7 +36,15 @@
         "caret_block": "#1e181070",
         "paper_read_only": "#c4b894",
         "paper_invalid": "#e6a896",
-        "selection_inactive": "#a08f68"
+        "selection_inactive": "#a08f68",
+        "paper_fill": "#c2ad78",
+        "paper_fill_hover": "#d0bb86",
+        "ink_dim": "#5a4e38",
+        "axis_x": "#c8705a",
+        "axis_y": "#86a85a",
+        "axis_z": "#6a8cb0",
+        "axis_w": "#a09478",
+        "axis_text": "#1e1810"
     },
     "elements": {
         "panel": {
@@ -220,6 +228,43 @@
             "overwrite_caret": { "kind": "flat", "colors": { "normal": "@caret_block" } },
             "text": { "normal": "@ink", "disabled": "@text_disabled" },
             "placeholder": { "normal": "@paper_disabled", "disabled": "@text_disabled" }
+        },
+        "property_box": {
+            "padding": [ 8, 4 ],
+            "min_size": [ 64, 26 ],
+            "caret_width": 2,
+            "unit_spacing": 4,
+            "box": {
+                "kind": "nine_slice",
+                "texture": "tbp:ui_box",
+                "margins": 6,
+                "colors": { "normal": "@paper", "hovered": "@paper_hover", "pressed": "@paper_pressed", "entered": "@paper_hover", "disabled": "@paper_disabled", "invalid": "@paper_invalid" }
+            },
+            "fill": { "kind": "nine_slice", "texture": "tbp:ui_track", "margins": [ 3, 2, 3, 2 ], "colors": { "normal": "@paper_fill", "hovered": "@paper_fill_hover", "pressed": "@paper_fill_hover", "disabled": "@raised_disabled" } },
+            "selection": { "kind": "flat", "colors": { "normal": "@accent" } },
+            "caret": { "kind": "flat", "colors": { "normal": "@ink" } },
+            "text": { "normal": "@ink", "disabled": "@text_disabled" },
+            "unit": { "normal": "@ink_dim", "disabled": "@text_disabled" }
+        },
+        "labelled": {
+            "spacing": 10
+        },
+        "form": {
+            "padding": [ 0, 0 ],
+            "spacing": 6
+        },
+        "compound_slider": {
+            "spacing": 8,
+            "box_width": 72
+        },
+        "vector_row": {
+            "spacing": 6,
+            "tag_width": 18,
+            "x_tag": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@axis_x" } },
+            "y_tag": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@axis_y" } },
+            "z_tag": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@axis_z" } },
+            "w_tag": { "kind": "nine_slice", "texture": "tbp:ui_box", "margins": 6, "colors": { "normal": "@axis_w" } },
+            "tag_text": { "normal": "@axis_text" }
         }
     }
 }

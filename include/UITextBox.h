@@ -195,6 +195,21 @@ typedef struct UITextBoxGeometryStruct
 } UITextBoxGeometry;
 
 /**
+ * @brief What an element that types in a text box of its own (a property box: its look base starts with the widget and a text box's
+ *        capability) hears in place of the box's events: with a host the box posts no Changed, Committed or Cancelled of its own. Static
+ *        storage; both slots set.
+ */
+typedef struct UITextBoxHostStruct
+{
+    /** @brief Hears an edit after the box applied it (typing, a paste, an undo, a reset): @p isWhole when it was made while the box is not
+     *  entered (the short list's paste and reset), where a text box would post Changed and Committed. */
+    Error (*OnEdited)(Widget* widget, const UITextEditChange* change, bool isWhole);
+    /** @brief Hears a visit end, after a cancel has put the text at entering back (with EscapeReverts): @p hasTextChanged tells whether the
+     *  text differed from the text at entering before that. */
+    Error (*OnVisitEnded)(Widget* widget, UILeaveReason reason, bool hasTextChanged);
+} UITextBoxHost;
+
+/**
  * @brief A text box's capability: its text piece, its scrollable piece, its options and what the keyboard and the mouse are doing. No look;
  *        embedded by a look's widget type right after its Widget (UITextBoxLookBase). Its fields are read-only outside the box's module.
  */
@@ -269,6 +284,8 @@ typedef struct UITextBoxCapabilityStruct
     bool _isBarShown[UIScrollAxis_Count];
     /** @brief The look's answers; NULL until it sets them. Static storage. */
     const UITextBoxGeometry* _geometry;
+    /** @brief The element typing in it, which hears its edits and visits in place of events; NULL for a text box. Static storage. */
+    const UITextBoxHost* _host;
     /** @brief The screen's time as the box last heard it, in seconds: the undo's grouping counts with it. */
     double _time;
     /** @brief Scratch: text being built or copied (bytes). */
@@ -542,6 +559,13 @@ Error UITextBoxCapability_Deconstruct(UITextBoxCapability* self);
  *        only along its text).
  */
 void UITextBoxCapability_SetGeometry(UITextBoxCapability* self, const UITextBoxGeometry* geometry);
+
+/**
+ * @brief Makes an element the box's host (UITextBoxHost): call it after constructing the capability, from the element's own construction.
+ * @param self The capability; must not be NULL.
+ * @param host The host; static storage, both slots set. NULL makes it a text box again, posting its own events.
+ */
+void UITextBoxCapability_SetHost(UITextBoxCapability* self, const UITextBoxHost* host);
 
 /**
  * @brief Returns the state a look shows for the box: disabled, pressed (a drag), invalid, entered, hovered, focused or normal.

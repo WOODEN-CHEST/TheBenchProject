@@ -8,12 +8,15 @@
 #include "StackWidget.h"
 #include "UIButton.h"
 #include "UIChoice.h"
+#include "UICompoundSlider.h"
 #include "UIDropdown.h"
 #include "UIElement.h"
 #include "UILabel.h"
+#include "UILabelled.h"
 #include "UIMenu.h"
 #include "UIMenuBar.h"
 #include "UIPanel.h"
+#include "UIPropertyBox.h"
 #include "UIScrollArea.h"
 #include "UIScrollbar.h"
 #include "UIScrollable.h"
@@ -22,6 +25,8 @@
 #include "UITextBox.h"
 #include "UITheme.h"
 #include "UIToggle.h"
+#include "UIValue.h"
+#include "UIVectorRow.h"
 
 
 /**
@@ -91,6 +96,18 @@ typedef enum UIElementCapabilityEnum
     UIElementCapability_StatusBar,
     /** @brief UITextBoxCapability (UITextBox.h). */
     UIElementCapability_TextBox,
+    /** @brief UIValueCapability (UIValue.h): a number; a slider's, a property box's, a compound slider's. */
+    UIElementCapability_Value,
+    /** @brief UIPropertyBoxCapability (UIPropertyBox.h). */
+    UIElementCapability_PropertyBox,
+    /** @brief UILabelledCapability (UILabelled.h). */
+    UIElementCapability_Labelled,
+    /** @brief UIFormCapability (UILabelled.h). */
+    UIElementCapability_Form,
+    /** @brief UICompoundSliderCapability (UICompoundSlider.h). */
+    UIElementCapability_CompoundSlider,
+    /** @brief UIVectorRowCapability (UIVectorRow.h). */
+    UIElementCapability_VectorRow,
     /** @brief The number of capabilities. */
     UIElementCapability_Count
 } UIElementCapability;
@@ -302,3 +319,16 @@ Error UIKit_CreateStatusBar(UIKit* self, UIScreen* screen, uint64_t parentId, co
 /** @brief Makes a text box (UITextBox.h) with its two scroll bars, each of the look the screen's theme names for the scroll bar (else the
  *  standard one), and its context menu. See the comment above for the parameters and the result. */
 Error UIKit_CreateTextBox(UIKit* self, UIScreen* screen, uint64_t parentId, const UITextBoxOptions* options, uint64_t* outId);
+/** @brief Makes a property box (UIPropertyBox.h) and its context menu. See the comment above for the parameters and the result. */
+Error UIKit_CreatePropertyBox(UIKit* self, UIScreen* screen, uint64_t parentId, const UIPropertyBoxOptions* options, uint64_t* outId);
+/** @brief Makes a labelled element (UILabelled.h) with its label (a label of the look the theme names for the label kind); calling code adds
+ *  the element it labels to it. See the comment above for the parameters and the result. */
+Error UIKit_CreateLabelled(UIKit* self, UIScreen* screen, uint64_t parentId, const UILabelledOptions* options, uint64_t* outId);
+/** @brief Makes a form (UILabelled.h); calling code adds its rows to it. See the comment above for the parameters and the result. */
+Error UIKit_CreateForm(UIKit* self, UIScreen* screen, uint64_t parentId, const UIFormOptions* options, uint64_t* outId);
+/** @brief Makes a compound slider (UICompoundSlider.h) with its name, its slider and its property box, each of the look the theme names for
+ *  its kind. See the comment above for the parameters and the result. */
+Error UIKit_CreateCompoundSlider(UIKit* self, UIScreen* screen, uint64_t parentId, const UICompoundSliderOptions* options, uint64_t* outId);
+/** @brief Makes a row of fields (UIVectorRow.h) with its property boxes, each of the look the theme names for the property box. See the
+ *  comment above for the parameters and the result. */
+Error UIKit_CreateVectorRow(UIKit* self, UIScreen* screen, uint64_t parentId, const UIVectorRowOptions* options, uint64_t* outId);

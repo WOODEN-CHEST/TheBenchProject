@@ -1162,3 +1162,41 @@ Error UIMenuBuilder_Add(UIMenuBuilder* builder, const UIMenuItem* item)
     builder->Count++;
     return Error_CreateSuccess();
 }
+
+void UIMenu_WriteShortcut(const UIScreen* screen, GameActionId action, unsigned char* outText, size_t capacity)
+{
+    if ((outText == NULL) || (capacity == 0U))
+    {
+        return;
+    }
+    outText[0] = 0U;
+    const GameInput* Input = (screen != NULL) ? UIScreen_GetInput(screen) : NULL;
+    GameInputBinding Binding;
+    if ((Input == NULL) || !GameInput_TryGetBinding(Input, action, 0U, &Binding))
+    {
+        return;
+    }
+    GenericBuffer Text;
+    GenericBuffer_CreateConstant(&Text, outText, capacity, sizeof(unsigned char), 0U);
+    static const struct { uint8_t Flag; const char* Name; } Modifiers[] =
+    {
+        { GAME_KEY_MODIFIER_CONTROL, "Ctrl+" }, { GAME_KEY_MODIFIER_ALT, "Alt+" }, { GAME_KEY_MODIFIER_SHIFT, "Shift+" }, { GAME_KEY_MODIFIER_SUPER, "Super+" }
+    };
+    bool IsWhole = true;
+    for (size_t Index = 0U; Index < (sizeof(Modifiers) / sizeof(Modifiers[0])); Index++)
+    {
+        if ((Binding.Modifiers & Modifiers[Index].Flag) != 0U)
+        {
+            IsWhole = IsWhole && GenericBuffer_AppendString(&Text, (const unsigned char*)Modifiers[Index].Name);
+        }
+    }
+    const unsigned char* Name = GameKey_GetDisplayName(Binding.Key);
+    if (Name != NULL)
+    {
+        IsWhole = IsWhole && GenericBuffer_AppendString(&Text, Name);
+    }
+    if (!IsWhole || !GenericBuffer_NullTerminate(&Text))
+    {
+        outText[0] = 0U;
+    }
+}

@@ -37,7 +37,14 @@
         "danger_pressed": "#e8a19d",
         "danger_focus": "#f4c1be",
         "caret_block": "#1f232860",
-        "thumb": "#a9b0ba"
+        "thumb": "#a9b0ba",
+        "fill_soft": "#c9dcf2",
+        "fill_soft_hover": "#b7cfee",
+        "axis_x": "#e0a3a4",
+        "axis_y": "#a8d39a",
+        "axis_z": "#a0bde6",
+        "axis_w": "#c4c9d0",
+        "axis_text": "#1f2328"
     },
     "elements": {
         "panel": {
@@ -205,6 +212,42 @@
             "overwrite_caret": { "kind": "flat", "colors": { "normal": "@caret_block" } },
             "text": { "normal": "@text", "disabled": "@text_disabled" },
             "placeholder": { "normal": "@text_dim", "disabled": "@text_disabled" }
+        },
+        "property_box": {
+            "padding": [ 6, 3 ],
+            "min_size": [ 60, 22 ],
+            "caret_width": 1,
+            "unit_spacing": 3,
+            "box": {
+                "kind": "flat",
+                "colors": { "normal": "@surface_sunken", "hovered": "@sunken_pressed", "pressed": "@sunken_pressed", "entered": "@sunken_pressed", "disabled": "@surface", "invalid": "@danger_pressed" },
+                "outline": { "thickness": 1, "colors": { "normal": "@outline", "hovered": "@outline_strong", "pressed": "@accent", "focused": "@accent", "entered": "@editing_outline", "disabled": "@outline_disabled", "invalid": "@danger_hover" } }
+            },
+            "fill": { "kind": "flat", "colors": { "normal": "@fill_soft", "hovered": "@fill_soft_hover", "pressed": "@fill_soft_hover", "disabled": "@raised_disabled" } },
+            "selection": { "kind": "flat", "colors": { "normal": "@selected" } },
+            "caret": { "kind": "flat", "colors": { "normal": "@text" } },
+            "text": { "normal": "@text", "disabled": "@text_disabled" },
+            "unit": { "normal": "@text_dim", "disabled": "@text_disabled" }
+        },
+        "labelled": {
+            "spacing": 8
+        },
+        "form": {
+            "padding": [ 0, 0 ],
+            "spacing": 4
+        },
+        "compound_slider": {
+            "spacing": 6,
+            "box_width": 64
+        },
+        "vector_row": {
+            "spacing": 4,
+            "tag_width": 16,
+            "x_tag": { "kind": "flat", "colors": { "normal": "@axis_x" } },
+            "y_tag": { "kind": "flat", "colors": { "normal": "@axis_y" } },
+            "z_tag": { "kind": "flat", "colors": { "normal": "@axis_z" } },
+            "w_tag": { "kind": "flat", "colors": { "normal": "@axis_w" } },
+            "tag_text": { "normal": "@axis_text" }
         }
     }
 }

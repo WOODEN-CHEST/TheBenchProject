@@ -39,7 +39,7 @@
 /** The scales the + and - keys go through. */
 #define SCALE_COUNT ((size_t)6)
 /** How many elements are named in the log. */
-#define MAX_NAMED_ELEMENTS ((size_t)160)
+#define MAX_NAMED_ELEMENTS ((size_t)256)
 /** Room for a status line. */
 #define STATUS_CAPACITY ((size_t)160)
 /** The background behind everything, opaque: the gallery has no world under it. */
@@ -51,7 +51,7 @@
 /** The keyboard box's width, in UI pixels. */
 #define KEYBOARD_BOX_WIDTH 320.0f
 /** How many pages the gallery has (N steps through them). */
-#define PAGE_COUNT ((size_t)4)
+#define PAGE_COUNT ((size_t)5)
 /** How many characters of a text box's text its events show in the status line. */
 #define SHOWN_TEXT_BYTES 40
 /** How many style ranges the fourth page's coloured box has. */
@@ -371,13 +371,13 @@ static void AddSlider(GalleryBuild* build, uint64_t parent, const char* name, do
     if (!HasFailed(build))
     {
         UISliderOptions Options = UISliderOptions_Create();
-        Options.Maximum = 100.0;
-        Options.Value = value;
-        Options.HasStep = hasStep;
-        Options.Step = step;
-        Options.IsEnabled = isEnabled;
-        Options.HasDefault = true;
-        Options.Default = value;
+        Options.Value.Settings.Maximum = 100.0;
+        Options.Value.Value = value;
+        Options.Value.Settings.HasStep = hasStep;
+        Options.Value.Settings.Step = step;
+        Options.Value.IsEnabled = isEnabled;
+        Options.Value.Settings.HasDefault = true;
+        Options.Value.Settings.Default = value;
         uint64_t Id = WIDGET_ID_INVALID;
         build->Result = UIKit_CreateSlider(&build->Frame->_kit, &build->Frame->_screen, parent, &Options, &Id);
         Remember(build, Id, name);
@@ -797,6 +797,7 @@ static void BuildLayouts(GalleryBuild* build, uint64_t page)
 static void BuildLooksPage(GalleryBuild* build);
 static void BuildPopupsPage(GalleryBuild* build);
 static void BuildTextPage(GalleryBuild* build);
+static void BuildValuePage(GalleryBuild* build);
 static void DescribeEverything(GalleryBuild* build);
 
 /* The first page: a heading and two panels side by side, scrolling, over a status line; then the other pages, and hover text on
@@ -822,6 +823,7 @@ static Error BuildPage(UIGalleryFrame* frame)
     BuildLooksPage(&Build);
     BuildPopupsPage(&Build);
     BuildTextPage(&Build);
+    BuildValuePage(&Build);
     DescribeEverything(&Build);
     return Build.Result;
 }
@@ -1788,6 +1790,353 @@ static void BuildTextPage(GalleryBuild* build)
 }
 
 
+// Static functions: the fifth page.
+static const double ValueList[] = { 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0 };
+
+/* A captioned slider of the value page, across in a column or upright in a row. */
+static uint64_t AddValueSlider(GalleryBuild* build, uint64_t parent, const unsigned char* caption, const UIValueOptions* value,
+    UISliderOrientation orientation, const char* name)
+{
+    uint64_t Column = (caption != NULL) ? AddCaptioned(build, parent, caption) : parent;
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UISliderOptions Options = UISliderOptions_Create();
+        Options.Value = *value;
+        Options.Value.Settings.HasDefault = true;
+        Options.Value.Settings.Default = value->Value;
+        Options.Orientation = orientation;
+        if (orientation == UISliderOrientation_Vertical)
+        {
+            // In a row: its width fixed, and as tall as a few of the rows across.
+            Options.Element.Hint = UIStackHint_Fixed(40.0f);
+            Options.Element.Hint.Align = UIStackAlign_Start;
+            Options.Element.Hint.HasCrossSize = true;
+            Options.Element.Hint.CrossSize = 150.0f;
+        }
+        build->Result = UIKit_CreateSlider(&build->Frame->_kit, &build->Frame->_screen, Column, &Options, &Id);
+        Remember(build, Id, name);
+    }
+    return Id;
+}
+
+/* The sliders: by every conversion, stepped, whole numbers, a value list, and three upright ones. */
+static void BuildValueSliders(GalleryBuild* build, uint64_t panel)
+{
+    AddLabel(build, panel, u8"Sliders: Shift during a drag slows it, let go it goes on at the full rate. Past an end the thumb is under the pointer "
+        u8"again. Middle click resets.", u8"hint");
+    UIValueOptions Value = UIValueOptions_CreateRange(0.0, 10.0, 4.0);
+    Value.Settings.HasStep = true;
+    Value.Settings.Step = 1.0;
+    AddValueSlider(build, panel, u8"Stepped: 0 to 10 by 1", &Value, UISliderOrientation_Horizontal, "the stepped slider");
+    Value = UIValueOptions_CreateRange(1.0, 10000.0, 100.0);
+    Value.Settings.Conversion = UIValueConversion_Log;
+    AddValueSlider(build, panel, u8"Log: 1 to 10 000, each fifth of the track ten times more", &Value, UISliderOrientation_Horizontal, "the log slider");
+    Value = UIValueOptions_CreateRange(0.0, 100.0, 12.5);
+    Value.Settings.Conversion = UIValueConversion_Power;
+    Value.Settings.Exponent = 3.0;
+    AddValueSlider(build, panel, u8"Power 3: fine near 0", &Value, UISliderOrientation_Horizontal, "the power slider");
+    Value = UIValueOptions_CreateRange(0.0, 20.0, 7.0);
+    Value.Settings.IsInteger = true;
+    AddValueSlider(build, panel, u8"Whole numbers, 0 to 20", &Value, UISliderOrientation_Horizontal, "the whole-number slider");
+    Value = UIValueOptions_CreateRange(1.0, 100.0, 5.0);
+    Value.Settings.ValueList = ValueList;
+    Value.Settings.ValueCount = sizeof(ValueList) / sizeof(ValueList[0]);
+    Value.Settings.Conversion = UIValueConversion_Even;
+    AddValueSlider(build, panel, u8"A list: 1 2 5 10 20 50 100, each the same length of track", &Value, UISliderOrientation_Horizontal,
+        "the value-list slider");
+    AddLabel(build, panel, u8"Upright: up is higher. Enter one, then all four arrows; Tab goes on.", u8"hint");
+    uint64_t Row = AddRow(build, panel, 24.0f);
+    Value = UIValueOptions_CreateRange(0.0, 1.0, 0.25);
+    AddValueSlider(build, Row, NULL, &Value, UISliderOrientation_Vertical, "the first upright slider");
+    Value = UIValueOptions_CreateRange(0.0, 10.0, 6.0);
+    Value.Settings.HasStep = true;
+    Value.Settings.Step = 2.0;
+    AddValueSlider(build, Row, NULL, &Value, UISliderOrientation_Vertical, "the stepped upright slider");
+    Value = UIValueOptions_CreateRange(0.01, 100.0, 1.0);
+    Value.Settings.Conversion = UIValueConversion_Log;
+    AddValueSlider(build, Row, NULL, &Value, UISliderOrientation_Vertical, "the log upright slider");
+}
+
+/* A captioned property box. */
+static uint64_t AddValueBox(GalleryBuild* build, uint64_t parent, const unsigned char* caption, const UIPropertyBoxOptions* options, const char* name)
+{
+    uint64_t Column = AddCaptioned(build, parent, caption);
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        build->Result = UIKit_CreatePropertyBox(&build->Frame->_kit, &build->Frame->_screen, Column, options, &Id);
+        Remember(build, Id, name);
+    }
+    return Id;
+}
+
+/* The property boxes: with no limits and a unit, in a range with a fill, with soft limits, whole numbers, log, mixed, disabled, a float's
+ * value, strings. */
+static void BuildValueBoxes(GalleryBuild* build, uint64_t panel)
+{
+    AddLabel(build, panel, u8"Property boxes: drag sideways to scrub (the cursor hides; Shift slow, Ctrl coarse; Escape takes it back). "
+        u8"Click to type, everything selected; Tab goes on typing.", u8"hint");
+    UIPropertyBoxOptions Options = UIPropertyBoxOptions_Create();
+    Options.Value.Value = 1234.5;
+    Options.Unit = u8" m";
+    Options.Value.Settings.HasDefault = true;
+    Options.Value.Settings.Default = 0.0;
+    AddValueBox(build, panel, u8"No limits, a unit: it scrubs by its size", &Options, "the unbounded box");
+    Options = UIPropertyBoxOptions_CreateRange(0.0, 100.0, 42.0);
+    Options.Unit = u8" %";
+    Options.Precision = 1;
+    AddValueBox(build, panel, u8"0 to 100 with its fill", &Options, "the ranged box");
+    Options = UIPropertyBoxOptions_CreateRange(0.0, 1000.0, 4.0);
+    Options.Value.Settings.HasSoftRange = true;
+    Options.Value.Settings.SoftMinimum = 0.0;
+    Options.Value.Settings.SoftMaximum = 10.0;
+    AddValueBox(build, panel, u8"Soft range 0 to 10 for a drag, typing up to 1000", &Options, "the soft-range box");
+    Options = UIPropertyBoxOptions_CreateRange(1.0, 1000.0, 10.0);
+    Options.Value.Settings.Conversion = UIValueConversion_Log;
+    Options.Precision = 2;
+    AddValueBox(build, panel, u8"Log, 1 to 1000: its fill by the conversion", &Options, "the log box");
+    Options = UIPropertyBoxOptions_Create();
+    Options.Value.Settings.IsInteger = true;
+    Options.Value.Value = 12.0;
+    AddValueBox(build, panel, u8"Whole numbers, a step every four pixels", &Options, "the whole-number box");
+    Options = UIPropertyBoxOptions_CreateRange(0.0, 10.0, 3.0);
+    Options.Value.IsMixed = true;
+    AddValueBox(build, panel, u8"Mixed: a dash until edited", &Options, "the mixed box");
+    Options = UIPropertyBoxOptions_CreateRange(0.0, 10.0, 6.5);
+    Options.Value.IsEnabled = false;
+    AddValueBox(build, panel, u8"Disabled", &Options, "the disabled box");
+    Options = UIPropertyBoxOptions_Create();
+    Options.Value.Value = (double)0.1f;
+    Options.Value.Settings.IsSinglePrecision = true;
+    Options.Precision = 6;
+    AddValueBox(build, panel, u8"A float's value: typed as 0.1, kept as the float", &Options, "the float box");
+    Options = UIPropertyBoxOptions_CreateString(u8"tbp:desk");
+    Options.HasDefaultText = true;
+    Options.DefaultText = u8"tbp:bench";
+    AddValueBox(build, panel, u8"A string: a click types at once (middle click: its default)", &Options, "the string box");
+}
+
+/* The compound sliders: across with a name and a unit, across with no name, and upright. */
+static void BuildCompoundSliders(GalleryBuild* build, uint64_t page)
+{
+    AddLabel(build, page, u8"Compound sliders: the slider and the box follow each other; one event per change, the compound's.", u8"hint");
+    uint64_t Row = AddRow(build, page, 24.0f);
+    uint64_t Column = AddColumn(build, Row, 0.0f, 8.0f);
+    UICompoundSliderOptions Options = UICompoundSliderOptions_Create();
+    Options.Value = UIValueOptions_CreateRange(0.0, 50.0, 12.0);
+    Options.Value.Settings.HasDefault = true;
+    Options.Value.Settings.Default = 12.0;
+    Options.Name = u8"Distance";
+    Options.Unit = u8" m";
+    Options.Precision = 1;
+    Options.Element.Hint = UIStackHint_Fixed(26.0f);
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIStackHint Fill = UIStackHint_Fill(1.0f);
+        build->Result = StackWidget_SetChildHint(&build->Frame->_screen, Column, &Fill);
+    }
+    if (!HasFailed(build))
+    {
+        build->Result = UIKit_CreateCompoundSlider(&build->Frame->_kit, &build->Frame->_screen, Column, &Options, &Id);
+        Remember(build, Id, "the compound slider");
+    }
+    Options = UICompoundSliderOptions_Create();
+    Options.Value = UIValueOptions_CreateRange(0.0, 1.0, 0.5);
+    Options.ShowsName = false;
+    Options.Element.Hint = UIStackHint_Fixed(26.0f);
+    if (!HasFailed(build))
+    {
+        build->Result = UIKit_CreateCompoundSlider(&build->Frame->_kit, &build->Frame->_screen, Column, &Options, &Id);
+        Remember(build, Id, "the compound slider with no name");
+    }
+    Options = UICompoundSliderOptions_Create();
+    Options.Value = UIValueOptions_CreateRange(0.0, 100.0, 30.0);
+    Options.Orientation = UISliderOrientation_Vertical;
+    Options.Name = u8"Level";
+    Options.Precision = 0;
+    Options.Element.Hint = UIStackHint_Fixed(190.0f);
+    if (!HasFailed(build))
+    {
+        uint64_t Upright = AddColumn(build, Row, 0.0f, 0.0f);
+        UIStackHint Fixed = UIStackHint_Fixed(120.0f);
+        Fixed.Align = UIStackAlign_Start;
+        build->Result = HasFailed(build) ? build->Result : StackWidget_SetChildHint(&build->Frame->_screen, Upright, &Fixed);
+        if (!HasFailed(build))
+        {
+            build->Result = UIKit_CreateCompoundSlider(&build->Frame->_kit, &build->Frame->_screen, Upright, &Options, &Id);
+        }
+        Remember(build, Id, "the upright compound slider");
+    }
+}
+
+/* A labelled row of a form, holding what the caller makes in it. */
+static uint64_t AddLabelledRow(GalleryBuild* build, uint64_t form, const unsigned char* text, const char* name)
+{
+    uint64_t Id = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UILabelledOptions Options = UILabelledOptions_Create(text);
+        build->Result = UIKit_CreateLabelled(&build->Frame->_kit, &build->Frame->_screen, form, &Options, &Id);
+        Remember(build, Id, name);
+    }
+    return Id;
+}
+
+/* A form: labelled rows (a dropdown, a toggle, a text box, a property box) whose labels line up, and a stacked one. */
+static void BuildValueForm(GalleryBuild* build, uint64_t panel)
+{
+    AddLabel(build, panel, u8"A form: labelled rows line up on the widest label.", u8"hint");
+    uint64_t Form = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIFormOptions Options = UIFormOptions_Create();
+        build->Result = UIKit_CreateForm(&build->Frame->_kit, &build->Frame->_screen, panel, &Options, &Form);
+    }
+    uint64_t Row = AddLabelledRow(build, Form, u8"Quality", "the labelled dropdown's row");
+    if (!HasFailed(build))
+    {
+        UIDropdownOptions Options = UIDropdownOptions_Create();
+        uint64_t Id = WIDGET_ID_INVALID;
+        build->Result = UIKit_CreateDropdown(&build->Frame->_kit, &build->Frame->_screen, Row, &Options, &Id);
+        if (!HasFailed(build))
+        {
+            build->Result = UIChoice_SetOptions(&build->Frame->_screen, Id, ShortOptions, sizeof(ShortOptions) / sizeof(ShortOptions[0]));
+        }
+        if (!HasFailed(build))
+        {
+            build->Result = UIChoice_SetSelected(&build->Frame->_screen, Id, true, 1U);
+        }
+        Remember(build, Id, "the labelled dropdown");
+    }
+    Row = AddLabelledRow(build, Form, u8"Casts shadows", "the labelled toggle's row");
+    if (!HasFailed(build))
+    {
+        UIToggleOptions Options = UIToggleOptions_Create(u8"on");
+        uint64_t Id = WIDGET_ID_INVALID;
+        build->Result = UIKit_CreateToggle(&build->Frame->_kit, &build->Frame->_screen, Row, &Options, &Id);
+        Remember(build, Id, "the labelled toggle");
+    }
+    Row = AddLabelledRow(build, Form, u8"Name", "the labelled text box's row");
+    if (!HasFailed(build))
+    {
+        UITextBoxOptions Options = UITextBoxOptions_Create();
+        Options.Text = u8"Lamp post";
+        uint64_t Id = WIDGET_ID_INVALID;
+        build->Result = UIKit_CreateTextBox(&build->Frame->_kit, &build->Frame->_screen, Row, &Options, &Id);
+        Remember(build, Id, "the labelled text box");
+    }
+    Row = AddLabelledRow(build, Form, u8"Draw distance", "the labelled property box's row");
+    if (!HasFailed(build))
+    {
+        UIPropertyBoxOptions Options = UIPropertyBoxOptions_CreateRange(0.0, 500.0, 120.0);
+        Options.Unit = u8" m";
+        Options.Precision = 0;
+        uint64_t Id = WIDGET_ID_INVALID;
+        build->Result = UIKit_CreatePropertyBox(&build->Frame->_kit, &build->Frame->_screen, Row, &Options, &Id);
+        Remember(build, Id, "the labelled property box");
+    }
+    if (!HasFailed(build))
+    {
+        UILabelledOptions Options = UILabelledOptions_Create(u8"A stacked row: its label above");
+        Options.Layout = UILabelledLayout_Stacked;
+        build->Result = UIKit_CreateLabelled(&build->Frame->_kit, &build->Frame->_screen, Form, &Options, &Row);
+        Remember(build, Row, "the stacked row");
+    }
+    if (!HasFailed(build))
+    {
+        UIPropertyBoxOptions Options = UIPropertyBoxOptions_CreateString(u8"notes");
+        uint64_t Id = WIDGET_ID_INVALID;
+        build->Result = UIKit_CreatePropertyBox(&build->Frame->_kit, &build->Frame->_screen, Row, &Options, &Id);
+        Remember(build, Id, "the stacked row's box");
+    }
+}
+
+/* A labelled row of fields. */
+static void AddFieldRow(GalleryBuild* build, uint64_t form, const unsigned char* text, size_t count, const double* values, const unsigned char* unit,
+    const char* name)
+{
+    uint64_t Row = AddLabelledRow(build, form, text, "a row of fields' label");
+    if (HasFailed(build))
+    {
+        return;
+    }
+    UIVectorRowOptions Options = UIVectorRowOptions_Create();
+    Options.Count = count;
+    for (size_t Axis = 0U; Axis < count; Axis++)
+    {
+        Options.Values[Axis] = values[Axis];
+    }
+    Options.Unit = unit;
+    Options.Precision = 2;
+    uint64_t Id = WIDGET_ID_INVALID;
+    build->Result = UIKit_CreateVectorRow(&build->Frame->_kit, &build->Frame->_screen, Row, &Options, &Id);
+    Remember(build, Id, name);
+}
+
+/* Rows of fields: X, Y, Z (and W), one event per field saying which axis; Tab types along the row. */
+static void BuildFieldRows(GalleryBuild* build, uint64_t panel)
+{
+    AddLabel(build, panel, u8"Rows of fields: each change says its axis; Tab types along the row.", u8"hint");
+    uint64_t Form = WIDGET_ID_INVALID;
+    if (!HasFailed(build))
+    {
+        UIFormOptions Options = UIFormOptions_Create();
+        build->Result = UIKit_CreateForm(&build->Frame->_kit, &build->Frame->_screen, panel, &Options, &Form);
+    }
+    static const double Position[] = { 12.5, 0.0, -3.25 };
+    static const double Rotation[] = { 0.0, 90.0, 0.0 };
+    static const double Scale[] = { 1.0, 1.0 };
+    static const double Turn[] = { 0.0, 0.0, 0.0, 1.0 };
+    AddFieldRow(build, Form, u8"Position", 3U, Position, u8" m", "the position row");
+    AddFieldRow(build, Form, u8"Rotation", 3U, Rotation, u8"°", "the rotation row");
+    AddFieldRow(build, Form, u8"Size", 2U, Scale, NULL, "the size row");
+    AddFieldRow(build, Form, u8"Quaternion", 4U, Turn, NULL, "the quaternion row");
+    // Several objects whose Y differs: that axis shows as mixed.
+    uint64_t Position2 = WIDGET_ID_INVALID;
+    AddFieldRow(build, Form, u8"Mixed Y", 3U, Position, u8" m", "the row with a mixed axis");
+    if (!HasFailed(build) && (build->Frame->_nameCount > 0U))
+    {
+        Position2 = build->Frame->_names[build->Frame->_nameCount - 1U].Id;
+        build->Result = UIVectorRow_SetMixed(&build->Frame->_screen, Position2, 1U, true);
+    }
+}
+
+static void BuildValuePage(GalleryBuild* build)
+{
+    UIGalleryFrame* Frame = build->Frame;
+    if (HasFailed(build))
+    {
+        return;
+    }
+    uint64_t Root = AddPageRoot(build);
+    Frame->_pageIds[4] = Root;
+    uint64_t Page = AddPageContent(build, Root);
+    AddLabel(build, Page, u8"UI gallery: values", u8"heading");
+    AddLabel(build, Page, u8"N the next page (while nothing is typed in). Ctrl and the wheel step a value; a plain wheel scrolls the page. "
+        u8"Backspace, Ctrl+C and Ctrl+V over a value: reset, copy, paste. Right click for the same menu.", u8"hint");
+    uint64_t Columns = AddRow(build, Page, 12.0f);
+    uint64_t Left = AddPanel(build, Columns, UIStackHint_Fill(1.0f), NULL);
+    uint64_t Right = AddPanel(build, Columns, UIStackHint_Fill(1.0f), NULL);
+    BuildValueSliders(build, Left);
+    BuildValueBoxes(build, Right);
+    uint64_t CompoundPanel = AddPanel(build, Page, UIStackHint_Content(), NULL);
+    BuildCompoundSliders(build, CompoundPanel);
+    uint64_t Lower = AddRow(build, Page, 12.0f);
+    uint64_t FormPanel = AddPanel(build, Lower, UIStackHint_Fill(1.0f), NULL);
+    uint64_t RowsPanel = AddPanel(build, Lower, UIStackHint_Fill(1.0f), NULL);
+    BuildValueForm(build, FormPanel);
+    BuildFieldRows(build, RowsPanel);
+    Frame->_statusIds[4] = AddStatusLine(build, Root);
+    Widget* PageBase = NULL;
+    if (!HasFailed(build) && UIScreen_TryGetWidgetById(&Frame->_screen, Root, &PageBase))
+    {
+        build->Result = Widget_SetIsRendered(PageBase, false);
+    }
+}
+
+
 // Static functions: switching pages.
 /* Shows the next page and hides the one shown. */
 static Error ShowNextPage(UIGalleryFrame* frame)
@@ -1940,8 +2289,11 @@ static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserDa
     {
         DescribeMouse(event, Value, sizeof(Value));
     }
+    static const char* const AxisNames[] = { "X", "Y", "Z", "W" };
+    bool HasAxis = event->HasIndex && (event->Index >= 0) && ((size_t)event->Index < (sizeof(AxisNames) / sizeof(AxisNames[0])));
     char Status[STATUS_CAPACITY];
-    snprintf(Status, sizeof(Status), "%s %s%s", GetElementName(Frame, event->WidgetId), IsKnown ? EventNames[event->WidgetEventId] : "posted", Value);
+    snprintf(Status, sizeof(Status), "%s %s%s%s%s", GetElementName(Frame, event->WidgetId), HasAxis ? AxisNames[event->Index] : "", HasAxis ? " " : "",
+        IsKnown ? EventNames[event->WidgetEventId] : "posted", Value);
     Error Result = SetStatus(Frame, Status);
     if (Result.Code == ErrorCode_Success)
     {

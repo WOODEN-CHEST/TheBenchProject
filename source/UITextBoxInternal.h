@@ -3,12 +3,15 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "wr/WRError.h"
+#include "UIContextMenu.h"
 #include "UITextBox.h"
 
 
 /*
  * Private to the text box's files: UITextBox.c (its content, its style ranges, its layout and bars, calling code's functions) and
- * UITextBoxInput.c (the keys, the mouse, entering and leaving, the clipboard, the context menu).
+ * UITextBoxInput.c (the keys, the mouse, entering and leaving, the clipboard, the context menu); and to the property box's
+ * (UIPropertyBox.c), which types in a text box of its own: its look base starts with the widget and a text box's capability, so every
+ * function here that takes a widget finds the capability there, and the box's host (UITextBoxHost) hears what a text box would post.
  */
 
 
@@ -20,6 +23,11 @@ typedef enum UITextBoxDragUnitEnum
     UITextBoxDragUnit_Word = 2,
     UITextBoxDragUnit_Line = 3
 } UITextBoxDragUnit;
+
+
+// Types.
+/** Finds a box's capability by id: a text box's (UITextBoxInternal_Resolve), or the one a property box types in. */
+typedef Error (*UITextBoxResolver)(UIScreen* screen, uint64_t widgetId, Widget** outWidget, UITextBoxCapability** outBox);
 
 
 // Functions (UITextBox.c).
@@ -52,6 +60,18 @@ bool UITextBoxInternal_HasTextChangedSinceEntering(const UITextBoxCapability* se
 /** Puts back the text at entering (UITextEdit_RevertToMark), moving the style ranges with it; whether it changed. */
 Error UITextBoxInternal_RevertToEntered(UITextBoxCapability* self, bool* outHasChanged);
 
+/** Replaces the text through the limits, as code does (UITextBox_SetText): the caret at its end, the undo list emptied, the ranges cut. */
+Error UITextBoxInternal_SetText(UITextBoxCapability* self, const unsigned char* text, size_t length);
+
+/** Changes the limits (UITextBox_SetLimits): the text cut to fit them, the undo list emptied. */
+Error UITextBoxInternal_SetLimits(UITextBoxCapability* self, const UITextEditLimits* limits);
+
+/** The kind's update: the time the undo groups by, a visit gone on through the box's menu, a drag past an edge. */
+Error UITextBoxInternal_Update(void* widget, ProgramTime time);
+
+/** The kind's layout: the text in its view, the bars along the edges by the modes, the caret kept in view. */
+Error UITextBoxInternal_Layout(void* widget, const UILayoutContext* context);
+
 
 // Functions (UITextBoxInput.c): the kind's hooks.
 Error UITextBoxInternal_OnMouseInput(void* widget, const WidgetMouseInputArgs* args);
@@ -67,3 +87,12 @@ Error UITextBoxInternal_UpdateDrag(void* widget, double passedSeconds);
 /** The behaviour's part of a tick for a visit gone on through the box's own context menu: once the menu has closed without giving the
  *  focus back, the visit ends (Committed if the text changed). */
 Error UITextBoxInternal_UpdateVisit(void* widget);
+
+/** Opens the box's own context menu (Undo, Redo, Cut, Copy, Paste, Delete, Select all) for a request, finding the box by id through
+ *  @p resolver whenever it acts (the menu outlives the request). */
+Error UITextBoxInternal_OpenContextMenu(UIScreen* screen, const UIContextMenuRequest* request, uint64_t widgetId, UITextBoxResolver resolver);
+
+/** The short list's acts on the whole text, as whole changes: copy it (refused when masked), paste over it, reset it to the default. */
+Error UITextBoxInternal_CopyAll(Widget* widget, UITextBoxCapability* self);
+Error UITextBoxInternal_PasteAll(Widget* widget, UITextBoxCapability* self);
+Error UITextBoxInternal_ResetToDefault(Widget* widget, UITextBoxCapability* self);

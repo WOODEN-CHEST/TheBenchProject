@@ -737,7 +737,7 @@ Current module list:
   * LabelWidget - The first concrete widget: displays a (possibly multi-line) rich text with per-line alignment and bound handling (cut/wrap/resize/wrap-then-resize/wrap-then-cut). Embeds a TextDocument and a TextLayout (TextDocument.md), lays out in Update, draws in Render. Auto-fits its widget box to the rendered text.
   Also adds 2D rectangle/outline/line primitives to the Renderer module.
 * UI elements (UIElements.md) - What calling code builds a UI from, sized in UI pixels, its looks data: the same elements in flat boxes or nine-slice art with no
-  element's code changing; text boxes among them. Covers:
+  element's code changing; text boxes, property boxes and the compounds final screens use among them. Covers:
   * UIBoxStyle - How a box is drawn (nothing, flat, nine-slice), a colour per state; resolving a state and cutting a box into nine quads are pure.
   * UITheme - The ui_theme asset type (a standard type, JSON in ui_themes/; include/UITheme.h, source/UITheme.c, source/UIThemeDefinition.c, private source/UIThemeInternal.h): a
     font, a text size, a transition time, a hover delay, a palette of named colours ("@name", resolved when read) and per element kind its metrics, parts, custom values a
@@ -750,14 +750,15 @@ Current module list:
   * UIKit - The one way to make elements, over one widget factory: registers the capabilities, holds the looks by kind and name and composes each one's widget type from
     the kind's behaviour (private source/UIKitInternal.h) and the look's hooks (UIKit_RegisterLook: Render and Measure, maybe Update), and UIKit_Create* makes an element
     with the look its options or the theme name, else the standard one, and gives its id. Calling code uses a kind's functions by id, never a widget type or a look.
-  * UIStandardLooks - The kit's standard look, tbp:test_box, for the panel, the button, the toggle, the slider, the scroll bar, the scroll area, the dropdown's head,
-    the menu bar, the status bar and the text box (theme-driven boxes, flat or nine-slice), the widget that shows hover text (the theme's tooltip kind) and a modal popup's backdrop.
+  * UIStandardLooks - The kit's standard look, tbp:test_box, for every kind but the label (theme-driven boxes, flat or nine-slice; the value elements' in
+    source/UIStandardValueLooks.c, the typing a text box and a property box draw shared in the private source/UITypingView.{h,c}), the widget that shows hover text
+    (the theme's tooltip kind) and a modal popup's backdrop.
   * StackWidget - Children in a row or a column, with padding and spacing: fixed, content or filling, aligned across; its arithmetic (UIStackLayout) shared with the panel.
   * UIPanel - A background and padding for what it holds.
   * UILabel - LabelWidget as an element of the kit: its text size in UI pixels, its font and colours from the theme.
   * UIButton - Activates by its click mode and buttons, or Enter or Space; an enabled flag (a disabled button swallows the click); an optional toggled look and icon; it can take the wheel.
   * UIToggle - A checkbox: on, off or mixed, with the same click modes.
-  * UISlider - A value in a range, by a drag that goes past the window to its limit, the arrows or the wheel (only while entered or with Ctrl), with an optional step and default (the reset action); changed, committed, cancelled. An edit element: its four arrows are its own only once Enter, a press or code entered it. Its look tells it the thumb's length.
+  * UISlider - A value piece on a track, across or upright, by a drag that goes past the window to its limit (Shift a flag on the rate: the value never jumps), the arrows (Shift a fine step) or the wheel (only while entered or with Ctrl), a middle click or the reset action back to its default; changed, committed, cancelled. An edit element: its four arrows are its own only once Enter, a press or code entered it. Its look tells it the thumb's length.
   * UIScrollable - The scrollable piece every element with content larger than its box holds: the content's and the view's sizes, the offset (always clamped), a mode
     per axis (none, a bar while it overflows, a bar always, scrolling with no bar); by-id functions to move it and reveal a descendant; its arithmetic pure.
   * UIScrollbar - A track and a thumb along one axis, bound to another element's scrollable: drag the thumb, press the track to page (repeating while held), a
@@ -782,7 +783,19 @@ Current module list:
     source/UITextBoxInternal.h): an edit element (Enter, a press or code enters it; then every key is its own, the clipboard, undo and select-all through actions), the
     mouse (drags, words and lines, a context menu), the short list when not entered, its own undo per box or per visit, scrolling with bars, a placeholder, masked and
     read-only boxes, a component tree shown whole, style ranges set by code; its look lays the text out with carets and draws only what is in view.
-  * UIGalleryFrame - A game frame on four pages, each scrolling, started with --ui-gallery: every element in every state, the routing and the keyboard (a box to go into, whose sliders Enter enters); the scale rows, a turning panel, a panel sliding in, a second look of the button, icons; a menu bar, dropdowns near the window's edges and in the page (three options, a thousand from a provider), context menus with submenus, a modal dialog, scroll areas, a long end and a status bar; text boxes of every kind and a form; hover text on everything. N the page, T the theme (three: flat, nine-slice, another palette), + and - the scale, P the scale policy, L the event log.
+  * UIValue - The value piece (include/UIValue.h, source/UIValue.c, source/UIValueText.c): a number a slider, a property box and a compound slider all hold and
+    answer by id (UIValue_*): hard limits each with a flag, a soft range a drag keeps to, whole numbers, a step or a list of allowed values, conversions (linear,
+    log, power, even over a list, a checked custom pair), a default, Shift's fine factor, mixed; its arithmetic pure (pointer, share, conversion, step, limits);
+    its text the shortest that reads back, so showing a value never changes it; hostile text parsed; copy, paste and a Reset/Copy/Paste menu; the change helpers
+    its elements post Changed, Committed and Cancelled with, under a compound's id when it is a part.
+  * UIPropertyBox - Blender's field (kind property_box): a number shown at a precision with a unit and a fill bar, scrubbed sideways past a threshold with the
+    cursor hidden (Shift slow, Ctrl coarse, Escape or a right press back), typed in as its entered state through a text box of its own (a host hears the box's
+    edits and visits); a string too.
+  * UILabelled - A label and any element across or stacked (kind labelled), and a form whose labelled rows share the widest label's width (kind form).
+  * UICompoundSlider - A name, a slider and a property box sharing one value (kind compound_slider): either part moves the other, the parts' value events are the
+    compound's own.
+  * UIVectorRow - Two to four property boxes after axis tags (kind vector_row), each field's events under the row's id with the axis as the event's index.
+  * UIGalleryFrame - A game frame on five pages, each scrolling, started with --ui-gallery: every element in every state, the routing and the keyboard (a box to go into, whose sliders Enter enters); the scale rows, a turning panel, a panel sliding in, a second look of the button, icons; a menu bar, dropdowns near the window's edges and in the page (three options, a thousand from a provider), context menus with submenus, a modal dialog, scroll areas, a long end and a status bar; text boxes of every kind and a form; sliders of every conversion and upright, property boxes of every kind, compound sliders, a form of labelled rows and rows of fields; hover text on everything. N the page, T the theme (three: flat, nine-slice, another palette), + and - the scale, P the scale policy, L the event log.
 * Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text as a STRICT TREE: a parent owns
   its children, a tree has at most 64 levels, components own copies of their strings, and fonts and sprite animations
   are named, never held. Every change gives the component and its ancestors a new revision. Covers three modules (plus

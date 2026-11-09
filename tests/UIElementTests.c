@@ -156,10 +156,10 @@ static uint64_t AddToggle(TestRun* run, TestUIFixture* fixture, UIToggleState st
 static uint64_t AddSlider(TestRun* run, TestUIFixture* fixture, double value, bool hasStep, double step)
 {
     UISliderOptions Options = UISliderOptions_Create();
-    Options.Maximum = 10.0;
-    Options.Value = value;
-    Options.HasStep = hasStep;
-    Options.Step = step;
+    Options.Value.Settings.Maximum = 10.0;
+    Options.Value.Value = value;
+    Options.Value.Settings.HasStep = hasStep;
+    Options.Value.Settings.Step = step;
     Options.Element.HasPlacement = true;
     Options.Element.Placement = PlaceAt(SLIDER_X, SLIDER_Y, SLIDER_WIDTH, SLIDER_HEIGHT);
     uint64_t Id = WIDGET_ID_INVALID;
@@ -188,7 +188,7 @@ static UIElementState GetState(TestUIFixture* fixture, uint64_t id)
 static double GetSliderValue(TestRun* run, TestUIFixture* fixture, uint64_t id)
 {
     double Value = NAN;
-    TEST_CHECK_SUCCESS(run, UISlider_GetValue(&fixture->Screen, id, &Value));
+    TEST_CHECK_SUCCESS(run, UIValue_Get(&fixture->Screen, id, &Value));
     return Value;
 }
 
@@ -1075,70 +1075,70 @@ static void AToggleMeasuresItsBoxAndText(TestRun* run)
 // Tests: the slider.
 static void TheSlidersArithmetic(TestRun* run)
 {
-    TEST_CHECK(run, UISlider_ClampAndSnap(5.0, 0.0, 10.0, false, 0.0) == 5.0);
-    TEST_CHECK(run, UISlider_ClampAndSnap(-5.0, 0.0, 10.0, false, 0.0) == 0.0);
-    TEST_CHECK(run, UISlider_ClampAndSnap(15.0, 0.0, 10.0, false, 0.0) == 10.0);
-    TEST_CHECK(run, UISlider_ClampAndSnap(NAN, 2.0, 10.0, false, 0.0) == 2.0);
-    TEST_CHECK(run, UISlider_ClampAndSnap(INFINITY, 2.0, 10.0, false, 0.0) == 10.0);
-    TEST_CHECK(run, UISlider_ClampAndSnap(-INFINITY, 2.0, 10.0, false, 0.0) == 2.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(5.0, 0.0, 10.0, false, 0.0) == 5.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(-5.0, 0.0, 10.0, false, 0.0) == 0.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(15.0, 0.0, 10.0, false, 0.0) == 10.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(NAN, 2.0, 10.0, false, 0.0) == 2.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(INFINITY, 2.0, 10.0, false, 0.0) == 10.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(-INFINITY, 2.0, 10.0, false, 0.0) == 2.0);
 
     // Steps count from the lower end, and the upper end stays reachable.
-    TEST_CHECK(run, UISlider_ClampAndSnap(4.4, 0.0, 10.0, true, 1.0) == 4.0);
-    TEST_CHECK(run, UISlider_ClampAndSnap(4.6, 0.0, 10.0, true, 1.0) == 5.0);
-    TEST_CHECK(run, UISlider_ClampAndSnap(3.0, 1.0, 10.0, true, 4.0) == 5.0);
-    TEST_CHECK(run, UISlider_ClampAndSnap(9.4, 1.0, 10.0, true, 4.0) == 9.0);
-    TEST_CHECK(run, UISlider_ClampAndSnap(10.0, 1.0, 10.0, true, 4.0) == 10.0);
-    TEST_CHECK(run, UISlider_ClampAndSnap(9.99, 0.0, 10.0, true, 7.0) == 10.0); // Past the last whole step the end counts as one.
-    TEST_CHECK(run, UISlider_ClampAndSnap(8.4, 0.0, 10.0, true, 7.0) == 7.0);
-    TEST_CHECK(run, UISlider_ClampAndSnap(8.6, 0.0, 10.0, true, 7.0) == 10.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(4.4, 0.0, 10.0, true, 1.0) == 4.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(4.6, 0.0, 10.0, true, 1.0) == 5.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(3.0, 1.0, 10.0, true, 4.0) == 5.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(9.4, 1.0, 10.0, true, 4.0) == 9.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(10.0, 1.0, 10.0, true, 4.0) == 10.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(9.99, 0.0, 10.0, true, 7.0) == 10.0); // Past the last whole step the end counts as one.
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(8.4, 0.0, 10.0, true, 7.0) == 7.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(8.6, 0.0, 10.0, true, 7.0) == 10.0);
 
     // A step goes to the next whole step, and from the end to the last one below it, never past a value on the way.
-    TEST_CHECK(run, UISlider_GetStepped(4.0, 0.0, 10.0, true, 1.0, 1.0) == 5.0);
-    TEST_CHECK(run, UISlider_GetStepped(4.0, 0.0, 10.0, true, 1.0, -1.0) == 3.0);
-    TEST_CHECK(run, UISlider_GetStepped(4.0, 0.0, 10.0, true, 1.0, 3.0) == 7.0);
-    TEST_CHECK(run, UISlider_GetStepped(9.0, 0.0, 10.0, true, 1.0, 5.0) == 10.0);
-    TEST_CHECK(run, UISlider_GetStepped(1.0, 0.0, 10.0, true, 1.0, -5.0) == 0.0);
-    TEST_CHECK(run, UISlider_GetStepped(7.0, 0.0, 10.0, true, 7.0, 1.0) == 10.0);
-    TEST_CHECK(run, UISlider_GetStepped(10.0, 0.0, 10.0, true, 7.0, -1.0) == 7.0);
-    TEST_CHECK(run, UISlider_GetStepped(7.0, 0.0, 10.0, true, 7.0, -1.0) == 0.0);
-    TEST_CHECK(run, UISlider_GetStepped(0.3, 0.1, 1.0, true, 0.1, 1.0) > 0.35); // 0.30000000000000004 is on its step
-    TEST_CHECK(run, UISlider_GetStepped(0.3, 0.1, 1.0, true, 0.1, -1.0) < 0.25);
-    TEST_CHECK(run, UISlider_GetStepped(4.0, 0.0, 10.0, true, 1.0, 0.4) == 4.0); // Less than half a step moves nothing.
-    TEST_CHECK(run, UISlider_GetStepped(2.7, 0.0, 10.0, true, 1.0, 0.4) == 2.7); // Also where it is not on a step.
-    TEST_CHECK(run, UISlider_GetStepped(2.7, 0.0, 10.0, true, 1.0, 1.0) == 3.0); // From between two, the next one.
-    TEST_CHECK(run, UISlider_GetStepped(2.3, 0.0, 10.0, true, 1.0, -1.0) == 2.0);
-    TEST_CHECK(run, IsNearDouble(UISlider_GetStepped(4.0, 0.0, 10.0, false, 0.0, 1.0), 4.1)); // A hundredth of the range.
-    TEST_CHECK(run, IsNearDouble(UISlider_GetStepped(4.0, 0.0, 10.0, false, 0.0, -0.5), 3.95));
+    TEST_CHECK(run, UIValue_GetSteppedFrom(4.0, 0.0, 10.0, true, 1.0, 1.0) == 5.0);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(4.0, 0.0, 10.0, true, 1.0, -1.0) == 3.0);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(4.0, 0.0, 10.0, true, 1.0, 3.0) == 7.0);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(9.0, 0.0, 10.0, true, 1.0, 5.0) == 10.0);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(1.0, 0.0, 10.0, true, 1.0, -5.0) == 0.0);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(7.0, 0.0, 10.0, true, 7.0, 1.0) == 10.0);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(10.0, 0.0, 10.0, true, 7.0, -1.0) == 7.0);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(7.0, 0.0, 10.0, true, 7.0, -1.0) == 0.0);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(0.3, 0.1, 1.0, true, 0.1, 1.0) > 0.35); // 0.30000000000000004 is on its step
+    TEST_CHECK(run, UIValue_GetSteppedFrom(0.3, 0.1, 1.0, true, 0.1, -1.0) < 0.25);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(4.0, 0.0, 10.0, true, 1.0, 0.4) == 4.0); // Less than half a step moves nothing.
+    TEST_CHECK(run, UIValue_GetSteppedFrom(2.7, 0.0, 10.0, true, 1.0, 0.4) == 2.7); // Also where it is not on a step.
+    TEST_CHECK(run, UIValue_GetSteppedFrom(2.7, 0.0, 10.0, true, 1.0, 1.0) == 3.0); // From between two, the next one.
+    TEST_CHECK(run, UIValue_GetSteppedFrom(2.3, 0.0, 10.0, true, 1.0, -1.0) == 2.0);
+    TEST_CHECK(run, IsNearDouble(UIValue_GetSteppedFrom(4.0, 0.0, 10.0, false, 0.0, 1.0), 4.1)); // A hundredth of the range.
+    TEST_CHECK(run, IsNearDouble(UIValue_GetSteppedFrom(4.0, 0.0, 10.0, false, 0.0, -0.5), 3.95));
 
-    TEST_CHECK(run, UISlider_GetFraction(5.0, 0.0, 10.0) == 0.5);
-    TEST_CHECK(run, UISlider_GetFraction(-1.0, 0.0, 10.0) == 0.0);
-    TEST_CHECK(run, UISlider_GetFraction(11.0, 0.0, 10.0) == 1.0);
-    TEST_CHECK(run, UISlider_GetFraction(5.0, 10.0, 10.0) == 0.0);
+    TEST_CHECK(run, UIValue_GetFraction(5.0, 0.0, 10.0) == 0.5);
+    TEST_CHECK(run, UIValue_GetFraction(-1.0, 0.0, 10.0) == 0.0);
+    TEST_CHECK(run, UIValue_GetFraction(11.0, 0.0, 10.0) == 1.0);
+    TEST_CHECK(run, UIValue_GetFraction(5.0, 10.0, 10.0) == 0.0);
 
-    TEST_CHECK(run, UISlider_GetPointerFraction(10.0, 220.0, 20.0) == 0.0);
-    TEST_CHECK(run, UISlider_GetPointerFraction(110.0, 220.0, 20.0) == 0.5);
-    TEST_CHECK(run, UISlider_GetPointerFraction(210.0, 220.0, 20.0) == 1.0);
-    TEST_CHECK(run, UISlider_GetPointerFraction(-500.0, 220.0, 20.0) == 0.0);
-    TEST_CHECK(run, UISlider_GetPointerFraction(9000.0, 220.0, 20.0) == 1.0);
-    TEST_CHECK(run, UISlider_GetPointerFraction(10.0, 20.0, 20.0) == 0.0); // No room to travel.
-    TEST_CHECK(run, UISlider_GetPointerFraction(15.0, 20.0, 20.0) == 0.0);
+    TEST_CHECK(run, UIValue_GetPointerFraction(10.0, 220.0, 20.0) == 0.0);
+    TEST_CHECK(run, UIValue_GetPointerFraction(110.0, 220.0, 20.0) == 0.5);
+    TEST_CHECK(run, UIValue_GetPointerFraction(210.0, 220.0, 20.0) == 1.0);
+    TEST_CHECK(run, UIValue_GetPointerFraction(-500.0, 220.0, 20.0) == 0.0);
+    TEST_CHECK(run, UIValue_GetPointerFraction(9000.0, 220.0, 20.0) == 1.0);
+    TEST_CHECK(run, UIValue_GetPointerFraction(10.0, 20.0, 20.0) == 0.0); // No room to travel.
+    TEST_CHECK(run, UIValue_GetPointerFraction(15.0, 20.0, 20.0) == 0.0);
 
     // What is no number stays in the range; a step that cannot be counted with is no step.
-    TEST_CHECK(run, UISlider_ClampAndSnap(5.0, 0.0, 10.0, true, INFINITY) == 5.0);
-    TEST_CHECK(run, UISlider_ClampAndSnap(5.0, 0.0, 10.0, true, NAN) == 5.0);
-    TEST_CHECK(run, UISlider_ClampAndSnap(5.0, 0.0, 10.0, true, -1.0) == 5.0);
-    TEST_CHECK(run, UISlider_ClampAndSnap(0.5, 0.0, 1.0, true, 1e-320) == 0.5);
-    TEST_CHECK(run, UISlider_GetStepped(NAN, 2.0, 10.0, true, 1.0, 1.0) == 3.0);
-    TEST_CHECK(run, UISlider_GetStepped(NAN, 2.0, 10.0, false, 0.0, 0.0) == 2.0);
-    TEST_CHECK(run, UISlider_GetStepped(4.0, 0.0, 10.0, true, 1.0, NAN) == 4.0);
-    TEST_CHECK(run, UISlider_GetStepped(4.0, 0.0, 10.0, false, 0.0, NAN) == 4.0);
-    TEST_CHECK(run, UISlider_GetStepped(20.0, 0.0, 10.0, true, 1.0, 0.0) == 10.0);
-    TEST_CHECK(run, UISlider_GetStepped(-20.0, 0.0, 10.0, true, 1.0, 0.0) == 0.0);
-    TEST_CHECK(run, UISlider_GetStepped(4.0, 0.0, 10.0, true, 1.0, INFINITY) == 10.0);
-    TEST_CHECK(run, UISlider_GetStepped(4.0, 0.0, 10.0, true, 1.0, -INFINITY) == 0.0);
-    TEST_CHECK(run, IsNearDouble(UISlider_GetStepped(4.0, 0.0, 10.0, true, INFINITY, 1.0), 4.1));
-    TEST_CHECK(run, UISlider_GetStepped(0.5, 0.0, 1.0, true, 1e-320, 1.0) == 0.5);
-    TEST_CHECK(run, UISlider_GetPointerFraction(10.0, 5.0, 20.0) == 0.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(5.0, 0.0, 10.0, true, INFINITY) == 5.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(5.0, 0.0, 10.0, true, NAN) == 5.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(5.0, 0.0, 10.0, true, -1.0) == 5.0);
+    TEST_CHECK(run, UIValue_ClampAndSnapToStep(0.5, 0.0, 1.0, true, 1e-320) == 0.5);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(NAN, 2.0, 10.0, true, 1.0, 1.0) == 3.0);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(NAN, 2.0, 10.0, false, 0.0, 0.0) == 2.0);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(4.0, 0.0, 10.0, true, 1.0, NAN) == 4.0);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(4.0, 0.0, 10.0, false, 0.0, NAN) == 4.0);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(20.0, 0.0, 10.0, true, 1.0, 0.0) == 10.0);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(-20.0, 0.0, 10.0, true, 1.0, 0.0) == 0.0);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(4.0, 0.0, 10.0, true, 1.0, INFINITY) == 10.0);
+    TEST_CHECK(run, UIValue_GetSteppedFrom(4.0, 0.0, 10.0, true, 1.0, -INFINITY) == 0.0);
+    TEST_CHECK(run, IsNearDouble(UIValue_GetSteppedFrom(4.0, 0.0, 10.0, true, INFINITY, 1.0), 4.1));
+    TEST_CHECK(run, UIValue_GetSteppedFrom(0.5, 0.0, 1.0, true, 1e-320, 1.0) == 0.5);
+    TEST_CHECK(run, UIValue_GetPointerFraction(10.0, 5.0, 20.0) == 0.0);
 }
 
 static void DraggingMapsThePointerAndClampsOutsideTheBox(TestRun* run)
@@ -1237,7 +1237,7 @@ static void AClickOnTheThumbChangesNothing(TestRun* run)
         TestUI_MovePointer(&Fixture, SliderPointerFor(7.0) + 8.0f, 110.0f);
         TestUI_Tick(run, &Fixture);
         TEST_CHECK(run, Events.Count == (Count + 1U));
-        TEST_CHECK_SUCCESS(run, UISlider_SetValue(&Fixture.Screen, Id, Began));
+        TEST_CHECK_SUCCESS(run, UIValue_Set(&Fixture.Screen, Id, Began));
         TestUI_Release(&Fixture, GameKey_MouseLeft);
         TestUI_Tick(run, &Fixture);
         TEST_CHECK(run, Events.Count == (Count + 1U));
@@ -1266,12 +1266,12 @@ static void AStepKeepsTheValueOnWholeSteps(TestRun* run)
         TestUI_Release(&Fixture, GameKey_MouseLeft);
         TestUI_Tick(run, &Fixture);
 
-        TEST_CHECK_SUCCESS(run, UISlider_SetStep(&Fixture.Screen, Id, true, 3.0));
+        TEST_CHECK_SUCCESS(run, UIValue_SetStep(&Fixture.Screen, Id, true, 3.0));
         TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 6.0);
-        TEST_CHECK_SUCCESS(run, UISlider_SetValue(&Fixture.Screen, Id, 7.0));
+        TEST_CHECK_SUCCESS(run, UIValue_Set(&Fixture.Screen, Id, 7.0));
         TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 6.0);
-        TEST_CHECK_SUCCESS(run, UISlider_SetStep(&Fixture.Screen, Id, false, 0.0));
-        TEST_CHECK_SUCCESS(run, UISlider_SetValue(&Fixture.Screen, Id, 7.0));
+        TEST_CHECK_SUCCESS(run, UIValue_SetStep(&Fixture.Screen, Id, false, 0.0));
+        TEST_CHECK_SUCCESS(run, UIValue_Set(&Fixture.Screen, Id, 7.0));
         TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 7.0);
     }
     TestUI_Deconstruct(run, &Fixture);
@@ -1341,7 +1341,7 @@ static void ArrowsStepHomeAndEndJumpAndTheKeysReleaseCommits(TestRun* run)
             TestUI_Tick(run, &Fixture);
 
             // Without a step the arrows move a hundredth of the range.
-            TEST_CHECK_SUCCESS(run, UISlider_SetStep(&Fixture.Screen, Id, false, 0.0));
+            TEST_CHECK_SUCCESS(run, UIValue_SetStep(&Fixture.Screen, Id, false, 0.0));
             TestUI_Tap(run, &Fixture, GameKey_Right);
             TEST_CHECK(run, IsNearDouble(GetSliderValue(run, &Fixture, Id), 0.1));
         }
@@ -1482,7 +1482,7 @@ static void TheWheelChangesItOnlyWhileEntered(TestRun* run)
             TEST_CHECK(run, Events.Count == 4U);
 
             // At the end: nothing changes, nothing is reported.
-            TEST_CHECK_SUCCESS(run, UISlider_SetValue(&Fixture.Screen, Id, 10.0));
+            TEST_CHECK_SUCCESS(run, UIValue_Set(&Fixture.Screen, Id, 10.0));
             TestUI_Wheel(&Fixture, 1.0f);
             TestUI_Tick(run, &Fixture);
             TEST_CHECK(run, Events.Count == 4U);
@@ -1498,51 +1498,51 @@ static void BadValuesAndRangesAreRefused(TestRun* run)
     if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
     {
         uint64_t Id = AddSlider(run, &Fixture, 5.0, false, 0.0);
-        TEST_CHECK_ERROR(run, UISlider_SetValue(&Fixture.Screen, Id, NAN), ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK_ERROR(run, UISlider_SetValue(&Fixture.Screen, Id, INFINITY), ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK_ERROR(run, UISlider_SetValue(&Fixture.Screen, Id, -INFINITY), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIValue_Set(&Fixture.Screen, Id, NAN), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIValue_Set(&Fixture.Screen, Id, INFINITY), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIValue_Set(&Fixture.Screen, Id, -INFINITY), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 5.0);
 
         // A value past the ends is clamped; code posts nothing.
-        TEST_CHECK_SUCCESS(run, UISlider_SetValue(&Fixture.Screen, Id, 99.0));
+        TEST_CHECK_SUCCESS(run, UIValue_Set(&Fixture.Screen, Id, 99.0));
         TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 10.0);
-        TEST_CHECK_SUCCESS(run, UISlider_SetValue(&Fixture.Screen, Id, -99.0));
+        TEST_CHECK_SUCCESS(run, UIValue_Set(&Fixture.Screen, Id, -99.0));
         TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 0.0);
         TestUI_Tick(run, &Fixture);
         TEST_CHECK(run, Events.Count == 0U);
 
-        TEST_CHECK_ERROR(run, UISlider_SetRange(&Fixture.Screen, Id, 5.0, 5.0), ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK_ERROR(run, UISlider_SetRange(&Fixture.Screen, Id, 6.0, 5.0), ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK_ERROR(run, UISlider_SetRange(&Fixture.Screen, Id, NAN, 5.0), ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK_ERROR(run, UISlider_SetRange(&Fixture.Screen, Id, 0.0, INFINITY), ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK_ERROR(run, UISlider_SetRange(&Fixture.Screen, Id, -1e308, 1e308), ErrorCode_ArgumentOutOfRange); // its span is infinite
-        TEST_CHECK_SUCCESS(run, UISlider_SetRange(&Fixture.Screen, Id, 20.0, 30.0));
+        TEST_CHECK_ERROR(run, UIValue_SetRange(&Fixture.Screen, Id, true, 5.0, true, 5.0), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIValue_SetRange(&Fixture.Screen, Id, true, 6.0, true, 5.0), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIValue_SetRange(&Fixture.Screen, Id, true, NAN, true, 5.0), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIValue_SetRange(&Fixture.Screen, Id, true, 0.0, true, INFINITY), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIValue_SetRange(&Fixture.Screen, Id, true, -1e308, true, 1e308), ErrorCode_ArgumentOutOfRange); // its span is infinite
+        TEST_CHECK_SUCCESS(run, UIValue_SetRange(&Fixture.Screen, Id, true, 20.0, true, 30.0));
         TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 20.0);
 
-        TEST_CHECK_ERROR(run, UISlider_SetStep(&Fixture.Screen, Id, true, 0.0), ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK_ERROR(run, UISlider_SetStep(&Fixture.Screen, Id, true, -1.0), ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK_ERROR(run, UISlider_SetStep(&Fixture.Screen, Id, true, NAN), ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK_ERROR(run, UISlider_SetStep(&Fixture.Screen, Id, true, INFINITY), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIValue_SetStep(&Fixture.Screen, Id, true, 0.0), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIValue_SetStep(&Fixture.Screen, Id, true, -1.0), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIValue_SetStep(&Fixture.Screen, Id, true, NAN), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIValue_SetStep(&Fixture.Screen, Id, true, INFINITY), ErrorCode_ArgumentOutOfRange);
 
         double Value = 0.0;
-        TEST_CHECK_ERROR(run, UISlider_SetValue(&Fixture.Screen, 99U, 1.0), ErrorCode_InvalidOperation);
-        TEST_CHECK_ERROR(run, UISlider_GetValue(&Fixture.Screen, 99U, &Value), ErrorCode_InvalidOperation);
-        TEST_CHECK_ERROR(run, UISlider_SetRange(&Fixture.Screen, 99U, 0.0, 1.0), ErrorCode_InvalidOperation);
-        TEST_CHECK_ERROR(run, UISlider_SetStep(&Fixture.Screen, 99U, false, 0.0), ErrorCode_InvalidOperation);
-        TEST_CHECK_ERROR(run, UISlider_SetIsEnabled(&Fixture.Screen, 99U, true), ErrorCode_InvalidOperation);
+        TEST_CHECK_ERROR(run, UIValue_Set(&Fixture.Screen, 99U, 1.0), ErrorCode_InvalidOperation);
+        TEST_CHECK_ERROR(run, UIValue_Get(&Fixture.Screen, 99U, &Value), ErrorCode_InvalidOperation);
+        TEST_CHECK_ERROR(run, UIValue_SetRange(&Fixture.Screen, 99U, true, 0.0, true, 1.0), ErrorCode_InvalidOperation);
+        TEST_CHECK_ERROR(run, UIValue_SetStep(&Fixture.Screen, 99U, false, 0.0), ErrorCode_InvalidOperation);
+        TEST_CHECK_ERROR(run, UIValue_SetIsEnabled(&Fixture.Screen, 99U, true), ErrorCode_InvalidOperation);
 
         // Options are checked the same way, and a slider that is refused leaves nothing behind.
         size_t Live = UIWidgetFactory_GetTotalLiveWidgetCount(&Fixture.Widgets);
         uint64_t Refused = WIDGET_ID_INVALID;
         UISliderOptions Options = UISliderOptions_Create();
-        Options.Value = NAN;
+        Options.Value.Value = NAN;
         TEST_CHECK_ERROR(run, UIKit_CreateSlider(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &Options, &Refused), ErrorCode_ArgumentOutOfRange);
         Options = UISliderOptions_Create();
-        Options.Maximum = Options.Minimum;
+        Options.Value.Settings.Maximum = Options.Value.Settings.Minimum;
         TEST_CHECK_ERROR(run, UIKit_CreateSlider(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &Options, &Refused), ErrorCode_ArgumentOutOfRange);
         Options = UISliderOptions_Create();
-        Options.HasStep = true;
-        Options.Step = 0.0;
+        Options.Value.Settings.HasStep = true;
+        Options.Value.Settings.Step = 0.0;
         TEST_CHECK_ERROR(run, UIKit_CreateSlider(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &Options, &Refused), ErrorCode_ArgumentOutOfRange);
         TEST_CHECK(run, (Refused == WIDGET_ID_INVALID) && (UIWidgetFactory_GetTotalLiveWidgetCount(&Fixture.Widgets) == Live));
     }
@@ -1561,7 +1561,7 @@ static void DisablingCancelsADragAndSwallowsInput(TestRun* run)
         TestUI_Tick(run, &Fixture);
         TEST_CHECK(run, IsNearDouble(GetSliderValue(run, &Fixture, Id), 5.0));
         TEST_CHECK(run, UIScreen_GetFocusedWidgetId(&Fixture.Screen) == Id);
-        TEST_CHECK_SUCCESS(run, UISlider_SetIsEnabled(&Fixture.Screen, Id, false));
+        TEST_CHECK_SUCCESS(run, UIValue_SetIsEnabled(&Fixture.Screen, Id, false));
         TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 2.0);
         TEST_CHECK(run, UIScreen_GetFocusedWidgetId(&Fixture.Screen) == WIDGET_ID_INVALID);
         TestUI_Tick(run, &Fixture);
@@ -1580,7 +1580,7 @@ static void DisablingCancelsADragAndSwallowsInput(TestRun* run)
         TEST_CHECK(run, Events.Count == Count);
 
         // Enabled again, it is whole.
-        TEST_CHECK_SUCCESS(run, UISlider_SetIsEnabled(&Fixture.Screen, Id, true));
+        TEST_CHECK_SUCCESS(run, UIValue_SetIsEnabled(&Fixture.Screen, Id, true));
         TestUI_Click(run, &Fixture, SliderPointerFor(7.0), 110.0f);
         TEST_CHECK(run, IsNearDouble(GetSliderValue(run, &Fixture, Id), 7.0));
     }
@@ -1707,7 +1707,7 @@ static void ARepeatOfAJumpDoesNotJumpAgain(TestRun* run)
             TestUI_Press(&Fixture, GameKey_Home);
             TestUI_Tick(run, &Fixture);
             TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 0.0);
-            TEST_CHECK_SUCCESS(run, UISlider_SetValue(&Fixture.Screen, Id, 5.0));
+            TEST_CHECK_SUCCESS(run, UIValue_Set(&Fixture.Screen, Id, 5.0));
             TestUI_Repeat(&Fixture, GameKey_Home);
             TestUI_Tick(run, &Fixture);
             TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 5.0);
@@ -1757,10 +1757,10 @@ static void TheSlidersHelpersAnswerForTheirInput(TestRun* run)
             UISliderCapability* Slider = Widget_GetCapability(Base, UIKit_GetCapabilityId(&Fixture.Kit, UIElementCapability_Slider));
             bool IsHandled = false;
             WidgetKeyboardInputArgs Press = { .Type = UIKeyboardInputType_KeyPress, .Key = GameKey_End };
-            TEST_CHECK_SUCCESS(run, UISlider_SetIsEnabled(&Fixture.Screen, Id, false));
+            TEST_CHECK_SUCCESS(run, UIValue_SetIsEnabled(&Fixture.Screen, Id, false));
             TEST_CHECK_SUCCESS(run, UISliderCapability_OnKeyboardInput(Slider, Base, &Press, &IsHandled));
             TEST_CHECK(run, !IsHandled && (GetSliderValue(run, &Fixture, Id) == 5.0));
-            TEST_CHECK_SUCCESS(run, UISlider_SetIsEnabled(&Fixture.Screen, Id, true));
+            TEST_CHECK_SUCCESS(run, UIValue_SetIsEnabled(&Fixture.Screen, Id, true));
 
             TEST_CHECK_SUCCESS(run, UISliderCapability_OnKeyboardInput(Slider, Base, &Press, &IsHandled));
             TEST_CHECK(run, IsHandled && (GetSliderValue(run, &Fixture, Id) == 10.0));
@@ -2357,7 +2357,8 @@ static void AnElementWithoutTheLossHookStillLetsGo(TestRun* run)
         {
             UISliderCapability* Slider = Widget_GetCapability(Base, UIKit_GetCapabilityId(&Fixture.Kit, UIElementCapability_Slider));
             Slider->_isDragging = true;
-            Slider->_sessionStartValue = 7.0;
+            UIValueCapability_BeginChange(&Slider->Value);
+            Slider->Value._changeStartValue = 7.0;
             TestUI_Tick(run, &Fixture);
             TEST_CHECK(run, !Slider->_isDragging && (Events.Count == 1U) && IsDoubleEvent(&Events, 0U, SliderId, UIElementEvent_Committed, 2.0));
         }
@@ -2636,11 +2637,11 @@ static void EveryElementTellsTheSameMouseEvents(TestRun* run)
         TestUI_Tick(run, &Fixture);
         TestUI_Tap(run, &Fixture, GameKey_MouseLeft);
         TEST_CHECK(run, (Events.Count == 2U) && IsEvent(&Events, 0U, Slider, UIElementEvent_Pressed) && IsEvent(&Events, 1U, Slider, UIElementEvent_Released));
-        TEST_CHECK_SUCCESS(run, UISlider_SetIsEnabled(&Fixture.Screen, Slider, false));
+        TEST_CHECK_SUCCESS(run, UIValue_SetIsEnabled(&Fixture.Screen, Slider, false));
         Events.Count = 0U;
         TestUI_Tap(run, &Fixture, GameKey_MouseRight);
         TEST_CHECK(run, Events.Count == 0U);
-        TEST_CHECK_SUCCESS(run, UISlider_SetIsEnabled(&Fixture.Screen, Slider, true));
+        TEST_CHECK_SUCCESS(run, UIValue_SetIsEnabled(&Fixture.Screen, Slider, true));
     }
     TestUI_Deconstruct(run, &Fixture);
 }
@@ -2761,7 +2762,7 @@ static void ASliderTakesTheWheelWhenEnteredOrWithControl(TestRun* run)
             TestUI_Tick(run, &Fixture);
 
             // Disabled: with Ctrl it stops there and moves nothing.
-            TEST_CHECK_SUCCESS(run, UISlider_SetIsEnabled(&Fixture.Screen, Id, false));
+            TEST_CHECK_SUCCESS(run, UIValue_SetIsEnabled(&Fixture.Screen, Id, false));
             Fixture.Sample.KeyStates[GameKey_LeftControl] = GAME_INPUT_KEY_STATE_DOWN;
             TestUI_Wheel(&Fixture, 1.0f);
             TestUI_Tick(run, &Fixture);
@@ -2781,13 +2782,13 @@ static void TheResetActionPutsASliderBack(TestRun* run)
     {
         UIScreen* Screen = &Fixture.Screen;
         UISliderOptions Options = UISliderOptions_Create();
-        TEST_CHECK(run, !Options.HasDefault);
-        Options.Maximum = 10.0;
-        Options.Value = 5.0;
-        Options.HasDefault = true;
-        Options.Default = 2.5;
-        Options.HasStep = true;
-        Options.Step = 1.0;
+        TEST_CHECK(run, !Options.Value.Settings.HasDefault);
+        Options.Value.Settings.Maximum = 10.0;
+        Options.Value.Value = 5.0;
+        Options.Value.Settings.HasDefault = true;
+        Options.Value.Settings.Default = 2.5;
+        Options.Value.Settings.HasStep = true;
+        Options.Value.Settings.Step = 1.0;
         Options.Element.HasPlacement = true;
         Options.Element.Placement = PlaceAt(SLIDER_X, SLIDER_Y, SLIDER_WIDTH, SLIDER_HEIGHT);
         uint64_t Id = WIDGET_ID_INVALID;
@@ -2803,13 +2804,13 @@ static void TheResetActionPutsASliderBack(TestRun* run)
         TEST_CHECK(run, (Events.Count == 2U) && IsDoubleEvent(&Events, 0U, Id, UIElementEvent_Changed, 3.0) && IsDoubleEvent(&Events, 1U, Id, UIElementEvent_Committed, 3.0));
         TEST_CHECK(run, GameInput_IsKeyConsumed(&Fixture.Input, GameKey_Backspace));
         // Its repeat and release do nothing more; at the default already nothing is told, though it is used.
-        TEST_CHECK_SUCCESS(run, UISlider_SetValue(Screen, Id, 8.0));
+        TEST_CHECK_SUCCESS(run, UIValue_Set(Screen, Id, 8.0));
         TestUI_Repeat(&Fixture, GameKey_Backspace);
         TestUI_Tick(run, &Fixture);
         TestUI_Release(&Fixture, GameKey_Backspace);
         TestUI_Tick(run, &Fixture);
         TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 8.0);
-        TEST_CHECK_SUCCESS(run, UISlider_SetValue(Screen, Id, 3.0));
+        TEST_CHECK_SUCCESS(run, UIValue_Set(Screen, Id, 3.0));
         Events.Count = 0U;
         TestUI_Press(&Fixture, GameKey_Backspace);
         TestUI_Tick(run, &Fixture);
@@ -2822,7 +2823,7 @@ static void TheResetActionPutsASliderBack(TestRun* run)
         if (TEST_CHECK(run, UIScreen_TryGetWidgetById(Screen, Id, &Base)))
         {
             TEST_CHECK_SUCCESS(run, UIScreen_SetFocusedWidget(Screen, Base));
-            TEST_CHECK_SUCCESS(run, UISlider_SetValue(Screen, Id, 8.0));
+            TEST_CHECK_SUCCESS(run, UIValue_Set(Screen, Id, 8.0));
             TestUI_RemovePointer(&Fixture);
             TestUI_Tick(run, &Fixture);
 
@@ -2832,20 +2833,20 @@ static void TheResetActionPutsASliderBack(TestRun* run)
             TestUI_Tick(run, &Fixture);
             TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 3.0);
             TEST_CHECK_SUCCESS(run, UIScreen_EnterWidget(Screen, Id));
-            TEST_CHECK_SUCCESS(run, UISlider_SetValue(Screen, Id, 8.0));
+            TEST_CHECK_SUCCESS(run, UIValue_Set(Screen, Id, 8.0));
             TestUI_Press(&Fixture, GameKey_Left);
             TestUI_Tick(run, &Fixture);
             TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 7.0);
             TestUI_Release(&Fixture, GameKey_Left);
             TestUI_Release(&Fixture, GameKey_Backspace);
             TestUI_Tick(run, &Fixture);
-            TEST_CHECK_SUCCESS(run, UISlider_SetValue(Screen, Id, 8.0));
+            TEST_CHECK_SUCCESS(run, UIValue_Set(Screen, Id, 8.0));
 
             TestUI_Tap(run, &Fixture, GameKey_Backspace);
             TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 3.0);
 
             // During a change it does nothing, but it is used.
-            TEST_CHECK_SUCCESS(run, UISlider_SetValue(Screen, Id, 8.0));
+            TEST_CHECK_SUCCESS(run, UIValue_Set(Screen, Id, 8.0));
             TestUI_Press(&Fixture, GameKey_Left);
             TestUI_Tick(run, &Fixture);
             TestUI_Press(&Fixture, GameKey_Backspace);
@@ -2869,8 +2870,8 @@ static void TheResetActionPutsASliderBack(TestRun* run)
         TEST_CHECK_SUCCESS(run, GameInput_ResetActionBindings(&Fixture.Input, GameAction_UIReset));
 
         // No default: it goes on, to the game.
-        TEST_CHECK_SUCCESS(run, UISlider_SetDefault(Screen, Id, false, 0.0));
-        TEST_CHECK_SUCCESS(run, UISlider_SetValue(Screen, Id, 8.0));
+        TEST_CHECK_SUCCESS(run, UIValue_SetDefault(Screen, Id, false, 0.0));
+        TEST_CHECK_SUCCESS(run, UIValue_Set(Screen, Id, 8.0));
         TestUI_Press(&Fixture, GameKey_Backspace);
         TestUI_Tick(run, &Fixture);
         TEST_CHECK(run, (GetSliderValue(run, &Fixture, Id) == 8.0) && !GameInput_IsKeyConsumed(&Fixture.Input, GameKey_Backspace));
@@ -2878,26 +2879,26 @@ static void TheResetActionPutsASliderBack(TestRun* run)
         TestUI_Tick(run, &Fixture);
 
         // A default past the range is clamped when it is used; what is not a number is refused.
-        TEST_CHECK_SUCCESS(run, UISlider_SetDefault(Screen, Id, true, 99.0));
+        TEST_CHECK_SUCCESS(run, UIValue_SetDefault(Screen, Id, true, 99.0));
         TestUI_Tap(run, &Fixture, GameKey_Backspace);
         TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 10.0);
-        TEST_CHECK_ERROR(run, UISlider_SetDefault(Screen, Id, true, NAN), ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK_ERROR(run, UISlider_SetDefault(Screen, Id, true, INFINITY), ErrorCode_ArgumentOutOfRange);
-        TEST_CHECK_ERROR(run, UISlider_SetDefault(Screen, WIDGET_ID_INVALID, true, 1.0), ErrorCode_InvalidOperation);
-        TEST_CHECK_SUCCESS(run, UISlider_SetDefault(Screen, Id, false, NAN)); // With no default the value means nothing.
+        TEST_CHECK_ERROR(run, UIValue_SetDefault(Screen, Id, true, NAN), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIValue_SetDefault(Screen, Id, true, INFINITY), ErrorCode_ArgumentOutOfRange);
+        TEST_CHECK_ERROR(run, UIValue_SetDefault(Screen, WIDGET_ID_INVALID, true, 1.0), ErrorCode_InvalidOperation);
+        TEST_CHECK_SUCCESS(run, UIValue_SetDefault(Screen, Id, false, NAN)); // With no default the value means nothing.
 
         // Its options check it too.
         UISliderOptions Bad = UISliderOptions_Create();
-        Bad.HasDefault = true;
-        Bad.Default = NAN;
+        Bad.Value.Settings.HasDefault = true;
+        Bad.Value.Settings.Default = NAN;
         uint64_t Other = WIDGET_ID_INVALID;
         TEST_CHECK_ERROR(run, UIKit_CreateSlider(&Fixture.Kit, Screen, WIDGET_ID_INVALID, &Bad, &Other), ErrorCode_ArgumentOutOfRange);
-        Bad.HasDefault = false;
+        Bad.Value.Settings.HasDefault = false;
         TEST_CHECK_SUCCESS(run, UIKit_CreateSlider(&Fixture.Kit, Screen, WIDGET_ID_INVALID, &Bad, &Other));
 
         // Disabled: it hears nothing of it.
-        TEST_CHECK_SUCCESS(run, UISlider_SetDefault(Screen, Id, true, 1.0));
-        TEST_CHECK_SUCCESS(run, UISlider_SetIsEnabled(Screen, Id, false));
+        TEST_CHECK_SUCCESS(run, UIValue_SetDefault(Screen, Id, true, 1.0));
+        TEST_CHECK_SUCCESS(run, UIValue_SetIsEnabled(Screen, Id, false));
         TestUI_MovePointer(&Fixture, 150.0f, 110.0f);
         TestUI_Tick(run, &Fixture);
         TestUI_Press(&Fixture, GameKey_Backspace);
@@ -2952,7 +2953,7 @@ static void OnlyTheDragsOwnPressEndsTheDrag(TestRun* run)
 
             // A drag ending where it began tells no commit, lost or not.
             Events.Count = 0U;
-            TEST_CHECK_SUCCESS(run, UISlider_SetValue(&Fixture.Screen, Id, 5.0));
+            TEST_CHECK_SUCCESS(run, UIValue_Set(&Fixture.Screen, Id, 5.0));
             TestUI_Tick(run, &Fixture);
             Events.Count = 0U;
             TestUI_MovePointer(&Fixture, SliderPointerFor(5.0), 110.0f);
@@ -3002,12 +3003,12 @@ static void NewLimitsKeepTheValuesInside(TestRun* run)
     if (Construct(run, &Fixture) && TestUI_RecordEvents(run, &Fixture, &Events))
     {
         uint64_t Id = AddSlider(run, &Fixture, 2.3, false, 0.0);
-        TEST_CHECK_SUCCESS(run, UISlider_SetStep(&Fixture.Screen, Id, true, 1.0));
+        TEST_CHECK_SUCCESS(run, UIValue_SetStep(&Fixture.Screen, Id, true, 1.0));
         TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 2.0);
         TestUI_MovePointer(&Fixture, SliderPointerFor(5.0), 110.0f);
         TestUI_Press(&Fixture, GameKey_MouseLeft);
         TestUI_Tick(run, &Fixture);
-        TEST_CHECK_SUCCESS(run, UISlider_SetRange(&Fixture.Screen, Id, 3.0, 9.0));
+        TEST_CHECK_SUCCESS(run, UIValue_SetRange(&Fixture.Screen, Id, true, 3.0, true, 9.0));
         TestUI_Tap(run, &Fixture, GameKey_Escape);
         TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 3.0);
         TEST_CHECK(run, IsDoubleEvent(&Events, Events.Count - 1U, Id, UIElementEvent_Cancelled, 3.0));
@@ -3015,12 +3016,12 @@ static void NewLimitsKeepTheValuesInside(TestRun* run)
         TestUI_Tick(run, &Fixture);
 
         // A step set during a drag: a cancel goes back to a whole step too.
-        TEST_CHECK_SUCCESS(run, UISlider_SetStep(&Fixture.Screen, Id, false, 0.0));
-        TEST_CHECK_SUCCESS(run, UISlider_SetValue(&Fixture.Screen, Id, 4.37));
+        TEST_CHECK_SUCCESS(run, UIValue_SetStep(&Fixture.Screen, Id, false, 0.0));
+        TEST_CHECK_SUCCESS(run, UIValue_Set(&Fixture.Screen, Id, 4.37));
         TestUI_MovePointer(&Fixture, SliderPointerFor(8.0), 110.0f);
         TestUI_Press(&Fixture, GameKey_MouseLeft);
         TestUI_Tick(run, &Fixture);
-        TEST_CHECK_SUCCESS(run, UISlider_SetStep(&Fixture.Screen, Id, true, 0.5));
+        TEST_CHECK_SUCCESS(run, UIValue_SetStep(&Fixture.Screen, Id, true, 0.5));
         TestUI_Tap(run, &Fixture, GameKey_Escape);
         TEST_CHECK(run, GetSliderValue(run, &Fixture, Id) == 4.5);
         TestUI_Release(&Fixture, GameKey_MouseLeft);
@@ -3306,7 +3307,7 @@ static void ElementsWorkWithoutATheme(TestRun* run)
         TEST_CHECK(run, (Events.Count == 1U) && IsEvent(&Events, 0U, Id, UIElementEvent_Activated));
         uint64_t Slider = WIDGET_ID_INVALID;
         UISliderOptions Options = UISliderOptions_Create();
-        Options.Maximum = 10.0;
+        Options.Value.Settings.Maximum = 10.0;
         Options.Element.HasPlacement = true;
         Options.Element.Placement = PlaceAt(100.0f, 200.0f, 112.0f, 24.0f); // The default thumb is 12: 100 pixels of travel from 106.
         TEST_CHECK_SUCCESS(run, UIKit_CreateSlider(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &Options, &Slider));
@@ -3494,7 +3495,7 @@ static void OneKitPerFactoryAndItsNulls(TestRun* run)
         TEST_CHECK(run, UIKit_FromScreen(&BareScreen) == NULL);
         TEST_CHECK_ERROR(run, UIButton_SetText(&BareScreen, 1U, u8"a"), ErrorCode_InvalidOperation);
         TEST_CHECK_ERROR(run, UILabel_SetText(&BareScreen, 1U, u8"a"), ErrorCode_InvalidOperation);
-        TEST_CHECK_ERROR(run, UISlider_SetValue(&BareScreen, 1U, 1.0), ErrorCode_InvalidOperation);
+        TEST_CHECK_ERROR(run, UIValue_Set(&BareScreen, 1U, 1.0), ErrorCode_InvalidOperation);
         TEST_CHECK_SUCCESS(run, UIScreen_Deconstruct(&BareScreen));
         TEST_CHECK_SUCCESS(run, UIWidgetFactory_Deconstruct(&Bare));
     }

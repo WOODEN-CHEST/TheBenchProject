@@ -386,7 +386,8 @@ for it. A box of no size holds no point.
 
 State changes (`UIEventKind_HoverChanged`, `FocusChanged`, `TabChanged`, `ActiveChanged`, `EnteredChanged`), a popup closing (`UIEventKind_PopupClosed`, "Popups" above), sound cues (`UIEventKind_Cue`, below) and a widget type's own events
 (`UIScreen_PostWidgetEvent`, `UIEventKind_Widget` with a type-defined id and an optional `UIPropertyValue`; `UIScreen_PostWidgetMouseEvent` adds the mouse's data by value,
-`UIEvent.HasMouse` and `UIEvent.Mouse`: button, modifiers, screen position, scroll delta, whether over the widget) are
+`UIEvent.HasMouse` and `UIEvent.Mouse`: button, modifiers, screen position, scroll delta, whether over the widget; `UIScreen_PostWidgetIndexedEvent` adds an index saying
+which of the widget's parts it is about, `UIEvent.HasIndex` and `UIEvent.Index`, as a row of fields says its axis) are
 **queued** and delivered at one point, at the end of `UIScreen_Update` (after the widget updates and layout), never in
 the middle of input routing. Subscribe with `UIScreen_Subscribe(screen, widgetId or 0 for every widget, kind mask,
 handler, userData, &id)`; a subscription to one widget ends when it is torn down (at the end of the update it was

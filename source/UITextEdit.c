@@ -739,6 +739,13 @@ Error UITextEdit_Replace(UITextEdit* self, size_t start, size_t end, const unsig
     bool IsSame = HasLostEverything || ((Inserted == (End - Start)) && AreBytesEqual(self->_incoming._data, Current + Start, Inserted));
     if (IsSame)
     {
+        // The text stays, but text that came in still leaves the caret after it, as an edit would: typing over a selection the same
+        // characters it holds (a number typed over itself) collapses it, and overwriting a character with itself goes on to the next.
+        if (!HasLostEverything)
+        {
+            self->_caret = Start + Inserted;
+            self->_anchor = self->_caret;
+        }
         SetChange(outChange, false, IsRefused, Start, 0U, 0U);
         return Error_CreateSuccess();
     }

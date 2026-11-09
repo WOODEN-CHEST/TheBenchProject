@@ -1,7 +1,8 @@
 # UI elements: the kit, themes and looks
 
 The elements calling code builds a UI from: panels, labels, buttons, toggles, sliders, stacks, scroll areas and scroll bars,
-dropdowns, menus, menu bars, status bars and text boxes, sized in UI pixels and drawn through a theme. They stand on the framework in [UIFramework.md](UIFramework.md) (screens, widgets, input routing,
+dropdowns, menus, menu bars, status bars, text boxes, property boxes and the compounds final screens use (labelled rows, forms, compound
+sliders, rows of fields), sized in UI pixels and drawn through a theme. They stand on the framework in [UIFramework.md](UIFramework.md) (screens, widgets, input routing,
 notifications).
 
 | Module | Files | What it is |
@@ -11,11 +12,16 @@ notifications).
 | UITheme | `include/UITheme.h`, `source/UITheme.c`, `source/UIThemeDefinition.c`, private `source/UIThemeInternal.h` | The `ui_theme` asset type: the look of every element kind as data. |
 | UIElement | `include/UIElement.h`, `source/UIElement.c` | What every element kind shares: its options, its events and cues, plain text content, icons, the press behaviour, and the helpers looks draw with. |
 | UIKit | `include/UIKit.h`, `source/UIKit.c`, private `source/UIKitInternal.h` | The one way to make elements, over one widget factory: capabilities, the looks registered by kind and name, the widget types it composes. |
-| UIStandardLooks | `include/UIStandardLooks.h`, `source/UIStandardLooks.c` | The kit's standard look (`tbp:test_box`) for the panel, the button, the toggle, the slider, the scroll bar, the scroll area, the dropdown's head, the menu bar, the status bar and the text box; the widget that shows hover text; a modal popup's backdrop. |
+| UIStandardLooks | `include/UIStandardLooks.h`, `source/UIStandardLooks.c`, `source/UIStandardValueLooks.c`, private `source/UIStandardLooksInternal.h` and `source/UITypingView.{h,c}` | The kit's standard look (`tbp:test_box`) for every kind but the label's; the widget that shows hover text; a modal popup's backdrop. `UITypingView` is what the text box's and the property box's looks draw typing with. |
 | StackWidget | `include/StackWidget.h`, `source/StackWidget.c` | Children in a row or a column. Its arithmetic (`UIStackLayout`) is shared with the panel. |
 | UIPanel | `include/UIPanel.h`, `source/UIPanel.c` | A background and padding for what it holds. |
 | UILabel | `include/UILabel.h`, `source/UILabel.c`, with `LabelWidget` | `LabelWidget` as an element of the kit. |
 | UIButton, UIToggle, UISlider | `include/UI<Kind>.h`, `source/UI<Kind>.c` | The element kinds with input. |
+| UIValue | `include/UIValue.h`, `source/UIValue.c`, `source/UIValueText.c` | The value piece: a number with its limits, soft range, step or value list, conversion and default, its pure arithmetic, its text that reads back, its clipboard and context menu, and the change helpers its elements post with. |
+| UIPropertyBox | `include/UIPropertyBox.h`, `source/UIPropertyBox.c` | A value in a box, typed in or scrubbed sideways: Blender's field; a string too. |
+| UILabelled | `include/UILabelled.h`, `source/UILabelled.c` | A label and any element (the labelled element), and a column whose labelled rows line up (the form). |
+| UICompoundSlider | `include/UICompoundSlider.h`, `source/UICompoundSlider.c` | A slider, a property box and a name sharing one value. |
+| UIVectorRow | `include/UIVectorRow.h`, `source/UIVectorRow.c` | Two to four property boxes for a vector's components, each event saying its axis. |
 | UIScrollable | `include/UIScrollable.h`, `source/UIScrollable.c` | The scrollable piece: content and view sizes, the clamped offset, a mode per axis; its arithmetic pure. |
 | UIScrollbar, UIScrollArea | `include/UI<Kind>.h`, `source/UI<Kind>.c` | A bar bound to another element's scrollable piece; content larger than its box, with two bars. |
 | UIChoice | `include/UIChoice.h`, `source/UIChoice.c` | The choice piece: options as texts or from providers, the selection, mixed. |
@@ -25,7 +31,7 @@ notifications).
 | UIMenuBar, UIStatusBar | `include/UI<Kind>.h`, `source/UI<Kind>.c` | A strip of entries opening menus; a strip of sections and a line of text. |
 | UITextEdit | `include/UITextEdit.h`, `source/UITextEdit.c` | The text piece, pure: a UTF-8 text with its limits, a caret and a selection, words, edits with the incoming text's rules, and a grouped undo with a budget. |
 | UITextBox | `include/UITextBox.h`, `source/UITextBox.c`, `source/UITextBoxInput.c`, private `source/UITextBoxInternal.h` | Text to type in or to read and select, on one line or several: the keys, the mouse, the clipboard, undo, scrolling, a placeholder, masked and read-only boxes, style ranges. |
-| UIGalleryFrame | `include/UIGalleryFrame.h`, `source/UIGalleryFrame.c` | Every element in every state: `--ui-gallery`. |
+| UIGalleryFrame | `include/UIGalleryFrame.h`, `source/UIGalleryFrame.c` | Every element in every state, on five pages: `--ui-gallery`. |
 
 ## Using it
 
@@ -81,8 +87,9 @@ A variant costs, from cheapest:
 3. **A look of its own** (below): Render and Measure, maybe Update.
 
 **Looks.** A look is a struct that starts with its kind's look base (`UIPanelLookBase`, `UIButtonLookBase`, `UIToggleLookBase`,
-`UISliderLookBase`, `UIScrollbarLookBase`, `UIScrollAreaLookBase`, `UIDropdownLookBase`, `UIMenuBarLookBase`, `UIStatusBarLookBase`, `UITextBoxLookBase`: the
-`Widget`, then the capability) and a `UILookVTable`:
+`UISliderLookBase`, `UIScrollbarLookBase`, `UIScrollAreaLookBase`, `UIDropdownLookBase`, `UIMenuBarLookBase`, `UIStatusBarLookBase`, `UITextBoxLookBase`,
+`UIPropertyBoxLookBase`, `UILabelledLookBase`, `UIFormLookBase`, `UICompoundSliderLookBase`, `UIVectorRowLookBase`: the `Widget`, then the capability) and a
+`UILookVTable`:
 
 | Slot | | What it does |
 |---|---|---|
@@ -106,7 +113,15 @@ kinds): `UIKit_RegisterLook` refuses the label, the tooltip, the menu and the ba
 
 A slider look also tells the behaviour how long its thumb is (`UISliderCapability_SetThumbLength`, in its own UI pixels, from its Update): a press within
 the thumb holds it where it was grabbed, and the thumb's centre travels the track less its length. A look that never says has a thumb of no length: the
-pointer is the value.
+pointer is the value. It draws the thumb at `UISliderCapability_GetShare` (through the value's conversion) along `UISliderCapability_GetOrientation`: from
+the left, or from the bottom when upright, where the standard look swaps the theme's `thumb_size`, `track_thickness` and `min_size` across and along.
+
+A property box look gives its text box the same geometry (its look base holds a text box's capability right after the widget) and draws, while
+`UIPropertyBoxCapability_IsTyping`, that box's text, selection and caret (the standard looks share `UITypingView` for both); otherwise its shown text
+(`UIPropertyBoxCapability_GetShownText`), the unit (`_GetUnit`, when `_ShowsUnit`) and the fill bar (`_ShowsFill`, `_GetFillShare`). A compound's look tells its
+behaviour the theme's metrics from its Update (`UILabelledCapability_SetSpacing`, `UIFormCapability_SetMetrics`, `UICompoundSliderCapability_SetMetrics`,
+`UIVectorRowCapability_SetMetrics`) and measures through the kind (`UILabelled_Measure`, `UIForm_Measure`, `UICompoundSlider_Measure`,
+`UIVectorRow_Measure`); the kind lays its parts out.
 
 A text box look tells the behaviour where its text is (`UITextBoxCapability_SetGeometry`, in its Construct): its text's insets, a layout of the text with
 carets at a wrap width (`TextLayoutOptions.TracksOffsets`; the look owns the document and the layout, so the capability holds no laid-out text), a line's
@@ -159,18 +174,107 @@ lies behind it, so a disabled button takes the click and reports nothing, nor th
 
 **Toggle** (`UIToggle.h`). On, off or mixed; an activation from mixed turns it on. The same click modes and activation buttons, Enter or Space. Disabled, it is as a disabled button.
 
-**Slider** (`UISlider.h`). A value in a range, as a double, with an optional step. It is an **edit element** ([UIFramework.md](UIFramework.md),
-"Entering elements"): moving the focus onto it changes nothing, and Tab and the arrows go past it until it is entered, by Enter, any press on it
-or code. A left press on the track brings the thumb under the pointer; a press on the thumb holds it where it was grabbed, so a click on it
-changes nothing. Dragging follows the pointer wherever it goes, past the box and past the window: past an end the value is that end. Entered,
-all four arrows are its own: `ui_up` and `ui_right` step higher, `ui_down` and `ui_left` lower (repeats follow; at an end they do nothing and
-are still consumed), Home and End jump. Each press is a whole change, committed when its key comes up. Escape during a held key or a drag
-cancels that change and the slider stays entered; otherwise it leaves Escape to the screen, which leaves it, and the presses already committed
-stay. Left any way (Enter, Tab, focus moving, code), it ends a drag or a held key's change there, with its commit (a cancel by code takes it
-back), and what is left of that drag or key does nothing. The wheel is the slider's only while it is entered or with Ctrl: otherwise it goes on up the tree, so scrolling a panel never changes a
-value by accident. With `HasDefault` and `Default` (`UISlider_SetDefault`), the reset action (`tbp:ui_reset`, Backspace), focused or only hovered,
-entered or not, puts it back, a whole change; during a change it is used and does nothing. A range that is no whole number of steps keeps its
-upper end reachable: the end counts as a step.
+**The value piece** (`UIValue.h`). A number, as a double, that a slider, a property box and a compound slider all hold and answer through the same functions
+by id (`UIValue_Set`, `_Get`, `_SetRange`, `_SetSoftRange`, `_SetStep`, `_SetIsInteger`, `_SetValueList`, `_SetConversion`, `_SetCustomConversion`,
+`_SetDefault`, `_ResetToDefault`, `_SetFineFactor`, `_SetMixed`, `_IsMixed`, `_Step`, `_SetIsEnabled`, `_GetSettings`), so calling code does not care which
+it has. Its settings (`UIValueSettings`, pure) are hard limits each with a flag of its own (`HasMinimum`, `HasMaximum`: a value may have none, one or both),
+a soft range inside them (its ends on the steps, or whole numbers, or on a hard limit, so no value lands between two steps), whole numbers, a step (a normal
+double, at least 2^-50 of the largest limit's size, so steps can be told apart there) *or* a list of allowed values (rising strictly, at most
+`UI_VALUE_MAX_LIST_COUNT`, inside the limits), a conversion (linear; log, its hard minimum above 0; power with an exponent; even, each value of a list the
+same length of track; a custom pair of functions whose answers are checked at every call: a NaN or a value out of range is clamped, never stored), a
+default, `FineFactor` (how much Shift slows a drag, 0.1) and `IsSinglePrecision` (the value stands for a float: its text is a float's shortest, typed text
+reads as a float). Every setter checks the whole result (`UIValueSettings_IsValid` names what is wrong) and refuses one that breaks a rule, changing
+nothing. **The order of operations, always:** the pointer, its share of the track (`UIValue_GetPointerFraction`), the conversion, the step or the list, the
+limits (`UIValueSettings_FromShare`). The drag range a track or a scrub spans is the soft range, else a list's ends, else both hard limits
+(`UIValueSettings_TryGetDragRange`); a drag and the keys stop at the soft ends, typing goes to the hard ones, and a value typed past the soft range widens
+it to take the value in (`UIValueSettings_GetDragRangeAround`), so a drag from there starts where the value is. A step snaps to whole steps from the lower
+limit (from 0 without one), the upper limit counting as a step so it stays reachable; whole numbers with no step step by 1. **A value is never changed by
+showing it:** code's values are only clamped and snapped (`UIValueSettings_Normalize`), conversions only read them (`UIValueSettings_ToShare`), and its text
+is the shortest that reads back to the same double (`UIValue_WriteShortestText`; `UIValue_WriteFixedText` for a precision, `UIValue_ParseText` for hostile
+text: spaces and a unit around the number passed over, a period for the point, no NaN or infinity, at most `UI_VALUE_MAX_TEXT_BYTES`). Its elements post
+through the change helpers (`UIValueCapability_BeginChange`, `_MoveTo`, `_EndChange`, `_CancelChange`, `_ApplyWholeChange`): `Changed` while it moves,
+`Committed` once a change is done (not when it ended as it began), `Cancelled` when its start comes back, with the mixed state it began with. Several values
+made one is a change too, even to the number the piece held (the first object's): a reset, a paste or a move to it ends the mixed state with `Changed` and
+`Committed`. Code that sets the value or the mixed state during a change is where that change now starts (a cancel goes back to code's value, a release
+commits only what came after: code posts no events); code's settings keep the change's start, inside them. Copy puts the shortest text on the clipboard,
+paste reads a number from it as a whole change (`UIValueCapability_Copy`, `_Paste`), and `UIValue_AttachContextMenu` gives an element Reset, Copy and Paste
+(Paste with the unit the element tells through `UIValueHooks.GetUnit`; an item that cannot act is disabled, and one chosen after the element was disabled
+meanwhile does nothing; nothing opens during a change: the menu would take the focus and end it). A piece can post under another widget's id, with an index
+or not (`UIValueCapability_SetEventTarget`: a compound's parts, a row's fields), and that widget's hook hears each move (`UIValueHooks.OnPartChanged`).
+
+**Slider** (`UISlider.h`). A value piece on a track (`UISliderOptions.Value`, which needs both ends of a drag range), across or upright
+(`UISliderOrientation`, `UISlider_SetOrientation`: up is higher, the thumb travelling from the bottom). It is an **edit element**
+([UIFramework.md](UIFramework.md), "Entering elements"): moving the focus onto it changes nothing, and Tab and the arrows go past it until it is entered,
+by Enter, any press on it or code. A left press on the track brings the thumb under the pointer; a press on the thumb holds it where it was grabbed, so a
+click on it changes nothing. Dragging follows the pointer wherever it goes, past the box and past the window: past an end the value is that end. A drag runs
+on the drag range around the value where it began, so a value past the soft range (typed, or set by code) moves on from where it is and never jumps into
+the range. **Shift is a flag on the rate** (`UISliderDrag`, the one small function `UISliderDrag_Move`): held, the pointer moves the thumb at the
+`FineFactor` of the rate; at each change of Shift the thumb's offset from the pointer is kept as it is, so the value never jumps; a thumb held at an end
+makes the offset give way (turning back moves it at once), and once the pointer is past that end of the box too the thumb is under the pointer again.
+The thumb's share builds up unsnapped, so a slow drag over a stepped track still moves it. Entered, all four arrows are
+its own: `ui_up` and `ui_right` step higher, `ui_down` and `ui_left` lower, with Shift a fine step (still a whole step on a stepped track; a list goes from
+value to value); repeats follow, at an end they do nothing and are still consumed; Home and End go to the track's ends. Each press is a whole change,
+committed when its key comes up. Escape during a held key or a drag cancels that change and the slider stays entered; otherwise it leaves Escape to the
+screen, which leaves it, and the presses already committed stay. Left any way (Enter, Tab, focus moving, code), it ends a drag or a held key's change there,
+with its commit (a cancel by code takes it back), and what is left of that drag or key does nothing. The wheel is the slider's only while it is entered or with
+Ctrl (Shift for a fine step): otherwise it goes on up the tree, so scrolling a panel never changes a value by accident. A middle press let go on it, or the
+reset action (`tbp:ui_reset`, Backspace), focused or only hovered, entered or not, puts the default back, a whole change; during a change it does nothing.
+Copy and paste (`tbp:ui_copy`, `tbp:ui_paste`) work focused or hovered, and its context menu offers Reset, Copy and Paste. A value set by code keeps its
+place (showing it through a log or a power conversion never moves it) and is where a drag in progress goes on from.
+
+**Property box** (`UIPropertyBox.h`, kind `property_box`, `UIKit_CreatePropertyBox`). Blender's field: a value in a box, typed in, or scrubbed sideways if it
+is a number (`UIPropertyBoxOptions_Create`, `_CreateRange`, which shows a fill bar), or a string (`_CreateString`: no value piece, no scrub).
+- **Showing:** a number at `Precision` digits after the point (none for whole numbers; at most `UI_VALUE_MAX_PRECISION`) with its unit after it
+  (`UIPropertyBox_SetPrecision`, `_SetUnit`), a hyphen while mixed (every font has one); a fill bar behind it by the conversion while it has a drag range
+  and `ShowsFill` (`_SetShowsFill`; none while mixed, none on a string); a string's text. Showing only reads the value; what it shows changing is
+  measured again, so a box sized by its content follows its number.
+- **Scrubbing** (a number): a left press holds; once the pointer has gone `UI_PROPERTY_BOX_SCRUB_THRESHOLD` UI pixels sideways it scrubs, asking for a
+  hidden-cursor drag (`UIScreen_CapturePointer`, so the window's edges do not stop it, and the cursor comes back where it hid: past the threshold, a
+  few pixels from the press). With a drag range the
+  box's width spans it through the conversion; without one it moves by `UIValueSettings_GetScrubRate` per UI pixel (a step every four pixels, else the
+  value's magnitude every hundred). Shift slows it by the `FineFactor`, Ctrl snaps it coarsely (`UIValueSettings_SnapCoarse`: a power of ten for the span,
+  never finer than the step; tenths of the share on a conversion that is not linear). The rate and the coarse snap count by the value the scrub began at,
+  and the scrub's place keeps to the range and the hard limits, so turning back past an end moves the value at once. `Changed` as it moves, `Committed`
+  at the release; Escape cancels it (`Cancelled`), and so does a right press during the left one, scrubbing or not (that right press opens no menu). A
+  scrub does not enter the box: while it holds, the box switches entering off (`Widget_SetNeedsEntering`) so the focused box hears every key first
+  (Escape cancels, the rest does nothing), and back on as it ends, however it ends.
+- **Typing** is its entered state, in a text box of its own: its look base holds a text box's capability, whose keys, mouse, clipboard and undo (one per
+  visit: the value's history is the caller's) it types with, hearing the box's edits and the visit's end through a host (`UITextBoxHost`) in place of the box's
+  events. It enters itself: a click without moving, Enter or a double click on a number, any press on a string, everything selected; a number's text is the
+  shortest that reads back to its value, and several values (mixed) type from an empty text, so leaving it empty changes nothing and any number typed makes
+  them one. A number's text holds at most `UI_VALUE_MAX_TEXT_BYTES`, and Insert does not overwrite. While the text reads as no number the box shows the
+  invalid state. Enter keeps (a good number clamped into the hard limits and snapped becomes the value, a bad one goes back with the Refused cue), Escape
+  cancels, Tab and Shift+Tab keep and go on, typing in the next box at once. A visit that
+  changed the value ends in `Changed` then `Committed`; text left as it began changes nothing, so a far double (1e7 + 0.1) or a float's value is kept exactly.
+  A string's visit posts the same with its length; its text is read by id (`UIPropertyBox_GetText`) and set by code (`_SetText`, `_SetTextLimits`,
+  `_SetDefaultText`).
+- **Also:** a middle click let go on it or the reset action puts the default back (with none, the reset action is not the box's and goes on); copy and paste
+  work focused or hovered (a number's shortest text, a number read from the clipboard with its unit passed over); its context menu is Reset, Copy and Paste
+  (Paste with its unit too), and while typing a text box's. Ctrl and the wheel step a number, not during a press; a plain wheel goes up the tree. Disabled
+  (`UIPropertyBox_SetIsEnabled`, or `UIValue_SetIsEnabled` on a number), it takes a scrub back, keeps a visit and takes no focus.
+
+**Labelled element and form** (`UILabelled.h`, kinds `labelled` and `form`). `UIKit_CreateLabelled` makes a label and calling code adds the element it
+labels to it (a dropdown, a toggle, a text box, a property box, anything): the element keeps its own id and functions, the labelled one places the two,
+across (the label at the left, vertically centred, the element filling the rest) or stacked (the label above, `UILabelled_SetLayout`), with the theme's
+`spacing`. Its label column is as wide as its label, as a width of its own (`UILabelled_SetLabelWidth`: a longer label runs past it, neither cut nor
+wrapped), or, while it is a form's row, as the form says (taken out of the form, its own again). `UIKit_CreateForm` makes a column of rows, each as tall as
+it measures and as wide as the form: its labelled rows across that show and have no width of their own share the widest of their labels (each at its row's
+scale), so the rows line up. Hover text set on a labelled element shows over its label and over an element with none of its own.
+
+**Compound slider** (`UICompoundSlider.h`, kind `compound_slider`, `UIKit_CreateCompoundSlider`). A name, a slider and a property box (each of the look the
+theme names for its kind, reachable by `UICompoundSlider_GetPartIds`) sharing one value: across in a row (the box `box_width` wide beside the slider),
+upright in a column (the box at the bottom). Options and `UICompoundSlider_SetShows` choose which show; with no slider across, the box takes the room. It
+answers the value piece itself: `UIValue_*` on it moves both parts, settings included; setting either part's value, by its id or by the pointer and the
+keys, moves the other and the compound's own, and settings set on a part by its id are the compound's (both parts get them). Its parts' `Changed`,
+`Committed` and `Cancelled` are posted under the compound's id, one of each per change, never under the parts'; their other events (pressed, released) stay
+their own, so listening on the compound's id hears its value events alone. It scales as one and its parts' hover text falls back to its own.
+
+**Row of fields** (`UIVectorRow.h`, kind `vector_row`, `UIKit_CreateVectorRow`). Two to four property boxes for a vector's components, each after an axis
+tag (X, Y, Z, W) in the theme's colours, sharing the row's width evenly (in a row too narrow for its tags, each tag keeps to its own slot). Each field is
+reachable by its own id (`UIVectorRow_GetFieldId`) for its own settings and mixed state (`UIVectorRow_SetMixed`, `_SetValue`, `_GetValue` for short). Its
+fields' value events are posted under the row's id with the axis as the event's index (`UIEvent.HasIndex`, `UIEvent.Index`), so a handler writes only that
+component, what several objects with different components need. Tab goes from field to field, typing in each at once. Dragging down across several fields to
+edit them together is not built.
 
 **Scroll area** (`UIScrollArea.h`, kind `scroll_area`). Content larger than its box. Calling code adds the content to the area as to any parent
 (one child is the usual, a column stack); every child but its two bars gets the same box. It measures the content at the view's width while only
@@ -326,7 +430,7 @@ Elements post through `UIScreen_PostWidgetEvent`, or `UIScreen_PostWidgetMouseEv
 | Event | Posted | Carries |
 |---|---|---|
 | `Activated` | a button's click, by its click mode, or its key | mouse data |
-| `Changed` | the value moved and may go on: during a drag, at each key step; a dropdown's choice (with `Committed`); a text box's edit | bool or double (a dropdown's index, a text box's length in bytes) |
+| `Changed` | the value moved and may go on: during a drag or a scrub, at each key step; a dropdown's choice (with `Committed`); a text box's edit; a property box's typed value (with `Committed`) | bool or double (a value's value, a dropdown's index, a text box's or a string property box's length in bytes) |
 | `Committed` | the change is done: the release, the key's release, the press lost, a text box left after a visit that changed it; what an undo history records. Not posted when the value ends where it began | bool or double |
 | `Cancelled` | Escape (the `ui_back` action's keys) during a change, or disabling it: the value at its start is back (a text box's text at entering) | double |
 | `Pressed` | a press of any button reached the element | mouse data |
@@ -336,11 +440,12 @@ Elements post through `UIScreen_PostWidgetEvent`, or `UIScreen_PostWidgetMouseEv
 | `ContextRequested` | a right press let go on the element, or the context menu action's key (`tbp:ui_context_menu`): then `Button` is the key, the place the element's middle, and `IsOverWidget` false | mouse data |
 
 The mouse data is in the event by value (`UIEvent.HasMouse`, `UIEvent.Mouse`: button, modifiers, screen position, scroll delta, whether over the element), so a handler needs no
-widget.
+widget. A compound's parts post their value events under the compound's id, and a row of fields' under the row's with the field's axis as the event's index
+(`UIEvent.HasIndex`, `UIEvent.Index`, posted with `UIScreen_PostWidgetIndexedEvent`).
 
 **Cues** (`UIEventKind_Cue`, [UIFramework.md](UIFramework.md), "Notifications"): elements post named sound cues for what they do, which nothing plays yet and which
 cost nothing while nobody subscribes. The kinds post `Hover` (the pointer came onto it), `Press` (a press on it while enabled; `Refused` while disabled), `Release`,
-`Activate` (a button's activation, a toggle's change) and `ValueStep` (a slider's arrow step, wheel notch or reset); a text box posts `Refused` for what its limits
+`Activate` (a button's activation, a toggle's change) and `ValueStep` (a value's arrow step, a wheel notch, a reset, a paste, a typed value); a text box posts `Refused` for what its limits
 or a masked box refuse and for an undo or redo with nothing left; the screen posts `Enter` and `Leave` for an edit element.
 `UIElement_PostCue` and `UIElement_PostMouseCues` are the helpers a new kind uses. For a key's activation `Button` is the key. A disabled element posts none of these, and a toggle and a slider tell the input events as a button does.
 
@@ -407,7 +512,7 @@ UI is scaled, and at 28 both go away while 14 pixels stays sharp enough to read 
 
 ## The gallery
 
-`sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test, on four pages (N switches), each in a scroll area, so the
+`sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test, on five pages (N switches), each in a scroll area, so the
 whole page scrolls at small window sizes while its status line stays below it. It keeps its pixels
 (`UIScalePolicy_ConstantPixels`): drag the window's edges, and the controls keep their size with more room around them. P switches to following the
 window's height and back, to compare them. T switches the theme (`tbp:test_flat`, `tbp:test_nine_slice`, whose art `asset_source/scripts/placeholder_ui.py`
@@ -442,6 +547,12 @@ limited to twelve characters, disabled, marked invalid by code, and a line of co
 or dark). Of several lines: wrapped, not wrapped (Tab types a tab, it scrolls both ways) and read-only. A form of three boxes to Tab through. Every edit
 shows in the status line with the text (a masked box's only as its length).
 
+The fifth page: values. Sliders stepped, log, power, of whole numbers and over a value list (each value the same length of track), and three upright ones;
+property boxes with no limits and a unit, in a range with a fill, with a soft range, log with its fill by the conversion, of whole numbers, mixed, disabled,
+of a float's value and of a string; compound sliders across (named, and with no name) and upright; a form of labelled rows (a dropdown, a toggle, a text box,
+a property box, and a stacked one); rows of fields (a position, a rotation, a size of two, four for a quaternion, and one whose Y is mixed), whose events
+show their axis.
+
 ## Rules for a new element
 
 - Behaviour and looks apart: the capability holds logical state and content, never a look, a colour or laid-out text; the look draws it. Calling code
@@ -463,5 +574,8 @@ shows in the status line with the text (a masked box's only as its length).
   are asked about may not be the width you end up with.
 - Turn UI pixels into surface pixels with the widget's effective scale (`Widget_GetEffectiveScale`), never the screen's: text, corners, padding, outlines.
 - Post the kind's cues (`UIElement_PostCue`) for what it does, as the standard kinds do.
+- An element that holds a number holds the value piece (`UIValue.h`) in its capability and declares it (`UIElementCapability_Value`), so `UIValue_*` reach it,
+  and posts through its change helpers; it gives the piece hooks (`UIValueHooks`) for what code changes, and a part of a compound posts for the compound
+  (`UIValueCapability_SetEventTarget`).
 - Draw nothing in an empty box (`UIElement_IsBoxEmpty`): an element made in a handler has no box until its first layout, and a stack may leave it no room.
 - Work on any surface: read the pointer, the keyboard and sizes only from what the screen gives. A world screen's pixels are its render target's.

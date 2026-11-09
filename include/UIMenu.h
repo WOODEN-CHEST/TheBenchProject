@@ -52,6 +52,10 @@ typedef struct UIMenuBuilderStruct UIMenuBuilder;
 #define UI_MENU_MAX_TEXT_BYTES ((size_t)256)
 
 
+/** @brief Room for any shortcut text UIMenu_WriteShortcut writes, its NUL included. */
+#define UI_MENU_SHORTCUT_CAPACITY ((size_t)48)
+
+
 // Types.
 /**
  * @brief One item of a menu. A plain value; build one with UIMenuItem_Create or UIMenuItem_Separator. The menu copies what it points
@@ -237,3 +241,14 @@ Error UIMenu_Close(UIScreen* screen, uint64_t menuId);
  *          item that is not valid; ErrorCode_InvalidTextEncoding for text that is not valid UTF-8.
  */
 Error UIMenuBuilder_Add(UIMenuBuilder* builder, const UIMenuItem* item);
+
+/**
+ * @brief Writes an action's first binding as a shortcut text ("Ctrl+Z"), for a menu item's Shortcut: what a context menu shows next to an
+ *        item an action also does. Only text: nothing binds it.
+ * @param screen The screen whose running update's input knows the bindings; must not be NULL.
+ * @param action The action.
+ * @param outText [out] Receives the NUL-terminated text, empty when the action has no binding (or no input), or when it does not fit;
+ *        must not be NULL.
+ * @param capacity The size of @p outText in bytes, its NUL included; at least 1 (UI_MENU_SHORTCUT_CAPACITY holds every binding).
+ */
+void UIMenu_WriteShortcut(const UIScreen* screen, GameActionId action, unsigned char* outText, size_t capacity);

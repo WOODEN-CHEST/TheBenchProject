@@ -364,6 +364,25 @@ void GameInputTests_Run(TestRun* run);
 /** @brief The input_actions asset type: its reader's rules and its registration with the input (InputActionsTests.c). */
 void InputActionsTests_Run(TestRun* run);
 
+/** @brief The value piece: its rules, the drag range, normalizing, conversions (custom ones checked), steps, a scrub's rate and a coarse
+ *  snap, text that reads back and shown digits, hostile typed and pasted text, the functions by id, changes and the clipboard
+ *  (UIValueTests.c). */
+void UIValueTests_Run(TestRun* run);
+
+/** @brief The slider on the value piece: Shift as a flag on a drag's rate in every order, the thumb under the pointer past an end, a
+ *  slow drag over a step, upright sliders, fine steps, a middle click, value lists, log sliders, its context menu (UISliderTests.c). */
+void UISliderTests_Run(TestRun* run);
+
+/** @brief The property box: what it shows, a press becoming a scrub, scrubbing with and without a range, Shift and Ctrl, soft and hard
+ *  limits, cancelling, typing (good, bad, out of range, Enter, Escape, Tab both ways), far doubles through the text, mixed, strings, the
+ *  wheel, resetting, the clipboard, its menus, disabling (UIPropertyBoxTests.c). */
+void UIPropertyBoxTests_Run(TestRun* run);
+
+/** @brief The compounds: a labelled element across and stacked, a form's labels lined up, a compound slider's parts in step (code on
+ *  either, a drag, typing, settings, mixed, enabled) with its events its own, its scale and hover text, a row of fields' indexed events,
+ *  Tab along it and mixed per axis (UICompoundTests.c). */
+void UICompoundTests_Run(TestRun* run);
+
 /** @brief Easing, keyframe validation and evaluation of typed values (UIAnimationTests.c). */
 void UIAnimationTests_Run(TestRun* run);
 

@@ -422,7 +422,9 @@ Error UITextEdit_SetUndoOptions(UITextEdit* self, const UITextEditUndoOptions* o
 /**
  * @brief Replaces a range of the text with new text, through the limits, as an edit of a kind: what typing, pasting, cutting and an edit
  *        from code come down to. The range's ends are moved back onto codepoint boundaries and clamped to the text. The caret goes after
- *        what was inserted, with nothing selected, and the edit becomes an undo step (or joins the last one, by the grouping rules).
+ *        what was inserted, with nothing selected, and the edit becomes an undo step (or joins the last one, by the grouping rules). New
+ *        text the same as the range's changes nothing and makes no step, but the caret still goes after it; text a limit refused whole
+ *        leaves the caret and the selection as they were.
  * @param self The text; must not be NULL.
  * @param start The range's first byte offset.
  * @param end One past its last; at least @p start.

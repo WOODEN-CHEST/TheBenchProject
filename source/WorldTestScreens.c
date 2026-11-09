@@ -311,9 +311,9 @@ static Error BuildElements(WorldTestScreens* self)
     {
         const WorldScreenComponent* Component = FindScreenComponent(self);
         UISliderOptions Options = UISliderOptions_Create();
-        Options.Minimum = BRIGHTNESS_MINIMUM;
-        Options.Maximum = BRIGHTNESS_MAXIMUM;
-        Options.Value = (Component != NULL) ? (double)WorldScreenComponent_GetBrightness(Component) : 1.0;
+        Options.Value.Settings.Minimum = BRIGHTNESS_MINIMUM;
+        Options.Value.Settings.Maximum = BRIGHTNESS_MAXIMUM;
+        Options.Value.Value = (Component != NULL) ? (double)WorldScreenComponent_GetBrightness(Component) : 1.0;
         Options.Element.Hint = UIStackHint_Fixed(BRIGHTNESS_SLIDER_WIDTH);
         Result = UIKit_CreateSlider(&self->_kit, &self->_screen, Row, &Options, &self->_brightnessSliderId);
     }

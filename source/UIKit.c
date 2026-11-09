@@ -58,6 +58,16 @@ static const UIKindBehaviour* GetBehaviour(UIElementKind kind)
         // backdrop's named to the factory). Each needs a behaviour of its own split out first.
         case UIElementKind_TextBox:
             return UITextBox_GetKindBehaviour();
+        case UIElementKind_PropertyBox:
+            return UIPropertyBox_GetKindBehaviour();
+        case UIElementKind_Labelled:
+            return UILabelled_GetKindBehaviour();
+        case UIElementKind_Form:
+            return UIForm_GetKindBehaviour();
+        case UIElementKind_CompoundSlider:
+            return UICompoundSlider_GetKindBehaviour();
+        case UIElementKind_VectorRow:
+            return UIVectorRow_GetKindBehaviour();
         case UIElementKind_Label:
         case UIElementKind_Tooltip:
         case UIElementKind_Menu:
@@ -369,6 +379,11 @@ static const unsigned char* const KindTypeNames[UIElementKind_Count] =
     [UIElementKind_StatusBar] = u8"StatusBar",
     [UIElementKind_Backdrop] = u8"Backdrop",
     [UIElementKind_TextBox] = u8"TextBox",
+    [UIElementKind_PropertyBox] = u8"PropertyBox",
+    [UIElementKind_Labelled] = u8"Labelled",
+    [UIElementKind_Form] = u8"Form",
+    [UIElementKind_CompoundSlider] = u8"CompoundSlider",
+    [UIElementKind_VectorRow] = u8"VectorRow",
 };
 
 
@@ -752,6 +767,8 @@ Error UIKit_CreateToggle(UIKit* self, UIScreen* screen, uint64_t parentId, const
     return CreateElement(self, screen, parentId, TypeId, &Arguments, outId);
 }
 
+static void DestroyPartlyMade(UIScreen* screen, uint64_t id);
+
 Error UIKit_CreateSlider(UIKit* self, UIScreen* screen, uint64_t parentId, const UISliderOptions* options, uint64_t* outId)
 {
     if ((self == NULL) || (options == NULL) || (screen == NULL))
@@ -760,10 +777,19 @@ Error UIKit_CreateSlider(UIKit* self, UIScreen* screen, uint64_t parentId, const
     }
     UISliderArgs Arguments = { .Kit = self, .Options = options };
     uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Slider, options->Element.Look);
-    return CreateElement(self, screen, parentId, TypeId, &Arguments, outId);
+    Error Result = CreateElement(self, screen, parentId, TypeId, &Arguments, outId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = UIValue_AttachContextMenu(screen, *outId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        DestroyPartlyMade(screen, *outId);
+        *outId = WIDGET_ID_INVALID;
+    }
+    return Result;
 }
-
-static void DestroyPartlyMade(UIScreen* screen, uint64_t id);
 
 Error UIKit_CreateDropdown(UIKit* self, UIScreen* screen, uint64_t parentId, const UIDropdownOptions* options, uint64_t* outId)
 {
@@ -942,5 +968,177 @@ Error UIKit_CreateTextBox(UIKit* self, UIScreen* screen, uint64_t parentId, cons
         return Result;
     }
     *outId = BoxId;
+    return Error_CreateSuccess();
+}
+
+Error UIKit_CreatePropertyBox(UIKit* self, UIScreen* screen, uint64_t parentId, const UIPropertyBoxOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL) || (outId == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreatePropertyBox: self, screen, options and outId must not be NULL.");
+    }
+    UIPropertyBoxArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_PropertyBox, options->Element.Look);
+    Error Result = CreateElement(self, screen, parentId, TypeId, &Arguments, outId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = UIPropertyBox_AttachContextMenu(screen, *outId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        DestroyPartlyMade(screen, *outId);
+        *outId = WIDGET_ID_INVALID;
+    }
+    return Result;
+}
+
+/* Makes one of a compound's parts placed by it: no stack hint, its box from the compound's layout. */
+static UIElementOptions MakePartElement(void)
+{
+    UIElementOptions Element = UIElementOptions_Create();
+    Element.HasPlacement = true;
+    Element.Placement = UIPlacement_FromTopLeft(0.0f, 0.0f, 0.0f, 0.0f);
+    return Element;
+}
+
+Error UIKit_CreateLabelled(UIKit* self, UIScreen* screen, uint64_t parentId, const UILabelledOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL) || (outId == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateLabelled: self, screen, options and outId must not be NULL.");
+    }
+    UILabelledArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Labelled, options->Element.Look);
+    uint64_t LabelledId = WIDGET_ID_INVALID;
+    Error Result = CreateElement(self, screen, parentId, TypeId, &Arguments, &LabelledId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        *outId = WIDGET_ID_INVALID;
+        return Result;
+    }
+    UILabelOptions Label = UILabelOptions_Create((options->Text != NULL) ? options->Text : (const unsigned char*)u8"");
+    Label.Element = MakePartElement();
+    uint64_t LabelId = WIDGET_ID_INVALID;
+    Result = UIKit_CreateLabel(self, screen, LabelledId, &Label, &LabelId);
+    Widget* Labelled = NULL;
+    if ((Result.Code == ErrorCode_Success) && !UIScreen_TryGetWidgetById(screen, LabelledId, &Labelled))
+    {
+        Result = Error_Construct2(ErrorCode_InvalidOperation, "UIKit_CreateLabelled: a hook took the element away.");
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        DestroyPartlyMade(screen, LabelledId);
+        *outId = WIDGET_ID_INVALID;
+        return Result;
+    }
+    // Every labelled look's struct starts with UILabelledLookBase (UIKit_RegisterLook checks its size).
+    UILabelled_SetLabel(&((UILabelledLookBase*)(void*)Labelled)->Labelled, LabelId);
+    *outId = LabelledId;
+    return Error_CreateSuccess();
+}
+
+Error UIKit_CreateForm(UIKit* self, UIScreen* screen, uint64_t parentId, const UIFormOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateForm: self, screen and options must not be NULL.");
+    }
+    UIFormArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Form, options->Element.Look);
+    return CreateElement(self, screen, parentId, TypeId, &Arguments, outId);
+}
+
+Error UIKit_CreateCompoundSlider(UIKit* self, UIScreen* screen, uint64_t parentId, const UICompoundSliderOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL) || (outId == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateCompoundSlider: self, screen, options and outId must not be NULL.");
+    }
+    UICompoundSliderArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_CompoundSlider, options->Element.Look);
+    uint64_t CompoundId = WIDGET_ID_INVALID;
+    Error Result = CreateElement(self, screen, parentId, TypeId, &Arguments, &CompoundId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        *outId = WIDGET_ID_INVALID;
+        return Result;
+    }
+    uint64_t NameId = WIDGET_ID_INVALID;
+    uint64_t SliderId = WIDGET_ID_INVALID;
+    uint64_t BoxId = WIDGET_ID_INVALID;
+    UILabelOptions Name = UILabelOptions_Create((options->Name != NULL) ? options->Name : (const unsigned char*)u8"");
+    Name.Element = MakePartElement();
+    Result = UIKit_CreateLabel(self, screen, CompoundId, &Name, &NameId);
+    if (Result.Code == ErrorCode_Success)
+    {
+        UISliderOptions Slider = UISliderOptions_Create();
+        Slider.Element = MakePartElement();
+        Slider.Value = options->Value;
+        Slider.Orientation = options->Orientation;
+        Result = UIKit_CreateSlider(self, screen, CompoundId, &Slider, &SliderId);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        UIPropertyBoxOptions Box = UIPropertyBoxOptions_Create();
+        Box.Element = MakePartElement();
+        Box.Value = options->Value;
+        Box.Precision = options->Precision;
+        Box.Unit = options->Unit;
+        Box.ShowsFill = false;
+        Result = UIKit_CreatePropertyBox(self, screen, CompoundId, &Box, &BoxId);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UICompoundSlider_BindParts(screen, CompoundId, NameId, SliderId, BoxId);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        DestroyPartlyMade(screen, CompoundId);
+        *outId = WIDGET_ID_INVALID;
+        return Result;
+    }
+    *outId = CompoundId;
+    return Error_CreateSuccess();
+}
+
+Error UIKit_CreateVectorRow(UIKit* self, UIScreen* screen, uint64_t parentId, const UIVectorRowOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL) || (outId == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateVectorRow: self, screen, options and outId must not be NULL.");
+    }
+    UIVectorRowArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_VectorRow, options->Element.Look);
+    uint64_t RowId = WIDGET_ID_INVALID;
+    Error Result = CreateElement(self, screen, parentId, TypeId, &Arguments, &RowId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        *outId = WIDGET_ID_INVALID;
+        return Result;
+    }
+    uint64_t FieldIds[UI_VECTOR_ROW_MAX_COUNT] = { WIDGET_ID_INVALID, WIDGET_ID_INVALID, WIDGET_ID_INVALID, WIDGET_ID_INVALID };
+    for (size_t Axis = 0U; (Axis < options->Count) && (Axis < UI_VECTOR_ROW_MAX_COUNT) && (Result.Code == ErrorCode_Success); Axis++)
+    {
+        UIPropertyBoxOptions Field = UIPropertyBoxOptions_Create();
+        Field.Element = MakePartElement();
+        Field.Value = options->Value;
+        Field.Value.Value = options->Values[Axis];
+        Field.Precision = options->Precision;
+        Field.Unit = options->Unit;
+        Field.ShowsFill = false;
+        Result = UIKit_CreatePropertyBox(self, screen, RowId, &Field, &FieldIds[Axis]);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIVectorRow_BindFields(screen, RowId, FieldIds);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        DestroyPartlyMade(screen, RowId);
+        *outId = WIDGET_ID_INVALID;
+        return Result;
+    }
+    *outId = RowId;
     return Error_CreateSuccess();
 }

@@ -268,6 +268,10 @@ typedef struct UIEventStruct
     bool HasMouse;
     /** @brief For UIEventKind_Widget: the input behind it, when HasMouse. */
     UIEventMouse Mouse;
+    /** @brief For UIEventKind_Widget: whether Index says which of the widget's parts it is about (UIScreen_PostWidgetIndexedEvent). */
+    bool HasIndex;
+    /** @brief For UIEventKind_Widget: the part, when HasIndex (a row of fields' axis). */
+    int32_t Index;
 } UIEvent;
 
 /**
@@ -1142,6 +1146,19 @@ Error UIScreen_PostWidgetEvent(UIScreen* self, uint64_t widgetId, int32_t widget
  *          alive; ErrorCode_BufferTooLarge if the queue could not grow.
  */
 Error UIScreen_PostWidgetMouseEvent(UIScreen* self, uint64_t widgetId, int32_t widgetEventId, const UIEventMouse* mouse);
+
+/**
+ * @brief Queues a widget type's own notification about one of its parts: UIScreen_PostWidgetEvent, with an index saying which (a row of
+ *        fields posts one event per field, its axis the index), carried as UIEvent.Index with UIEvent.HasIndex set.
+ * @param self The screen; must not be NULL.
+ * @param widgetId The widget the event belongs to; must be alive.
+ * @param widgetEventId The type-defined event id.
+ * @param value Optional data carried by value; may be NULL.
+ * @param index Which part.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_InvalidOperation if the widget is not alive;
+ *          ErrorCode_BufferTooLarge if the queue could not grow.
+ */
+Error UIScreen_PostWidgetIndexedEvent(UIScreen* self, uint64_t widgetId, int32_t widgetEventId, const UIPropertyValue* value, int32_t index);
 
 /**
  * @brief Posts a sound cue for a widget (UIEventKind_Cue, its WidgetEventId the cue), delivered at the end of the update like every

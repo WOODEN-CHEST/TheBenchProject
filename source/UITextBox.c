@@ -659,7 +659,7 @@ static Error Behaviour_Deconstruct(void* widget)
     return UITextBoxCapability_Deconstruct(UITextBoxInternal_GetCapability(widget));
 }
 
-static Error Behaviour_Update(void* widget, ProgramTime time)
+Error UITextBoxInternal_Update(void* widget, ProgramTime time)
 {
     UITextBoxCapability* Self = UITextBoxInternal_GetCapability(widget);
     Self->_time = time.TotalTime;
@@ -673,8 +673,7 @@ static Error Behaviour_OnHoverStart(void* widget, const WidgetHoverArgs* args)
     return UIElement_PostCue(widget, UIElementCue_Hover);
 }
 
-/* The text in its view, the bars along the edges by the modes, the caret kept in view. */
-static Error Behaviour_Layout(void* widget, const UILayoutContext* context)
+Error UITextBoxInternal_Layout(void* widget, const UILayoutContext* context)
 {
     UITextBoxCapability* Self = UITextBoxInternal_GetCapability(widget);
     UIScreen* Screen = Widget_GetScreen(widget);
@@ -744,8 +743,8 @@ static const UIKindBehaviour TextBoxBehaviour =
     .EntersItself = false,
     .Construct = Behaviour_Construct,
     .Deconstruct = Behaviour_Deconstruct,
-    .Update = Behaviour_Update,
-    .Layout = Behaviour_Layout,
+    .Update = UITextBoxInternal_Update,
+    .Layout = UITextBoxInternal_Layout,
     .OnHoverStart = Behaviour_OnHoverStart,
     .OnMouseInput = UITextBoxInternal_OnMouseInput,
     .OnPressLost = UITextBoxInternal_OnPressLost,
@@ -861,7 +860,15 @@ Error UITextBoxInternal_PostEdit(Widget* widget, UITextBoxCapability* self, cons
 {
     UITextBoxInternal_OnTextChanged(self, change);
     Error Result = change->IsRefused ? UIElement_PostCue(widget, UIElementCue_Refused) : Error_CreateSuccess();
-    if ((Result.Code != ErrorCode_Success) || !change->HasChanged)
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (self->_host != NULL)
+    {
+        return self->_host->OnEdited(widget, change, isWhole);
+    }
+    if (!change->HasChanged)
     {
         return Result;
     }
@@ -872,6 +879,15 @@ Error UITextBoxInternal_PostEdit(Widget* widget, UITextBoxCapability* self, cons
     {
         Result = UIScreen_PostWidgetEvent(Screen, Widget_GetId(widget), UIElementEvent_Committed, &Length);
     }
+    return Result;
+}
+
+Error UITextBoxInternal_SetText(UITextBoxCapability* self, const unsigned char* text, size_t length)
+{
+    ReleaseComponent(self);
+    UITextEditChange Change;
+    Error Result = UITextEdit_SetText(&self->Edit, text, length, &Change);
+    OnTextSetWhole(self);
     return Result;
 }
 
@@ -1043,6 +1059,11 @@ void UITextBoxCapability_SetGeometry(UITextBoxCapability* self, const UITextBoxG
     self->_geometry = geometry;
 }
 
+void UITextBoxCapability_SetHost(UITextBoxCapability* self, const UITextBoxHost* host)
+{
+    self->_host = host;
+}
+
 UIElementState UITextBoxCapability_GetState(const UITextBoxCapability* self, const Widget* widget)
 {
     return UIElementState_Choose(self->_isEnabled, self->_isDragging, self->_isInvalid, Widget_IsEntered(widget), false, Widget_IsHovered(widget),
@@ -1150,11 +1171,7 @@ Error UITextBox_SetText(UIScreen* screen, uint64_t widgetId, const unsigned char
     {
         return Error_Construct2(ErrorCode_InvalidTextEncoding, "UITextBox_SetText: the text is not valid UTF-8.");
     }
-    ReleaseComponent(Box);
-    UITextEditChange Change;
-    Result = UITextEdit_SetText(&Box->Edit, Text, StringUTF8_GetByteLength(Text), &Change);
-    OnTextSetWhole(Box);
-    return Result;
+    return UITextBoxInternal_SetText(Box, Text, StringUTF8_GetByteLength(Text));
 }
 
 Error UITextBox_GetText(UIScreen* screen, uint64_t widgetId, const unsigned char** outText, size_t* outLength)
@@ -1246,20 +1263,25 @@ Error UITextBox_SetLimits(UIScreen* screen, uint64_t widgetId, const UITextEditL
     {
         return Result;
     }
+    return UITextBoxInternal_SetLimits(Box, limits);
+}
+
+Error UITextBoxInternal_SetLimits(UITextBoxCapability* self, const UITextEditLimits* limits)
+{
     UITextEditChange Change;
-    Result = UITextEdit_SetLimits(&Box->Edit, limits, &Change);
-    if ((Result.Code == ErrorCode_Success) && (Box->_component != NULL))
+    Error Result = UITextEdit_SetLimits(&self->Edit, limits, &Change);
+    if ((Result.Code == ErrorCode_Success) && (self->_component != NULL))
     {
         // A box showing a tree keeps its text whole, the layout's offsets: the limits hold for a text set later.
-        Result = WriteFlowText(Box, Box->_component, true, NULL);
+        Result = WriteFlowText(self, self->_component, true, NULL);
         if (Result.Code == ErrorCode_Success)
         {
-            Result = UITextEdit_SetTextVerbatim(&Box->Edit, Box->_scratch._data, Box->_scratch._count);
+            Result = UITextEdit_SetTextVerbatim(&self->Edit, self->_scratch._data, self->_scratch._count);
         }
     }
     if ((Result.Code == ErrorCode_Success) && Change.HasChanged)
     {
-        OnTextSetWhole(Box);
+        OnTextSetWhole(self);
     }
     return Result;
 }

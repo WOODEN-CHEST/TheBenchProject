@@ -147,6 +147,44 @@ static const UIThemePartDescriptor TextBoxParts[UITextBoxPart_Count] =
     [UITextBoxPart_Placeholder] = COLORS_PART("placeholder"),
 };
 
+static const UIThemePartDescriptor PropertyBoxParts[UIPropertyBoxPart_Count] =
+{
+    [UIPropertyBoxPart_Padding] = VECTOR_PART("padding", 6.0f, 3.0f),
+    [UIPropertyBoxPart_MinSize] = VECTOR_PART("min_size", 60.0f, 22.0f),
+    [UIPropertyBoxPart_CaretWidth] = NUMBER_PART("caret_width", 1.0f),
+    [UIPropertyBoxPart_UnitSpacing] = NUMBER_PART("unit_spacing", 3.0f),
+    [UIPropertyBoxPart_Box] = BOX_PART("box"),
+    [UIPropertyBoxPart_Fill] = BOX_PART("fill"),
+    [UIPropertyBoxPart_Selection] = BOX_PART("selection"),
+    [UIPropertyBoxPart_Caret] = BOX_PART("caret"),
+    [UIPropertyBoxPart_Text] = COLORS_PART("text"),
+    [UIPropertyBoxPart_Unit] = COLORS_PART("unit"),
+};
+static const UIThemePartDescriptor LabelledParts[UILabelledPart_Count] =
+{
+    [UILabelledPart_Spacing] = NUMBER_PART("spacing", 8.0f),
+};
+static const UIThemePartDescriptor FormParts[UIFormPart_Count] =
+{
+    [UIFormPart_Padding] = VECTOR_PART("padding", 0.0f, 0.0f),
+    [UIFormPart_Spacing] = NUMBER_PART("spacing", 4.0f),
+};
+static const UIThemePartDescriptor CompoundSliderParts[UICompoundSliderPart_Count] =
+{
+    [UICompoundSliderPart_Spacing] = NUMBER_PART("spacing", 6.0f),
+    [UICompoundSliderPart_BoxWidth] = NUMBER_PART("box_width", 64.0f),
+};
+static const UIThemePartDescriptor VectorRowParts[UIVectorRowPart_Count] =
+{
+    [UIVectorRowPart_Spacing] = NUMBER_PART("spacing", 4.0f),
+    [UIVectorRowPart_TagWidth] = NUMBER_PART("tag_width", 16.0f),
+    [UIVectorRowPart_XTag] = BOX_PART("x_tag"),
+    [UIVectorRowPart_YTag] = BOX_PART("y_tag"),
+    [UIVectorRowPart_ZTag] = BOX_PART("z_tag"),
+    [UIVectorRowPart_WTag] = BOX_PART("w_tag"),
+    [UIVectorRowPart_TagText] = COLORS_PART("tag_text"),
+};
+
 static const struct
 {
     const unsigned char* Name;
@@ -169,6 +207,11 @@ Kinds[UIElementKind_Count] =
     [UIElementKind_StatusBar] = { u8"status_bar", StatusBarParts, UIStatusBarPart_Count },
     [UIElementKind_Backdrop] = { u8"backdrop", BackdropParts, UIBackdropPart_Count },
     [UIElementKind_TextBox] = { u8"text_box", TextBoxParts, UITextBoxPart_Count },
+    [UIElementKind_PropertyBox] = { u8"property_box", PropertyBoxParts, UIPropertyBoxPart_Count },
+    [UIElementKind_Labelled] = { u8"labelled", LabelledParts, UILabelledPart_Count },
+    [UIElementKind_Form] = { u8"form", FormParts, UIFormPart_Count },
+    [UIElementKind_CompoundSlider] = { u8"compound_slider", CompoundSliderParts, UICompoundSliderPart_Count },
+    [UIElementKind_VectorRow] = { u8"vector_row", VectorRowParts, UIVectorRowPart_Count },
 };
 
 

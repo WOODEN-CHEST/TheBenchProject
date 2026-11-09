@@ -361,6 +361,42 @@ static void TypingReplacesTheSelection(TestRun* run)
     UITextEdit_Deconstruct(&Edit);
 }
 
+/* Text the same as what it replaces changes nothing and makes no step, but the caret still goes after it: typing over a selection the
+ * characters it holds collapses it (so the next character goes after them), overwriting a character with itself goes on to the next, and
+ * a paste of the same text lands its caret at its end. Text a limit refused whole leaves the selection as it was. */
+static void TypingTheSameTextStillMovesTheCaret(TestRun* run)
+{
+    UITextEdit Edit;
+    if (Make(run, &Edit, "5", NULL))
+    {
+        UITextEdit_SelectAll(&Edit);
+        double Time = 0.0;
+        TypeText(run, &Edit, "5.5", &Time, QUICK);
+        TEST_CHECK(run, IsText(&Edit, "5.5") && IsSelection(&Edit, 3U, 3U));
+        TEST_CHECK_SUCCESS(run, UITextEdit_Undo(&Edit, NULL)); // The 5 typed over itself was no step: undo takes back .5 alone.
+        TEST_CHECK(run, IsText(&Edit, "5") && !UITextEdit_CanUndo(&Edit));
+        TEST_CHECK_SUCCESS(run, UITextEdit_Redo(&Edit, NULL));
+        UITextEdit_SetCaret(&Edit, 0U, false);
+        TEST_CHECK_SUCCESS(run, UITextEdit_TypeCodepoint(&Edit, (uint32_t)'5', true, 0.0, NULL)); // Overwriting 5 with 5.
+        TEST_CHECK(run, IsText(&Edit, "5.5") && IsSelection(&Edit, 1U, 1U));
+        UITextEdit_Select(&Edit, 0U, 3U);
+        UITextEditChange Change;
+        TEST_CHECK_SUCCESS(run, Paste(&Edit, "5.5", 0.0, &Change));
+        TEST_CHECK(run, !Change.HasChanged && IsText(&Edit, "5.5") && IsSelection(&Edit, 3U, 3U));
+    }
+    UITextEdit_Deconstruct(&Edit);
+    UITextEditLimits Limits = UITextEditLimits_Create();
+    Limits.MaxBytes = 2U;
+    if (Make(run, &Edit, "ab", &Limits))
+    {
+        UITextEdit_Select(&Edit, 0U, 1U);
+        UITextEditChange Change;
+        TEST_CHECK_SUCCESS(run, UITextEdit_TypeCodepoint(&Edit, 0x416U, false, 0.0, &Change)); // Two bytes for one: refused whole.
+        TEST_CHECK(run, Change.IsRefused && IsText(&Edit, "ab") && IsSelection(&Edit, 0U, 1U));
+    }
+    UITextEdit_Deconstruct(&Edit);
+}
+
 static void OverwritingNeverTakesALineBreak(TestRun* run)
 {
     UITextEdit Edit;
@@ -979,6 +1015,7 @@ void UITextEditTests_Run(TestRun* run)
         { "hostile_pastes_stay_bounded", HostilePastesStayBounded },
         { "limits_and_options_are_checked", LimitsAndOptionsAreChecked },
         { "typing_replaces_the_selection", TypingReplacesTheSelection },
+        { "typing_the_same_text_still_moves_the_caret", TypingTheSameTextStillMovesTheCaret },
         { "overwriting_never_takes_a_line_break", OverwritingNeverTakesALineBreak },
         { "deleting_by_character_selection_and_word", DeletingByCharacterSelectionAndWord },
         { "left_and_right_collapse_a_selection", LeftAndRightCollapseASelection },

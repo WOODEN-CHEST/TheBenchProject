@@ -342,10 +342,10 @@ static Widget* GetWidget(EnteringFixture* self, uint64_t id)
 static uint64_t AddSlider(TestRun* run, EnteringFixture* self, uint64_t parentId, float x, float y, double value)
 {
     UISliderOptions Options = UISliderOptions_Create();
-    Options.Maximum = 10.0;
-    Options.Value = value;
-    Options.HasStep = true;
-    Options.Step = 1.0;
+    Options.Value.Settings.Maximum = 10.0;
+    Options.Value.Value = value;
+    Options.Value.Settings.HasStep = true;
+    Options.Value.Settings.Step = 1.0;
     Options.Element.HasPlacement = true;
     Options.Element.Placement = UIPlacement_FromTopLeft(x, y, CELL_WIDTH, CELL_HEIGHT);
     uint64_t Id = WIDGET_ID_INVALID;
@@ -371,7 +371,7 @@ static float CellX(int cell)
 static double GetValue(TestRun* run, EnteringFixture* self, uint64_t id)
 {
     double Value = NAN;
-    TEST_CHECK_SUCCESS(run, UISlider_GetValue(&self->UI.Screen, id, &Value));
+    TEST_CHECK_SUCCESS(run, UIValue_Get(&self->UI.Screen, id, &Value));
     return Value;
 }
 
@@ -582,7 +582,7 @@ static void EnterEntersASliderWhoseArrowsEachCommit(TestRun* run)
         Tick(run, &Fixture);
 
         // At the ends the arrows move nothing and are still the slider's: consumed, never the game's.
-        TEST_CHECK_SUCCESS(run, UISlider_SetValue(&Fixture.UI.Screen, Slider, 10.0));
+        TEST_CHECK_SUCCESS(run, UIValue_Set(&Fixture.UI.Screen, Slider, 10.0));
         size_t EventCount = Fixture.Events.Count;
         const GameKey Higher[] = { GameKey_Right, GameKey_Up };
         for (size_t Index = 0U; Index < 2U; Index++)
@@ -593,7 +593,7 @@ static void EnterEntersASliderWhoseArrowsEachCommit(TestRun* run)
             TestUI_Release(&Fixture.UI, Higher[Index]);
             Tick(run, &Fixture);
         }
-        TEST_CHECK_SUCCESS(run, UISlider_SetValue(&Fixture.UI.Screen, Slider, 0.0));
+        TEST_CHECK_SUCCESS(run, UIValue_Set(&Fixture.UI.Screen, Slider, 0.0));
         const GameKey Lower[] = { GameKey_Left, GameKey_Down };
         for (size_t Index = 0U; Index < 2U; Index++)
         {

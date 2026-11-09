@@ -421,7 +421,7 @@ static void ATurnedSliderIsDraggedAlongItsTrack(TestRun* run)
     if (TestUI_Construct(run, &Fixture))
     {
         UISliderOptions Options = UISliderOptions_Create();
-        Options.Maximum = 10.0;
+        Options.Value.Settings.Maximum = 10.0;
         Options.Element.HasPlacement = true;
         Options.Element.Placement = UIPlacement_FromTopLeft(400.0f, 200.0f, 200.0f, 24.0f);
         uint64_t Id = WIDGET_ID_INVALID;
@@ -437,11 +437,11 @@ static void ATurnedSliderIsDraggedAlongItsTrack(TestRun* run)
         TestUI_MovePointer(&Fixture, 500.0f, 212.0f + 200.0f);
         TestUI_Tick(run, &Fixture);
         double Value = -1.0;
-        TEST_CHECK_SUCCESS(run, UISlider_GetValue(&Fixture.Screen, Id, &Value));
+        TEST_CHECK_SUCCESS(run, UIValue_Get(&Fixture.Screen, Id, &Value));
         TEST_CHECK(run, Value == 10.0); // Past its end along its own track: exactly the limit.
         TestUI_MovePointer(&Fixture, 900.0f, 212.0f); // Far to the side, across its track: its share stays where it was.
         TestUI_Tick(run, &Fixture);
-        TEST_CHECK_SUCCESS(run, UISlider_GetValue(&Fixture.Screen, Id, &Value));
+        TEST_CHECK_SUCCESS(run, UIValue_Get(&Fixture.Screen, Id, &Value));
         TEST_CHECK(run, fabs(Value - 5.0) < 0.6);
         TestUI_Release(&Fixture, GameKey_MouseLeft);
         TestUI_Tick(run, &Fixture);

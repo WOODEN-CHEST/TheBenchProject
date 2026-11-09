@@ -656,7 +656,7 @@ static void IconsAndThumbsScaleWithTheirElements(TestRun* run)
             TEST_CHECK_SUCCESS(run, UIKit_CreateButton(&Fixture.Kit, &Fixture.Screen, Column, &Options, &Buttons[Index]));
         }
         UISliderOptions SliderOptions = UISliderOptions_Create();
-        SliderOptions.Maximum = 10.0;
+        SliderOptions.Value.Settings.Maximum = 10.0;
         SliderOptions.Element.HasPlacement = true;
         SliderOptions.Element.Placement = UIPlacement_FromTopLeft(100.0f, 300.0f, 200.0f, 24.0f);
         SliderOptions.Element.Scale = 2.0f;
@@ -676,7 +676,7 @@ static void IconsAndThumbsScaleWithTheirElements(TestRun* run)
         TestUI_Release(&Fixture, GameKey_MouseLeft);
         TestUI_Tick(run, &Fixture);
         double Value = -1.0;
-        TEST_CHECK_SUCCESS(run, UISlider_GetValue(&Fixture.Screen, Slider, &Value));
+        TEST_CHECK_SUCCESS(run, UIValue_Get(&Fixture.Screen, Slider, &Value));
         TEST_CHECK(run, fabs(Value - 2.5) < 0.001);
     }
     TestUI_Deconstruct(run, &Fixture);

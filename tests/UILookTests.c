@@ -239,7 +239,7 @@ static void TwoLooksOfAKindShareAScreen(TestRun* run)
         TestUI_Tick(run, &Fixture);
         // A slider's calls refuse a button of either look.
         uint64_t Other = AddButton(run, &Fixture, u8"tbp:plain", 0.0f);
-        TEST_CHECK_ERROR(run, UISlider_SetValue(&Fixture.Screen, Other, 1.0), ErrorCode_InvalidOperation);
+        TEST_CHECK_ERROR(run, UIValue_Set(&Fixture.Screen, Other, 1.0), ErrorCode_InvalidOperation);
         TEST_CHECK_ERROR(run, UIToggle_SetState(&Fixture.Screen, Other, UIToggleState_On), ErrorCode_InvalidOperation);
     }
     TestUI_Deconstruct(run, &Fixture);
@@ -289,7 +289,7 @@ static void LooksOfEveryComposedKindWork(TestRun* run)
         // A slider look that says nothing of its thumb: the pointer is the value.
         TestUI_Click(run, &Fixture, 450.0f, 110.0f);
         double Value = 0.0;
-        TEST_CHECK_SUCCESS(run, UISlider_GetValue(&Fixture.Screen, SliderId, &Value));
+        TEST_CHECK_SUCCESS(run, UIValue_Get(&Fixture.Screen, SliderId, &Value));
         TEST_CHECK(run, (Value > 0.74) && (Value < 0.76));
         // A panel look without a Layout of its own gets the options' padding.
         TEST_CHECK(run, TestUI_IsBox(TestUI_GetPixelBox(run, &Fixture, InsideId), 603.0f, 103.0f, 50.0f, 20.0f));
@@ -308,9 +308,9 @@ static void CuesArePostedOnlyWhileSomeoneListens(TestRun* run)
     {
         uint64_t Button = AddButton(run, &Fixture, NULL, 100.0f);
         UISliderOptions Slider = UISliderOptions_Create();
-        Slider.Maximum = 10.0;
-        Slider.HasStep = true;
-        Slider.Step = 1.0;
+        Slider.Value.Settings.Maximum = 10.0;
+        Slider.Value.Settings.HasStep = true;
+        Slider.Value.Settings.Step = 1.0;
         Slider.Element.HasPlacement = true;
         Slider.Element.Placement = UIPlacement_FromTopLeft(400.0f, 100.0f, 200.0f, 24.0f);
         uint64_t SliderId = WIDGET_ID_INVALID;
@@ -400,9 +400,9 @@ static void EveryElementCuesWhatItDoes(TestRun* run)
         uint64_t Toggle = WIDGET_ID_INVALID;
         TEST_CHECK_SUCCESS(run, UIKit_CreateToggle(&Fixture.Kit, &Fixture.Screen, WIDGET_ID_INVALID, &ToggleOptions, &Toggle));
         UISliderOptions SliderOptions = UISliderOptions_Create();
-        SliderOptions.Maximum = 10.0;
-        SliderOptions.HasStep = true;
-        SliderOptions.Step = 1.0;
+        SliderOptions.Value.Settings.Maximum = 10.0;
+        SliderOptions.Value.Settings.HasStep = true;
+        SliderOptions.Value.Settings.Step = 1.0;
         SliderOptions.Element.HasPlacement = true;
         SliderOptions.Element.Placement = UIPlacement_FromTopLeft(400.0f, 100.0f, 200.0f, 24.0f);
         uint64_t Slider = WIDGET_ID_INVALID;
@@ -437,9 +437,9 @@ static void EveryElementCuesWhatItDoes(TestRun* run)
         TestUI_Wheel(&Fixture, 1.0f);
         TestUI_Tick(run, &Fixture);
         double Value = -1.0;
-        TEST_CHECK_SUCCESS(run, UISlider_GetValue(&Fixture.Screen, Slider, &Value));
+        TEST_CHECK_SUCCESS(run, UIValue_Get(&Fixture.Screen, Slider, &Value));
         TEST_CHECK(run, (Value == 1.0) && HasHeard(&Heard, Slider, UIElementCue_ValueStep));
-        TEST_CHECK_SUCCESS(run, UISlider_SetValue(&Fixture.Screen, Slider, 10.0));
+        TEST_CHECK_SUCCESS(run, UIValue_Set(&Fixture.Screen, Slider, 10.0));
         Heard.Count = 0U;
         TestUI_Tap(run, &Fixture, GameKey_Right);
         TEST_CHECK(run, !HasHeard(&Heard, Slider, UIElementCue_ValueStep));

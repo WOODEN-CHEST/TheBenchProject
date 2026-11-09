@@ -6,28 +6,25 @@
 #include "wr/WRMath.h"
 
 
-// Macros.
-/** With no step, the arrows and the wheel move this share of the range. */
-#define DEFAULT_STEP_SHARE 0.01
-/** How far from a whole step, in steps, a value is still on it: float noise (0.1 x 3) does not make it lie between two. */
-#define ON_STEP_TOLERANCE 1e-9
-
-
 // Static functions: small helpers.
 static bool IsDoubleFinite(double value)
 {
     return !Math_IsNaNDouble(value) && !Math_IsInfinityDouble(value);
 }
 
-static bool IsRangeValid(double minimum, double maximum)
+static bool IsOrientationValid(UISliderOrientation orientation)
 {
-    return IsDoubleFinite(minimum) && IsDoubleFinite(maximum) && (minimum < maximum) && IsDoubleFinite(maximum - minimum);
+    return (orientation == UISliderOrientation_Horizontal) || (orientation == UISliderOrientation_Vertical);
 }
 
-/* Whether a step means anything: a positive finite number. */
-static bool IsStepUsable(bool hasStep, double step)
+static double ClampShare(double share)
 {
-    return hasStep && IsDoubleFinite(step) && (step > 0.0);
+    return (share > 0.0) ? ((share < 1.0) ? share : 1.0) : 0.0;
+}
+
+static bool HasModifier(uint8_t modifiers, uint8_t flag)
+{
+    return (modifiers & flag) != 0U;
 }
 
 static Error ResolveSlider(UIScreen* screen, uint64_t widgetId, Widget** outWidget, UISliderCapability** outSlider)
@@ -48,54 +45,38 @@ static Error ResolveSlider(UIScreen* screen, uint64_t widgetId, Widget** outWidg
     return Error_CreateSuccess();
 }
 
-static Error PostValue(Widget* widget, UIElementEvent event, double value)
+/* The track's ends: a drag's held track, else the drag range around the value (a value past a soft range sits at the end it passed). */
+static void GetTrack(const UISliderCapability* self, double* outMinimum, double* outMaximum)
 {
-    UIPropertyValue Value = UIPropertyValue_FromDouble(value);
-    return UIScreen_PostWidgetEvent(Widget_GetScreen(widget), Widget_GetId(widget), event, &Value);
-}
-
-/* The value becomes @p value, clamped and snapped; a change is reported. */
-static Error MoveTo(UISliderCapability* self, Widget* widget, double value)
-{
-    double Next = UISlider_ClampAndSnap(value, self->_minimum, self->_maximum, self->_hasStep, self->_step);
-    if (Next == self->_value)
+    if (self->_hasDragTrack)
     {
-        return Error_CreateSuccess();
+        *outMinimum = self->_dragTrackMinimum;
+        *outMaximum = self->_dragTrackMaximum;
+        return;
     }
-    self->_value = Next;
-    return PostValue(widget, UIElementEvent_Changed, Next);
-}
-
-/* A change that is whole at once: a wheel notch, a reset. */
-static Error MoveWholeChange(UISliderCapability* self, Widget* widget, double value)
-{
-    double Before = self->_value;
-    Error Result = MoveTo(self, widget, value);
-    if ((Result.Code != ErrorCode_Success) || (self->_value == Before))
+    if (!UIValueSettings_GetDragRangeAround(UIValueCapability_GetSettings(&self->Value), UIValueCapability_GetValue(&self->Value), outMinimum,
+        outMaximum))
     {
-        return Result;
+        *outMinimum = 0.0;
+        *outMaximum = 0.0;
     }
-    Result = PostValue(widget, UIElementEvent_Committed, self->_value);
-    return (Result.Code == ErrorCode_Success) ? UIElement_PostCue(widget, UIElementCue_ValueStep) : Result;
 }
 
-/* The change in progress ends: committed unless the value ended where it began. */
-static Error EndSession(UISliderCapability* self, Widget* widget)
+/* Holds the track a drag runs on: the drag range around the value now. */
+static void HoldDragTrack(UISliderCapability* self)
 {
-    self->_isDragging = false;
-    self->_sessionKey = GameKey_Unknown;
-    return (self->_value != self->_sessionStartValue) ? PostValue(widget, UIElementEvent_Committed, self->_value)
-        : Error_CreateSuccess();
+    self->_hasDragTrack = false;
+    GetTrack(self, &self->_dragTrackMinimum, &self->_dragTrackMaximum);
+    self->_hasDragTrack = true;
 }
 
-/* The change in progress is taken back; while its key stays down, what is left of it does nothing. */
-static Error CancelSession(UISliderCapability* self, Widget* widget)
+/* The value at a share of the track: through the conversion, snapped, the ends exact. */
+static double GetValueAtShare(const UISliderCapability* self, double share)
 {
-    self->_endedKey = self->_sessionKey;
-    self->_isDragging = false;
-    self->_sessionKey = GameKey_Unknown;
-    self->_value = self->_sessionStartValue;
-    return PostValue(widget, UIElementEvent_Cancelled, self->_value);
+    double Minimum = 0.0;
+    double Maximum = 0.0;
+    GetTrack(self, &Minimum, &Maximum);
+    return UIValueSettings_FromShare(UIValueCapability_GetSettings(&self->Value), Minimum, Maximum, share);
 }
 
 static bool IsInSession(const UISliderCapability* self)
@@ -103,72 +84,118 @@ static bool IsInSession(const UISliderCapability* self)
     return self->_isDragging || (self->_sessionKey != GameKey_Unknown);
 }
 
-/* The widget's width and the thumb's, in surface pixels, as layout put the box (a render transform turns the drawing and the
- * pointer alike, so the drag's arithmetic stays along the box). */
-static void GetTrackPixels(const UISliderCapability* self, Widget* widget, double* outWidth, double* outThumb)
+/* The change in progress ends: committed unless the value ended where it began. */
+static Error EndSession(UISliderCapability* self, Widget* widget)
 {
-    *outWidth = (double)UIScreen_GetWidgetPixelBox(Widget_GetScreen(widget), widget).width;
+    self->_isDragging = false;
+    self->_hasDragTrack = false;
+    self->_sessionKey = GameKey_Unknown;
+    return UIValueCapability_EndChange(&self->Value, widget);
+}
+
+/* The change in progress is taken back; while its key stays down, what is left of it does nothing. */
+static Error CancelSession(UISliderCapability* self, Widget* widget)
+{
+    self->_endedKey = self->_sessionKey;
+    self->_isDragging = false;
+    self->_hasDragTrack = false;
+    self->_sessionKey = GameKey_Unknown;
+    return UIValueCapability_CancelChange(&self->Value, widget);
+}
+
+/* The track's length and the thumb's along it, in surface pixels, as layout put the box (a render transform turns the drawing and the
+ * pointer alike, so the drag's arithmetic stays along the box). */
+static void GetTrackPixels(const UISliderCapability* self, Widget* widget, double* outLength, double* outThumb)
+{
+    Rectangle Box = UIScreen_GetWidgetPixelBox(Widget_GetScreen(widget), widget);
+    *outLength = (double)((self->_orientation == UISliderOrientation_Vertical) ? Box.height : Box.width);
     *outThumb = (double)self->_thumbLength * (double)Widget_GetEffectiveScale(widget);
 }
 
-/* The value the pointer means, less how far from the thumb's centre it holds the thumb. */
-static double GetPointerValue(const UISliderCapability* self, Widget* widget, const WidgetMouseInputArgs* args)
+/* Where the pointer is along the track from its low end, in surface pixels: from the left, or from the bottom when upright. */
+static double GetPointerAlong(const UISliderCapability* self, const WidgetMouseInputArgs* args, double length)
 {
-    double Width = 0.0;
-    double Thumb = 0.0;
-    GetTrackPixels(self, widget, &Width, &Thumb);
-    double Pointer = ((double)args->WidgetPosition.x * Width) - self->_grabOffsetPixels;
-    double Fraction = UISlider_GetPointerFraction(Pointer, Width, Thumb);
-    return self->_minimum + (Fraction * (self->_maximum - self->_minimum));
+    double Along = (self->_orientation == UISliderOrientation_Vertical) ? (1.0 - (double)args->WidgetPosition.y) : (double)args->WidgetPosition.x;
+    return Along * length;
 }
 
-/* A press: on the thumb it holds the thumb where it was grabbed and changes nothing, on the track it brings the thumb under
- * the pointer. */
+/* The pointer's share of the track, not clamped. */
+static double GetPointerShare(const UISliderCapability* self, Widget* widget, const WidgetMouseInputArgs* args)
+{
+    double Length = 0.0;
+    double Thumb = 0.0;
+    GetTrackPixels(self, widget, &Length, &Thumb);
+    return UIValue_GetUnclampedPointerFraction(GetPointerAlong(self, args, Length), Length, Thumb);
+}
+
+/* A press: on the thumb it holds the thumb where it was grabbed and changes nothing, on the track it brings the thumb under the
+ * pointer. */
 static Error BeginDrag(UISliderCapability* self, Widget* widget, const WidgetMouseInputArgs* args)
 {
-    double Width = 0.0;
+    double Length = 0.0;
     double Thumb = 0.0;
-    GetTrackPixels(self, widget, &Width, &Thumb);
-    double ThumbCentre = (Thumb * 0.5) + (UISlider_GetFraction(self->_value, self->_minimum, self->_maximum) * (Width - Thumb));
-    double FromCentre = ((double)args->WidgetPosition.x * Width) - ThumbCentre;
+    HoldDragTrack(self);
+    GetTrackPixels(self, widget, &Length, &Thumb);
+    double Pointer = GetPointerAlong(self, args, Length);
+    double PointerShare = UIValue_GetUnclampedPointerFraction(Pointer, Length, Thumb);
+    double ThumbShare = UISliderCapability_GetShare(self);
+    double Travel = Length - Thumb;
+    double Margin = (Travel > 0.0) ? ((Thumb * 0.5) / Travel) : 0.0;
+    double FromCentre = Pointer - ((Thumb * 0.5) + (ThumbShare * ((Travel > 0.0) ? Travel : 0.0)));
+    bool IsFine = HasModifier(args->Modifiers, GAME_KEY_MODIFIER_SHIFT);
     self->_isDragging = true;
-    self->_sessionStartValue = self->_value;
+    UIValueCapability_BeginChange(&self->Value);
     if (Math_AbsDouble(FromCentre) <= (Thumb * 0.5))
     {
-        self->_grabOffsetPixels = FromCentre;
+        UISliderDrag_Begin(&self->_drag, ThumbShare, ThumbShare - PointerShare, PointerShare, Margin, IsFine);
         return Error_CreateSuccess();
     }
-    self->_grabOffsetPixels = 0.0;
-    return MoveTo(self, widget, GetPointerValue(self, widget, args));
+    UISliderDrag_Begin(&self->_drag, ClampShare(PointerShare), 0.0, PointerShare, Margin, IsFine);
+    return UIValueCapability_MoveTo(&self->Value, widget, GetValueAtShare(self, self->_drag.Share), NULL);
 }
 
-/* A key's move: an arrow by a step (up and right higher, down and left lower), Home and End to the ends. Returns false for
- * another key. */
-static bool TryGetKeyTarget(const UISliderCapability* self, const UIScreen* screen, GameKey key, bool* outIsRepeatable, double* outTarget)
+static Error MoveDrag(UISliderCapability* self, Widget* widget, const WidgetMouseInputArgs* args)
 {
+    bool IsFine = HasModifier(args->Modifiers, GAME_KEY_MODIFIER_SHIFT);
+    double Share = UISliderDrag_Move(&self->_drag, GetPointerShare(self, widget, args), IsFine,
+        UIValueCapability_GetSettings(&self->Value)->FineFactor);
+    return UIValueCapability_MoveTo(&self->Value, widget, GetValueAtShare(self, Share), NULL);
+}
+
+/* A key's move: an arrow by a step (up and right higher, down and left lower; Shift a fine one), Home and End to the track's ends.
+ * Returns false for another key. */
+static bool TryGetKeyTarget(const UISliderCapability* self, const UIScreen* screen, const WidgetKeyboardInputArgs* args, bool* outIsRepeatable,
+    double* outTarget)
+{
+    const UIValueSettings* Settings = UIValueCapability_GetSettings(&self->Value);
+    double Value = UIValueCapability_GetValue(&self->Value);
+    bool IsFine = HasModifier(args->Modifiers, GAME_KEY_MODIFIER_SHIFT);
+    GameKey Key = args->Key;
     *outIsRepeatable = true;
-    if (UIElement_IsActionKey(screen, GameAction_UILeft, key) || UIElement_IsActionKey(screen, GameAction_UIDown, key))
+    if (UIElement_IsActionKey(screen, GameAction_UILeft, Key) || UIElement_IsActionKey(screen, GameAction_UIDown, Key))
     {
-        *outTarget = UISlider_GetStepped(self->_value, self->_minimum, self->_maximum, self->_hasStep, self->_step, -1.0);
+        *outTarget = UIValueSettings_Step(Settings, Value, -1.0, IsFine);
         return true;
     }
-    if (UIElement_IsActionKey(screen, GameAction_UIRight, key) || UIElement_IsActionKey(screen, GameAction_UIUp, key))
+    if (UIElement_IsActionKey(screen, GameAction_UIRight, Key) || UIElement_IsActionKey(screen, GameAction_UIUp, Key))
     {
-        *outTarget = UISlider_GetStepped(self->_value, self->_minimum, self->_maximum, self->_hasStep, self->_step, 1.0);
+        *outTarget = UIValueSettings_Step(Settings, Value, 1.0, IsFine);
         return true;
     }
     *outIsRepeatable = false;
-    if (key == GameKey_Home)
+    if ((Key == GameKey_Home) || (Key == GameKey_End))
     {
-        *outTarget = self->_minimum;
-        return true;
-    }
-    if (key == GameKey_End)
-    {
-        *outTarget = self->_maximum;
+        *outTarget = GetValueAtShare(self, (Key == GameKey_End) ? 1.0 : 0.0);
         return true;
     }
     return false;
+}
+
+/* Back to the default: a whole change. */
+static Error ResetToDefault(UISliderCapability* self, Widget* widget)
+{
+    const UIValueSettings* Settings = UIValueCapability_GetSettings(&self->Value);
+    return UIValueCapability_ApplyWholeChange(&self->Value, widget, UIValueSettings_Normalize(Settings, Settings->Default), NULL);
 }
 
 
@@ -183,6 +210,53 @@ static void* ResolveCapability(void* widget)
     return GetCapability(widget);
 }
 
+static void* ResolveValue(void* widget)
+{
+    return &GetCapability(widget)->Value;
+}
+
+/* Code set the value or a setting: a drag goes on from the new value, on the track around it. */
+static Error Value_OnChangedByCode(Widget* widget)
+{
+    UISliderCapability* Self = GetCapability(widget);
+    if (Self->_isDragging)
+    {
+        HoldDragTrack(Self);
+        Self->_drag.Share = UISliderCapability_GetShare(Self);
+        Self->_drag.Offset = Self->_drag.Share - Self->_drag.PointerShare;
+    }
+    return Error_CreateSuccess();
+}
+
+/* Disabled, it takes a change in progress back and takes no focus. */
+static Error Value_OnEnabledChanged(Widget* widget)
+{
+    UISliderCapability* Self = GetCapability(widget);
+    bool IsEnabled = UIValueCapability_IsEnabled(&Self->Value);
+    if (!IsEnabled)
+    {
+        Self->_isMiddlePressed = false;
+        if (IsInSession(Self))
+        {
+            uint64_t Id = Widget_GetId(widget);
+            Error Result = CancelSession(Self, widget);
+            if ((Result.Code != ErrorCode_Success) || !UIScreen_TryGetWidgetById(Widget_GetScreen(widget), Id, &widget))
+            {
+                return Result;
+            }
+        }
+    }
+    return Widget_SetIsFocusable(widget, IsEnabled);
+}
+
+static const UIValueHooks SliderValueHooks =
+{
+    .OnChangedByCode = Value_OnChangedByCode,
+    .OnEnabledChanged = Value_OnEnabledChanged,
+    .OnPartChanged = NULL,
+    .GetUnit = NULL
+};
+
 static Error Behaviour_Construct(void* widget, void* args)
 {
     if (args == NULL)
@@ -190,6 +264,12 @@ static Error Behaviour_Construct(void* widget, void* args)
         return Error_Construct2(ErrorCode_IllegalArgument, "UISlider: the arguments are required.");
     }
     return UISliderCapability_Construct(GetCapability(widget), widget, args);
+}
+
+static Error Behaviour_Deconstruct(void* widget)
+{
+    UISliderCapability_Deconstruct(GetCapability(widget));
+    return Error_CreateSuccess();
 }
 
 static Error Behaviour_Update(void* widget, ProgramTime time)
@@ -231,7 +311,11 @@ static Error Behaviour_OnLeave(void* widget, UILeaveReason reason)
 
 
 // Fields.
-static const UIKindCapability SliderCapabilities[] = { { .Capability = UIElementCapability_Slider, .Resolve = ResolveCapability } };
+static const UIKindCapability SliderCapabilities[] =
+{
+    { .Capability = UIElementCapability_Slider, .Resolve = ResolveCapability },
+    { .Capability = UIElementCapability_Value, .Resolve = ResolveValue }
+};
 
 static const UIKindBehaviour SliderBehaviour =
 {
@@ -243,6 +327,7 @@ static const UIKindBehaviour SliderBehaviour =
     .NeedsEntering = true,
     .EntersItself = false,
     .Construct = Behaviour_Construct,
+    .Deconstruct = Behaviour_Deconstruct,
     .Update = Behaviour_Update,
     .OnHoverStart = Behaviour_OnHoverStart,
     .OnMouseInput = Behaviour_OnMouseInput,
@@ -261,7 +346,7 @@ const UIKindBehaviour* UISlider_GetKindBehaviour(void)
 
 
 // Public functions: calling code.
-Error UISlider_SetValue(UIScreen* screen, uint64_t widgetId, double value)
+Error UISlider_SetOrientation(UIScreen* screen, uint64_t widgetId, UISliderOrientation orientation)
 {
     Widget* Target = NULL;
     UISliderCapability* Slider = NULL;
@@ -270,104 +355,69 @@ Error UISlider_SetValue(UIScreen* screen, uint64_t widgetId, double value)
     {
         return Result;
     }
-    if (!IsDoubleFinite(value))
+    if (!IsOrientationValid(orientation))
     {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UISlider_SetValue: the value must be a finite number.");
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UISlider_SetOrientation: the orientation is none of UISliderOrientation.");
     }
-    Slider->_value = UISlider_ClampAndSnap(value, Slider->_minimum, Slider->_maximum, Slider->_hasStep, Slider->_step);
+    if (Slider->_orientation != orientation)
+    {
+        Slider->_orientation = orientation;
+        Widget_InvalidateMeasure(Target);
+    }
     return Error_CreateSuccess();
 }
 
-Error UISlider_GetValue(UIScreen* screen, uint64_t widgetId, double* outValue)
+Error UISlider_GetOrientation(UIScreen* screen, uint64_t widgetId, UISliderOrientation* outOrientation)
 {
     Widget* Target = NULL;
     UISliderCapability* Slider = NULL;
     Error Result = ResolveSlider(screen, widgetId, &Target, &Slider);
     if (Result.Code == ErrorCode_Success)
     {
-        *outValue = Slider->_value;
+        *outOrientation = Slider->_orientation;
     }
     return Result;
 }
 
-Error UISlider_SetRange(UIScreen* screen, uint64_t widgetId, double minimum, double maximum)
+
+// Public functions: the drag.
+void UISliderDrag_Begin(UISliderDrag* self, double share, double offset, double pointerShare, double edgeMargin, bool isFine)
 {
-    Widget* Target = NULL;
-    UISliderCapability* Slider = NULL;
-    Error Result = ResolveSlider(screen, widgetId, &Target, &Slider);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-    if (!IsRangeValid(minimum, maximum))
-    {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
-            "UISlider_SetRange: the ends must be finite and the upper above the lower, with a finite span.");
-    }
-    Slider->_minimum = minimum;
-    Slider->_maximum = maximum;
-    Slider->_value = UISlider_ClampAndSnap(Slider->_value, minimum, maximum, Slider->_hasStep, Slider->_step);
-    Slider->_sessionStartValue = UISlider_ClampAndSnap(Slider->_sessionStartValue, minimum, maximum, Slider->_hasStep, Slider->_step);
-    return Error_CreateSuccess();
+    self->Share = ClampShare(share);
+    self->Offset = IsDoubleFinite(offset) ? offset : 0.0;
+    self->PointerShare = IsDoubleFinite(pointerShare) ? pointerShare : 0.0;
+    self->EdgeMargin = (edgeMargin > 0.0) && IsDoubleFinite(edgeMargin) ? edgeMargin : 0.0;
+    self->IsFine = isFine;
 }
 
-Error UISlider_SetStep(UIScreen* screen, uint64_t widgetId, bool hasStep, double step)
+double UISliderDrag_Move(UISliderDrag* self, double pointerShare, bool isFine, double fineFactor)
 {
-    Widget* Target = NULL;
-    UISliderCapability* Slider = NULL;
-    Error Result = ResolveSlider(screen, widgetId, &Target, &Slider);
-    if (Result.Code != ErrorCode_Success)
+    double Pointer = IsDoubleFinite(pointerShare) ? pointerShare : self->PointerShare;
+    if (isFine != self->IsFine)
     {
-        return Result;
+        // Shift changed: the rate changes from here, at the pointer's last place, so the thumb stays where it is.
+        self->Offset = self->Share - self->PointerShare;
+        self->IsFine = isFine;
     }
-    if (hasStep && (!IsDoubleFinite(step) || !(step > 0.0)))
+    if (isFine)
     {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UISlider_SetStep: the step must be a finite number above 0.");
+        double Factor = ((fineFactor > 0.0) && (fineFactor <= 1.0)) ? fineFactor : 1.0;
+        self->Share = ClampShare(self->Share + ((Pointer - self->PointerShare) * Factor));
     }
-    Slider->_hasStep = hasStep;
-    Slider->_step = step;
-    Slider->_value = UISlider_ClampAndSnap(Slider->_value, Slider->_minimum, Slider->_maximum, hasStep, step);
-    Slider->_sessionStartValue = UISlider_ClampAndSnap(Slider->_sessionStartValue, Slider->_minimum, Slider->_maximum, hasStep, step);
-    return Error_CreateSuccess();
-}
-
-Error UISlider_SetIsEnabled(UIScreen* screen, uint64_t widgetId, bool isEnabled)
-{
-    Widget* Target = NULL;
-    UISliderCapability* Slider = NULL;
-    Error Result = ResolveSlider(screen, widgetId, &Target, &Slider);
-    if (Result.Code != ErrorCode_Success)
+    else
     {
-        return Result;
-    }
-    Slider->_isEnabled = isEnabled;
-    if (!isEnabled && IsInSession(Slider))
-    {
-        Result = CancelSession(Slider, Target);
-        if (Result.Code != ErrorCode_Success)
+        double Unclamped = Pointer + self->Offset;
+        self->Share = ClampShare(Unclamped);
+        if ((Unclamped < 0.0) || (Unclamped > 1.0))
         {
-            return Result;
+            // Held at an end: the offset gives way, so turning back moves the thumb at once; with the pointer past that end of the box too,
+            // the thumb is under the pointer again from here on. Only where the thumb already is: no jump, even after Shift let go out there.
+            bool IsPastEnd = (Unclamped < 0.0) ? (Pointer < -self->EdgeMargin) : (Pointer > (1.0 + self->EdgeMargin));
+            self->Offset = IsPastEnd ? 0.0 : (self->Share - Pointer);
         }
     }
-    return Widget_SetIsFocusable(Target, isEnabled);
-}
-
-Error UISlider_SetDefault(UIScreen* screen, uint64_t widgetId, bool hasDefault, double value)
-{
-    Widget* Target = NULL;
-    UISliderCapability* Slider = NULL;
-    Error Result = ResolveSlider(screen, widgetId, &Target, &Slider);
-    if (Result.Code != ErrorCode_Success)
-    {
-        return Result;
-    }
-    if (hasDefault && !IsDoubleFinite(value))
-    {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UISlider_SetDefault: the default must be a finite number.");
-    }
-    Slider->_hasDefault = hasDefault;
-    Slider->_default = value;
-    return Error_CreateSuccess();
+    self->PointerShare = Pointer;
+    return self->Share;
 }
 
 
@@ -375,37 +425,42 @@ Error UISlider_SetDefault(UIScreen* screen, uint64_t widgetId, bool hasDefault, 
 Error UISliderCapability_Construct(UISliderCapability* self, Widget* widget, const UISliderArgs* args)
 {
     const UISliderOptions* Options = args->Options;
-    if (!IsRangeValid(Options->Minimum, Options->Maximum) || !IsDoubleFinite(Options->Value)
-        || (Options->HasStep && (!IsDoubleFinite(Options->Step) || !(Options->Step > 0.0)))
-        || (Options->HasDefault && !IsDoubleFinite(Options->Default)))
+    if (!IsOrientationValid(Options->Orientation))
     {
-        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UISlider: the range, the value, the step or the default is not valid.");
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UISlider: the orientation is none of UISliderOrientation.");
     }
-    Error Result = UIElement_ApplyOptions(widget, &Options->Element);
+    Error Result = UIValueCapability_Construct(&self->Value, &Options->Value, &SliderValueHooks, true);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;
     }
-    self->_minimum = Options->Minimum;
-    self->_maximum = Options->Maximum;
-    self->_hasStep = Options->HasStep;
-    self->_step = Options->Step;
-    self->_value = UISlider_ClampAndSnap(Options->Value, Options->Minimum, Options->Maximum, Options->HasStep, Options->Step);
-    self->_isEnabled = Options->IsEnabled;
-    self->_hasDefault = Options->HasDefault;
-    self->_default = Options->Default;
+    Result = UIElement_ApplyOptions(widget, &Options->Element);
+    if (Result.Code != ErrorCode_Success)
+    {
+        UIValueCapability_Deconstruct(&self->Value);
+        return Result;
+    }
+    self->_orientation = Options->Orientation;
     self->_isDragging = false;
+    UISliderDrag_Begin(&self->_drag, 0.0, 0.0, 0.0, 0.0, false);
     self->_sessionKey = GameKey_Unknown;
     self->_endedKey = GameKey_Unknown;
-    self->_sessionStartValue = self->_value;
-    self->_grabOffsetPixels = 0.0;
+    self->_isMiddlePressed = false;
     self->_thumbLength = 0.0f;
-    if (!Options->IsEnabled)
+    self->_hasDragTrack = false;
+    self->_dragTrackMinimum = 0.0;
+    self->_dragTrackMaximum = 0.0;
+    if (!Options->Value.IsEnabled)
     {
         Error Focus = Widget_SetIsFocusable(widget, false); // The widget is not alive yet: nothing can fail or run.
         Error_Deconstruct(&Focus);
     }
     return Error_CreateSuccess();
+}
+
+void UISliderCapability_Deconstruct(UISliderCapability* self)
+{
+    UIValueCapability_Deconstruct(&self->Value);
 }
 
 Error UISliderCapability_Update(UISliderCapability* self, Widget* widget)
@@ -414,24 +469,28 @@ Error UISliderCapability_Update(UISliderCapability* self, Widget* widget)
     // A key's release that cannot reach the slider any more (it was detached or disabled for input meanwhile) still ends the change, and so
     // does a button that is up, in a widget type that does not answer OnPressLost.
     const GameInput* Input = UIScreen_GetInput(Screen);
-    Error Result = Error_CreateSuccess();
-    if (Input != NULL)
+    if (Input == NULL)
     {
-        bool HasDragEnded = self->_isDragging && ((GameInput_GetRawKeyState(Input, GameKey_MouseLeft) & GAME_INPUT_KEY_STATE_DOWN) == 0U);
-        bool HasKeyEnded = (self->_sessionKey != GameKey_Unknown)
-            && ((GameInput_GetRawKeyState(Input, self->_sessionKey) & GAME_INPUT_KEY_STATE_DOWN) == 0U);
-        if (HasDragEnded || HasKeyEnded)
-        {
-            Result = EndSession(self, widget);
-        }
+        return Error_CreateSuccess();
     }
-    return Result;
+    bool HasDragEnded = self->_isDragging && ((GameInput_GetRawKeyState(Input, GameKey_MouseLeft) & GAME_INPUT_KEY_STATE_DOWN) == 0U);
+    bool HasKeyEnded = (self->_sessionKey != GameKey_Unknown)
+        && ((GameInput_GetRawKeyState(Input, self->_sessionKey) & GAME_INPUT_KEY_STATE_DOWN) == 0U);
+    return (HasDragEnded || HasKeyEnded) ? EndSession(self, widget) : Error_CreateSuccess();
 }
 
 UIElementState UISliderCapability_GetState(const UISliderCapability* self, const Widget* widget)
 {
-    return UIElementState_Choose(self->_isEnabled, self->_isDragging, false, Widget_IsEntered(widget), false, Widget_IsHovered(widget),
-        Widget_IsFocused(widget));
+    return UIElementState_Choose(UIValueCapability_IsEnabled(&self->Value), self->_isDragging, false, Widget_IsEntered(widget), false,
+        Widget_IsHovered(widget), Widget_IsFocused(widget));
+}
+
+double UISliderCapability_GetShare(const UISliderCapability* self)
+{
+    double Minimum = 0.0;
+    double Maximum = 0.0;
+    GetTrack(self, &Minimum, &Maximum);
+    return UIValueSettings_ToShare(UIValueCapability_GetSettings(&self->Value), Minimum, Maximum, UIValueCapability_GetValue(&self->Value));
 }
 
 void UISliderCapability_SetThumbLength(UISliderCapability* self, float length)
@@ -441,8 +500,9 @@ void UISliderCapability_SetThumbLength(UISliderCapability* self, float length)
 
 Error UISliderCapability_OnMouseInput(UISliderCapability* self, Widget* widget, const WidgetMouseInputArgs* args)
 {
-    Error EventResult = UIElement_PostMouseCues(widget, args, self->_isEnabled);
-    if ((EventResult.Code != ErrorCode_Success) || !self->_isEnabled)
+    bool IsEnabled = UIValueCapability_IsEnabled(&self->Value);
+    Error EventResult = UIElement_PostMouseCues(widget, args, IsEnabled);
+    if ((EventResult.Code != ErrorCode_Success) || !IsEnabled)
     {
         return EventResult;
     }
@@ -454,15 +514,28 @@ Error UISliderCapability_OnMouseInput(UISliderCapability* self, Widget* widget, 
     switch (args->Type)
     {
         case UIMouseInputType_ButtonPress:
+            if (args->Button == GameKey_MouseMiddle)
+            {
+                self->_isMiddlePressed = !IsInSession(self);
+                return Error_CreateSuccess();
+            }
             if ((args->Button != GameKey_MouseLeft) || IsInSession(self))
             {
                 return Error_CreateSuccess();
             }
             return BeginDrag(self, widget, args);
         case UIMouseInputType_Move:
-            return ((args->Button == GameKey_MouseLeft) && self->_isDragging) ? MoveTo(self, widget, GetPointerValue(self, widget, args))
-                : Error_CreateSuccess();
+            return ((args->Button == GameKey_MouseLeft) && self->_isDragging) ? MoveDrag(self, widget, args) : Error_CreateSuccess();
         case UIMouseInputType_ButtonRelease:
+            if ((args->Button == GameKey_MouseMiddle) && self->_isMiddlePressed)
+            {
+                // A middle press let go on it puts it back to its default.
+                self->_isMiddlePressed = false;
+                bool IsOver = (args->WidgetPosition.x >= 0.0f) && (args->WidgetPosition.x <= 1.0f) && (args->WidgetPosition.y >= 0.0f)
+                    && (args->WidgetPosition.y <= 1.0f);
+                bool HasDefault = UIValueCapability_GetSettings(&self->Value)->HasDefault;
+                return (IsOver && HasDefault && !IsInSession(self)) ? ResetToDefault(self, widget) : Error_CreateSuccess();
+            }
             return ((args->Button == GameKey_MouseLeft) && self->_isDragging) ? EndSession(self, widget) : Error_CreateSuccess();
         case UIMouseInputType_ReleaseOver:
             return Error_CreateSuccess();
@@ -472,6 +545,11 @@ Error UISliderCapability_OnMouseInput(UISliderCapability* self, Widget* widget, 
 
 Error UISliderCapability_OnPressLost(UISliderCapability* self, Widget* widget, GameKey button)
 {
+    if (button == GameKey_MouseMiddle)
+    {
+        self->_isMiddlePressed = false;
+        return Error_CreateSuccess();
+    }
     return ((button == GameKey_MouseLeft) && self->_isDragging) ? EndSession(self, widget) : Error_CreateSuccess();
 }
 
@@ -490,24 +568,25 @@ Error UISliderCapability_OnLeave(UISliderCapability* self, Widget* widget, UILea
 
 Error UISliderCapability_OnScrollInput(UISliderCapability* self, Widget* widget, const WidgetScrollInputArgs* args, bool* outIsHandled)
 {
-    if (!Widget_IsEntered(widget) && ((args->Modifiers & GAME_KEY_MODIFIER_CONTROL) == 0U))
+    if (!Widget_IsEntered(widget) && !HasModifier(args->Modifiers, GAME_KEY_MODIFIER_CONTROL))
     {
         return Error_CreateSuccess();
     }
     *outIsHandled = true;
-    if (!self->_isEnabled || IsInSession(self))
+    if (!UIValueCapability_IsEnabled(&self->Value) || IsInSession(self))
     {
         return Error_CreateSuccess();
     }
-    double Target = UISlider_GetStepped(self->_value, self->_minimum, self->_maximum, self->_hasStep, self->_step, (double)args->ScrollDelta.y);
-    return MoveWholeChange(self, widget, Target);
+    double Target = UIValueSettings_Step(UIValueCapability_GetSettings(&self->Value), UIValueCapability_GetValue(&self->Value),
+        (double)args->ScrollDelta.y, HasModifier(args->Modifiers, GAME_KEY_MODIFIER_SHIFT));
+    return UIValueCapability_ApplyWholeChange(&self->Value, widget, Target, NULL);
 }
 
 Error UISliderCapability_OnKeyboardInput(UISliderCapability* self, Widget* widget, const WidgetKeyboardInputArgs* args,
     bool* outIsHandled)
 {
     const UIScreen* Screen = Widget_GetScreen(widget);
-    if ((args->Type == UIKeyboardInputType_Text) || !self->_isEnabled)
+    if ((args->Type == UIKeyboardInputType_Text) || !UIValueCapability_IsEnabled(&self->Value))
     {
         return Error_CreateSuccess();
     }
@@ -534,15 +613,26 @@ Error UISliderCapability_OnKeyboardInput(UISliderCapability* self, Widget* widge
         *outIsHandled = true;
         return CancelSession(self, widget);
     }
-    if ((args->Type == UIKeyboardInputType_KeyPress) && self->_hasDefault && UIElement_IsActionPress(Screen, GameAction_UIReset, args->Key))
+    if ((args->Type == UIKeyboardInputType_KeyPress) && UIValueCapability_GetSettings(&self->Value)->HasDefault
+        && UIElement_IsActionPress(Screen, GameAction_UIReset, args->Key))
     {
         *outIsHandled = true;
-        return IsInSession(self) ? Error_CreateSuccess() : MoveWholeChange(self, widget, self->_default);
+        return ResetToDefault(self, widget); // During a change, a whole change is refused: nothing happens.
+    }
+    if ((args->Type == UIKeyboardInputType_KeyPress) && UIElement_IsActionPress(Screen, GameAction_UICopy, args->Key))
+    {
+        *outIsHandled = true;
+        return UIValueCapability_Copy(&self->Value, widget);
+    }
+    if ((args->Type == UIKeyboardInputType_KeyPress) && UIElement_IsActionPress(Screen, GameAction_UIPaste, args->Key))
+    {
+        *outIsHandled = true;
+        return IsInSession(self) ? Error_CreateSuccess() : UIValueCapability_Paste(&self->Value, widget, NULL, NULL);
     }
 
     bool IsRepeatable = false;
     double Target = 0.0;
-    if (!TryGetKeyTarget(self, Screen, args->Key, &IsRepeatable, &Target))
+    if (!TryGetKeyTarget(self, Screen, args, &IsRepeatable, &Target))
     {
         return UIElement_OnContextKey(widget, args, outIsHandled);
     }
@@ -554,86 +644,9 @@ Error UISliderCapability_OnKeyboardInput(UISliderCapability* self, Widget* widge
     if (self->_sessionKey == GameKey_Unknown)
     {
         self->_sessionKey = args->Key;
-        self->_sessionStartValue = self->_value;
+        UIValueCapability_BeginChange(&self->Value);
     }
-    double Before = self->_value;
-    Error Result = MoveTo(self, widget, Target);
-    return ((Result.Code == ErrorCode_Success) && (self->_value != Before)) ? UIElement_PostCue(widget, UIElementCue_ValueStep) : Result;
-}
-
-// Public functions: the value's arithmetic.
-double UISlider_ClampAndSnap(double value, double minimum, double maximum, bool hasStep, double step)
-{
-    if (Math_IsNaNDouble(value) || (value <= minimum))
-    {
-        return minimum;
-    }
-    if (value >= maximum)
-    {
-        return maximum;
-    }
-    double Steps = IsStepUsable(hasStep, step) ? ((value - minimum) / step) : 0.0;
-    if (!IsStepUsable(hasStep, step) || !IsDoubleFinite(Steps))
-    {
-        return value;
-    }
-    double Snapped = minimum + (Math_FloorDouble(Steps + 0.5) * step);
-    if ((Snapped >= maximum) || ((maximum - value) < Math_AbsDouble(value - Snapped)))
-    {
-        return maximum; // Past the last whole step the end counts as one.
-    }
-    return Snapped;
-}
-
-double UISlider_GetStepped(double value, double minimum, double maximum, bool hasStep, double step, double count)
-{
-    double Value = UISlider_ClampAndSnap(value, minimum, maximum, false, 0.0);
-    double Count = Math_IsNaNDouble(count) ? 0.0 : count;
-    if (!IsStepUsable(hasStep, step))
-    {
-        return UISlider_ClampAndSnap(Value + (Count * (maximum - minimum) * DEFAULT_STEP_SHARE), minimum, maximum, false, 0.0);
-    }
-    double Steps = Math_FloorDouble(Math_AbsDouble(Count) + 0.5);
-    double Position = (Value - minimum) / step;
-    if ((Steps == 0.0) || !IsDoubleFinite(Position))
-    {
-        return Value;
-    }
-    double OnStep = Math_FloorDouble(Position + 0.5);
-    bool IsOnStep = Math_AbsDouble(Position - OnStep) <= ON_STEP_TOLERANCE;
-    double From = 0.0;
-    double Target = 0.0;
-    if (Count > 0.0)
-    {
-        From = IsOnStep ? OnStep : Math_FloorDouble(Position);
-        Target = From + Steps;
-    }
-    else
-    {
-        From = IsOnStep ? OnStep : Math_CeilDouble(Position);
-        Target = From - Steps;
-    }
-    double Next = minimum + (Target * step);
-    return (Next <= minimum) ? minimum : ((Next >= maximum) ? maximum : Next);
-}
-
-double UISlider_GetFraction(double value, double minimum, double maximum)
-{
-    if (!(maximum > minimum))
-    {
-        return 0.0;
-    }
-    double Fraction = (value - minimum) / (maximum - minimum);
-    return (Fraction > 0.0) ? ((Fraction < 1.0) ? Fraction : 1.0) : 0.0;
-}
-
-double UISlider_GetPointerFraction(double pointer, double boxLength, double thumbLength)
-{
-    double Travel = boxLength - thumbLength;
-    if (!(Travel > 0.0))
-    {
-        return 0.0;
-    }
-    double Fraction = (pointer - (thumbLength * 0.5)) / Travel;
-    return (Fraction > 0.0) ? ((Fraction < 1.0) ? Fraction : 1.0) : 0.0;
+    bool HasMoved = false;
+    Error Result = UIValueCapability_MoveTo(&self->Value, widget, Target, &HasMoved);
+    return ((Result.Code == ErrorCode_Success) && HasMoved) ? UIElement_PostCue(widget, UIElementCue_ValueStep) : Result;
 }

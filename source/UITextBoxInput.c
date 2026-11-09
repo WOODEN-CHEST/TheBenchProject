@@ -12,8 +12,6 @@
 
 
 // Macros.
-/** The longest shortcut text a context menu item shows, its NUL included. */
-#define SHORTCUT_CAPACITY ((size_t)48)
 /** How far inside the view's far edges a place out of it counts, in UI pixels: the last line or column that shows, not the next one. */
 #define VIEW_EDGE_INSET 0.5f
 /** The scratch a box keeps after a paste beyond twice its text, in bytes. */
@@ -692,40 +690,6 @@ static Error OnShortListKey(Widget* widget, UITextBoxCapability* self, const Wid
 
 
 // Static functions: the context menu.
-/* "Ctrl+Z": an action's first binding as a shortcut text. */
-static void WriteShortcut(const UIScreen* screen, GameActionId action, unsigned char* outText)
-{
-    outText[0] = 0U;
-    const GameInput* Input = UIScreen_GetInput(screen);
-    GameInputBinding Binding;
-    if ((Input == NULL) || !GameInput_TryGetBinding(Input, action, 0U, &Binding))
-    {
-        return;
-    }
-    GenericBuffer Text;
-    GenericBuffer_CreateConstant(&Text, outText, SHORTCUT_CAPACITY, sizeof(unsigned char), 0U);
-    static const struct { uint8_t Flag; const char* Name; } Modifiers[] =
-    {
-        { GAME_KEY_MODIFIER_CONTROL, "Ctrl+" }, { GAME_KEY_MODIFIER_ALT, "Alt+" }, { GAME_KEY_MODIFIER_SHIFT, "Shift+" }, { GAME_KEY_MODIFIER_SUPER, "Super+" }
-    };
-    for (size_t Index = 0U; Index < (sizeof(Modifiers) / sizeof(Modifiers[0])); Index++)
-    {
-        if (HasModifier(Binding.Modifiers, Modifiers[Index].Flag))
-        {
-            GenericBuffer_AppendString(&Text, (const unsigned char*)Modifiers[Index].Name);
-        }
-    }
-    const unsigned char* Name = GameKey_GetDisplayName(Binding.Key);
-    if (Name != NULL)
-    {
-        GenericBuffer_AppendString(&Text, Name);
-    }
-    if (!GenericBuffer_NullTerminate(&Text))
-    {
-        outText[0] = 0U;
-    }
-}
-
 static uint64_t GetBoxId(const UserData* userData)
 {
     uint64_t Id = WIDGET_ID_INVALID;
@@ -733,11 +697,27 @@ static uint64_t GetBoxId(const UserData* userData)
     return Id;
 }
 
+/* The resolver a box's menu finds it with, after its id in the menu's data. */
+static UITextBoxResolver GetResolver(const UserData* userData)
+{
+    UITextBoxResolver Resolver = NULL;
+    Memory_Copy(userData->Bytes + sizeof(uint64_t), &Resolver, sizeof(Resolver));
+    return (Resolver != NULL) ? Resolver : UITextBoxInternal_Resolve;
+}
+
+static UserData MakeMenuData(uint64_t widgetId, UITextBoxResolver resolver)
+{
+    UserData Data = UserData_CreateEmpty();
+    Memory_Copy(&widgetId, Data.Bytes, sizeof(widgetId));
+    Memory_Copy(&resolver, Data.Bytes + sizeof(uint64_t), sizeof(resolver));
+    return Data;
+}
+
 static Error OnMenuItem(UIScreen* screen, const UIMenuActivation* activation, const UserData* userData)
 {
     Widget* Target = NULL;
     UITextBoxCapability* Box = NULL;
-    Error Result = UITextBoxInternal_Resolve(screen, GetBoxId(userData), &Target, &Box);
+    Error Result = GetResolver(userData)(screen, GetBoxId(userData), &Target, &Box);
     if (Result.Code != ErrorCode_Success)
     {
         Error_Deconstruct(&Result); // The box went away while its menu was open: nothing to do.
@@ -774,9 +754,14 @@ static UIMenuItem MakeItem(TextBoxMenuItem id, const char* label, bool isEnabled
 
 static Error ProvideMenu(UIScreen* screen, const UIContextMenuRequest* request, const UserData* userData)
 {
+    return UITextBoxInternal_OpenContextMenu(screen, request, GetBoxId(userData), GetResolver(userData));
+}
+
+Error UITextBoxInternal_OpenContextMenu(UIScreen* screen, const UIContextMenuRequest* request, uint64_t widgetId, UITextBoxResolver resolver)
+{
     Widget* Target = NULL;
     UITextBoxCapability* Box = NULL;
-    Error Result = UITextBoxInternal_Resolve(screen, GetBoxId(userData), &Target, &Box);
+    Error Result = resolver(screen, widgetId, &Target, &Box);
     if (Result.Code != ErrorCode_Success)
     {
         Error_Deconstruct(&Result);
@@ -784,13 +769,13 @@ static Error ProvideMenu(UIScreen* screen, const UIContextMenuRequest* request, 
     }
     bool HasSelection = UITextEdit_HasSelection(&Box->Edit);
     bool IsEditable = Box->_isEditable && Box->_isEnabled;
-    unsigned char Shortcuts[6][SHORTCUT_CAPACITY];
-    WriteShortcut(screen, GameAction_UIUndo, Shortcuts[0]);
-    WriteShortcut(screen, GameAction_UIRedo, Shortcuts[1]);
-    WriteShortcut(screen, GameAction_UICut, Shortcuts[2]);
-    WriteShortcut(screen, GameAction_UICopy, Shortcuts[3]);
-    WriteShortcut(screen, GameAction_UIPaste, Shortcuts[4]);
-    WriteShortcut(screen, GameAction_UISelectAll, Shortcuts[5]);
+    unsigned char Shortcuts[6][UI_MENU_SHORTCUT_CAPACITY];
+    UIMenu_WriteShortcut(screen, GameAction_UIUndo, Shortcuts[0], UI_MENU_SHORTCUT_CAPACITY);
+    UIMenu_WriteShortcut(screen, GameAction_UIRedo, Shortcuts[1], UI_MENU_SHORTCUT_CAPACITY);
+    UIMenu_WriteShortcut(screen, GameAction_UICut, Shortcuts[2], UI_MENU_SHORTCUT_CAPACITY);
+    UIMenu_WriteShortcut(screen, GameAction_UICopy, Shortcuts[3], UI_MENU_SHORTCUT_CAPACITY);
+    UIMenu_WriteShortcut(screen, GameAction_UIPaste, Shortcuts[4], UI_MENU_SHORTCUT_CAPACITY);
+    UIMenu_WriteShortcut(screen, GameAction_UISelectAll, Shortcuts[5], UI_MENU_SHORTCUT_CAPACITY);
     UIMenuItem Items[] =
     {
         MakeItem(TextBoxMenuItem_Undo, "Undo", IsEditable && UITextEdit_CanUndo(&Box->Edit), Shortcuts[0]),
@@ -810,13 +795,13 @@ static Error ProvideMenu(UIScreen* screen, const UIContextMenuRequest* request, 
     Options.OwnerId = request->TargetWidgetId;
     Options.FocusesFirstItem = request->IsFromKey;
     Options.Handler = OnMenuItem;
-    Options.Data = *userData;
-    uint64_t BoxId = GetBoxId(userData);
+    Options.Data = MakeMenuData(widgetId, resolver);
+    uint64_t BoxId = widgetId;
     uint64_t MenuId = WIDGET_ID_INVALID;
     Box->_isOpeningMenu = true;
     Result = UIMenu_Open(screen, Items, sizeof(Items) / sizeof(Items[0]), &Options, &MenuId);
     // The open ran the box's leave hook: the box is found again by its id.
-    Error Found = UITextBoxInternal_Resolve(screen, BoxId, &Target, &Box);
+    Error Found = resolver(screen, BoxId, &Target, &Box);
     if (Found.Code == ErrorCode_Success)
     {
         Box->_isOpeningMenu = false;
@@ -994,12 +979,20 @@ static Error EndVisit(Widget* widget, UITextBoxCapability* self, UILeaveReason r
         // Put back even when the text is as it was: the undo list goes back to where the visit found it.
         bool HasChanged = false;
         Error Result = UITextBoxInternal_RevertToEntered(self, &HasChanged);
+        if ((Result.Code == ErrorCode_Success) && (self->_host != NULL))
+        {
+            return self->_host->OnVisitEnded(widget, reason, IsChanged);
+        }
         if ((Result.Code != ErrorCode_Success) || !IsChanged)
         {
             return Result;
         }
         UIPropertyValue Length = UIPropertyValue_FromDouble((double)UITextEdit_GetLength(&self->Edit));
         return UIScreen_PostWidgetEvent(Screen, Widget_GetId(widget), UIElementEvent_Cancelled, &Length);
+    }
+    if (self->_host != NULL)
+    {
+        return self->_host->OnVisitEnded(widget, reason, IsChanged);
     }
     if (!IsChanged)
     {
@@ -1097,7 +1090,21 @@ Error UITextBox_AttachContextMenu(UIScreen* screen, uint64_t widgetId)
     {
         return Result;
     }
-    UserData Data = UserData_CreateEmpty();
-    Memory_Copy(&widgetId, Data.Bytes, sizeof(widgetId));
+    UserData Data = MakeMenuData(widgetId, UITextBoxInternal_Resolve);
     return UIContextMenu_SetProvider(screen, widgetId, ProvideMenu, &Data);
+}
+
+Error UITextBoxInternal_CopyAll(Widget* widget, UITextBoxCapability* self)
+{
+    return Copy(widget, self, true);
+}
+
+Error UITextBoxInternal_PasteAll(Widget* widget, UITextBoxCapability* self)
+{
+    return Paste(widget, self, true);
+}
+
+Error UITextBoxInternal_ResetToDefault(Widget* widget, UITextBoxCapability* self)
+{
+    return ResetToDefault(widget, self);
 }
