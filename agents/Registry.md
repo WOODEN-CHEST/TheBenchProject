@@ -99,8 +99,10 @@ most `REGISTRY_ROOT_MAX_ENTRY_COUNT` (256) registries.
 - At startup `main.c` logs one line with the root's registries and their active entry counts ("Registries: none." while
   nothing has added one).
 - The registries in it today: the input's actions (`tbp:input_action`) and their categories (`tbp:input_category`),
-  added by `GameInput_Construct` and withdrawn by `GameInput_Deconstruct` ([GameInput.md](GameInput.md)). Their elements
-  are the input's own records: read them through the input's functions, which also apply overrides.
+  added by `GameInput_Construct` and withdrawn by `GameInput_Deconstruct` ([GameInput.md](GameInput.md)), and the window
+  types (`tbp:ui_window_type`), added by `UIWindowTypes_Construct` and withdrawn by `UIWindowTypes_Deconstruct`
+  ([UIElements.md](UIElements.md), "Windows"). Their elements are their owners' own records: read them through the
+  owners' functions (the input's also apply overrides).
 
 ## Not built
 

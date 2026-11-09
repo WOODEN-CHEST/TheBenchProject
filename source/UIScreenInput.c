@@ -378,27 +378,32 @@ static Error PressButton(UIScreen* self, ProgramTime time, GameKey button, size_
         .ClickCount = CountClick(self, time, button, Widget_GetId(Target))
     };
 
+    // Looking up from what was pressed, the first widget that keeps the focus or can take it decides: one that keeps it leaves the focus
+    // where it is (a window's title bar gives its window the focus itself), one that takes it is focused.
     Widget* FocusTarget = Target;
-    while ((FocusTarget != NULL) && !UIScreen_InternalCanFocus(FocusTarget))
+    while ((FocusTarget != NULL) && !FocusTarget->_keepsFocusOnPress && !UIScreen_InternalCanFocus(FocusTarget))
     {
         FocusTarget = Widget_GetParent(FocusTarget);
     }
-    uint64_t FocusTargetId = (FocusTarget != NULL) ? Widget_GetId(FocusTarget) : WIDGET_ID_INVALID;
-    Error Result = UIScreen_InternalSetFocus(self, FocusTargetId);
-    if (Result.Code != ErrorCode_Success)
+    if ((FocusTarget == NULL) || !FocusTarget->_keepsFocusOnPress)
     {
-        return Result;
-    }
-    // An edit element the press focused is entered before the press arrives, unless it enters itself, and only on a screen that has
-    // the keyboard (its keys are what entering gives it: a world screen not in use only focuses it); a hook that moved the focus on
-    // wins (only the focused widget can be entered).
-    Widget* FocusedTarget = UIScreen_InternalResolve(self, FocusTargetId);
-    if ((FocusedTarget != NULL) && !FocusedTarget->_entersItself && self->_hasKeyboardFocus)
-    {
-        Result = UIScreen_InternalEnter(self, FocusTargetId, UIEnterCause_Press);
+        uint64_t FocusTargetId = (FocusTarget != NULL) ? Widget_GetId(FocusTarget) : WIDGET_ID_INVALID;
+        Error Result = UIScreen_InternalSetFocus(self, FocusTargetId);
         if (Result.Code != ErrorCode_Success)
         {
             return Result;
+        }
+        // An edit element the press focused is entered before the press arrives, unless it enters itself, and only on a screen that has
+        // the keyboard (its keys are what entering gives it: a world screen not in use only focuses it); a hook that moved the focus on
+        // wins (only the focused widget can be entered).
+        Widget* FocusedTarget = UIScreen_InternalResolve(self, FocusTargetId);
+        if ((FocusedTarget != NULL) && !FocusedTarget->_entersItself && self->_hasKeyboardFocus)
+        {
+            Result = UIScreen_InternalEnter(self, FocusTargetId, UIEnterCause_Press);
+            if (Result.Code != ErrorCode_Success)
+            {
+                return Result;
+            }
         }
     }
 
@@ -408,7 +413,7 @@ static Error PressButton(UIScreen* self, ProgramTime time, GameKey button, size_
     {
         return Error_CreateSuccess();
     }
-    Result = RaiseRootOf(self, Target);
+    Error Result = RaiseRootOf(self, Target);
     if (Result.Code != ErrorCode_Success)
     {
         return Result;

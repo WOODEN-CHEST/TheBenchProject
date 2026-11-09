@@ -661,6 +661,12 @@ uint64_t UIScreen_FindPopupOf(const UIScreen* screen, uint64_t widgetId)
     return (FindEntry(screen, RootId) != GENERIC_BUFFER_INDEX_INVALID) ? RootId : WIDGET_ID_INVALID;
 }
 
+uint64_t UIScreen_GetPopupOwner(const UIScreen* screen, uint64_t rootWidgetId)
+{
+    size_t Index = (rootWidgetId != WIDGET_ID_INVALID) ? FindEntry(screen, rootWidgetId) : GENERIC_BUFFER_INDEX_INVALID;
+    return (Index != GENERIC_BUFFER_INDEX_INVALID) ? GetEntryAt(screen, Index)->Options.OwnerId : WIDGET_ID_INVALID;
+}
+
 /* Centred on the anchor, no larger than the surface and kept on it, in whole pixels. */
 static Rectangle ResolveCentred(Rectangle anchor, float width, float height, Vector2 surface)
 {

@@ -79,6 +79,8 @@ static const UIKindBehaviour* GetBehaviour(UIElementKind kind)
             return UIColorPicker_GetKindBehaviour();
         case UIElementKind_Toolbar:
             return UIToolbar_GetKindBehaviour();
+        case UIElementKind_Window:
+            return UIWindow_GetKindBehaviour();
         case UIElementKind_Label:
         case UIElementKind_Tooltip:
         case UIElementKind_Menu:
@@ -402,6 +404,7 @@ static const unsigned char* const KindTypeNames[UIElementKind_Count] =
     [UIElementKind_ColorPicker] = u8"ColorPicker",
     [UIElementKind_Toolbar] = u8"Toolbar",
     [UIElementKind_Drag] = u8"DragGhost",
+    [UIElementKind_Window] = u8"Window",
 };
 
 
@@ -489,6 +492,10 @@ static Error RegisterEverything(UIKit* self)
     if (Result.Code == ErrorCode_Success)
     {
         Result = UIColorPicker_RegisterTypes(self, self->_factory);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIWindow_RegisterTypes(self, self->_factory);
     }
     return Result;
 }
@@ -1428,5 +1435,128 @@ Error UIKit_CreateToolbar(UIKit* self, UIScreen* screen, uint64_t parentId, cons
         return Result;
     }
     *outId = BarId;
+    return Error_CreateSuccess();
+}
+
+/* Makes one of a window's caption buttons in its title bar: a button of the kit of its variant, a placeholder letter for its icon, never
+ * taking the focus (a press on it acts on nothing inside the window, as one on the title bar). */
+static Error CreateCaptionButton(UIKit* self, UIScreen* screen, uint64_t titleBarId, const unsigned char* variant, uint32_t letter,
+    uint64_t* outId)
+{
+    UIButtonOptions Button = UIButtonOptions_Create(NULL);
+    Button.Element = MakePartElement();
+    Button.Element.Variant = variant;
+    Button.Icon = UIElementIcon_FromLetter(letter);
+    Error Result = UIKit_CreateButton(self, screen, titleBarId, &Button, outId);
+    Widget* Made = NULL;
+    if ((Result.Code == ErrorCode_Success) && UIScreen_TryGetWidgetById(screen, *outId, &Made))
+    {
+        Result = Widget_SetIsFocusable(Made, false);
+    }
+    return Result;
+}
+
+/* Makes a window's content: a scroll area by its fits, and in it the column calling code fills, padded and spaced as the theme says. */
+static Error CreateWindowContent(UIKit* self, UIScreen* screen, uint64_t windowId, const UIWindowOptions* options, uint64_t* outAreaId,
+    uint64_t* outContentId)
+{
+    UIScrollAreaOptions Area = UIScrollAreaOptions_Create();
+    Area.Element = MakePartElement();
+    Area.Element.Variant = u8"window"; // A theme draws the window's content background under it.
+    Area.Horizontal = (options->FitAcross == UIWindowFit_Fit) ? UIScrollMode_Disabled : UIScrollMode_Auto;
+    Area.Vertical = (options->FitDown == UIWindowFit_Fit) ? UIScrollMode_Disabled : UIScrollMode_Auto;
+    Error Result = UIKit_CreateScrollArea(self, screen, windowId, &Area, outAreaId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    const UIThemeStyle* Style = UITheme_FindStyle(UIScreen_GetTheme(screen), UIElementKind_Window, options->Element.Variant);
+    Vector2 Padding = UIThemeStyle_GetVector(Style, UIElementKind_Window, UIWindowPart_ContentPadding);
+    UIStackOptions Column = UIStackOptions_Create(UIStackDirection_Column);
+    Column.Layout.Padding = (UIInsets){ .Left = Padding.x, .Top = Padding.y, .Right = Padding.x, .Bottom = Padding.y };
+    Column.Layout.Spacing = UIThemeStyle_GetNumber(Style, UIElementKind_Window, UIWindowPart_ContentSpacing);
+    return UIKit_CreateStack(self, screen, *outAreaId, &Column, outContentId);
+}
+
+Error UIKit_CreateWindow(UIKit* self, UIScreen* screen, const UIWindowOptions* options, uint64_t* outId, uint64_t* outContentId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL) || (outId == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateWindow: self, screen, options and outId must not be NULL.");
+    }
+    *outId = WIDGET_ID_INVALID;
+    if (outContentId != NULL)
+    {
+        *outContentId = WIDGET_ID_INVALID;
+    }
+    UIWindowArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Window, options->Element.Look);
+    uint64_t WindowId = WIDGET_ID_INVALID;
+    Error Result = CreateElement(self, screen, WIDGET_ID_INVALID, TypeId, &Arguments, &WindowId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Widget* Window = NULL;
+    if (UIScreen_TryGetWidgetById(screen, WindowId, &Window))
+    {
+        Result = UIScreen_SetRootLayer(screen, Window, UIScreenLayer_Floating);
+    }
+    if ((Result.Code == ErrorCode_Success) && UIScreen_TryGetWidgetById(screen, WindowId, &Window))
+    {
+        Result = UIScreen_BringToTop(screen, Window); // Over the floating windows raised before it.
+    }
+    // The frame first, under everything made after it: a press on what shows of it (the border) acts on nothing inside.
+    UIWindowParts Parts = { .FrameId = WIDGET_ID_INVALID, .TitleBarId = WIDGET_ID_INVALID, .AreaId = WIDGET_ID_INVALID, .ContentId = WIDGET_ID_INVALID };
+    for (int32_t Button = 0; Button < (int32_t)UIWindowButton_Count; Button++)
+    {
+        Parts.ButtonIds[Button] = WIDGET_ID_INVALID;
+    }
+    for (int32_t Edge = 0; Edge < (int32_t)UIWindowEdge_Count; Edge++)
+    {
+        Parts.EdgeIds[Edge] = WIDGET_ID_INVALID;
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = CreateOwnPart(self, screen, WindowId, self->_windowFrameType, &WindowId, &Parts.FrameId);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = CreateOwnPart(self, screen, WindowId, self->_windowTitleType, &WindowId, &Parts.TitleBarId);
+    }
+    static const uint32_t Letters[UIWindowButton_Count] = { UI_WINDOW_MINIMIZE_LETTER, UI_WINDOW_MAXIMIZE_LETTER, UI_WINDOW_CLOSE_LETTER };
+    for (int32_t Button = 0; (Button < (int32_t)UIWindowButton_Count) && (Result.Code == ErrorCode_Success); Button++)
+    {
+        const unsigned char* Variant = (Button == (int32_t)UIWindowButton_Close) ? u8"window_close" : u8"window_button";
+        Result = CreateCaptionButton(self, screen, Parts.TitleBarId, Variant, Letters[Button], &Parts.ButtonIds[Button]);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = CreateWindowContent(self, screen, WindowId, options, &Parts.AreaId, &Parts.ContentId);
+    }
+    for (int32_t Edge = 0; (Edge < (int32_t)UIWindowEdge_Count) && (Result.Code == ErrorCode_Success); Edge++)
+    {
+        UIWindowEdgeArgs EdgeArguments = { .WindowId = WindowId, .Edge = (UIWindowEdge)Edge };
+        Result = CreateOwnPart(self, screen, WindowId, self->_windowEdgeType, &EdgeArguments, &Parts.EdgeIds[Edge]);
+        Widget* Made = NULL;
+        if ((Result.Code == ErrorCode_Success) && UIScreen_TryGetWidgetById(screen, Parts.EdgeIds[Edge], &Made))
+        {
+            Result = Widget_SetZLayer(Made, 2.0f); // Over the content and the title bar: an edge is caught first.
+        }
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIWindow_SetParts(screen, WindowId, &Parts);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        DestroyPartlyMade(screen, WindowId);
+        return Result;
+    }
+    *outId = WindowId;
+    if (outContentId != NULL)
+    {
+        *outContentId = Parts.ContentId;
+    }
     return Error_CreateSuccess();
 }

@@ -11,7 +11,7 @@
  *
  * As the game grows, most subsystems need the same handful of long-lived services: the logger, the loaded
  * Unicode database, the asset manager (and the standard asset-type ids), the game-frame manager, the game
- * config, the per-tick input, the key registry, the root registry, and a GHDF object pool for world save/load.
+ * config, the per-tick input, the key registry, the root registry, the window types, and a GHDF object pool for world save/load.
  * Services aggregates BORROWED pointers to them so a frame or subsystem can be handed one Services* rather than a
  * growing argument list.
  *
@@ -41,6 +41,8 @@ typedef struct GameInputStruct GameInput;
 typedef struct KeyRegistryStruct KeyRegistry;
 /** @brief The program's root registry (the registry of registries); full type in Registry.h. Borrowed. */
 typedef struct RegistryRootStruct RegistryRoot;
+/** @brief The program's window types; full type in UIWindowTypes.h. Borrowed. */
+typedef struct UIWindowTypesStruct UIWindowTypes;
 
 
 // Types.
@@ -77,6 +79,9 @@ typedef struct ServicesStruct
      *  tools that work on every kind (the terminal, autocomplete, the editor's pickers). Systems add their registries
      *  at startup and keep direct pointers to them; nothing looks a registry up per tick. It borrows Keys. Borrowed. */
     RegistryRoot* Registries;
+    /** @brief The program's window types (`tbp:ui_window_type`, in Registries): the windows a UI opens by key. Frames register the types
+     *  they offer while they run and withdraw them when they go. NULL when they could not be set up. Borrowed. */
+    UIWindowTypes* WindowTypes;
     /** @brief Absolute UTF-8 directory that game files (config, assets, logs, the asset cache) are resolved
      *  against: the executable's directory, or the working directory if the OS could not report it. Borrowed. */
     const unsigned char* BaseDirectory;

@@ -16,6 +16,7 @@
 #include "UIAnimation.h"
 #include "UIDragDrop.h"
 #include "UIInput.h"
+#include "UIPlacement.h"
 #include "UIWidgetFactory.h"
 
 
@@ -46,7 +47,8 @@
  * hovered widget and its ancestors. The widget that handles a key's press owns the key until it is released: the key's
  * repeats and release go to that widget alone, even after focus moved. Keyboard navigation acts on the navigation actions
  * nobody handled (GameAction_UI*), and whatever is still unconsumed reaches the game. Focus can be on any focusable widget: a
- * click focuses the nearest focusable widget under the pointer, and navigation moves focus between focusable widgets. A click
+ * click focuses the nearest focusable widget under the pointer (unless a widget on the way up keeps the focus on a press:
+ * Widget_SetKeepsFocusOnPress), and navigation moves focus between focusable widgets. A click
  * that hits no widget, including any click while the screen has no pointer (the cursor captured for mouse look, or over UI
  * above), is a click outside: it ends navigation and clears focus, and the game gets the click.
  *
@@ -63,7 +65,8 @@
  * keys (Widget_SetKeepsKeysWhenEntered) is left only by focus moving and code, and those keys stay unconsumed for its reader.
  *
  * LAYERS. Every root stands in a layer (UIScreenLayer, UIScreen_SetRootLayer): drawing and hit testing go by layer, then by z,
- * then by insertion. A press raises its root within a Normal or Floating layer, and in no other.
+ * then by insertion. A press raises its root within a Normal or Floating layer, and in no other. Windows use the workspace: the
+ * surface less the strips its insets name (UIScreen_SetWorkspaceInsets, UIScreen_GetWorkspaceBox).
  *
  * NAVIGATION. ui_next / ui_previous move focus between the focusable widgets of the current level in reading order, the
  * arrows move it to the nearest one in that direction (the first such key only starts navigation and shows the
@@ -410,6 +413,8 @@ typedef struct UIScreenStruct
     float _scale;
     /** @brief Moves on whenever the scale, the viewport or the theme changes: widgets' cached preferred sizes are then old. */
     uint64_t _measureGeneration;
+    /** @brief The strips along the surface's edges that windows leave alone (UIScreen_SetWorkspaceInsets), in UI pixels. */
+    UIInsets _workspaceInsets;
 
     /** @brief The asset manager the theme came from; borrowed, meaningful while _theme is set. */
     AssetManager* _themeAssets;
@@ -636,6 +641,38 @@ static inline uint64_t UIScreen_GetMeasureGeneration(const UIScreen* self)
 {
     return self->_measureGeneration;
 }
+
+
+// The workspace.
+/**
+ * @brief Sets the strips along the surface's edges that windows leave alone (a menu bar at the top, a status bar at the bottom): what is
+ *        left is the workspace, where floating windows stay reachable and a maximized one goes (UIScreen_GetWorkspaceBox). None by
+ *        default, so the workspace is the whole surface. Whoever lays the bars out sets it; windows read it at their next update.
+ * @param self The screen; must not be NULL.
+ * @param insets The strips' widths from the left, top, right and bottom, in UI pixels; each finite, >= 0 and at most
+ *        UI_LAYOUT_MAX_LENGTH.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL; ErrorCode_ArgumentOutOfRange for an inset that is not.
+ */
+Error UIScreen_SetWorkspaceInsets(UIScreen* self, UIInsets insets);
+
+/**
+ * @brief Returns the strips windows leave alone (UIScreen_SetWorkspaceInsets).
+ * @param self The screen; must not be NULL.
+ * @returns The insets in UI pixels; all 0 unless set.
+ */
+static inline UIInsets UIScreen_GetWorkspaceInsets(const UIScreen* self)
+{
+    return self->_workspaceInsets;
+}
+
+/**
+ * @brief Returns the workspace: the area of the surface windows may use, the surface less the strips UIScreen_SetWorkspaceInsets
+ *        names. The one place windows read it from.
+ * @param self The screen; must not be NULL.
+ * @returns The box in the screen's UI pixels from the surface's top-left (its root widgets' placement units); a size the strips leave
+ *          nothing of is 0.
+ */
+Rectangle UIScreen_GetWorkspaceBox(const UIScreen* self);
 
 
 // Theme.

@@ -129,6 +129,8 @@ int main(void)
     UIColorPickerTests_Run(&Run);
     UIDragDropTests_Run(&Run);
     UIToolbarTests_Run(&Run);
+    UIWindowTests_Run(&Run);
+    UIWindowTypesTests_Run(&Run);
     GameWindowStateTests_Run(&Run);
     GameWindowTests_Run(&Run);
     UITestFrameTests_Run(&Run);

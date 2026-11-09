@@ -25,6 +25,7 @@
 #include "WorldTestFrame.h"
 #include "UIGalleryFrame.h"
 #include "UITestFrame.h"
+#include "UIWindowTypes.h"
 #include "raylib/raylib.h"
 #include "wr/WRStopwatch.h"
 #include "wr/WRThread.h"
@@ -575,6 +576,15 @@ int main(int argc, char** argv)
         }
     }
     LoadControls(&Log, BaseDirectory._data, &Input);
+
+    // The window types: the windows a UI opens by key. Frames register theirs while they run; without it, they offer none.
+    UIWindowTypes WindowTypes;
+    Error WindowTypesResult = UIWindowTypes_Construct(&WindowTypes, &Keys, &Registries);
+    bool HasWindowTypes = WindowTypesResult.Code == ErrorCode_Success;
+    if (!HasWindowTypes)
+    {
+        LogWarningAndRelease(&Log, (const unsigned char*)u8"Failed to set up the window types: %s", &WindowTypesResult);
+    }
     LogRegistries(&Log, &Registries);
 
     // The frame manager owns the scenes and the per-frame update/render logic. The window (GL context)
@@ -594,6 +604,10 @@ int main(int argc, char** argv)
         if (GhdfPool != NULL) { Error e = GHDFObjectPool_Deconstruct(GhdfPool); Error_Deconstruct(&e); }
         GameWindow_Close(&Window);
         GameWindow_Deconstruct(&Window);
+        if (HasWindowTypes)
+        {
+            UIWindowTypes_Deconstruct(&WindowTypes);
+        }
         Error InputCloseResult = GameInput_Deconstruct(&Input);
         Error_Deconstruct(&InputCloseResult);
         RegistryRoot_Deconstruct(&Registries);
@@ -621,6 +635,7 @@ int main(int argc, char** argv)
     GameServices.GHDFPool = GhdfPool;
     GameServices.Keys = &Keys;
     GameServices.Registries = &Registries;
+    GameServices.WindowTypes = HasWindowTypes ? &WindowTypes : NULL;
     GameServices.BaseDirectory = BaseDirectory._data;
 
     // Both need the asset manager; only add a frame if it came up.
@@ -649,8 +664,8 @@ int main(int argc, char** argv)
 
     // Tear down in the reverse of construction: frames first (they release assets and GPU render targets
     // and need both the asset manager and the GL context alive), then the asset manager and pools, then
-    // the window, then the remaining plain resources (the input before the root registry, the root before the key
-    // registry).
+    // the window, then the remaining plain resources (the window types and the input before the root registry, the root before the
+    // key registry).
     Error ManagerCloseResult = GameFrameManager_Deconstruct(&FrameManager);
     if (ManagerCloseResult.Code != ErrorCode_Success)
     {
@@ -680,6 +695,10 @@ int main(int argc, char** argv)
     GameWindow_Deconstruct(&Window);
 
     Services_Deconstruct(&GameServices);
+    if (HasWindowTypes)
+    {
+        UIWindowTypes_Deconstruct(&WindowTypes);
+    }
     Error InputCloseResult = GameInput_Deconstruct(&Input);
     Error_Deconstruct(&InputCloseResult);
     RegistryRoot_Deconstruct(&Registries);

@@ -308,6 +308,7 @@ void Widget_InternalInitializeBase(Widget* self, const WidgetVTable* vtable, UIS
     self->_needsEntering = flags->NeedsEntering;
     self->_entersItself = flags->EntersItself;
     self->_keepsKeysWhenEntered = false;
+    self->_keepsFocusOnPress = false;
 
     self->_isHovered = false;
     self->_isFocused = false;
@@ -1084,6 +1085,16 @@ Error Widget_SetKeepsKeysWhenEntered(Widget* self, bool keepsKeys)
         return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetKeepsKeysWhenEntered: self must not be NULL.");
     }
     self->_keepsKeysWhenEntered = keepsKeys;
+    return Error_CreateSuccess();
+}
+
+Error Widget_SetKeepsFocusOnPress(Widget* self, bool keepsFocus)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "Widget_SetKeepsFocusOnPress: self must not be NULL.");
+    }
+    self->_keepsFocusOnPress = keepsFocus;
     return Error_CreateSuccess();
 }
 

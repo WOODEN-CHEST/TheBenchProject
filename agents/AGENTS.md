@@ -430,7 +430,7 @@ Current module list:
   * GameCamera - 3D camera (a double position, fov/yaw/pitch/roll; +Y up, +Z forward), converted at render time to
     raylib's render camera, which sits at the origin and only turns (render space).
   * Services - Bundle of borrowed shared services (logger, config, unicode, asset manager, frame manager, input, GHDF
-    pool, key registry, root registry).
+    pool, key registry, root registry, window types).
   * WorldRenderer - Renders a World through a GameCamera (PBR lit by the sun and the moon, HDR, sky with the moon,
     stars, Milky Way and light pollution, the eye's night vision, sun and moon shadows, local lights (points and spots
     with their cones, on or off, flickering; the nearest shadow-casting point light's cube shadow and the two strongest
@@ -710,9 +710,10 @@ Current module list:
   * UIWidget - The abstract widget base (vtable incl. Layout, keyboard first refusal, a lost press and the wheel, entering and leaving, a hit test standing in for
     its box, a descendant's focus (a scroll area scrolling it into view), geometry/flags/state, its own scale and the effective scale kept current, a render transform, subwidgets with a separate draw order, moving whole to another
     parent, capabilities, typed properties, deferred destroy); concrete widgets embed it first.
-  * UIScreen - The context: id registry, roots, focus, the entered edit element, input routing, keyboard navigation + outlines, animations,
-    notifications and cues (subscriptions; queued, delivered at the end of UIScreen_Update), hover text, layout pass and rendering (hit tests and coordinates through
-    render transforms).
+  * UIScreen - The context: id registry, roots, focus (a press on a widget that keeps the focus leaves it where it is: a window's title bar), the
+    entered edit element, input routing, keyboard navigation + outlines, animations, notifications and cues (subscriptions; queued, delivered at the end
+    of UIScreen_Update), hover text, the workspace (the surface less the strips bars keep, which windows use), layout pass and rendering (hit tests and
+    coordinates through render transforms).
   * UITooltip - Hover text as a service of the screen (UITooltip.h, source/UIScreenTooltips.c): a side table emptied at a widget's teardown, text by value or from a
     provider, the delay (its own or the theme's), falling back up the tree, hidden by a press or moving off, shown by a widget of the type the factory names in the
     overlay layer; UITooltip_GetCurrent for a status bar.
@@ -812,7 +813,15 @@ Current module list:
     gradients, channel fields and a hex field; Changed while moving, Committed on close, Escape cancels; mixed; its HSV conversions pure and round-tripping.
   * UIToolbar - A strip of the kit's buttons from a list (kind toolbar): buttons, toggles, choices of a group, separators, across or upright; names as hover text;
     events under the bar's id with the item's id as the index.
-  * UIGalleryFrame - A game frame on six pages, each scrolling, started with --ui-gallery: every element in every state, the routing and the keyboard (a box to go into, whose sliders Enter enters); the scale rows, a turning panel, a panel sliding in, a second look of the button, icons; a menu bar, dropdowns near the window's edges and in the page (three options, a thousand from a provider), context menus with submenus, a modal dialog, scroll areas, a long end and a status bar; text boxes of every kind and a form; sliders of every conversion and upright, property boxes of every kind, compound sliders, a form of labelled rows and rows of fields; tool bars, a list of a hundred thousand rows, a tree twelve deep, a drag between two lists, colour pickers and dialogs; hover text on everything. N the page, T the theme (three: flat, nine-slice, another palette), + and - the scale, P the scale policy, L the event log.
+  * UIWindow - A window (kind window): an icon, a title, a frame that moves (the title bar), resizes (eight edges and corners, within its least size and the
+    workspace), minimizes to a title bar, maximizes into the workspace (one at a time, in the Maximized layer) and closes (asking a close query first), its
+    content a column in a scroll area that fits or scrolls per axis (its least size then the content's); its floating box kept reachable on the workspace and
+    never changed by that; a press on its frame acts on nothing inside and gives the focus back where it was (entered again), else to its default target;
+    its arithmetic pure. Works on any screen.
+  * UIWindowTypes - The windows a UI opens by key: a Registry of types (`tbp:ui_window_type`, in the root; main.c makes the program's, Services carries it)
+    with a display name, icon, fill function, fits, sizes and whether only one opens; opening one (a single one restored, brought to the front and
+    focused), where the type's last window closed, the items of a Window menu.
+  * UIGalleryFrame - A game frame on seven pages, each scrolling, started with --ui-gallery: every element in every state, the routing and the keyboard (a box to go into, whose sliders Enter enters); the scale rows, a turning panel, a panel sliding in, a second look of the button, icons; a menu bar, dropdowns near the window's edges and in the page (three options, a thousand from a provider), context menus with submenus, a modal dialog, scroll areas, a long end and a status bar; text boxes of every kind and a form; sliders of every conversion and upright, property boxes of every kind, compound sliders, a form of labelled rows and rows of fields; tool bars, a list of a hundred thousand rows, a tree twelve deep, a drag between two lists, colour pickers and dialogs; floating windows of four types it registers while it runs (fitting, scrolling, fixed, notes that ask before closing) and a Window menu (the private source/UIGalleryWindows.{h,c}); hover text on everything. N the page, T the theme (three: flat, nine-slice, another palette), + and - the scale, P the scale policy, L the event log.
 * Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text as a STRICT TREE: a parent owns
   its children, a tree has at most 64 levels, components own copies of their strings, and fonts and sprite animations
   are named, never held. Every change gives the component and its ancestors a new revision. Covers three modules (plus

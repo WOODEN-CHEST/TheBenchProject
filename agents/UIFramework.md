@@ -248,7 +248,10 @@ The screen routes, in this order, from its `UIScreenInput`:
    looked up again and becomes hovered (`OnHoverStart` / `OnHoverEnd`). While the pointer is over a widget, and while a press is held wherever the pointer is, the screen
    claims it (`GameInput_ConsumePointer`). Pointer movement over the screen ends keyboard navigation (focus stays).
 2. **Mouse buttons.** A press over a widget is **consumed**, focuses the nearest focusable widget under the pointer (or
-   clears focus), raises that widget's root if its layer raises (below, "Rendering"), and reaches the widget as a `ButtonPress`.
+   clears focus), raises that widget's root if its layer raises (below, "Rendering"), and reaches the widget as a `ButtonPress`. Looking up from
+   the widget pressed, the first that **keeps the focus on a press** (`Widget_SetKeepsFocusOnPress`) or can take it decides: one that keeps it
+   leaves the focus where it is, so the press focuses, enters and leaves nothing (a window's title bar, which gives its window the focus itself
+   without leaving what is being edited inside; [UIElements.md](UIElements.md), "Windows"). A focusable widget that keeps it is still focused by the keys.
    A press that hits no widget is a **click outside**: it ends navigation and clears focus, and the game gets it. That
    includes any press while the screen has no pointer (the cursor captured for mouse look, or the pointer over UI of a
    higher frame), so clicking into the world blurs the UI. With another press held it is neither: it is consumed and does nothing. The rest is under "A held press" below.
@@ -434,7 +437,8 @@ Things that open above everything (a dropdown's list, a menu, a modal dialog) ar
 `UIScreen_ClosePopup(screen, rootId)` closes it with every popup opened above it; `UIScreen_ClosePopupAndItsOwn` closes it with only the popups
 opened from inside it (each whose owner lies in it, or in one of those), leaving the others open, and a popup left open whose focus would go
 back into it gives it back where the closed one would have (a dialog closing after its answer keeps the next question its answer opened). `UIScreen_CloseAllPopups`, `UIScreen_IsPopupOpen`,
-`UIScreen_GetPopupCount` and `UIScreen_GetPopupAt` are the rest. All are safe from hooks and handlers; a popup opened in a tick takes input
+`UIScreen_GetPopupCount`, `UIScreen_GetPopupAt`, `UIScreen_FindPopupOf` (the open popup a widget lies in) and `UIScreen_GetPopupOwner` (the owner it
+was opened with) are the rest. All are safe from hooks and handlers; a popup opened in a tick takes input
 from the next.
 
 - **Placed against an anchor** each update, after the widgets' updates and before the layout: a box in normalized screen coordinates
@@ -521,10 +525,14 @@ for drawing and for hit testing alike:
 |---|---|---|
 | `Background` | no | what stays behind everything |
 | `Normal` (the default) | yes, within its layer | the ordinary root |
-| `Floating` | yes, within its layer | movable windows |
-| `Maximized` | no | a window that fills the screen |
+| `Floating` | yes, within its layer | movable windows ([UIElements.md](UIElements.md), "Windows") |
+| `Maximized` | no | a window that fills the workspace |
 | `Popup` | no | popups ("Popups" above), each above those opened before it, a modal one's backdrop under it |
 | `Overlay` | no, and it takes no input | what only shows: the pointer goes through it, nothing in it can have focus or a press, and navigation passes it and leaves it at once if it becomes one |
+
+**The workspace** is the part of the surface windows use: the surface less the strips its insets name (`UIScreen_SetWorkspaceInsets`, in UI
+pixels from each edge: a menu bar's, a status bar's), which whoever lays those bars out sets. `UIScreen_GetWorkspaceBox` gives it in the screen's UI
+pixels, the units of a root's placement; floating windows stay reachable on it and a maximized one fills it. None by default: the whole surface.
 
 A layer belongs to a root: a root moved under a parent stops having one, and gets back its own if it becomes a root again. `UIScreen_BringToTop` and a root's `Widget_SetZLayer` work within the
 layer, and entering a root with `ui_accept` raises it as a press does. The screen draws roots in draw
@@ -581,7 +589,8 @@ typed properties there; a type that uses the arrows or typing sets `NeedsEnterin
 cancel mean something to it); construct only the concrete part in the constructor; create child widgets in `Initialize`;
 report keys you handle through `outIsHandled` (handle a key's press to get its repeats and release), and the wheel the same way in `OnScrollInput`; a press that starts something must
 answer `OnPressLost` as well as the release (Destroy tells nothing: the widget is gone); answer `Measure` in your own UI pixels and turn them into surface pixels
-with `Widget_GetEffectiveScale`; give a `HitTest` hook when your shape is not your box; `OnDescendantFocus(self, focusedId)` runs on each ancestor of a widget that has just
+with `Widget_GetEffectiveScale`; give a `HitTest` hook when your shape is not your box; a part of a frame that moves the focus itself (a title bar)
+keeps the focus on a press (`Widget_SetKeepsFocusOnPress`); `OnDescendantFocus(self, focusedId)` runs on each ancestor of a widget that has just
 become focused, innermost first (a scroll area scrolls it into view there, unless a press focused it); post your own
 events with `UIScreen_PostWidgetEvent` or `UIScreen_PostWidgetMouseEvent` (they reach subscribers even if the widget is destroyed in the same update);
 never write state in `Render`.

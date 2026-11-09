@@ -9,7 +9,7 @@ See [WorldData.md](WorldData.md) for the data model it draws.
 | Module | Files | What it is |
 |---|---|---|
 | GameCamera | `include/GameCamera.h`, `source/GameCamera.c` | The 3D camera (a double position, fov/yaw/pitch/roll), converted to raylib's render camera at the origin only at render time. |
-| Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, the key registry, the root registry, base directory). |
+| Services | `include/Services.h`, `source/Services.c` | A bundle of BORROWED pointers to the shared game services (logger, config, unicode, asset manager + standard type ids, frame manager, per-tick input, GHDF pool, the key registry, the root registry, the window types, base directory). |
 | WorldRenderer | `include/WorldRenderer.h`, `source/WorldRenderer*.c`, `source/WorldRendererInternal.h` | Renders a World through a GameCamera; fully separate from the world data. Split by render pass, see "Renderer structure". |
 | WorldRenderCache | `source/WorldRenderCache.h`, `source/WorldRenderCache.c` (private) | The renderer's per-component cache and per-frame draw lists (models with their resolved world models, their LOD state, the variant, the settings in effect, their pose and their screen's surface; the camera's pose, the first-person object's with its hidden bones collapsed; sprites with their world sprites' settings in effect; lights; terrains and their chunks; the model instances components with their cells), built from the world's per-type component arrays. |
 | WorldInstancing | `source/WorldInstancing.h`, `source/WorldInstancing.c` (private) | Instanced drawing as pure maths (see "Model instances"): a component's copies sorted into cells with their records, the copies' LOD bands, fades and per-pass draws, and the LODs a cell can show: the C mirror of `shaders/common/instancing.glsl`. |
@@ -2765,10 +2765,12 @@ cache directory `<base>/.wr_asset_cache`, absolute `<base>/asset` search root, `
 key registry (`KeyRegistry`, [NamespacedKey.md](NamespacedKey.md)) → the root registry (`RegistryRoot`,
 [Registry.md](Registry.md)) → `GameInput` (the engine's actions and categories; its two registries join the root) →
 the packs' input actions (`InputActions_RegisterDefinitions`, [GameInput.md](GameInput.md)) → `<base>/controls.json` if
-present → one log line listing the root's registries → GameFrameManager (polls the input, then updates the game window) → build `Services` (`Services.BaseDirectory`, `Services.Input`,
-`Services.Keys`, `Services.Registries`) → create + add `WorldTestFrame`, then `UITestFrame` on top → run loop.
+present → the window types (`UIWindowTypes`, [UIElements.md](UIElements.md), "Windows": empty, its registry joins the root; without them the
+frames offer no windows) → one log line listing the root's registries → GameFrameManager (polls the input, then updates the game window) → build
+`Services` (`Services.BaseDirectory`, `Services.Input`, `Services.Keys`, `Services.Registries`, `Services.WindowTypes`) → create + add
+`WorldTestFrame`, then `UITestFrame` on top → run loop.
 Teardown (reverse, ordering matters): frame manager (releases assets + GPU targets, needs asset manager + GL alive;
-its worlds borrow the key registry) → asset manager → JSON pool → GHDF pool → `GameWindow_Close` (saves the window's state) → input → root registry
+its worlds borrow the key registry) → asset manager → JSON pool → GHDF pool → `GameWindow_Close` (saves the window's state) → window types → input → root registry
 (after every system withdrew its registries) → key registry (the root borrows it) → unicode → config → base-directory
 buffer → logger.
 

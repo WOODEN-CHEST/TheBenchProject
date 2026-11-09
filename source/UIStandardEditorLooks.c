@@ -8,14 +8,16 @@
 #include "UIToolbar.h"
 #include "UITree.h"
 #include "UIWidgetFactory.h"
+#include "UIWindow.h"
 #include "wr/WRMath.h"
 
 
 /*
  * The kit's standard look (tbp:test_box) for the editor's elements: the list and the tree (a background; their rows are the kit's own
  * widgets), the dialog (a background; its parts are a label's, a column's and buttons), the colour picker's swatch (its popup is the kit's
- * own widgets), the tool bar (a background and its separators; its buttons are buttons), and the widget that shows a drag (the dragged item
- * beside the pointer, and a frame over the target that would take it). Every value comes from the screen's theme.
+ * own widgets), the tool bar (a background and its separators; its buttons are buttons), the window (its frame, its title bar with the icon
+ * and the title, its content's background and an edge's highlight; its caption buttons are buttons), and the widget that shows a drag (the
+ * dragged item beside the pointer, and a frame over the target that would take it). Every value comes from the screen's theme.
  */
 
 
@@ -54,6 +56,16 @@ typedef struct ToolbarBoxStruct
     UIToolbarLookBase Base;
     UIElementLook Look;
 } ToolbarBox;
+
+/* The standard window: its frame, its title bar with the icon and the title (focused while the window is active), the content's background
+ * (not while minimized) and the highlight of an edge under the pointer or dragged; the theme's metrics told to the behaviour. */
+typedef struct WindowBoxStruct
+{
+    UIWindowLookBase Base;
+    UIElementLook Look;
+    UIElementText Title;
+    UIElementIconView Icon;
+} WindowBox;
 
 /* What shows a drag: a root of the overlay layer over the whole surface, drawing the dragged item beside the pointer and a frame over the
  * target that would take it, clipped as the target is. A plain widget type, made by the screen (UIDragDrop.h) with no arguments. */
@@ -402,6 +414,175 @@ static UIElementLook* ToolbarBox_GetThemeLook(void* self)
 }
 
 
+// Static functions: the window.
+static Error WindowBox_Construct(void* self, void* args)
+{
+    WindowBox* Box = self;
+    const UIWindowArgs* Arguments = args;
+    Error Result = UIElementLook_Construct(&Box->Look, UIElementKind_Window, Arguments->Options->Element.Variant);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = UIElementText_Construct(&Box->Title, UIKit_GetTextFactory(Arguments->Kit), UIKit_GetAssets(Arguments->Kit),
+        UIKit_GetLogger(Arguments->Kit));
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Result = UIElementIconView_Construct(&Box->Icon, UIKit_GetTextFactory(Arguments->Kit), UIKit_GetAssets(Arguments->Kit),
+        UIKit_GetLogger(Arguments->Kit));
+    if (Result.Code != ErrorCode_Success)
+    {
+        Error Cleanup = UIElementText_Deconstruct(&Box->Title);
+        Error_Deconstruct(&Cleanup);
+    }
+    return Result;
+}
+
+static Error WindowBox_Deconstruct(void* self)
+{
+    WindowBox* Box = self;
+    Error Result = UIElementIconView_Deconstruct(&Box->Icon);
+    Error TextResult = UIElementText_Deconstruct(&Box->Title);
+    if (Result.Code == ErrorCode_Success)
+    {
+        return TextResult;
+    }
+    Error_Deconstruct(&TextResult);
+    return Result;
+}
+
+static Error WindowBox_Update(void* self, ProgramTime time)
+{
+    WindowBox* Box = self;
+    Widget* Base = &Box->Base.Base;
+    UIScreen* Screen = Widget_GetScreen(Base);
+    const UIWindowCapability* Window = &Box->Base.Window;
+    UIElementLook_Update(&Box->Look, Screen, UIWindowCapability_IsActive(Window) ? UIElementState_Focused : UIElementState_Normal,
+        time.PassedTime);
+    Error Result = UIElementText_Refresh(&Box->Title, Base, &Window->_title);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIElementIconView_Refresh(&Box->Icon, Base, &Window->_icon);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIElementIconView_Update(&Box->Icon, time);
+    }
+    const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Screen);
+    UIWindowMetrics Metrics =
+    {
+        .TitleHeight = UIThemeStyle_GetNumber(Style, UIElementKind_Window, UIWindowPart_TitleHeight),
+        .TitlePadding = UIThemeStyle_GetNumber(Style, UIElementKind_Window, UIWindowPart_TitlePadding),
+        .IconSpacing = UIThemeStyle_GetNumber(Style, UIElementKind_Window, UIWindowPart_IconSpacing),
+        .IconWidth = UIElementIconView_GetPixelSize(&Box->Icon, Screen).x / Widget_GetEffectiveScale(Base),
+        .ButtonSize = UIThemeStyle_GetVector(Style, UIElementKind_Window, UIWindowPart_ButtonSize),
+        .ButtonSpacing = UIThemeStyle_GetNumber(Style, UIElementKind_Window, UIWindowPart_ButtonSpacing),
+        .Border = UIThemeStyle_GetNumber(Style, UIElementKind_Window, UIWindowPart_Border),
+        .ResizeMargin = UIThemeStyle_GetNumber(Style, UIElementKind_Window, UIWindowPart_ResizeMargin),
+        .MinSize = UIThemeStyle_GetVector(Style, UIElementKind_Window, UIWindowPart_MinSize),
+        .MinimizedWidth = UIThemeStyle_GetNumber(Style, UIElementKind_Window, UIWindowPart_MinimizedWidth),
+        .ContentPadding = UIThemeStyle_GetVector(Style, UIElementKind_Window, UIWindowPart_ContentPadding),
+        .ContentSpacing = UIThemeStyle_GetNumber(Style, UIElementKind_Window, UIWindowPart_ContentSpacing)
+    };
+    UIWindowCapability_SetMetrics(&Box->Base.Window, Base, &Metrics);
+    return Result;
+}
+
+static Error WindowBox_Measure(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
+{
+    return UIWindow_Measure(&((WindowBox*)self)->Base.Base, context, availableWidth, outSize);
+}
+
+/* The icon and the title in the title bar: the icon after the padding, the title after it, cut where the caption buttons begin. */
+static Error WindowBox_RenderTitle(const WindowBox* box, UIRenderContext* context, const UIThemeStyle* style, Rectangle bar, float scale)
+{
+    const UIScreen* Screen = Widget_GetScreen(&box->Base.Base);
+    const UIWindowCapability* Window = &box->Base.Window;
+    Color TextColor = UIElementLook_BlendColors(&box->Look, UIThemeStyle_GetColors(style, UIWindowPart_TitleText), WHITE);
+    Vector2 Icon = UIElementIconView_GetPixelSize(&box->Icon, Screen);
+    Vector2 Text = UIElementText_GetPixelSize(&box->Title, Screen);
+    float X = bar.x + RoundToPixel(Window->_metrics.TitlePadding * scale);
+    float End = bar.x + RoundToPixel(UIWindowCapability_GetTitleEnd(Window) * scale);
+    if (!(End > X))
+    {
+        return Error_CreateSuccess();
+    }
+    Rectangle Span = { .x = X, .y = bar.y, .width = End - X, .height = bar.height };
+    RenderContext_PushClip(UIRenderContext_GetRenderContext(context), Span);
+    Error Result = UIElementIconView_Draw(&box->Icon, context, X, bar.y + RoundToPixel((bar.height - Icon.y) * 0.5f), TextColor);
+    if (UIElementIconView_IsShowing(&box->Icon))
+    {
+        X += Icon.x + RoundToPixel(Window->_metrics.IconSpacing * scale);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIElementText_Draw(&box->Title, context, X, bar.y + RoundToPixel((bar.height - Text.y) * 0.5f), TextColor);
+    }
+    RenderContext_PopClip(UIRenderContext_GetRenderContext(context));
+    return Result;
+}
+
+/* Each edge's highlight while it shows hovered or pressed; a theme with no such part draws none. */
+static Error WindowBox_RenderEdges(const WindowBox* box, UIRenderContext* context, const UIThemeStyle* style, Rectangle pixels, float scale)
+{
+    const UIBoxStyle* Highlight = UIThemeStyle_GetBox(style, UIWindowPart_ResizeEdge);
+    Error Result = Error_CreateSuccess();
+    for (int32_t Edge = 0; (Edge < (int32_t)UIWindowEdge_Count) && (Highlight != NULL) && (Result.Code == ErrorCode_Success); Edge++)
+    {
+        Rectangle Band;
+        UIElementState State = UIWindow_GetEdgeState(&box->Base.Base, (UIWindowEdge)Edge, &Band);
+        if (State == UIElementState_Normal)
+        {
+            continue;
+        }
+        Rectangle BandPixels = { .x = pixels.x + RoundToPixel(Band.x * scale), .y = pixels.y + RoundToPixel(Band.y * scale),
+            .width = RoundToPixel(Band.width * scale), .height = RoundToPixel(Band.height * scale) };
+        UIBoxPaint Paint = UIBoxStyle_Resolve(Highlight, State);
+        Result = UIBoxStyle_Draw(Highlight, context, BandPixels, &Paint, scale);
+    }
+    return Result;
+}
+
+static Error WindowBox_Render(void* self, UIRenderContext* context)
+{
+    WindowBox* Box = self;
+    Rectangle Pixels = UIRenderContext_GetPixelBox(context);
+    if (UIElement_IsBoxEmpty(Pixels))
+    {
+        return Error_CreateSuccess();
+    }
+    const UIWindowCapability* Window = &Box->Base.Window;
+    const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Widget_GetScreen(&Box->Base.Base));
+    float Scale = Widget_GetEffectiveScale(&Box->Base.Base);
+    Error Result = UIElementLook_DrawBox(&Box->Look, Style, UIWindowPart_Frame, context, Pixels, Scale);
+    float TitleHeight = Math_MinFloat(Pixels.height, RoundToPixel(Window->_metrics.TitleHeight * Scale));
+    Rectangle Bar = { .x = Pixels.x, .y = Pixels.y, .width = Pixels.width, .height = TitleHeight };
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIElementLook_DrawBox(&Box->Look, Style, UIWindowPart_TitleBar, context, Bar, Scale);
+    }
+    float Border = RoundToPixel(Window->_metrics.Border * Scale);
+    Rectangle Content = { .x = Pixels.x + Border, .y = Pixels.y + TitleHeight, .width = Pixels.width - (2.0f * Border),
+        .height = Pixels.height - TitleHeight - Border };
+    if ((Result.Code == ErrorCode_Success) && !UIWindowCapability_IsMinimized(Window) && !UIElement_IsBoxEmpty(Content))
+    {
+        Result = UIElementLook_DrawBox(&Box->Look, Style, UIWindowPart_ContentBackground, context, Content, Scale);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = WindowBox_RenderTitle(Box, context, Style, Bar, Scale);
+    }
+    return (Result.Code == ErrorCode_Success) ? WindowBox_RenderEdges(Box, context, Style, Pixels, Scale) : Result;
+}
+
+static UIElementLook* WindowBox_GetThemeLook(void* self)
+{
+    return &((WindowBox*)self)->Look;
+}
+
+
 // Static functions: what shows a drag.
 static Error DragGhost_Construct(void* widget, void* args)
 {
@@ -597,6 +778,16 @@ static const UILookVTable ToolbarBoxLook =
     .GetThemeLook = ToolbarBox_GetThemeLook
 };
 
+static const UILookVTable WindowBoxLook =
+{
+    .Construct = WindowBox_Construct,
+    .Deconstruct = WindowBox_Deconstruct,
+    .Update = WindowBox_Update,
+    .Render = WindowBox_Render,
+    .Measure = WindowBox_Measure,
+    .GetThemeLook = WindowBox_GetThemeLook
+};
+
 static const WidgetVTable DragGhostVTable =
 {
     .OnDeconstruct = DragGhost_OnDeconstruct,
@@ -625,6 +816,10 @@ Error UIStandardEditorLooks_Register(UIKit* kit)
     if (Result.Code == ErrorCode_Success)
     {
         Result = UIKit_RegisterLook(kit, UIElementKind_Toolbar, UI_KIT_STANDARD_LOOK, sizeof(ToolbarBox), &ToolbarBoxLook, NULL);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIKit_RegisterLook(kit, UIElementKind_Window, UI_KIT_STANDARD_LOOK, sizeof(WindowBox), &WindowBoxLook, NULL);
     }
     return Result;
 }

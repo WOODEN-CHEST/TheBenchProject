@@ -1157,6 +1157,36 @@ Error UIScreen_SetScale(UIScreen* self, float scale)
     return Error_CreateSuccess();
 }
 
+Error UIScreen_SetWorkspaceInsets(UIScreen* self, UIInsets insets)
+{
+    if (self == NULL)
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIScreen_SetWorkspaceInsets: self must not be NULL.");
+    }
+    if (!UILayoutLength_IsValid(insets.Left) || !UILayoutLength_IsValid(insets.Top) || !UILayoutLength_IsValid(insets.Right)
+        || !UILayoutLength_IsValid(insets.Bottom))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange,
+            "UIScreen_SetWorkspaceInsets: every inset must be a finite number within [0, UI_LAYOUT_MAX_LENGTH].");
+    }
+    self->_workspaceInsets = insets;
+    return Error_CreateSuccess();
+}
+
+Rectangle UIScreen_GetWorkspaceBox(const UIScreen* self)
+{
+    const UIInsets* Insets = &self->_workspaceInsets;
+    float Width = self->_viewport.SizePixels.x / self->_scale;
+    float Height = self->_viewport.SizePixels.y / self->_scale;
+    return (Rectangle)
+    {
+        .x = Insets->Left,
+        .y = Insets->Top,
+        .width = Math_MaxFloat(0.0f, Width - Insets->Left - Insets->Right),
+        .height = Math_MaxFloat(0.0f, Height - Insets->Top - Insets->Bottom)
+    };
+}
+
 
 // Public functions: theme.
 /* The theme has just changed: cached sizes are old, and what was logged about the last one may hold again. */

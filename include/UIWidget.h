@@ -347,6 +347,9 @@ typedef struct WidgetStruct
     /** @brief When true, while the widget is entered, the keys the screen would act on for it (Tab, the arrows, Enter,
      *  Escape) stay unconsumed for their reader, and only focus moving, code or a world screen let go leave it. */
     bool _keepsKeysWhenEntered;
+    /** @brief When true, a press on the widget, or on a widget inside it that neither takes the focus nor keeps it, leaves the focus
+     *  where it is: the press focuses, enters and leaves nothing (a window's title bar, which moves the focus itself). */
+    bool _keepsFocusOnPress;
 
     /** @brief True while the pointer hovers the widget. */
     bool _isHovered;
@@ -951,6 +954,29 @@ static inline bool Widget_KeepsKeysWhenEntered(const Widget* self)
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
  */
 Error Widget_SetKeepsKeysWhenEntered(Widget* self, bool keepsKeys);
+
+/**
+ * @brief Returns whether a press on the widget leaves the focus where it is (Widget_SetKeepsFocusOnPress).
+ * @param self The widget; must not be NULL.
+ * @returns true if it keeps the focus.
+ */
+static inline bool Widget_KeepsFocusOnPress(const Widget* self)
+{
+    return self->_keepsFocusOnPress;
+}
+
+/**
+ * @brief Sets whether a press on the widget, or on a widget inside it that neither takes the focus nor keeps it itself, leaves the
+ *        focus where it is: the screen focuses, enters and leaves nothing for that press, which still reaches the widget under the
+ *        pointer as any press does. Looking up from what was pressed, the first widget that keeps the focus or can take it decides,
+ *        so a focusable widget inside one that keeps it is focused as usual. For what moves the focus itself: a window's title bar
+ *        gives its window the focus back without leaving what is being edited inside it. Keyboard navigation does not change: a
+ *        focusable widget that keeps the focus is still focused by the keys. Takes effect at the next press.
+ * @param self The widget; must not be NULL.
+ * @param keepsFocus The new flag.
+ * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.
+ */
+Error Widget_SetKeepsFocusOnPress(Widget* self, bool keepsFocus);
 
 
 // Interaction state (driven by the screen).

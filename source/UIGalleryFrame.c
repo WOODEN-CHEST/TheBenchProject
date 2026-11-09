@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "UIGalleryFrame.h"
+#include "UIGalleryWindows.h"
 #include "Config.h"
 #include "GameFrame.h"
 #include "GameFrameManager.h"
@@ -57,8 +58,9 @@
 #define SCRUB_START_PIXELS 3.0f
 /** The keyboard box's width, in UI pixels. */
 #define KEYBOARD_BOX_WIDTH 320.0f
-/** How many pages the gallery has (N steps through them). */
-#define PAGE_COUNT ((size_t)6)
+/** How many pages the gallery has (N steps through them), and which one is the windows'. */
+#define PAGE_COUNT ((size_t)7)
+#define WINDOWS_PAGE ((size_t)6)
 /** How many characters of a text box's text its events show in the status line. */
 #define SHOWN_TEXT_BYTES 40
 /** How many style ranges the fourth page's coloured box has. */
@@ -231,6 +233,9 @@ typedef struct UIGalleryFrameStruct
     uint64_t _aboutButtonId;
     uint64_t _openDialogId;
     uint64_t _renameFieldId;
+    /** The seventh page's windows and their types, and whether they are set up (for teardown after a failed creation). */
+    GalleryWindows _windows;
+    bool _areWindowsConstructed;
 } UIGalleryFrame;
 
 /* A stack that takes the wheel, as a scroll area does: its children's wheel comes up to it. */
@@ -841,6 +846,7 @@ static void BuildPopupsPage(GalleryBuild* build);
 static void BuildTextPage(GalleryBuild* build);
 static void BuildValuePage(GalleryBuild* build);
 static void BuildEditorPage(GalleryBuild* build);
+static void BuildWindowsPage(GalleryBuild* build);
 static void DescribeEverything(GalleryBuild* build);
 static const char* GetElementName(const UIGalleryFrame* frame, uint64_t id);
 
@@ -869,6 +875,7 @@ static Error BuildPage(UIGalleryFrame* frame)
     BuildTextPage(&Build);
     BuildValuePage(&Build);
     BuildEditorPage(&Build);
+    BuildWindowsPage(&Build);
     DescribeEverything(&Build);
     return Build.Result;
 }
@@ -2940,8 +2947,31 @@ static void BuildEditorPage(GalleryBuild* build)
 }
 
 
+// Static functions: the seventh page.
+/* Windows: what to try and a Window menu over a page of its own; the windows are roots of their own, opened when the page first shows. */
+static void BuildWindowsPage(GalleryBuild* build)
+{
+    UIGalleryFrame* Frame = build->Frame;
+    uint64_t Root = AddPageRoot(build);
+    Frame->_pageIds[WINDOWS_PAGE] = Root;
+    uint64_t Page = AddPageContent(build, Root);
+    if (!HasFailed(build))
+    {
+        build->Result = GalleryWindows_BuildPage(&Frame->_windows, Page);
+    }
+    Frame->_statusIds[WINDOWS_PAGE] = AddStatusLine(build, Root);
+    Widget* PageBase = NULL;
+    if (!HasFailed(build) && UIScreen_TryGetWidgetById(&Frame->_screen, Root, &PageBase))
+    {
+        build->Result = Widget_SetIsRendered(PageBase, false);
+    }
+}
+
+static Error ReportFromWindows(void* context, const char* text);
+
+
 // Static functions: switching pages.
-/* Shows the next page and hides the one shown. */
+/* Shows the next page and hides the one shown; the windows show with their page alone. */
 static Error ShowNextPage(UIGalleryFrame* frame)
 {
     Widget* Shown = NULL;
@@ -2957,7 +2987,12 @@ static Error ShowNextPage(UIGalleryFrame* frame)
     {
         Result = Widget_SetIsRendered(Next, true);
     }
+    bool HasWindowsPageChanged = (frame->_pageIndex == WINDOWS_PAGE) || (NextIndex == WINDOWS_PAGE);
     frame->_pageIndex = NextIndex;
+    if ((Result.Code == ErrorCode_Success) && HasWindowsPageChanged && frame->_areWindowsConstructed)
+    {
+        Result = GalleryWindows_SetShown(&frame->_windows, NextIndex == WINDOWS_PAGE);
+    }
     return Result;
 }
 
@@ -3130,6 +3165,12 @@ static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserDa
     return Error_CreateSuccess();
 }
 
+/* What the windows page tells: the status line and the log. */
+static Error ReportFromWindows(void* context, const char* text)
+{
+    return Report(context, text);
+}
+
 /* Shows and logs an element being entered or left. */
 static Error OnEnteredChanged(UIScreen* screen, const UIEvent* event, const UserData* userData)
 {
@@ -3270,7 +3311,12 @@ static Error UIGalleryFrame_Update(void* self, ProgramTime time)
     UIGalleryFrame* Frame = self;
     GameInput* Input = Frame->_services->Input;
     Frame->_time = time.TotalTime;
-    Error Result = UIWindowHost_Update(&Frame->_host, &Frame->_screen, time, Input);
+    Error Result = (Frame->_pageIndex == WINDOWS_PAGE) ? GalleryWindows_KeepWorkspace(&Frame->_windows, Frame->_statusIds[WINDOWS_PAGE])
+        : Error_CreateSuccess();
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIWindowHost_Update(&Frame->_host, &Frame->_screen, time, Input);
+    }
     if ((Result.Code == ErrorCode_Success) && (Input != NULL))
     {
         Result = HandleKeys(Frame, Input);
@@ -3311,6 +3357,10 @@ static void DestroyFrameContents(UIGalleryFrame* frame)
     {
         Error Result = UIScreen_Deconstruct(&frame->_screen);
         Error_Deconstruct(&Result);
+    }
+    if (frame->_areWindowsConstructed)
+    {
+        GalleryWindows_Deconstruct(&frame->_windows); // Its types go once their windows have.
     }
     if (frame->_isKitConstructed)
     {
@@ -3438,6 +3488,12 @@ static Error BuildFrameContents(UIGalleryFrame* frame)
         uint64_t Subscription = UI_SCREEN_ID_INVALID;
         Result = UIScreen_Subscribe(&frame->_screen, WIDGET_ID_INVALID, UI_EVENT_KIND_MASK(UIEventKind_PopupClosed), OnPopupClosed, &FrameData,
             &Subscription);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = GalleryWindows_Construct(&frame->_windows, Shared->WindowTypes, Shared->Keys, &frame->_kit, &frame->_screen, ReportFromWindows,
+            frame);
+        frame->_areWindowsConstructed = true; // Whatever registered is withdrawn at teardown.
     }
     if (Result.Code == ErrorCode_Success)
     {

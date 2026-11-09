@@ -32,6 +32,7 @@
 #include "UITree.h"
 #include "UIValue.h"
 #include "UIVectorRow.h"
+#include "UIWindow.h"
 
 
 /**
@@ -123,6 +124,8 @@ typedef enum UIElementCapabilityEnum
     UIElementCapability_ColorPicker,
     /** @brief UIToolbarCapability (UIToolbar.h). */
     UIElementCapability_Toolbar,
+    /** @brief UIWindowCapability (UIWindow.h). */
+    UIElementCapability_Window,
     /** @brief The number of capabilities. */
     UIElementCapability_Count
 } UIElementCapability;
@@ -187,6 +190,10 @@ typedef struct UIKitStruct
     uint64_t _colorPopupType;
     uint64_t _colorSquareType;
     uint64_t _colorStripType;
+    /** @brief The kit's own widget types a window's frame is made of: the frame under its parts, its title bar and an edge. */
+    uint64_t _windowFrameType;
+    uint64_t _windowTitleType;
+    uint64_t _windowEdgeType;
     /** @brief The registered looks (a private element type): kind, name, widget type, hooks. Owned. */
     GenericBuffer _looks;
     /** @brief Per factory type id less one, the index + 1 of its look in _looks (uint32_t), 0 for a type that is no look. Owned. */
@@ -377,3 +384,18 @@ Error UIKit_CreateColorPicker(UIKit* self, UIScreen* screen, uint64_t parentId, 
 /** @brief Makes a tool bar (UIToolbar.h) with a button for each item but its separators (each of the look the theme names for the button,
  *  of the variant its options name, its name its hover text). See the comment above for the parameters and the result. */
 Error UIKit_CreateToolbar(UIKit* self, UIScreen* screen, uint64_t parentId, const UIToolbarOptions* options, uint64_t* outId);
+/**
+ * @brief Makes a window (UIWindow.h) as a root of the screen's Floating layer, at its options' place (centred on the workspace without one):
+ *        its title bar with its caption buttons (each of the look the theme names for the button, of the "window_button" or "window_close"
+ *        variant), its edges, and its content, a column in a scroll area of the "window" variant (the scroll area's look the theme's), which
+ *        calling code fills.
+ * @param self The kit; must not be NULL.
+ * @param screen The screen; must not be NULL.
+ * @param options The options; must not be NULL. Read for the call.
+ * @param outId [out] Receives the window's id, or WIDGET_ID_INVALID on a failure (nothing stays behind). Must not be NULL.
+ * @param outContentId [out] Receives the content's column, where calling code adds its elements (UIWindow_GetContentId reads it later).
+ *        May be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if a pointer that must not be NULL is; ErrorCode_ArgumentOutOfRange for options that are
+ *          not valid (UIWindowOptions_IsValid); otherwise the first error of making it or its parts.
+ */
+Error UIKit_CreateWindow(UIKit* self, UIScreen* screen, const UIWindowOptions* options, uint64_t* outId, uint64_t* outContentId);

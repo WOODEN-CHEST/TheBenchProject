@@ -69,6 +69,14 @@ typedef struct UIKindBehaviourStruct
 } UIKindBehaviour;
 
 
+/** What a window's edge, a widget type of the kit's own, is made with (UIKit_CreateWindow): its window and which edge it is. */
+typedef struct UIWindowEdgeArgsStruct
+{
+    uint64_t WindowId;
+    UIWindowEdge Edge;
+} UIWindowEdgeArgs;
+
+
 // The kinds' behaviours (each in its kind's module).
 /** The panel's: its options (direction, padding, spacing); children laid out with its own padding or none. */
 const UIKindBehaviour* UIPanel_GetKindBehaviour(void);
@@ -110,3 +118,21 @@ const UIKindBehaviour* UIDialog_GetKindBehaviour(void);
 const UIKindBehaviour* UIColorPicker_GetKindBehaviour(void);
 /** The tool bar's: its items, its buttons' clicks turned into its events, its buttons laid out. */
 const UIKindBehaviour* UIToolbar_GetKindBehaviour(void);
+/** The window's: its box kept reachable and at least its least size, its layer, its parts laid out, the focus it remembers. */
+const UIKindBehaviour* UIWindow_GetKindBehaviour(void);
+
+/** The parts UIKit_CreateWindow made a window of, by id: its frame, its title bar, its caption buttons (by UIWindowButton), its scroll
+ *  area, its content's column and its edges (by UIWindowEdge). */
+typedef struct UIWindowPartsStruct
+{
+    uint64_t FrameId;
+    uint64_t TitleBarId;
+    uint64_t ButtonIds[UIWindowButton_Count];
+    uint64_t AreaId;
+    uint64_t ContentId;
+    uint64_t EdgeIds[UIWindowEdge_Count];
+} UIWindowParts;
+
+/** Gives a window its parts once (a second call is refused with ErrorCode_InvalidOperation), subscribes to its buttons' events, posts its
+ *  Open cue and applies its state. ErrorCode_InvalidOperation also for a stale id or a widget that is no window. */
+Error UIWindow_SetParts(UIScreen* screen, uint64_t windowId, const UIWindowParts* parts);

@@ -249,6 +249,15 @@ uint64_t UIScreen_GetPopupAt(const UIScreen* screen, size_t index);
 uint64_t UIScreen_FindPopupOf(const UIScreen* screen, uint64_t widgetId);
 
 /**
+ * @brief Returns the widget an open popup belongs to (its options' OwnerId): what opened a menu or a list, for following the focus in a
+ *        popup back to where it came from.
+ * @param screen The screen; must not be NULL.
+ * @param rootWidgetId An open popup's root.
+ * @returns The owner's id; WIDGET_ID_INVALID for a popup owned by nobody, or a widget that is no open popup's root.
+ */
+uint64_t UIScreen_GetPopupOwner(const UIScreen* screen, uint64_t rootWidgetId);
+
+/**
  * @brief Places a box against an anchor on a surface, all in surface pixels: on the rules' side, flipped to the other when it does not
  *        fit there and fits (or has more room) on the other and the rules allow it, made shorter to the room on its side when they allow
  *        it (never below their minimum, nor below nothing), then moved to stay on the surface, every edge on a whole pixel. Pure.

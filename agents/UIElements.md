@@ -2,8 +2,8 @@
 
 The elements calling code builds a UI from: panels, labels, buttons, toggles, sliders, stacks, scroll areas and scroll bars,
 dropdowns, menus, menu bars, status bars, text boxes, property boxes, the compounds final screens use (labelled rows, forms, compound
-sliders, rows of fields) and what an editor's windows are built from (lists, trees, modal dialogs, colour pickers, tool bars, drag and drop),
-sized in UI pixels and drawn through a theme. They stand on the framework in [UIFramework.md](UIFramework.md) (screens, widgets, input routing,
+sliders, rows of fields), what an editor's windows are built from (lists, trees, modal dialogs, colour pickers, tool bars, drag and drop) and
+the windows themselves with their types, sized in UI pixels and drawn through a theme. They stand on the framework in [UIFramework.md](UIFramework.md) (screens, widgets, input routing,
 notifications).
 
 | Module | Files | What it is |
@@ -37,7 +37,9 @@ notifications).
 | UIDialog | `include/UIDialog.h`, `source/UIDialog.c` | A modal question: a title, a message, content, buttons with an answer each; Enter and Escape in one press from an entered field. |
 | UIColorPicker | `include/UIColorPicker.h`, `source/UIColorPicker.c` | A swatch and the popup that picks a `Color` or a `RenderColor`: a square, strips, channel fields and hex; its HSV conversions pure. |
 | UIToolbar | `include/UIToolbar.h`, `source/UIToolbar.c` | A strip of the kit's buttons from a list: buttons, toggles, choices of a group and separators, across or upright. |
-| UIGalleryFrame | `include/UIGalleryFrame.h`, `source/UIGalleryFrame.c` | Every element in every state, on six pages: `--ui-gallery`. |
+| UIWindow | `include/UIWindow.h`, `source/UIWindow.c` | A window: a frame that moves, resizes, minimizes, maximizes and closes, kept reachable, with content calling code fills; its pure arithmetic. |
+| UIWindowTypes | `include/UIWindowTypes.h`, `source/UIWindowTypes.c` | The windows a UI opens by key: a registry of types in the root, opening one (a single one brought back), where the last one closed, a Window menu's items. |
+| UIGalleryFrame | `include/UIGalleryFrame.h`, `source/UIGalleryFrame.c`, private `source/UIGalleryWindows.{h,c}` (the windows page) | Every element in every state, on seven pages: `--ui-gallery`. |
 
 ## Using it
 
@@ -95,7 +97,7 @@ A variant costs, from cheapest:
 **Looks.** A look is a struct that starts with its kind's look base (`UIPanelLookBase`, `UIButtonLookBase`, `UIToggleLookBase`,
 `UISliderLookBase`, `UIScrollbarLookBase`, `UIScrollAreaLookBase`, `UIDropdownLookBase`, `UIMenuBarLookBase`, `UIStatusBarLookBase`, `UITextBoxLookBase`,
 `UIPropertyBoxLookBase`, `UILabelledLookBase`, `UIFormLookBase`, `UICompoundSliderLookBase`, `UIVectorRowLookBase`, `UIListLookBase`, `UITreeLookBase`,
-`UIDialogLookBase`, `UIColorPickerLookBase`, `UIToolbarLookBase`: the `Widget`, then the capability) and a `UILookVTable`:
+`UIDialogLookBase`, `UIColorPickerLookBase`, `UIToolbarLookBase`, `UIWindowLookBase`: the `Widget`, then the capability) and a `UILookVTable`:
 
 | Slot | | What it does |
 |---|---|---|
@@ -129,7 +131,7 @@ A property box look gives its text box the same geometry (its look base holds a 
 behaviour the theme's metrics from its Update (`UILabelledCapability_SetSpacing`, `UIFormCapability_SetMetrics`, `UICompoundSliderCapability_SetMetrics`,
 `UIVectorRowCapability_SetMetrics`) and measures through the kind (`UILabelled_Measure`, `UIForm_Measure`, `UICompoundSlider_Measure`,
 `UIVectorRow_Measure`); the kind lays its parts out. The list, the tree and the dialog are told their metrics the same way (`UIListCapability_SetMetrics`,
-`UITreeCapability_SetMetrics`, `UIDialogCapability_SetMetrics`) and measure through the kind; a tool bar look lays its buttons out and measures them through
+`UITreeCapability_SetMetrics`, `UIDialogCapability_SetMetrics`, `UIWindowCapability_SetMetrics`) and measure through the kind; a tool bar look lays its buttons out and measures them through
 `UIToolbar_Arrange` and `UIToolbar_Measure` with the theme's metrics, and draws its separators where its entries say (`UIToolbarCapability_GetEntryAt`).
 
 A text box look tells the behaviour where its text is (`UITextBoxCapability_SetGeometry`, in its Construct): its text's insets, a layout of the text with
@@ -486,6 +488,85 @@ any widget can be one.
 **Context menus** are a service of the screen ([UIFramework.md](UIFramework.md), "Context menus"): a provider set on a widget answers a right click or
 the menu key on it or on anything inside it that has no provider of its own, and opens a menu with `UIMenu_OpenAt`.
 
+## Windows
+
+**Window** (`UIWindow.h`, kind `window`, `UIKit_CreateWindow`). An icon, a title, a frame that moves and resizes, minimize, maximize and close,
+and content calling code fills. It works on any screen: the game window's, or a screen in the world, where its title bar and edges follow the
+ray on the picture as any held press does.
+- **Made whole** as a root in the screen's `Floating` layer, in front of the floating windows: its frame (a widget of the kit's own under the
+  rest, as large as the window), its title bar (another), three caption buttons in it (kit buttons of the theme's `window_button` and `window_close` variants, with placeholder letters until icon art exists),
+  eight edges and corners (widgets of the kit's own, each with its pointer's shape) and its content: a column in a scroll area of the theme's
+  `window` variant (drawn over the window's content background). The creation gives
+  the column's id (`UIWindow_GetContentId` later): calling code adds its elements there and talks to the window by its id, never to its frame.
+- **Its box.** Its floating box (`UIWindowOptions.Position` and `Size`, centred on the workspace without a position; `UIWindow_SetBox`,
+  `UIWindow_GetBox`) is in the screen's UI pixels, a root's placement units, and is what the window goes back to. What shows
+  (`UIWindow_GetShownBox`) is that box grown to the window's least size and kept reachable on the workspace: the title bar's whole height on it,
+  and at least `UI_WINDOW_REACHABLE_WIDTH` (in the window's own UI pixels) of the title bar's draggable part, the title bar less its buttons
+  (`UIWindow_KeepReachable`, pure). Keeping it reachable never changes the floating box, so a game window that shrinks and grows back puts every
+  window back where it was. Each update places it again, so a move, a resize, a new surface size or new workspace strips all count.
+- **Moving and resizing.** A left press on the title bar moves it, following the held press past the surface; the drag starts from where it
+  shows. An edge or a corner resizes it (`UIWindow_ResizeBox`, pure): each edge it names stops at the workspace's edge (or where it began, when that
+  lies beyond) and where the least size is left, and a top edge a title bar's height above the workspace's bottom. Either keeps the floating box
+  reachable too. Other buttons move and resize nothing (their press and release during a drag leave it going); minimizing, maximizing or a lost
+  press (the window hidden) end it. A double click on the title bar maximizes, or restores a maximized or minimized window. A maximized window is
+  moved and resized by nothing; one that is not resizable (`IsResizable`, `UIWindow_SetIsResizable`), minimized or maximized shows no edges.
+- **Its least size,** in its own UI pixels (its scale multiplies it), is the largest of the theme's `min_size`, its own (`MinimumSize`,
+  `UIWindow_SetMinimumSize`), what its title bar needs, and, per axis that fits (`UIWindowFit_Fit`: `FitAcross`, `FitDown`, `UIWindow_SetFit`), what
+  its content needs: across, the content measured with no width at all (as narrow as it can be: a wrapped label at its longest word), plus the
+  vertical bar's room while down scrolls; down, the content's height at the window's width. An axis that scrolls (`UIWindowFit_Scroll`) gives the
+  content its preferred size, with a bar while that is larger. The default fits across and scrolls down. The window's Measure is its least size
+  (`UIWindow_Measure`), cached as any element's until something in it changes.
+- **Minimized** (`UIWindow_Minimize`, its first button): its content is hidden (the focus in it is lost; its state is kept) and its frame is only
+  a title bar `minimized_width` wide where the window was: the icon, as much of the title as fits, restore (the same button) and close. It can be
+  moved. Restoring (`UIWindow_Restore`) gives the same size back; restored by its button or a double click, it gives the focus back inside
+  too (the press gave it to the window itself while its content was hidden). It is as wide as `minimized_width`, or what its title bar needs
+  when that is more.
+- **Maximized** (`UIWindow_Maximize`, its second button, a double click on the title bar): it stands in the `Maximized` layer, over every floating
+  window, and fills the workspace; restoring brings back its floating box, in front of the floating windows. One window of a screen shows maximized
+  at a time: maximizing one restores any other. A maximized window that is minimized is a floating title bar, and restores to maximized
+  (restoring the other one then). Giving a floating window the focus by code (`UIWindow_Focus`, opening a type) restores a window maximized
+  over it, so the one focused shows. Only a root minimizes or fills the workspace: a window another widget places shows neither button, and
+  `UIWindow_Minimize` and `UIWindow_Maximize` refuse it.
+- **Closing** (its close button while `CanClose`, `UIWindow_Close`) asks its close query first (`CloseQuery`, `UIWindow_SetCloseQuery`): false keeps
+  it, and the query may open a dialog and close it later with `UIWindow_CloseNow`, which does not ask (a query that closes it at once counts as
+  closing it, whatever it answers). A closed window is destroyed. Which caption buttons show is `CanMinimize`, `CanMaximize` and `CanClose`
+  (`UIWindow_SetButtons`), and a minimized window always shows the one that restores it; code can minimize and maximize any root window and close
+  any window. It posts the `Open` cue when it is made and `Close` when it closes.
+- **Focus.** A press anywhere in it raises it within its layer, as a press raises any root. The window is a focusable group: navigation reaches it
+  as one, and Enter goes in. A press on its title bar, a caption button, an edge or its border acts on nothing inside: those parts keep the focus
+  where it is on a press (`Widget_SetKeepsFocusOnPress`, [UIFramework.md](UIFramework.md)), so an element being edited inside stays entered in the
+  same visit, and the window then takes the focus itself unless it is inside already: from elsewhere or from the window itself, back to what last
+  had it inside, entered again if it was (on a screen that has the keyboard), else to its default target (`UIWindow_SetDefaultFocus`, entered if
+  asked: a world view), else the window itself. A double click on the title bar acts when its second press is let go, so the release lands on
+  the title bar, never on what the window shows there afterwards. `UIWindow_Focus` does the same from code and brings
+  it to the front. It is active (`UIWindow_IsActive`) while the focus is in it, or in a popup whose owner is in it (its dropdown's list, a menu it
+  opened, a popup opened from those: `UIScreen_GetPopupOwner`); its look shows the `focused` state then. What had the focus in a popup is not
+  remembered as its own: a press on its title bar afterwards goes back to what had it inside before.
+- **The workspace** is the surface less the strips the screen's workspace insets name (`UIScreen_SetWorkspaceInsets`, `UIScreen_GetWorkspaceBox`,
+  [UIFramework.md](UIFramework.md)): the bars' room, which whoever lays the bars out sets. None by default.
+- **Its look** (a struct starting with `UIWindowLookBase`) draws the frame, the title bar (the icon, then the title cut where the buttons begin:
+  `UIWindowCapability_GetTitleEnd`), the content's background and an edge's highlight while the pointer is on it or it is dragged
+  (`UIWindow_GetEdgeState`: a hidden edge is normal with an empty box); it tells the behaviour the theme's metrics with the icon's width
+  (`UIWindowCapability_SetMetrics`) and measures through `UIWindow_Measure`.
+- **Not built:** the content column's padding and spacing are read from the theme when the window is made (a theme swap changes the frame at once,
+  not those); the caption buttons take no focus by the keys and there are no window keys; a window posts no events of its own for moves, resizes
+  or its states (code reads `UIWindow_GetBox` and `UIWindow_GetState`); dragging a maximized window's title bar does not restore it.
+
+**Window types** (`UIWindowTypes.h`). The windows a UI opens by key (`tbp:editor_outliner`): each registered with a display name, an icon, a
+function that fills a new window's content (`UIWindowTypeFill`), its windows' fits, default size and least size, and whether only one may be open on
+a screen (`IsSingle`). `UIWindowTypes` keeps them in a `Registry` under `tbp:ui_window_type` ([Registry.md](Registry.md)), added to the program's
+root registry; `main.c` makes the program's one and `Services.WindowTypes` carries it. A frame registers the types it offers under a source key of
+its own while it runs and withdraws them together (`UIWindowTypes_WithdrawSource`) when it goes.
+- `UIWindowTypes_Open(types, screen, key, &windowId)`, or `_OpenAt` by index: a single type's window that is open on the screen already (found
+  anywhere in its tree: `UIWindowTypes_FindOpen`) is restored if it is minimized, brought to the front and given the focus. Otherwise a new window
+  is made where the type's last window was when it closed, or at its default size centred on the workspace (either stepped down and to the right
+  by `UI_WINDOW_TYPES_CASCADE_STEP` while another window's top-left stands there), filled, and given the focus (`UIWindow_Focus`: what the fill
+  focused inside keeps it, else the default focus target, else the window). A fill that fails takes its window with it; one that closes its own
+  window leaves the open successful with no window.
+- A window that closes leaves its floating box with its type (`UIWindowTypes_GetRememberedBox`): the record is the type's, whatever the screen.
+- `UIWindowTypes_WriteMenuItems(types, firstId, items, capacity, &count)` writes a Window menu: an item per active type with its name and icon, its
+  id the type's index after `firstId`, so the menu's handler opens `id - firstId`.
+
 ### Click modes
 
 Button and toggle options have `ClickMode` and `ActivationButtons` (`UIButton_SetClickMode`, `UIButton_SetActivationButtons`, and the toggle's).
@@ -594,7 +675,7 @@ UI is scaled, and at 28 both go away while 14 pixels stays sharp enough to read 
 
 ## The gallery
 
-`sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test, on six pages (N switches), each in a scroll area, so the
+`sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test, on seven pages (N switches), each in a scroll area, so the
 whole page scrolls at small window sizes while its status line stays below it. It keeps its pixels
 (`UIScalePolicy_ConstantPixels`): drag the window's edges, and the controls keep their size with more room around them. P switches to following the
 window's height and back, to compare them. T switches the theme (`tbp:test_flat`, `tbp:test_nine_slice`, whose art `asset_source/scripts/placeholder_ui.py`
@@ -642,6 +723,13 @@ whose nodes drag but no list takes them (the refused look); two lists, the desk 
 rows land selected where the line was); colour pickers with alpha, opaque, a light's `RenderColor`, mixed and disabled; and three dialogs: unsaved changes
 (Save the default, Cancel the cancel), a rename with its field entered and the old name selected, and a long message that wraps. The status line tells each
 selection, opened row, toggled cell, colour, answer and drop.
+
+The seventh page: windows, of four types the gallery registers with the program's window types while it runs (`source/UIGalleryWindows.c`): Fitting
+(both ways fit: a form of labelled rows it gets no smaller than), Scrolling (across fits, down scrolls: thirty buttons and the bar), Fixed (no edges,
+no maximize, all of it at a scale of 1.25, as a screen in the world is) and Notes (a text box filling it, several at once, whose close asks with a
+dialog while it says something). They open at their places the first time the page shows and hide while another page shows; the page's menu bar has
+a Window menu that lists every type and opens it (a single one comes to the front, restored). While the page shows, the screen's workspace
+runs from under the menu bar to the status line, so a maximized window leaves both.
 
 ## Rules for a new element
 

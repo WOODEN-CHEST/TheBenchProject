@@ -264,6 +264,25 @@ static const UIThemePartDescriptor DragParts[UIDragPart_Count] =
     [UIDragPart_Text] = COLORS_PART("text"),
     [UIDragPart_Target] = BOX_PART("target"),
 };
+static const UIThemePartDescriptor WindowParts[UIWindowPart_Count] =
+{
+    [UIWindowPart_TitleHeight] = NUMBER_PART("title_height", 24.0f),
+    [UIWindowPart_TitlePadding] = NUMBER_PART("title_padding", 6.0f),
+    [UIWindowPart_IconSpacing] = NUMBER_PART("icon_spacing", 6.0f),
+    [UIWindowPart_ButtonSize] = VECTOR_PART("button_size", 22.0f, 18.0f),
+    [UIWindowPart_ButtonSpacing] = NUMBER_PART("button_spacing", 2.0f),
+    [UIWindowPart_Border] = NUMBER_PART("border", 3.0f),
+    [UIWindowPart_ResizeMargin] = NUMBER_PART("resize_margin", 5.0f),
+    [UIWindowPart_MinSize] = VECTOR_PART("min_size", 160.0f, 80.0f),
+    [UIWindowPart_MinimizedWidth] = NUMBER_PART("minimized_width", 200.0f),
+    [UIWindowPart_ContentPadding] = VECTOR_PART("content_padding", 8.0f, 8.0f),
+    [UIWindowPart_ContentSpacing] = NUMBER_PART("content_spacing", 6.0f),
+    [UIWindowPart_Frame] = BOX_PART("frame"),
+    [UIWindowPart_TitleBar] = BOX_PART("title_bar"),
+    [UIWindowPart_TitleText] = COLORS_PART("title_text"),
+    [UIWindowPart_ContentBackground] = BOX_PART("content_background"),
+    [UIWindowPart_ResizeEdge] = BOX_PART("resize_edge"),
+};
 
 static const struct
 {
@@ -298,6 +317,7 @@ Kinds[UIElementKind_Count] =
     [UIElementKind_ColorPicker] = { u8"color_picker", ColorPickerParts, UIColorPickerPart_Count },
     [UIElementKind_Toolbar] = { u8"toolbar", ToolbarParts, UIToolbarPart_Count },
     [UIElementKind_Drag] = { u8"drag", DragParts, UIDragPart_Count },
+    [UIElementKind_Window] = { u8"window", WindowParts, UIWindowPart_Count },
 };
 
 

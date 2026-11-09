@@ -221,6 +221,9 @@ static void APopupOpensAboveEverythingAndFollowsItsAnchor(TestRun* run)
             && (Widget_GetId(Top) == PopupId));
         TEST_CHECK(run, UIScreen_FindPopupOf(&Fixture.Screen, PopupId) == PopupId);
         TEST_CHECK(run, UIScreen_FindPopupOf(&Fixture.Screen, AnchorId) == WIDGET_ID_INVALID);
+        TEST_CHECK(run, (UIScreen_GetPopupOwner(&Fixture.Screen, PopupId) == AnchorId)
+            && (UIScreen_GetPopupOwner(&Fixture.Screen, AnchorId) == WIDGET_ID_INVALID)
+            && (UIScreen_GetPopupOwner(&Fixture.Screen, WIDGET_ID_INVALID) == WIDGET_ID_INVALID));
 
         // It follows its anchor, and keeps its place when the surface changes size; a wider anchor makes it wider.
         UIPlacement Moved = UIPlacement_FromTopLeft(300.0f, 50.0f, 200.0f, 20.0f);

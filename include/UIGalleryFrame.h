@@ -14,7 +14,10 @@
  * look of the button; the third a menu bar, dropdowns near the window's edges and in the page (three options, a thousand from a
  * provider), context menus with submenus, a modal dialog, scroll areas and a long end, over a status bar; the fourth text boxes (one
  * line with a placeholder, a default, masked, filtered, limited, disabled, invalid, a line of code coloured by style ranges; several
- * lines wrapped, not wrapped and read-only; a form of three to Tab through). Every element shows hover text.
+ * lines wrapped, not wrapped and read-only; a form of three to Tab through); the fifth values; the sixth what an editor's windows are
+ * built from (lists, a tree, colour pickers, dialogs, drags, tool bars); the seventh floating windows of four types it registers with the
+ * program's window types while it runs (one that fits both ways, one that scrolls, a fixed one of its own scale, notes whose close asks
+ * first) and a Window menu that opens them. Every element shows hover text.
  *
  * Its keys, while no text box is being edited: N switches the page, T the theme (the same elements in flat boxes, nine-slice art and the flat boxes with another
  * palette, with no element's code changing), + and - scale the UI, P the scale policy, L stops and starts logging each element's
@@ -32,8 +35,8 @@ typedef struct ServicesStruct Services;
 // Functions.
 /**
  * @brief Creates the gallery (heap-allocated; the frame manager destroys it).
- * @param services The shared services; borrowed, must outlive the frame. Its Input, FrameManager, Assets, Config and Logger are
- *        used. Must not be NULL.
+ * @param services The shared services; borrowed, must outlive the frame. Its Input, FrameManager, Assets, Config, Logger, Keys and
+ *        WindowTypes (the windows page has none without them) are used. Must not be NULL.
  * @param outFrame [out] Receives the frame; must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if a pointer is NULL; otherwise an error from building the UI.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.

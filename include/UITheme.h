@@ -131,6 +131,8 @@ typedef enum UIElementKindEnum
     UIElementKind_Toolbar,
     /** @brief What a drag shows: what is dragged beside the pointer, and a frame over the target that would take it. */
     UIElementKind_Drag,
+    /** @brief A window: a frame with a title bar, its caption buttons, edges to resize it and content. */
+    UIElementKind_Window,
     /** @brief The number of kinds. */
     UIElementKind_Count
 } UIElementKind;
@@ -636,6 +638,46 @@ typedef enum UIDragPartEnum
     /** @brief The number of what a drag shows. */
     UIDragPart_Count
 } UIDragPart;
+
+/** @brief A window's values in a theme (its caption buttons are buttons of the "window_button" and "window_close" variants, its content
+ *  a scroll area's). */
+typedef enum UIWindowPartEnum
+{
+    /** @brief "title_height": the title bar's height, UI pixels. */
+    UIWindowPart_TitleHeight,
+    /** @brief "title_padding": from the title bar's left to the icon, and from its right to the last caption button, UI pixels. */
+    UIWindowPart_TitlePadding,
+    /** @brief "icon_spacing": between the icon and the title, UI pixels. */
+    UIWindowPart_IconSpacing,
+    /** @brief "button_size": a caption button's size, UI pixels. */
+    UIWindowPart_ButtonSize,
+    /** @brief "button_spacing": between two caption buttons, and between the title and the first of them, UI pixels. */
+    UIWindowPart_ButtonSpacing,
+    /** @brief "border": the frame around the content, at its left, right and bottom, UI pixels. */
+    UIWindowPart_Border,
+    /** @brief "resize_margin": how far in from each edge a press resizes the window, UI pixels. */
+    UIWindowPart_ResizeMargin,
+    /** @brief "min_size": the least size of a window whatever it holds, UI pixels. */
+    UIWindowPart_MinSize,
+    /** @brief "minimized_width": how wide a minimized window's title bar is, UI pixels. */
+    UIWindowPart_MinimizedWidth,
+    /** @brief "content_padding": inside the content's column, horizontal and vertical, UI pixels. */
+    UIWindowPart_ContentPadding,
+    /** @brief "content_spacing": between the content's elements, UI pixels. */
+    UIWindowPart_ContentSpacing,
+    /** @brief "frame": a box, the whole window; focused while the window is active (the focus is in it). */
+    UIWindowPart_Frame,
+    /** @brief "title_bar": a box, the title bar; focused while the window is active. */
+    UIWindowPart_TitleBar,
+    /** @brief "title_text": a colour per state, the title and a letter icon; focused while the window is active. */
+    UIWindowPart_TitleText,
+    /** @brief "content_background": a box behind the content; focused while the window is active. */
+    UIWindowPart_ContentBackground,
+    /** @brief "resize_edge": a box over an edge's band, hovered under the pointer and pressed while it is dragged; drawn only then. */
+    UIWindowPart_ResizeEdge,
+    /** @brief The number of a window's values. */
+    UIWindowPart_Count
+} UIWindowPart;
 
 /**
  * @brief What a value of an element kind is.

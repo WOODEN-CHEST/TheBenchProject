@@ -414,6 +414,19 @@ void UIDragDropTests_Run(TestRun* run);
  *  (UIToolbarTests.c). */
 void UIToolbarTests_Run(TestRun* run);
 
+/** @brief Windows: the title bar moving one, every edge and corner resizing it within its least size and the workspace, its least size
+ *  from its content per axis, staying reachable as the surface shrinks (every corner, odd scales, a window of its own scale) and coming back
+ *  as it grows, minimize, maximize (one at a time, the workspace's strips), a double click, closing and its query, a window destroyed
+ *  mid-drag, a press on the title bar acting on nothing inside and the focus coming back (entered again if it was), raising within a layer,
+ *  its scale, a press on what keeps the focus, the workspace, refused options, the arithmetic, a window on a world screen
+ *  (UIWindowTests.c). */
+void UIWindowTests_Run(TestRun* run);
+
+/** @brief Window types: registering and finding them (through the root too), refused definitions and keys, withdrawing and reviving,
+ *  opening one filled by its type, centred and stepped, a single type opening once (restored, in front, focused, found anywhere), what
+ *  cannot open, a closed window's place remembered, the Window menu's items (UIWindowTypesTests.c). */
+void UIWindowTypesTests_Run(TestRun* run);
+
 /** @brief Easing, keyframe validation and evaluation of typed values (UIAnimationTests.c). */
 void UIAnimationTests_Run(TestRun* run);
 
