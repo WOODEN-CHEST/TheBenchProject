@@ -2,6 +2,7 @@
 #include <string.h>
 #include "UIGalleryFrame.h"
 #include "UIGalleryWindows.h"
+#include "UIGalleryWorkspace.h"
 #include "Config.h"
 #include "GameFrame.h"
 #include "GameFrameManager.h"
@@ -58,9 +59,10 @@
 #define SCRUB_START_PIXELS 3.0f
 /** The keyboard box's width, in UI pixels. */
 #define KEYBOARD_BOX_WIDTH 320.0f
-/** How many pages the gallery has (N steps through them), and which one is the windows'. */
-#define PAGE_COUNT ((size_t)7)
+/** How many pages the gallery has (N steps through them), and which ones are the windows' and the workspace's. */
+#define PAGE_COUNT ((size_t)8)
 #define WINDOWS_PAGE ((size_t)6)
+#define WORKSPACE_PAGE ((size_t)7)
 /** How many characters of a text box's text its events show in the status line. */
 #define SHOWN_TEXT_BYTES 40
 /** How many style ranges the fourth page's coloured box has. */
@@ -236,6 +238,9 @@ typedef struct UIGalleryFrameStruct
     /** The seventh page's windows and their types, and whether they are set up (for teardown after a failed creation). */
     GalleryWindows _windows;
     bool _areWindowsConstructed;
+    /** The eighth page's workspace, its window types and layouts, and whether they are set up. */
+    GalleryWorkspace _workspace;
+    bool _isWorkspaceConstructed;
 } UIGalleryFrame;
 
 /* A stack that takes the wheel, as a scroll area does: its children's wheel comes up to it. */
@@ -503,6 +508,18 @@ static Error SetStatus(UIGalleryFrame* frame, const char* text)
     if (frame->_statusBarId != WIDGET_ID_INVALID)
     {
         Error Result = UIStatusBar_SetMessage(&frame->_screen, frame->_statusBarId, (const unsigned char*)text, STATUS_MESSAGE_SECONDS);
+        if (First.Code == ErrorCode_Success)
+        {
+            First = Result;
+        }
+        else
+        {
+            Error_Deconstruct(&Result);
+        }
+    }
+    if (frame->_isWorkspaceConstructed)
+    {
+        Error Result = GalleryWorkspace_SetStatus(&frame->_workspace, text);
         if (First.Code == ErrorCode_Success)
         {
             First = Result;
@@ -847,6 +864,7 @@ static void BuildTextPage(GalleryBuild* build);
 static void BuildValuePage(GalleryBuild* build);
 static void BuildEditorPage(GalleryBuild* build);
 static void BuildWindowsPage(GalleryBuild* build);
+static void BuildWorkspacePage(GalleryBuild* build);
 static void DescribeEverything(GalleryBuild* build);
 static const char* GetElementName(const UIGalleryFrame* frame, uint64_t id);
 
@@ -876,6 +894,7 @@ static Error BuildPage(UIGalleryFrame* frame)
     BuildValuePage(&Build);
     BuildEditorPage(&Build);
     BuildWindowsPage(&Build);
+    BuildWorkspacePage(&Build);
     DescribeEverything(&Build);
     return Build.Result;
 }
@@ -2970,22 +2989,44 @@ static void BuildWindowsPage(GalleryBuild* build)
 static Error ReportFromWindows(void* context, const char* text);
 
 
+// Static functions: the eighth page.
+/* The workspace: its own root, bars and windows, which show with the page alone. */
+static void BuildWorkspacePage(GalleryBuild* build)
+{
+    UIGalleryFrame* Frame = build->Frame;
+    Frame->_statusIds[WORKSPACE_PAGE] = WIDGET_ID_INVALID; // Its status bar shows the status (SetStatus).
+    if (!HasFailed(build))
+    {
+        build->Result = GalleryWorkspace_Build(&Frame->_workspace, &Frame->_pageIds[WORKSPACE_PAGE]);
+    }
+}
+
+
 // Static functions: switching pages.
+/* Shows or hides a page: the workspace's with its windows, another by its root. */
+static Error SetPageShown(UIGalleryFrame* frame, size_t index, bool isShown)
+{
+    if (index == WORKSPACE_PAGE)
+    {
+        return frame->_isWorkspaceConstructed ? GalleryWorkspace_SetShown(&frame->_workspace, isShown) : Error_CreateSuccess();
+    }
+    Widget* Page = NULL;
+    return UIScreen_TryGetWidgetById(&frame->_screen, frame->_pageIds[index], &Page) ? Widget_SetIsRendered(Page, isShown) : Error_CreateSuccess();
+}
+
 /* Shows the next page and hides the one shown; the windows show with their page alone. */
 static Error ShowNextPage(UIGalleryFrame* frame)
 {
-    Widget* Shown = NULL;
-    Widget* Next = NULL;
     size_t NextIndex = (frame->_pageIndex + 1U) % PAGE_COUNT;
-    if (!UIScreen_TryGetWidgetById(&frame->_screen, frame->_pageIds[frame->_pageIndex], &Shown)
-        || !UIScreen_TryGetWidgetById(&frame->_screen, frame->_pageIds[NextIndex], &Next))
+    if (!UIScreen_IsWidgetAlive(&frame->_screen, frame->_pageIds[frame->_pageIndex])
+        || !UIScreen_IsWidgetAlive(&frame->_screen, frame->_pageIds[NextIndex]))
     {
         return Error_CreateSuccess();
     }
-    Error Result = Widget_SetIsRendered(Shown, false);
+    Error Result = SetPageShown(frame, frame->_pageIndex, false);
     if (Result.Code == ErrorCode_Success)
     {
-        Result = Widget_SetIsRendered(Next, true);
+        Result = SetPageShown(frame, NextIndex, true);
     }
     bool HasWindowsPageChanged = (frame->_pageIndex == WINDOWS_PAGE) || (NextIndex == WINDOWS_PAGE);
     frame->_pageIndex = NextIndex;
@@ -3165,7 +3206,7 @@ static Error OnElementEvent(UIScreen* screen, const UIEvent* event, const UserDa
     return Error_CreateSuccess();
 }
 
-/* What the windows page tells: the status line and the log. */
+/* What the windows page and the workspace page tell: the status line and the log. */
 static Error ReportFromWindows(void* context, const char* text)
 {
     return Report(context, text);
@@ -3353,6 +3394,17 @@ static Error UIGalleryFrame_Render(void* self, const FrameRenderContext* context
 static void DestroyFrameContents(UIGalleryFrame* frame)
 {
     UIWindowHost_Deconstruct(&frame->_host);
+    if (frame->_isWorkspaceConstructed && frame->_isScreenConstructed)
+    {
+        Error Saved = GalleryWorkspace_Save(&frame->_workspace); // While its windows are there to capture.
+        if (Saved.Code != ErrorCode_Success)
+        {
+            Error LogResult = Logger_LogWarningFormatted(frame->_services->Logger, (const unsigned char*)u8"UIGallery: the layouts were not saved: %s",
+                (Saved.Message != NULL) ? (const char*)Saved.Message : "no reason given");
+            Error_Deconstruct(&LogResult);
+        }
+        Error_Deconstruct(&Saved);
+    }
     if (frame->_isScreenConstructed)
     {
         Error Result = UIScreen_Deconstruct(&frame->_screen);
@@ -3361,6 +3413,10 @@ static void DestroyFrameContents(UIGalleryFrame* frame)
     if (frame->_areWindowsConstructed)
     {
         GalleryWindows_Deconstruct(&frame->_windows); // Its types go once their windows have.
+    }
+    if (frame->_isWorkspaceConstructed)
+    {
+        GalleryWorkspace_Deconstruct(&frame->_workspace);
     }
     if (frame->_isKitConstructed)
     {
@@ -3494,6 +3550,12 @@ static Error BuildFrameContents(UIGalleryFrame* frame)
         Result = GalleryWindows_Construct(&frame->_windows, Shared->WindowTypes, Shared->Keys, &frame->_kit, &frame->_screen, ReportFromWindows,
             frame);
         frame->_areWindowsConstructed = true; // Whatever registered is withdrawn at teardown.
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = GalleryWorkspace_Construct(&frame->_workspace, Shared->WindowTypes, Shared->Keys, &frame->_kit, &frame->_screen, Shared->Logger,
+            Shared->BaseDirectory, ReportFromWindows, frame);
+        frame->_isWorkspaceConstructed = true; // Whatever registered is withdrawn, and the layouts released, at teardown.
     }
     if (Result.Code == ErrorCode_Success)
     {

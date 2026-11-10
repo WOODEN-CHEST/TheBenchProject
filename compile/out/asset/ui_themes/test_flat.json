@@ -48,7 +48,9 @@
         "checker_light": "#8a9099",
         "checker_dark": "#5c626b",
         "edge_hover": "#9ec1ff59",
-        "edge_pressed": "#9ec1ffa0"
+        "edge_pressed": "#9ec1ffa0",
+        "zone": "#9ec1ff1a",
+        "zone_hover": "#9ec1ff40"
     },
     "elements": {
         "panel": {
@@ -406,6 +408,30 @@
             "title_text": { "normal": "@text_dim", "focused": "@text" },
             "content_background": { "kind": "flat", "colors": { "normal": "@surface" } },
             "resize_edge": { "kind": "flat", "colors": { "normal": "#00000000", "hovered": "@edge_hover", "pressed": "@edge_pressed" } }
+        },
+        "workspace": {
+            "tab_height": 22,
+            "tab_padding": 7,
+            "tab_spacing": 1,
+            "icon_spacing": 5,
+            "tab_max_width": 180,
+            "splitter_thickness": 4,
+            "guide_size": 28,
+            "background": { "kind": "flat", "colors": { "normal": "@surface_sunken" } },
+            "strip": { "kind": "flat", "colors": { "normal": "@raised_disabled", "focused": "@selected" } },
+            "tab": { "kind": "flat", "colors": { "normal": "@raised_disabled", "hovered": "@raised_hover", "pressed": "@pressed", "selected": "@surface" } },
+            "tab_text": { "normal": "@text_dim", "hovered": "@text", "selected": "@text" },
+            "splitter": { "kind": "flat", "colors": { "normal": "@surface_sunken", "hovered": "@edge_hover", "pressed": "@edge_pressed" } },
+            "zone": {
+                "kind": "flat",
+                "colors": { "normal": "@zone", "hovered": "@zone_hover" },
+                "outline": { "thickness": 1, "colors": { "normal": "@edge_hover", "hovered": "@accent" } }
+            },
+            "drop_preview": {
+                "kind": "flat",
+                "colors": { "normal": "@zone_hover" },
+                "outline": { "thickness": 2, "colors": { "normal": "@accent" } }
+            }
         }
     }
 }

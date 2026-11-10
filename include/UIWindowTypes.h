@@ -28,7 +28,9 @@
  * the type's default size centred on the workspace (either moved down and to the right while another window's top-left stands just
  * there), filled by the type's function, and given the focus (UIWindow_Focus: what the fill focused inside keeps it, else the window's
  * default focus target, else the window). Each type remembers the floating box of its last window that closed (UIWindow_Close); the
- * record belongs to the type, so it holds for any screen. A fill may close its own window: the open succeeds with no window then.
+ * record belongs to the type, so it holds for any screen. A fill may close its own window: the open succeeds with no window then. Docks
+ * are not known here: a single type's window kept by a workspace in a tab that is not selected is found and returned, but stays hidden, so
+ * a workspace's windows are opened through it (UIWorkspace_OpenType), which selects the tab.
  *
  * A Window menu lists the types (UIWindowTypes_WriteMenuItems), one item per active type, its id the type's index after a first id the
  * caller picks; the menu's handler opens the type of the item it is told (UIWindowTypes_OpenAt).
@@ -231,6 +233,23 @@ uint32_t UIWindowTypes_WithdrawSource(UIWindowTypes* self, uint32_t sourceKeyId)
 bool UIWindowTypes_Find(UIWindowTypes* self, const unsigned char* key, uint32_t* outIndex);
 
 /**
+ * @brief Finds an active type by its key's id in the program's key registry (what a layout keeps).
+ * @param self The registry; must not be NULL.
+ * @param keyId The key's id.
+ * @param outIndex [out] Receives its index. Must not be NULL.
+ * @returns true when found.
+ */
+bool UIWindowTypes_FindByKeyId(UIWindowTypes* self, uint32_t keyId, uint32_t* outIndex);
+
+/**
+ * @brief Returns a type's key's id in the program's key registry.
+ * @param self The registry; must not be NULL.
+ * @param index The type's index (withdrawn ones keep their keys).
+ * @returns The id; NAMESPACED_KEY_ID_NONE for an index the registry does not have.
+ */
+uint32_t UIWindowTypes_GetKeyId(const UIWindowTypes* self, uint32_t index);
+
+/**
  * @brief Reads an active type.
  * @param self The registry; must not be NULL.
  * @param index The type's index.
@@ -286,7 +305,8 @@ bool UIWindowTypes_FindOpen(UIWindowTypes* self, UIScreen* screen, uint32_t inde
  * @brief Remembers where a type's window was when it closed: the next one opens there. UIWindow_CloseNow calls it.
  * @param self The registry; must not be NULL.
  * @param index The type's index; one the registry does not have is ignored.
- * @param box The window's floating box, in its screen's UI pixels.
+ * @param box The window's floating box, in its screen's UI pixels: one a window can have (UIWindow_SetBox's rule), else the type
+ *        remembers none.
  */
 void UIWindowTypes_RememberBox(UIWindowTypes* self, uint32_t index, Rectangle box);
 

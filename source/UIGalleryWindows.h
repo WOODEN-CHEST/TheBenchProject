@@ -8,7 +8,7 @@
 /*
  * The UI gallery's windows page, private to the gallery (UIGalleryFrame.c): four window types registered with the program's window types
  * while the gallery runs (a window that fits both ways, one whose content scrolls, a fixed one of its own scale, and notes whose close asks
- * first), opened at their places the first time the page shows and hidden while another page shows, and a Window menu listing every type.
+ * first), opened at their places the first time the page shows and hidden while another page shows, and a Window menu listing them.
  */
 
 
@@ -64,8 +64,8 @@ void GalleryWindows_Deconstruct(GalleryWindows* self);
 /** Fills the page's column: what to try, and a menu bar whose Window menu lists the types. */
 Error GalleryWindows_BuildPage(GalleryWindows* self, uint64_t columnId);
 
-/** Shows every window of the screen while the page shows (opening the page's the first time) and hides them while another page shows; the
- *  screen's workspace is the whole surface again then. */
+/** Shows the page's windows while the page shows (opening them the first time) and hides them while another page shows; the screen's
+ *  workspace is the whole surface again then. */
 Error GalleryWindows_SetShown(GalleryWindows* self, bool isShown);
 
 /** Keeps the screen's workspace between the page's menu bar and a line under it (the page's status line) while the page shows: a maximized

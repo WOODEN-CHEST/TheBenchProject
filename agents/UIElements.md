@@ -39,7 +39,10 @@ notifications).
 | UIToolbar | `include/UIToolbar.h`, `source/UIToolbar.c` | A strip of the kit's buttons from a list: buttons, toggles, choices of a group and separators, across or upright. |
 | UIWindow | `include/UIWindow.h`, `source/UIWindow.c` | A window: a frame that moves, resizes, minimizes, maximizes and closes, kept reachable, with content calling code fills; its pure arithmetic. |
 | UIWindowTypes | `include/UIWindowTypes.h`, `source/UIWindowTypes.c` | The windows a UI opens by key: a registry of types in the root, opening one (a single one brought back), where the last one closed, a Window menu's items. |
-| UIGalleryFrame | `include/UIGalleryFrame.h`, `source/UIGalleryFrame.c`, private `source/UIGalleryWindows.{h,c}` (the windows page) | Every element in every state, on seven pages: `--ui-gallery`. |
+| UIDockTree | `include/UIDockTree.h`, `source/UIDockTree.c` | Pure: a workspace's docking areas as a split tree with tabs in its leaves, its operations and limits, its arrangement in whole pixels with least sizes, and where a drop over it would go. |
+| UIWorkspace | `include/UIWorkspace.h`, `source/UIWorkspace.c`, `source/UIWorkspaceParts.c` (tabs, splitters, the drop guides), `source/UIWorkspaceLayouts.c` (layouts and the switcher), private `source/UIWorkspaceInternal.h` | The root of a screen that uses windows: its bars, a dock where windows tab and split, floating and maximized windows, dragging between them, layouts shown and kept. |
+| UILayouts | `include/UILayouts.h`, `source/UILayouts.c` | Named layouts as pure data, and the file that keeps them across restarts: read with limits, put aside when bad, written atomically once changes settle. |
+| UIGalleryFrame | `include/UIGalleryFrame.h`, `source/UIGalleryFrame.c`, private `source/UIGalleryWindows.{h,c}` (the windows page) and `source/UIGalleryWorkspace.{h,c}` (the workspace page) | Every element in every state, on eight pages: `--ui-gallery`. |
 
 ## Using it
 
@@ -488,6 +491,21 @@ any widget can be one.
 **Context menus** are a service of the screen ([UIFramework.md](UIFramework.md), "Context menus"): a provider set on a widget answers a right click or
 the menu key on it or on anything inside it that has no provider of its own, and opens a menu with `UIMenu_OpenAt`.
 
+### Click modes
+
+Button and toggle options have `ClickMode` and `ActivationButtons` (`UIButton_SetClickMode`, `UIButton_SetActivationButtons`, and the toggle's).
+
+| `UIClickMode` | Activates at | So |
+|---|---|---|
+| `OnPressAndRelease` (the default) | its own press let go on it, nothing covering it there | a slip forgives: press, drag off, let go, and nothing happens |
+| `OnPress` | the press | at once, and what follows does nothing |
+| `OnRelease` | a release on it, wherever on this screen the press began, a press handed to it too | press-drag-release menus |
+
+`ActivationButtons` is a mask of mouse buttons, `UI_BUTTON_BIT(GameKey_MouseMiddle)` and so on, up to `UI_BUTTONS_ALL`; `UI_BUTTONS_LEFT` is the default. Each button is held
+on its own, and another button's press does nothing to it. A press that is lost (`OnPressLost`) activates nothing, and a release ends what its press held even if its button stopped
+activating meanwhile. An element's own type wires `UIPressable_OnMouseInput`, `UIPressable_OnPressLost`, `UIPressable_OnKeyboardInput` and `UIPressable_Update` as the standard ones do;
+one that leaves out the loss still lets go at its next update once the button is up.
+
 ## Windows
 
 **Window** (`UIWindow.h`, kind `window`, `UIKit_CreateWindow`). An icon, a title, a frame that moves and resizes, minimize, maximize and close,
@@ -507,8 +525,9 @@ ray on the picture as any held press does.
 - **Moving and resizing.** A left press on the title bar moves it, following the held press past the surface; the drag starts from where it
   shows. An edge or a corner resizes it (`UIWindow_ResizeBox`, pure): each edge it names stops at the workspace's edge (or where it began, when that
   lies beyond) and where the least size is left, and a top edge a title bar's height above the workspace's bottom. Either keeps the floating box
-  reachable too. Other buttons move and resize nothing (their press and release during a drag leave it going); minimizing, maximizing or a lost
-  press (the window hidden) end it. A double click on the title bar maximizes, or restores a maximized or minimized window. A maximized window is
+  reachable too. Other buttons move and resize nothing (their press and release during a drag leave it going); minimizing, maximizing, docking or
+  a lost press (the window hidden) end it. Escape during either (the `ui_back` action's keys, which the window hears as the focused widget or an
+  ancestor of it) puts the floating box back where the drag began; the press then moves nothing. A double click on the title bar maximizes, or restores a maximized or minimized window. A maximized window is
   moved and resized by nothing; one that is not resizable (`IsResizable`, `UIWindow_SetIsResizable`), minimized or maximized shows no edges.
 - **Its least size,** in its own UI pixels (its scale multiplies it), is the largest of the theme's `min_size`, its own (`MinimumSize`,
   `UIWindow_SetMinimumSize`), what its title bar needs, and, per axis that fits (`UIWindowFit_Fit`: `FitAcross`, `FitDown`, `UIWindow_SetFit`), what
@@ -542,6 +561,14 @@ ray on the picture as any held press does.
   it to the front. It is active (`UIWindow_IsActive`) while the focus is in it, or in a popup whose owner is in it (its dropdown's list, a menu it
   opened, a popup opened from those: `UIScreen_GetPopupOwner`); its look shows the `focused` state then. What had the focus in a popup is not
   remembered as its own: a press on its title bar afterwards goes back to what had it inside before.
+- **Docks.** A dock (the workspace, below) marks the windows it holds (`UIWindow_SetDock`, `UIWindow_GetDock`). Docked
+  (`UIWindowDock_Docked`), a window shows no title bar, frame, edges or caption buttons, its content filling the box its parent gives it, and its
+  least size has no title bar or border in it. Maximized out of its dock (`UIWindowDock_Maximized`), it has no minimize. In neither does it
+  minimize (`UIWindow_Minimize` refuses it, and a minimized window docked is restored). A move observer (`UIWindow_SetMoveObserver`, one per
+  window: its dock) hears each move by the title bar: `Began`, `Moved`, `Released`, `Cancelled` (Escape, the box back) and `Lost` (the press handed
+  on or lost, the window hidden, or minimized, maximized or docked by code mid-move); it may move, dock or destroy the window. `UIWindow_StartMove`
+  hands a press held elsewhere to the window's title bar (`UIScreen_TransferPress`) and moves the window by it from its floating box, raised and
+  active as a press on its title bar would make it: what a tab dragged out of a dock does.
 - **The workspace** is the surface less the strips the screen's workspace insets name (`UIScreen_SetWorkspaceInsets`, `UIScreen_GetWorkspaceBox`,
   [UIFramework.md](UIFramework.md)): the bars' room, which whoever lays the bars out sets. None by default.
 - **Its look** (a struct starting with `UIWindowLookBase`) draws the frame, the title bar (the icon, then the title cut where the buttons begin:
@@ -549,8 +576,9 @@ ray on the picture as any held press does.
   (`UIWindow_GetEdgeState`: a hidden edge is normal with an empty box); it tells the behaviour the theme's metrics with the icon's width
   (`UIWindowCapability_SetMetrics`) and measures through `UIWindow_Measure`.
 - **Not built:** the content column's padding and spacing are read from the theme when the window is made (a theme swap changes the frame at once,
-  not those); the caption buttons take no focus by the keys and there are no window keys; a window posts no events of its own for moves, resizes
-  or its states (code reads `UIWindow_GetBox` and `UIWindow_GetState`); dragging a maximized window's title bar does not restore it.
+  not those); the caption buttons take no focus by the keys and there are no window keys; a window posts no events of its own for moves (its move
+  observer is its dock's), resizes or its states (code reads `UIWindow_GetBox` and `UIWindow_GetState`); dragging a maximized window's title bar
+  does not restore it.
 
 **Window types** (`UIWindowTypes.h`). The windows a UI opens by key (`tbp:editor_outliner`): each registered with a display name, an icon, a
 function that fills a new window's content (`UIWindowTypeFill`), its windows' fits, default size and least size, and whether only one may be open on
@@ -558,7 +586,9 @@ a screen (`IsSingle`). `UIWindowTypes` keeps them in a `Registry` under `tbp:ui_
 root registry; `main.c` makes the program's one and `Services.WindowTypes` carries it. A frame registers the types it offers under a source key of
 its own while it runs and withdraws them together (`UIWindowTypes_WithdrawSource`) when it goes.
 - `UIWindowTypes_Open(types, screen, key, &windowId)`, or `_OpenAt` by index: a single type's window that is open on the screen already (found
-  anywhere in its tree: `UIWindowTypes_FindOpen`) is restored if it is minimized, brought to the front and given the focus. Otherwise a new window
+  anywhere in its tree: `UIWindowTypes_FindOpen`) is restored if it is minimized, brought to the front and given the focus. Docks are not
+  known there: one a workspace keeps in a tab that is not selected is found but stays hidden, so a workspace's windows open through it
+  (`UIWorkspace_OpenType`, which selects the tab). Otherwise a new window
   is made where the type's last window was when it closed, or at its default size centred on the workspace (either stepped down and to the right
   by `UI_WINDOW_TYPES_CASCADE_STEP` while another window's top-left stands there), filled, and given the focus (`UIWindow_Focus`: what the fill
   focused inside keeps it, else the default focus target, else the window). A fill that fails takes its window with it; one that closes its own
@@ -567,20 +597,76 @@ its own while it runs and withdraws them together (`UIWindowTypes_WithdrawSource
 - `UIWindowTypes_WriteMenuItems(types, firstId, items, capacity, &count)` writes a Window menu: an item per active type with its name and icon, its
   id the type's index after `firstId`, so the menu's handler opens `id - firstId`.
 
-### Click modes
+## Docking and layouts
 
-Button and toggle options have `ClickMode` and `ActivationButtons` (`UIButton_SetClickMode`, `UIButton_SetActivationButtons`, and the toggle's).
+**Workspace** (`UIWorkspace.h`, kind `workspace`, `UIKit_CreateWorkspace`). The root of a screen that uses windows: a root of the screen's
+`Background` layer over the whole surface, with a menu bar along its top and a status bar along its bottom when its options ask for them
+(`UIWorkspace_GetMenuBarId`, `_GetStatusBarId`: calling code adds the entries and sections), a dock filling what the bars leave, and the floating
+windows above it. It sets the screen's workspace insets to its bars, so floating and maximized windows use what they leave. One per screen;
+`UIWorkspace_SetShown` hides it with its floating windows and its guides (a page of a UI that has others; its host puts the insets back).
+- **Its windows** are those opened through it (`UIWorkspace_OpenType`, `_OpenTypeByKey`: a single type's window it keeps already comes back, its
+  tab selected when docked) or handed to it (`UIWorkspace_AdoptWindow`). Each floats, is docked or is maximized out of the dock
+  (`UIWorkspace_GetPlace`); a window that closes leaves it. Windows go between the dock and the floating layer with `Widget_MoveTo`, so nothing
+  inside them loses its state.
+- **The dock** is a dock tree (below) whose items are window ids. Each docking area always shows its tab strip, even with one window: the selected
+  tab shows its window's icon and name, the others their icon only (the name's first letter without one), the name as hover text, none wider than
+  the theme's `tab_max_width`. Windows in tabs that are not selected are hidden and get no updates (their update flag off). A press on a tab selects
+  it and gives its window the focus as a press on a title bar does; a double click maximizes it out of the dock; its context menu has Undock,
+  Maximize and Close. A strip too short for its tabs takes the room from the selected tab's name first; past that the selected tab still
+  shows, with as many before it as fit, and the wheel over a strip steps through its tabs as presses would, so every tab can be reached. Between areas, splitters (widgets of the kit's own, with the pointer's resize shape) drag to set their split's ratio, each
+  side kept at its windows' least size while there is room. A docked window has no title bar, frame, edges or minimize of its own, and the strip
+  of the area whose window is active shows `focused`.
+- **Docking by drag.** A tab dragged along its strip reorders. Dragged `UI_WORKSPACE_UNDOCK_DISTANCE` pixels off its strip, its window leaves the
+  dock in the same tick and floats under the pointer, carried on by the same press (`UIWindow_StartMove`). While any of its windows is dragged by
+  its title bar over the dock, the area under the pointer shows its guides in the `Overlay` layer: the middle one adds a tab, and one beside it
+  toward each edge splits the area there. On a guide or on a tab strip, the guide lights and a box shows where the window would go, and a
+  release docks it; anywhere else it floats where it was let go, so a floating window moves freely over the dock. Another window covering the
+  dock there takes the guides away, and so does a dock not laid out again since it changed (a release in the very tick a tab was torn out
+  docks nothing). Escape puts it back where the drag began: a window torn out of a tab goes back to its tab, the dock as it was, unless the
+  dock changed some other way meanwhile, when the window floats where it was before the drag. A window that does not fit an area's least
+  size docks anyway: it clips and scrolls.
+- **By code:** `UIWorkspace_Dock(screen, workspace, window, beside, zone)` (a tab beside a docked window, a new area at one of its area's sides,
+  or the empty dock's first area), `UIWorkspace_Undock`, `UIWorkspace_MaximizeDocked`, `UIWorkspace_SetAreaShare` (an area's share of the split
+  above it: what a default layout builds with) and `UIWorkspace_SelectTab`; `UIWorkspace_GetTree`, `_GetTabId`, `_GetSplitterId` and
+  `_GetDropView` read it.
+- **Maximized out of the dock**, a window fills the workspace in the `Maximized` layer while its tab keeps its place; restored (its button, a
+  double click on its title bar), it goes back to its tab at the workspace's next update.
+- **A surface that changes size:** the ratios hold, each side kept at its least size while there is room; floating windows stay reachable (the
+  window's rule), and everything stands where it was when the size comes back.
+- **Its look** (a struct starting with `UIWorkspaceLookBase`) draws the background under the dock and each area's tab strip
+  (`UIWorkspaceCapability_GetLeaf`), and tells the behaviour the theme's metrics (`UIWorkspaceCapability_SetMetrics`); the tabs, the splitters and
+  the guides are widgets of the kit's own, drawn from the theme's `workspace` element.
 
-| `UIClickMode` | Activates at | So |
-|---|---|---|
-| `OnPressAndRelease` (the default) | its own press let go on it, nothing covering it there | a slip forgives: press, drag off, let go, and nothing happens |
-| `OnPress` | the press | at once, and what follows does nothing |
-| `OnRelease` | a release on it, wherever on this screen the press began, a press handed to it too | press-drag-release menus |
+**Dock tree** (`UIDockTree.h`, pure). A split divides its box across or down, its first child taking its ratio of the room; a leaf holds tabs
+(items the caller chooses, never `UI_DOCK_ITEM_NONE`, each once in a tree) and the selected one. Its operations (`AddTab`, `RemoveTab`, `MoveTab`,
+`SplitLeaf`, `CollapseEmpty`, `SetRatio`, `SelectTab`, `BuildNode`, `ReplaceItem`) refuse what would break a limit (`UI_DOCK_TREE_MAX_LEAVES`,
+`_MAX_TABS`, `_MAX_DEPTH`) and change nothing then. `UIDockTree_Arrange` gives every node its box in whole pixels: a split keeps both sides at
+their least sizes (a callback per leaf) while there is room for both, and below that shares what there is by those least sizes; neighbours share
+their edges exactly. `UIDockTree_GetRatioAt` is the ratio a splitter's drag sets. `UIDockTree_DropZoneAt` says where a point would drop (a tab
+strip and the middle guide add a tab, the guides beside it split, anything else floats); `UIDockZone_GetGuide` and `UIDockZone_GetPreview` give
+the boxes the guides draw. A tree is a plain value: a drag keeps a copy and puts it back on Escape.
 
-`ActivationButtons` is a mask of mouse buttons, `UI_BUTTON_BIT(GameKey_MouseMiddle)` and so on, up to `UI_BUTTONS_ALL`; `UI_BUTTONS_LEFT` is the default. Each button is held
-on its own, and another button's press does nothing to it. A press that is lost (`OnPressLost`) activates nothing, and a release ends what its press held even if its button stopped
-activating meanwhile. An element's own type wires `UIPressable_OnMouseInput`, `UIPressable_OnPressLost`, `UIPressable_OnKeyboardInput` and `UIPressable_Update` as the standard ones do;
-one that leaves out the loss still lets go at its next update once the button is up.
+**Layouts** (`UILayouts.h`). A layout (`UILayout`) is a name, the windows by their types' keys (each with its floating box in UI pixels,
+minimized or maximized), the dock tree whose items are those windows (the index + 1), and where each window type's last window was when it
+closed. `UILayouts` keeps up to `UI_LAYOUTS_MAX_COUNT` of them and the active one in one JSON file of the player's, at a path its host gives
+([references/layouts_structure.md](../references/layouts_structure.md)). The file is hostile: one that is not what the writer writes is put aside
+as `<path>.bad` with one log line, and the host shows its default; unknown keys are passed over and window types that are not registered dropped,
+each with one log line. A file that is there but cannot be read (no permission, a lock) is left as it is and never saved over while the game
+runs (`UILayoutsLoadResult_Unreadable`). One window of a layout at most shows maximized; a minimized one may keep that it was, and restores to
+it.
+- `UIWorkspace_SetLayouts(screen, workspace, layouts, makeDefault, data)` shows the active layout, or with none has `makeDefault` build the
+  default on the live workspace and keeps it as "Default". From then on the arrangement is kept in the active layout once its changes have
+  settled (`UI_LAYOUTS_SETTLE_SECONDS`: the file is saved then, never per tick), when another layout is shown or made, and when the host
+  saves: a host calls `UIWorkspace_SaveLayouts` before it goes. An arrangement a layout cannot keep is logged once and leaves the layout as
+  it was; it stops neither a switch nor a save.
+- `UIWorkspace_SwitchLayout` keeps the arrangement in the active layout and shows the other: windows it lacks close, those it has open, and
+  windows of the same types are reused, so what is inside a window stays with the window. `UIWorkspace_NewLayout` (the arrangement as it is,
+  named, or "Layout" and then "Layout 2" and on), `_RenameLayout`, `_DeleteLayout` (never the last; deleting the active one shows the one
+  before it) and `_ResetLayout` (the default again, built on an empty dock: a window whose close query keeps it floats).
+- `UIWorkspace_CreateLayoutSwitcher` makes a dropdown of the layouts' names for a bar's section; choosing one switches at the workspace's next
+  update.
+- A layout fits any surface: ratios are fractions, and floating windows are kept reachable as any window is, their saved boxes untouched.
+- **Not built:** tabs on a floating window, docking by the keys, keeping scroll positions in a layout.
 
 ## Events
 
@@ -675,7 +761,7 @@ UI is scaled, and at 28 both go away while 14 pixels stays sharp enough to read 
 
 ## The gallery
 
-`sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test, on seven pages (N switches), each in a scroll area, so the
+`sh compile/run_linux_x11.sh --ui-gallery` runs `UIGalleryFrame` instead of the world test, on eight pages (N switches), each in a scroll area, so the
 whole page scrolls at small window sizes while its status line stays below it. It keeps its pixels
 (`UIScalePolicy_ConstantPixels`): drag the window's edges, and the controls keep their size with more room around them. P switches to following the
 window's height and back, to compare them. T switches the theme (`tbp:test_flat`, `tbp:test_nine_slice`, whose art `asset_source/scripts/placeholder_ui.py`
@@ -728,8 +814,16 @@ The seventh page: windows, of four types the gallery registers with the program'
 (both ways fit: a form of labelled rows it gets no smaller than), Scrolling (across fits, down scrolls: thirty buttons and the bar), Fixed (no edges,
 no maximize, all of it at a scale of 1.25, as a screen in the world is) and Notes (a text box filling it, several at once, whose close asks with a
 dialog while it says something). They open at their places the first time the page shows and hide while another page shows; the page's menu bar has
-a Window menu that lists every type and opens it (a single one comes to the front, restored). While the page shows, the screen's workspace
+a Window menu that lists them and opens them (a single one comes to the front, restored). While the page shows, the screen's workspace
 runs from under the menu bar to the status line, so a maximized window leaves both.
+
+The eighth page: a workspace with a menu bar and a status bar, and five window types the gallery registers while it runs
+(`source/UIGalleryWorkspace.c`): Outline (a column of buttons that scrolls), View (what to try), Inspector (a form), Log (read-only lines) and
+Notes (a text box; several at once). The default layout docks them all: the view in the middle, the outline at its left, the inspector at its
+right, the log under it with the notes as a second tab. The Window menu opens each type through the workspace, the Layout menu makes, renames
+(a dialog), deletes and resets layouts, and the switcher in the status bar changes between them. The layouts are kept in
+`ui_gallery_layouts.json` in the game's folder: arranged things are there at the next start, and a broken file is put aside as
+`ui_gallery_layouts.json.bad` while the default shows. The page's status bar shows the gallery's status line.
 
 ## Rules for a new element
 

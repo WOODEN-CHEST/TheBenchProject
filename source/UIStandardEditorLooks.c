@@ -9,6 +9,7 @@
 #include "UITree.h"
 #include "UIWidgetFactory.h"
 #include "UIWindow.h"
+#include "UIWorkspace.h"
 #include "wr/WRMath.h"
 
 
@@ -16,8 +17,9 @@
  * The kit's standard look (tbp:test_box) for the editor's elements: the list and the tree (a background; their rows are the kit's own
  * widgets), the dialog (a background; its parts are a label's, a column's and buttons), the colour picker's swatch (its popup is the kit's
  * own widgets), the tool bar (a background and its separators; its buttons are buttons), the window (its frame, its title bar with the icon
- * and the title, its content's background and an edge's highlight; its caption buttons are buttons), and the widget that shows a drag (the
- * dragged item beside the pointer, and a frame over the target that would take it). Every value comes from the screen's theme.
+ * and the title, its content's background and an edge's highlight; its caption buttons are buttons), the workspace (its dock's background and
+ * its areas' strips; its tabs, splitters and drop zones are the kit's own widgets), and the widget that shows a drag (the dragged item beside
+ * the pointer, and a frame over the target that would take it). Every value comes from the screen's theme.
  */
 
 
@@ -58,7 +60,8 @@ typedef struct ToolbarBoxStruct
 } ToolbarBox;
 
 /* The standard window: its frame, its title bar with the icon and the title (focused while the window is active), the content's background
- * (not while minimized) and the highlight of an edge under the pointer or dragged; the theme's metrics told to the behaviour. */
+ * (not while minimized; alone while docked) and the highlight of an edge under the pointer or dragged; the theme's metrics told to the
+ * behaviour. */
 typedef struct WindowBoxStruct
 {
     UIWindowLookBase Base;
@@ -66,6 +69,14 @@ typedef struct WindowBoxStruct
     UIElementText Title;
     UIElementIconView Icon;
 } WindowBox;
+
+/* The standard workspace: the dock's background, and behind each area's tabs its strip (focused while the area's window is active); the
+ * theme's metrics told to the behaviour. Its bars, tabs, splitters and windows draw themselves. */
+typedef struct WorkspaceBoxStruct
+{
+    UIWorkspaceLookBase Base;
+    UIElementLook Look;
+} WorkspaceBox;
 
 /* What shows a drag: a root of the overlay layer over the whole surface, drawing the dragged item beside the pointer and a frame over the
  * target that would take it, clipped as the target is. A plain widget type, made by the screen (UIDragDrop.h) with no arguments. */
@@ -556,6 +567,11 @@ static Error WindowBox_Render(void* self, UIRenderContext* context)
     const UIWindowCapability* Window = &Box->Base.Window;
     const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Widget_GetScreen(&Box->Base.Base));
     float Scale = Widget_GetEffectiveScale(&Box->Base.Base);
+    if (UIWindowCapability_GetDock(Window) == UIWindowDock_Docked)
+    {
+        // Its dock's tab stands for its title bar and its dock's frame for its own: only the content's background shows.
+        return UIElementLook_DrawBox(&Box->Look, Style, UIWindowPart_ContentBackground, context, Pixels, Scale);
+    }
     Error Result = UIElementLook_DrawBox(&Box->Look, Style, UIWindowPart_Frame, context, Pixels, Scale);
     float TitleHeight = Math_MinFloat(Pixels.height, RoundToPixel(Window->_metrics.TitleHeight * Scale));
     Rectangle Bar = { .x = Pixels.x, .y = Pixels.y, .width = Pixels.width, .height = TitleHeight };
@@ -580,6 +596,75 @@ static Error WindowBox_Render(void* self, UIRenderContext* context)
 static UIElementLook* WindowBox_GetThemeLook(void* self)
 {
     return &((WindowBox*)self)->Look;
+}
+
+
+// Static functions: the workspace.
+static Error WorkspaceBox_Construct(void* self, void* args)
+{
+    WorkspaceBox* Box = self;
+    const UIWorkspaceArgs* Arguments = args;
+    return UIElementLook_Construct(&Box->Look, UIElementKind_Workspace, Arguments->Options->Element.Variant);
+}
+
+static Error WorkspaceBox_Update(void* self, ProgramTime time)
+{
+    WorkspaceBox* Box = self;
+    Widget* Base = &Box->Base.Base;
+    UIScreen* Screen = Widget_GetScreen(Base);
+    UIElementLook_Update(&Box->Look, Screen, UIElementState_Normal, time.PassedTime);
+    const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Screen);
+    UIWorkspaceMetrics Metrics =
+    {
+        .TabHeight = UIThemeStyle_GetNumber(Style, UIElementKind_Workspace, UIWorkspacePart_TabHeight),
+        .TabPadding = UIThemeStyle_GetNumber(Style, UIElementKind_Workspace, UIWorkspacePart_TabPadding),
+        .TabSpacing = UIThemeStyle_GetNumber(Style, UIElementKind_Workspace, UIWorkspacePart_TabSpacing),
+        .IconSpacing = UIThemeStyle_GetNumber(Style, UIElementKind_Workspace, UIWorkspacePart_IconSpacing),
+        .TabMaxWidth = UIThemeStyle_GetNumber(Style, UIElementKind_Workspace, UIWorkspacePart_TabMaxWidth),
+        .SplitterThickness = UIThemeStyle_GetNumber(Style, UIElementKind_Workspace, UIWorkspacePart_SplitterThickness),
+        .GuideSize = UIThemeStyle_GetNumber(Style, UIElementKind_Workspace, UIWorkspacePart_GuideSize)
+    };
+    UIWorkspaceCapability_SetMetrics(&Box->Base.Workspace, Base, &Metrics);
+    return Error_CreateSuccess();
+}
+
+static Error WorkspaceBox_Measure(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
+{
+    (void)self;
+    (void)context;
+    (void)availableWidth;
+    *outSize = (Vector2){ .x = 0.0f, .y = 0.0f }; // It covers its surface.
+    return Error_CreateSuccess();
+}
+
+static Error WorkspaceBox_Render(void* self, UIRenderContext* context)
+{
+    WorkspaceBox* Box = self;
+    const UIWorkspaceCapability* Workspace = &Box->Base.Workspace;
+    const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Widget_GetScreen(&Box->Base.Base));
+    float Scale = Widget_GetEffectiveScale(&Box->Base.Base);
+    Error Result = Error_CreateSuccess();
+    if (!UIElement_IsBoxEmpty(Workspace->_dockArea))
+    {
+        Result = UIElementLook_DrawBox(&Box->Look, Style, UIWorkspacePart_Background, context, Workspace->_dockArea, Scale);
+    }
+    const UIBoxStyle* Strip = UIThemeStyle_GetBox(Style, UIWorkspacePart_Strip);
+    for (int32_t Node = 0; (Node < (int32_t)UI_DOCK_TREE_MAX_NODES) && (Strip != NULL) && (Result.Code == ErrorCode_Success); Node++)
+    {
+        Rectangle StripBox;
+        bool IsActive = false;
+        if (UIWorkspaceCapability_GetLeaf(Workspace, Node, &StripBox, &IsActive) && !UIElement_IsBoxEmpty(StripBox))
+        {
+            UIBoxPaint Paint = UIBoxStyle_Resolve(Strip, IsActive ? UIElementState_Focused : UIElementState_Normal);
+            Result = UIBoxStyle_Draw(Strip, context, StripBox, &Paint, Scale);
+        }
+    }
+    return Result;
+}
+
+static UIElementLook* WorkspaceBox_GetThemeLook(void* self)
+{
+    return &((WorkspaceBox*)self)->Look;
 }
 
 
@@ -788,6 +873,15 @@ static const UILookVTable WindowBoxLook =
     .GetThemeLook = WindowBox_GetThemeLook
 };
 
+static const UILookVTable WorkspaceBoxLook =
+{
+    .Construct = WorkspaceBox_Construct,
+    .Update = WorkspaceBox_Update,
+    .Render = WorkspaceBox_Render,
+    .Measure = WorkspaceBox_Measure,
+    .GetThemeLook = WorkspaceBox_GetThemeLook
+};
+
 static const WidgetVTable DragGhostVTable =
 {
     .OnDeconstruct = DragGhost_OnDeconstruct,
@@ -820,6 +914,10 @@ Error UIStandardEditorLooks_Register(UIKit* kit)
     if (Result.Code == ErrorCode_Success)
     {
         Result = UIKit_RegisterLook(kit, UIElementKind_Window, UI_KIT_STANDARD_LOOK, sizeof(WindowBox), &WindowBoxLook, NULL);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIKit_RegisterLook(kit, UIElementKind_Workspace, UI_KIT_STANDARD_LOOK, sizeof(WorkspaceBox), &WorkspaceBoxLook, NULL);
     }
     return Result;
 }

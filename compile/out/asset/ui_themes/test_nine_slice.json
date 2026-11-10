@@ -46,7 +46,9 @@
         "axis_w": "#a09478",
         "axis_text": "#1e1810",
         "edge_hover": "#d2a65a59",
-        "edge_pressed": "#d2a65aa0"
+        "edge_pressed": "#d2a65aa0",
+        "zone": "#d2a65a22",
+        "zone_hover": "#d2a65a50"
     },
     "elements": {
         "panel": {
@@ -377,6 +379,35 @@
             "title_text": { "normal": "@text_dim", "focused": "@ink" },
             "content_background": { "kind": "flat", "colors": { "normal": "@surface_sunken" } },
             "resize_edge": { "kind": "flat", "colors": { "normal": "#00000000", "hovered": "@edge_hover", "pressed": "@edge_pressed" } }
+        },
+        "workspace": {
+            "tab_height": 24,
+            "tab_padding": 8,
+            "tab_spacing": 2,
+            "icon_spacing": 5,
+            "tab_max_width": 190,
+            "splitter_thickness": 5,
+            "guide_size": 30,
+            "background": { "kind": "flat", "colors": { "normal": "@surface_sunken" } },
+            "strip": { "kind": "flat", "colors": { "normal": "@surface_disabled", "focused": "@surface" } },
+            "tab": {
+                "kind": "nine_slice",
+                "texture": "tbp:ui_box",
+                "margins": 6,
+                "colors": { "normal": "@raised_disabled", "hovered": "@accent_hover", "pressed": "@pressed", "selected": "@raised" }
+            },
+            "tab_text": { "normal": "@text_dim", "hovered": "@ink", "selected": "@ink" },
+            "splitter": { "kind": "flat", "colors": { "normal": "@surface_sunken", "hovered": "@edge_hover", "pressed": "@edge_pressed" } },
+            "zone": {
+                "kind": "flat",
+                "colors": { "normal": "@zone", "hovered": "@zone_hover" },
+                "outline": { "thickness": 1, "colors": { "normal": "@edge_hover", "hovered": "@accent_bright" } }
+            },
+            "drop_preview": {
+                "kind": "flat",
+                "colors": { "normal": "@zone_hover" },
+                "outline": { "thickness": 2, "colors": { "normal": "@accent_bright" } }
+            }
         }
     }
 }

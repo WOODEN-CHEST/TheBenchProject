@@ -78,6 +78,15 @@ typedef struct CueProbeStruct
     uint64_t WindowId;
 } CueProbe;
 
+/* What a move observer heard, and whether it destroys the window on a release. */
+typedef struct MoveProbeStruct
+{
+    UIWindowMoveStage Stages[64];
+    size_t Count;
+    Vector2 Last;
+    bool IsDestroyingOnRelease;
+} MoveProbe;
+
 
 // Static functions: helpers.
 static bool Construct(TestRun* run, TestUIFixture* fixture)
@@ -1895,6 +1904,319 @@ static void AWindowInsideAnotherWidgetIsPlacedByIt(TestRun* run)
 }
 
 
+// Tests: docks.
+static Error OnMove(UIScreen* screen, uint64_t windowId, UIWindowMoveStage stage, Vector2 screenPosition, const UserData* userData)
+{
+    MoveProbe* Probe = UserData_GetPointer(userData);
+    if (Probe->Count < (sizeof(Probe->Stages) / sizeof(Probe->Stages[0])))
+    {
+        Probe->Stages[Probe->Count] = stage;
+        Probe->Count++;
+    }
+    Probe->Last = screenPosition;
+    Widget* Window = NULL;
+    if (Probe->IsDestroyingOnRelease && (stage == UIWindowMoveStage_Released) && UIScreen_TryGetWidgetById(screen, windowId, &Window))
+    {
+        return Widget_Destroy(Window);
+    }
+    return Error_CreateSuccess();
+}
+
+/* How many times a probe heard a stage, and the stage it heard last. */
+static size_t CountStage(const MoveProbe* probe, UIWindowMoveStage stage)
+{
+    size_t Count = 0U;
+    for (size_t Index = 0U; Index < probe->Count; Index++)
+    {
+        Count += (probe->Stages[Index] == stage) ? 1U : 0U;
+    }
+    return Count;
+}
+
+static bool IsLastStage(const MoveProbe* probe, UIWindowMoveStage stage)
+{
+    return (probe->Count > 0U) && (probe->Stages[probe->Count - 1U] == stage);
+}
+
+static UIWindowDock DockOf(TestRun* run, TestUIFixture* fixture, uint64_t windowId)
+{
+    UIWindowDock Dock = UIWindowDock_None;
+    TEST_CHECK_SUCCESS(run, UIWindow_GetDock(&fixture->Screen, windowId, &Dock));
+    return Dock;
+}
+
+/* Docked, a window shows its content alone over its whole box, minimizes in no way, and its least size has no title bar or border in it;
+ * maximized out of its dock, it has no minimize button. */
+static void DockedItShowsItsContentAlone(TestRun* run)
+{
+    TestUIFixture Fixture;
+    if (Construct(run, &Fixture))
+    {
+        UIWindowOptions Options = UIWindowOptions_Create(u8"Docked");
+        Options.FitDown = UIWindowFit_Fit;
+        uint64_t ContentId = WIDGET_ID_INVALID;
+        uint64_t Id = MakeWindowWith(run, &Fixture, &Options, Box(600.0f, 300.0f, 200.0f, 150.0f), &ContentId);
+        uint64_t TextBox = AddTextBox(run, &Fixture, ContentId);
+        AddTextBox(run, &Fixture, ContentId);
+        AddTextBox(run, &Fixture, ContentId);
+        TestUI_Ticks(run, &Fixture, 2U);
+        Vector2 Floating = MeasureWindow(run, &Fixture, Id, WINDOW_WIDTH);
+        TEST_CHECK(run, DockOf(run, &Fixture, Id) == UIWindowDock_None);
+        // Maximized, then docked: no longer maximized (its dock places it).
+        TEST_CHECK_SUCCESS(run, UIWindow_Maximize(&Fixture.Screen, Id));
+        TEST_CHECK_SUCCESS(run, UIWindow_SetDock(&Fixture.Screen, Id, UIWindowDock_Docked));
+        TEST_CHECK(run, !IsMaximized(&Fixture, Id));
+        TEST_CHECK_SUCCESS(run, UIWindow_SetDock(&Fixture.Screen, Id, UIWindowDock_None));
+        TestUI_Ticks(run, &Fixture, 2U);
+        // Minimized, then docked: restored, as nothing from a dock minimizes.
+        TEST_CHECK_SUCCESS(run, UIWindow_Minimize(&Fixture.Screen, Id));
+        TEST_CHECK_SUCCESS(run, UIWindow_SetDock(&Fixture.Screen, Id, UIWindowDock_Docked));
+        TEST_CHECK(run, AreEdgesHidden(&Fixture, Id)); // Docked, even while still a root: no edges.
+        PutInHolder(run, &Fixture, Id, Box(WINDOW_X, WINDOW_Y, WINDOW_WIDTH, WINDOW_HEIGHT));
+        bool IsMinimized = true;
+        TEST_CHECK_SUCCESS(run, UIWindow_GetState(&Fixture.Screen, Id, &IsMinimized, NULL));
+        TEST_CHECK(run, !IsMinimized && (DockOf(run, &Fixture, Id) == UIWindowDock_Docked));
+        // No title bar, frame, edges or caption buttons: what it holds fills its box.
+        const UIWindowCapability* Window = GetWindow(&Fixture, Id);
+        if (TEST_CHECK(run, Window != NULL))
+        {
+            TEST_CHECK(run, !IsShown(&Fixture, Window->_titleBarId) && !IsShown(&Fixture, Window->_frameId) && AreEdgesHidden(&Fixture, Id));
+            TEST_CHECK(run, IsSameBox(TestUI_GetPixelBox(run, &Fixture, Window->_areaId), Box(WINDOW_X, WINDOW_Y, WINDOW_WIDTH, WINDOW_HEIGHT)));
+        }
+        for (int32_t Button = 0; Button < (int32_t)UIWindowButton_Count; Button++)
+        {
+            TEST_CHECK(run, !IsShown(&Fixture, GetButton(run, &Fixture, Id, (UIWindowButton)Button)));
+        }
+        TEST_CHECK(run, IsShown(&Fixture, TextBox));
+        TEST_CHECK(run, IsSameBox(TestUI_GetPixelBox(run, &Fixture, TextBox), Box(WINDOW_X + 4.0f, WINDOW_Y + 4.0f, WINDOW_WIDTH - 8.0f, 24.0f)));
+        // Its least size: its content's, the title bar and the border left out.
+        Vector2 Docked = MeasureWindow(run, &Fixture, Id, WINDOW_WIDTH);
+        TEST_CHECK(run, TestUI_IsSamePixel(Floating.y - Docked.y, TITLE_HEIGHT + BORDER) && TestUI_IsSamePixel(Floating.x - Docked.x, 2.0f * BORDER));
+        TEST_CHECK(run, TestUI_IsSamePixel(Docked.y, (3.0f * 24.0f) + (2.0f * 2.0f) + (2.0f * 4.0f)));
+        // Code minimizes it in no way; a drag where its title bar was moves nothing.
+        TEST_CHECK_ERROR(run, UIWindow_Minimize(&Fixture.Screen, Id), ErrorCode_InvalidOperation);
+        Drag(run, &Fixture, WINDOW_X + 2.0f, WINDOW_Y + 1.0f, WINDOW_X + 102.0f, WINDOW_Y + 51.0f);
+        TEST_CHECK(run, IsSameBox(TestUI_GetPixelBox(run, &Fixture, Id), Box(WINDOW_X, WINDOW_Y, WINDOW_WIDTH, WINDOW_HEIGHT)));
+        TEST_CHECK(run, IsSameBox(GetWanted(run, &Fixture, Id), Box(600.0f, 300.0f, 200.0f, 150.0f)));
+        TEST_CHECK_ERROR(run, UIWindow_SetDock(&Fixture.Screen, Id, (UIWindowDock)7), ErrorCode_ArgumentOutOfRange);
+        // Let go, it has them all again.
+        TEST_CHECK_SUCCESS(run, UIWindow_SetDock(&Fixture.Screen, Id, UIWindowDock_None));
+        TestUI_Ticks(run, &Fixture, 2U);
+        Window = GetWindow(&Fixture, Id);
+        TEST_CHECK(run, (Window != NULL) && IsShown(&Fixture, Window->_titleBarId) && IsShown(&Fixture, Window->_frameId));
+        TEST_CHECK(run, IsShown(&Fixture, GetButton(run, &Fixture, Id, UIWindowButton_Close)));
+        Vector2 Again = MeasureWindow(run, &Fixture, Id, WINDOW_WIDTH);
+        TEST_CHECK(run, TestUI_IsSamePixel(Again.x, Floating.x) && TestUI_IsSamePixel(Again.y, Floating.y));
+        // Maximized out of a dock (a root again): maximize and close show, minimize does not, and code is refused.
+        Widget* Found = NULL;
+        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Found)))
+        {
+            TEST_CHECK_SUCCESS(run, Widget_MoveTo(Found, NULL));
+        }
+        TEST_CHECK_SUCCESS(run, UIWindow_SetDock(&Fixture.Screen, Id, UIWindowDock_Maximized));
+        TEST_CHECK_SUCCESS(run, UIWindow_Maximize(&Fixture.Screen, Id));
+        TestUI_Ticks(run, &Fixture, 2U);
+        TEST_CHECK(run, IsMaximized(&Fixture, Id) && IsSameBox(GetShown(run, &Fixture, Id), Box(0.0f, 0.0f, TEST_UI_SURFACE_WIDTH, TEST_UI_SURFACE_HEIGHT)));
+        TEST_CHECK(run, !IsShown(&Fixture, GetButton(run, &Fixture, Id, UIWindowButton_Minimize))
+            && IsShown(&Fixture, GetButton(run, &Fixture, Id, UIWindowButton_Maximize)) && IsShown(&Fixture, GetButton(run, &Fixture, Id, UIWindowButton_Close)));
+        TEST_CHECK_ERROR(run, UIWindow_Minimize(&Fixture.Screen, Id), ErrorCode_InvalidOperation);
+        // Restored by its button: floating where it was, still marked out of its dock (its dock takes it back).
+        ClickButton(run, &Fixture, Id, UIWindowButton_Maximize);
+        TEST_CHECK(run, !IsMaximized(&Fixture, Id) && (DockOf(run, &Fixture, Id) == UIWindowDock_Maximized));
+        TEST_CHECK(run, IsSameBox(GetShown(run, &Fixture, Id), Box(600.0f, 300.0f, 200.0f, 150.0f)));
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+/* With no least size from the theme, a docked window's least width is its content's alone: no title bar's needs. */
+static void DockedItNeedsNoRoomForATitleBar(TestRun* run)
+{
+    TestUIFixture Fixture;
+    if (ConstructWith(run, &Fixture, "\"min_size\": [100, 60], \"minimized_width\"", "\"min_size\": [0, 0], \"minimized_width\"", NULL, NULL))
+    {
+        UIWindowOptions Options = UIWindowOptions_Create(u8"Empty");
+        Options.FitDown = UIWindowFit_Fit;
+        uint64_t Id = MakeWindowWith(run, &Fixture, &Options, Box(WINDOW_X, WINDOW_Y, WINDOW_WIDTH, WINDOW_HEIGHT), NULL);
+        Vector2 Floating = MeasureWindow(run, &Fixture, Id, WINDOW_WIDTH);
+        TEST_CHECK(run, Floating.x >= BUTTONS_WIDTH); // Floating, its title bar's buttons need room.
+        TEST_CHECK_SUCCESS(run, UIWindow_SetDock(&Fixture.Screen, Id, UIWindowDock_Docked));
+        PutInHolder(run, &Fixture, Id, Box(WINDOW_X, WINDOW_Y, WINDOW_WIDTH, WINDOW_HEIGHT));
+        Vector2 Docked = MeasureWindow(run, &Fixture, Id, WINDOW_WIDTH);
+        TEST_CHECK(run, TestUI_IsSamePixel(Docked.x, 8.0f) && TestUI_IsSamePixel(Docked.y, 8.0f)); // The content's padding, all round.
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+/* A move observer hears a move by the title bar begin, go on and end: released, cancelled by Escape, or lost to a state that moves
+ * nothing, a hidden window or a press handed on. A resize is no move. */
+static void ItsMoveObserverHearsEachStage(TestRun* run)
+{
+    TestUIFixture Fixture;
+    if (Construct(run, &Fixture))
+    {
+        MoveProbe Probe = { 0 };
+        UserData Data = UserData_FromPointer(&Probe);
+        Rectangle Start = Box(WINDOW_X, WINDOW_Y, WINDOW_WIDTH, WINDOW_HEIGHT);
+        uint64_t Id = MakeWindow(run, &Fixture, Start, NULL);
+        TEST_CHECK_SUCCESS(run, UIWindow_SetMoveObserver(&Fixture.Screen, Id, OnMove, &Data));
+        // Began on the press, moved with the pointer, released.
+        PressAt(run, &Fixture, TITLE_X, TITLE_Y);
+        TEST_CHECK(run, (Probe.Count == 1U) && IsLastStage(&Probe, UIWindowMoveStage_Began));
+        TestUI_MovePointer(&Fixture, TITLE_X + 30.0f, TITLE_Y + 10.0f);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, IsLastStage(&Probe, UIWindowMoveStage_Moved));
+        TEST_CHECK(run, TestUI_IsSamePixel(Probe.Last.x * TEST_UI_SURFACE_WIDTH, TITLE_X + 30.0f)
+            && TestUI_IsSamePixel(Probe.Last.y * TEST_UI_SURFACE_HEIGHT, TITLE_Y + 10.0f));
+        ReleaseAt(run, &Fixture, TITLE_X + 30.0f, TITLE_Y + 10.0f);
+        TEST_CHECK(run, IsLastStage(&Probe, UIWindowMoveStage_Released) && (CountStage(&Probe, UIWindowMoveStage_Began) == 1U)
+            && (CountStage(&Probe, UIWindowMoveStage_Released) == 1U));
+        Rectangle Moved = Box(WINDOW_X + 30.0f, WINDOW_Y + 10.0f, WINDOW_WIDTH, WINDOW_HEIGHT);
+        TEST_CHECK(run, IsSameBox(GetWanted(run, &Fixture, Id), Moved));
+        // Escape mid-move: cancelled, back where it began; the press goes on moving nothing and its release tells nothing.
+        WaitPastDoubleClick(run, &Fixture);
+        Probe.Count = 0U;
+        PressAt(run, &Fixture, TITLE_X + 30.0f, TITLE_Y + 10.0f);
+        TestUI_MovePointer(&Fixture, TITLE_X + 130.0f, TITLE_Y + 50.0f);
+        TestUI_Tick(run, &Fixture);
+        TestUI_Tap(run, &Fixture, GameKey_Escape);
+        TEST_CHECK(run, IsLastStage(&Probe, UIWindowMoveStage_Cancelled) && IsSameBox(GetWanted(run, &Fixture, Id), Moved));
+        size_t Heard = Probe.Count;
+        TestUI_MovePointer(&Fixture, TITLE_X + 200.0f, TITLE_Y + 80.0f);
+        TestUI_Tick(run, &Fixture);
+        ReleaseAt(run, &Fixture, TITLE_X + 200.0f, TITLE_Y + 80.0f);
+        TEST_CHECK(run, (Probe.Count == Heard) && IsSameBox(GetWanted(run, &Fixture, Id), Moved));
+        // Minimized, maximized or docked by code mid-move: lost at once, and the release tells nothing.
+        for (int32_t State = 0; State < 3; State++)
+        {
+            WaitPastDoubleClick(run, &Fixture);
+            Probe.Count = 0U;
+            PressAt(run, &Fixture, TITLE_X + 30.0f, TITLE_Y + 10.0f);
+            TestUI_MovePointer(&Fixture, TITLE_X + 40.0f, TITLE_Y + 10.0f);
+            TestUI_Tick(run, &Fixture);
+            Error Result = (State == 0) ? UIWindow_Minimize(&Fixture.Screen, Id) : (State == 1) ? UIWindow_Maximize(&Fixture.Screen, Id)
+                : UIWindow_SetDock(&Fixture.Screen, Id, UIWindowDock_Maximized);
+            TEST_CHECK_SUCCESS(run, Result);
+            TEST_CHECK(run, IsLastStage(&Probe, UIWindowMoveStage_Lost) && (CountStage(&Probe, UIWindowMoveStage_Lost) == 1U));
+            ReleaseAt(run, &Fixture, TITLE_X + 90.0f, TITLE_Y + 10.0f);
+            TEST_CHECK(run, IsLastStage(&Probe, UIWindowMoveStage_Lost) && (CountStage(&Probe, UIWindowMoveStage_Released) == 0U));
+            TEST_CHECK_SUCCESS(run, UIWindow_SetDock(&Fixture.Screen, Id, UIWindowDock_None));
+            TEST_CHECK_SUCCESS(run, UIWindow_Restore(&Fixture.Screen, Id));
+            TEST_CHECK_SUCCESS(run, UIWindow_SetBox(&Fixture.Screen, Id, Moved));
+            TestUI_Ticks(run, &Fixture, 2U);
+        }
+        // Hidden mid-move: the press stops reaching its title bar.
+        WaitPastDoubleClick(run, &Fixture);
+        Probe.Count = 0U;
+        PressAt(run, &Fixture, TITLE_X + 30.0f, TITLE_Y + 10.0f);
+        Widget* Window = NULL;
+        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Window)))
+        {
+            TEST_CHECK_SUCCESS(run, Widget_SetIsRendered(Window, false));
+        }
+        TestUI_Ticks(run, &Fixture, 2U);
+        TEST_CHECK(run, IsLastStage(&Probe, UIWindowMoveStage_Lost));
+        ReleaseAt(run, &Fixture, TITLE_X + 30.0f, TITLE_Y + 10.0f);
+        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, Id, &Window)))
+        {
+            TEST_CHECK_SUCCESS(run, Widget_SetIsRendered(Window, true));
+        }
+        TestUI_Ticks(run, &Fixture, 2U);
+        // A resize is no move, and Escape puts it back where it began too.
+        WaitPastDoubleClick(run, &Fixture);
+        Probe.Count = 0U;
+        float RightEdge = Moved.x + Moved.width - 2.0f;
+        PressAt(run, &Fixture, RightEdge, Moved.y + 100.0f);
+        TestUI_MovePointer(&Fixture, RightEdge + 60.0f, Moved.y + 100.0f);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, TestUI_IsSamePixel(GetWanted(run, &Fixture, Id).width, WINDOW_WIDTH + 60.0f));
+        TestUI_Tap(run, &Fixture, GameKey_Escape);
+        TEST_CHECK(run, IsSameBox(GetWanted(run, &Fixture, Id), Moved));
+        TestUI_MovePointer(&Fixture, RightEdge + 90.0f, Moved.y + 100.0f);
+        TestUI_Tick(run, &Fixture);
+        ReleaseAt(run, &Fixture, RightEdge + 90.0f, Moved.y + 100.0f);
+        TEST_CHECK(run, IsSameBox(GetWanted(run, &Fixture, Id), Moved) && (Probe.Count == 0U));
+        // Escape with no drag reaches what is focused as before: the window does nothing with it.
+        TestUI_Tap(run, &Fixture, GameKey_Escape);
+        TEST_CHECK(run, IsSameBox(GetWanted(run, &Fixture, Id), Moved) && (Probe.Count == 0U));
+        // An observer that destroys the window when it is released leaves nothing behind.
+        WaitPastDoubleClick(run, &Fixture);
+        Probe.IsDestroyingOnRelease = true;
+        Drag(run, &Fixture, TITLE_X + 30.0f, TITLE_Y + 10.0f, TITLE_X + 50.0f, TITLE_Y + 10.0f);
+        TEST_CHECK(run, !UIScreen_IsWidgetAlive(&Fixture.Screen, Id) && !UIScreen_HasHeldPress(&Fixture.Screen));
+        // None set: nothing is heard.
+        TEST_CHECK_ERROR(run, UIWindow_SetMoveObserver(&Fixture.Screen, Id, OnMove, &Data), ErrorCode_InvalidOperation);
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+/* UIWindow_StartMove hands a press held elsewhere to the window's title bar: the window comes on top and active, moves with the press from
+ * its floating box, and Escape puts it back where the move began. What held the press loses it. */
+static void StartMoveCarriesItWithAPressHeldElsewhere(TestRun* run)
+{
+    TestUIFixture Fixture;
+    if (Construct(run, &Fixture))
+    {
+        MoveProbe ProbeA = { 0 };
+        MoveProbe ProbeB = { 0 };
+        UserData DataA = UserData_FromPointer(&ProbeA);
+        UserData DataB = UserData_FromPointer(&ProbeB);
+        uint64_t ContentA = WIDGET_ID_INVALID;
+        Rectangle StartA = Box(WINDOW_X, WINDOW_Y, WINDOW_WIDTH, WINDOW_HEIGHT);
+        uint64_t A = MakeWindow(run, &Fixture, StartA, &ContentA);
+        uint64_t TextA = AddTextBox(run, &Fixture, ContentA);
+        Rectangle StartB = Box(300.0f, 200.0f, WINDOW_WIDTH, 150.0f);
+        uint64_t B = MakeWindow(run, &Fixture, StartB, NULL);
+        TEST_CHECK_SUCCESS(run, UIWindow_SetMoveObserver(&Fixture.Screen, A, OnMove, &DataA));
+        TEST_CHECK_SUCCESS(run, UIWindow_SetMoveObserver(&Fixture.Screen, B, OnMove, &DataB));
+        TEST_CHECK_SUCCESS(run, UIWindow_SetDefaultFocus(&Fixture.Screen, A, TextA, false));
+        // No press held: refused.
+        TEST_CHECK_ERROR(run, UIWindow_StartMove(&Fixture.Screen, A, GameKey_MouseLeft), ErrorCode_InvalidOperation);
+        // B's title bar pressed, the press handed to A: B loses its move, A begins, comes on top and takes the focus.
+        PressAt(run, &Fixture, 500.0f, 212.0f);
+        TEST_CHECK(run, IsLastStage(&ProbeB, UIWindowMoveStage_Began) && IsInWindow(&Fixture, TopmostAt(&Fixture, 350.0f, 230.0f), B));
+        TEST_CHECK_SUCCESS(run, UIWindow_StartMove(&Fixture.Screen, A, GameKey_MouseLeft));
+        TEST_CHECK(run, IsLastStage(&ProbeB, UIWindowMoveStage_Lost) && IsLastStage(&ProbeA, UIWindowMoveStage_Began));
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, IsActive(&Fixture, A) && (UIScreen_GetFocusedWidgetId(&Fixture.Screen) == TextA));
+        TEST_CHECK(run, IsInWindow(&Fixture, TopmostAt(&Fixture, 350.0f, 230.0f), A));
+        TestUI_MovePointer(&Fixture, 550.0f, 232.0f);
+        TestUI_Tick(run, &Fixture);
+        Rectangle MovedA = Box(WINDOW_X + 50.0f, WINDOW_Y + 20.0f, WINDOW_WIDTH, WINDOW_HEIGHT);
+        TEST_CHECK(run, IsSameBox(GetWanted(run, &Fixture, A), MovedA) && IsSameBox(GetWanted(run, &Fixture, B), StartB));
+        ReleaseAt(run, &Fixture, 550.0f, 232.0f);
+        TEST_CHECK(run, IsLastStage(&ProbeA, UIWindowMoveStage_Released) && IsLastStage(&ProbeB, UIWindowMoveStage_Lost));
+        // Again, cancelled: A back where the move began.
+        WaitPastDoubleClick(run, &Fixture);
+        PressAt(run, &Fixture, 500.0f, 212.0f);
+        TEST_CHECK_SUCCESS(run, UIWindow_StartMove(&Fixture.Screen, A, GameKey_MouseLeft));
+        TestUI_MovePointer(&Fixture, 450.0f, 300.0f);
+        TestUI_Tick(run, &Fixture);
+        TEST_CHECK(run, IsSameBox(GetWanted(run, &Fixture, A), Box(MovedA.x - 50.0f, MovedA.y + 88.0f, WINDOW_WIDTH, WINDOW_HEIGHT)));
+        TestUI_Tap(run, &Fixture, GameKey_Escape);
+        TEST_CHECK(run, IsLastStage(&ProbeA, UIWindowMoveStage_Cancelled) && IsSameBox(GetWanted(run, &Fixture, A), MovedA));
+        ReleaseAt(run, &Fixture, 450.0f, 300.0f);
+        TEST_CHECK(run, IsSameBox(GetWanted(run, &Fixture, A), MovedA));
+        // Refused for a window that is maximized, docked or placed by another widget, and for a button that holds no press.
+        WaitPastDoubleClick(run, &Fixture);
+        PressAt(run, &Fixture, 500.0f, 212.0f);
+        TEST_CHECK_ERROR(run, UIWindow_StartMove(&Fixture.Screen, A, GameKey_MouseRight), ErrorCode_InvalidOperation);
+        TEST_CHECK_SUCCESS(run, UIWindow_Maximize(&Fixture.Screen, A));
+        TEST_CHECK_ERROR(run, UIWindow_StartMove(&Fixture.Screen, A, GameKey_MouseLeft), ErrorCode_InvalidOperation);
+        TEST_CHECK_SUCCESS(run, UIWindow_Restore(&Fixture.Screen, A));
+        TEST_CHECK_SUCCESS(run, UIWindow_SetDock(&Fixture.Screen, A, UIWindowDock_Docked));
+        TEST_CHECK_ERROR(run, UIWindow_StartMove(&Fixture.Screen, A, GameKey_MouseLeft), ErrorCode_InvalidOperation);
+        TEST_CHECK_SUCCESS(run, UIWindow_SetDock(&Fixture.Screen, A, UIWindowDock_None));
+        ReleaseAt(run, &Fixture, 500.0f, 212.0f);
+        PutInHolder(run, &Fixture, A, StartA);
+        PressAt(run, &Fixture, 500.0f, 212.0f);
+        TEST_CHECK_ERROR(run, UIWindow_StartMove(&Fixture.Screen, A, GameKey_MouseLeft), ErrorCode_InvalidOperation);
+        ReleaseAt(run, &Fixture, 500.0f, 212.0f);
+        TEST_CHECK(run, IsSameBox(GetWanted(run, &Fixture, A), MovedA));
+    }
+    TestUI_Deconstruct(run, &Fixture);
+}
+
+
 // Tests: the framework's parts.
 static void APressOnWhatKeepsTheFocusLeavesIt(TestRun* run)
 {
@@ -2219,6 +2541,10 @@ static const TestCase Cases[] =
     { "its_scale_zooms_what_it_holds", ItsScaleZoomsWhatItHolds },
     { "a_new_window_opens_on_top_and_tells_its_cues", ANewWindowOpensOnTopAndTellsItsCues },
     { "a_window_inside_another_widget_is_placed_by_it", AWindowInsideAnotherWidgetIsPlacedByIt },
+    { "docked_it_shows_its_content_alone", DockedItShowsItsContentAlone },
+    { "docked_it_needs_no_room_for_a_title_bar", DockedItNeedsNoRoomForATitleBar },
+    { "its_move_observer_hears_each_stage", ItsMoveObserverHearsEachStage },
+    { "start_move_carries_it_with_a_press_held_elsewhere", StartMoveCarriesItWithAPressHeldElsewhere },
     { "a_press_on_what_keeps_the_focus_leaves_it", APressOnWhatKeepsTheFocusLeavesIt },
     { "the_workspace_is_the_surface_less_its_strips", TheWorkspaceIsTheSurfaceLessItsStrips },
     { "options_that_cannot_be_made_are_refused", OptionsThatCannotBeMadeAreRefused },

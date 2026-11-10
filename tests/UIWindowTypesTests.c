@@ -433,6 +433,10 @@ static void AClosedWindowsPlaceIsRemembered(TestRun* run)
         // A box that means nothing is not remembered.
         UIWindowTypes_RememberBox(&Fixture.Types, Index, (Rectangle){ NAN, 0.0f, 10.0f, 10.0f });
         TEST_CHECK(run, !UIWindowTypes_GetRememberedBox(&Fixture.Types, Index, &Remembered));
+        UIWindowTypes_RememberBox(&Fixture.Types, Index, (Rectangle){ 0.0f, 5e9f, 10.0f, 10.0f }); // Further than a window can be.
+        TEST_CHECK(run, !UIWindowTypes_GetRememberedBox(&Fixture.Types, Index, &Remembered));
+        UIWindowTypes_RememberBox(&Fixture.Types, Index, (Rectangle){ -5e9f, 0.0f, 10.0f, 10.0f });
+        TEST_CHECK(run, !UIWindowTypes_GetRememberedBox(&Fixture.Types, Index, &Remembered));
         UIWindowTypes_RememberBox(&Fixture.Types, Index + 100U, Moved);
     }
     Deconstruct(run, &Fixture);

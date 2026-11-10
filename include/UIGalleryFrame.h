@@ -17,7 +17,9 @@
  * lines wrapped, not wrapped and read-only; a form of three to Tab through); the fifth values; the sixth what an editor's windows are
  * built from (lists, a tree, colour pickers, dialogs, drags, tool bars); the seventh floating windows of four types it registers with the
  * program's window types while it runs (one that fits both ways, one that scrolls, a fixed one of its own scale, notes whose close asks
- * first) and a Window menu that opens them. Every element shows hover text.
+ * first) and a Window menu that opens them; the eighth a workspace with a menu bar and a status bar, five window types it registers docked as
+ * its default layout (tabs, splits, a floating window can be dropped on guides), Window and Layout menus and the layout switcher, its layouts
+ * kept in `ui_gallery_layouts.json` in the game's folder (Services.BaseDirectory). Every element shows hover text.
  *
  * Its keys, while no text box is being edited: N switches the page, T the theme (the same elements in flat boxes, nine-slice art and the flat boxes with another
  * palette, with no element's code changing), + and - scale the UI, P the scale policy, L stops and starts logging each element's
@@ -35,8 +37,9 @@ typedef struct ServicesStruct Services;
 // Functions.
 /**
  * @brief Creates the gallery (heap-allocated; the frame manager destroys it).
- * @param services The shared services; borrowed, must outlive the frame. Its Input, FrameManager, Assets, Config, Logger, Keys and
- *        WindowTypes (the windows page has none without them) are used. Must not be NULL.
+ * @param services The shared services; borrowed, must outlive the frame. Its Input, FrameManager, Assets, Config, Logger, Keys,
+ *        WindowTypes (the windows and workspace pages have none without them) and BaseDirectory (the workspace keeps no layouts without
+ *        it) are used. Must not be NULL.
  * @param outFrame [out] Receives the frame; must not be NULL.
  * @returns Success; ErrorCode_IllegalArgument if a pointer is NULL; otherwise an error from building the UI.
  * @note May propagate errors from internal calls; consult the documentation of called functions for the full set.

@@ -28,6 +28,7 @@ The references/ directory contains various reference files for various things. I
 * asset_structure.md - A file which describes the JSON asset structure that assets must have.
 * text_component_structure.md - The JSON structure of text components.
 * controls_structure.md - The JSON structure of the player's controls file (action bindings).
+* layouts_structure.md - The JSON structure of a workspace's layouts file (named arrangements of windows, docks and tabs).
 * world_structure.md - The structure of world files: JSON (authored worlds) and GHDF (saves, the network), their
   loading rules and what the writer writes.
 
@@ -821,7 +822,17 @@ Current module list:
   * UIWindowTypes - The windows a UI opens by key: a Registry of types (`tbp:ui_window_type`, in the root; main.c makes the program's, Services carries it)
     with a display name, icon, fill function, fits, sizes and whether only one opens; opening one (a single one restored, brought to the front and
     focused), where the type's last window closed, the items of a Window menu.
-  * UIGalleryFrame - A game frame on seven pages, each scrolling, started with --ui-gallery: every element in every state, the routing and the keyboard (a box to go into, whose sliders Enter enters); the scale rows, a turning panel, a panel sliding in, a second look of the button, icons; a menu bar, dropdowns near the window's edges and in the page (three options, a thousand from a provider), context menus with submenus, a modal dialog, scroll areas, a long end and a status bar; text boxes of every kind and a form; sliders of every conversion and upright, property boxes of every kind, compound sliders, a form of labelled rows and rows of fields; tool bars, a list of a hundred thousand rows, a tree twelve deep, a drag between two lists, colour pickers and dialogs; floating windows of four types it registers while it runs (fitting, scrolling, fixed, notes that ask before closing) and a Window menu (the private source/UIGalleryWindows.{h,c}); hover text on everything. N the page, T the theme (three: flat, nine-slice, another palette), + and - the scale, P the scale policy, L the event log.
+  * UIDockTree - Pure: a workspace's docking areas as a split tree with tabs in its leaves (limited in leaves, tabs and depth for hostile files),
+    its operations, its arrangement in whole pixels keeping least sizes while there is room, the ratio a splitter's drag sets, and the drop zones
+    (tab strips, a middle guide and four edge guides per area).
+  * UIWorkspace - The root of a screen that uses windows (kind workspace): optional menu and status bars, a dock where windows tab and split
+    (tabs with icons and names, splitters, hidden tabs getting no updates), tabs torn out by drag and windows dropped on guides (Escape puts it all
+    back), maximizing out of the dock, and layouts: captured as the arrangement changes, saved once changes settle, switched with windows reused,
+    a switcher dropdown.
+  * UILayouts - Named layouts as pure data (windows by type key, the dock tree, each type's last place) and their file
+    (references/layouts_structure.md): read with limits as hostile (a bad file put aside as `.bad`, an unreadable one left alone and never
+    saved over, unknown types dropped with one log line), written atomically.
+  * UIGalleryFrame - A game frame on eight pages, each scrolling, started with --ui-gallery: every element in every state, the routing and the keyboard (a box to go into, whose sliders Enter enters); the scale rows, a turning panel, a panel sliding in, a second look of the button, icons; a menu bar, dropdowns near the window's edges and in the page (three options, a thousand from a provider), context menus with submenus, a modal dialog, scroll areas, a long end and a status bar; text boxes of every kind and a form; sliders of every conversion and upright, property boxes of every kind, compound sliders, a form of labelled rows and rows of fields; tool bars, a list of a hundred thousand rows, a tree twelve deep, a drag between two lists, colour pickers and dialogs; floating windows of four types it registers while it runs (fitting, scrolling, fixed, notes that ask before closing) and a Window menu (the private source/UIGalleryWindows.{h,c}); a workspace with five window types docked as a default layout, Window and Layout menus and the layout switcher, its layouts kept in ui_gallery_layouts.json (the private source/UIGalleryWorkspace.{h,c}); hover text on everything. N the page, T the theme (three: flat, nine-slice, another palette), + and - the scale, P the scale policy, L the event log.
 * Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text as a STRICT TREE: a parent owns
   its children, a tree has at most 64 levels, components own copies of their strings, and fonts and sprite animations
   are named, never held. Every change gives the component and its ancestors a new revision. Covers three modules (plus

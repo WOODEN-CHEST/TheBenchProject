@@ -133,6 +133,9 @@ typedef enum UIElementKindEnum
     UIElementKind_Drag,
     /** @brief A window: a frame with a title bar, its caption buttons, edges to resize it and content. */
     UIElementKind_Window,
+    /** @brief A workspace: its docking areas' tab strips and tabs, the splitters between them, the dock's background, and the zones a
+     *  window dragged over the dock shows. */
+    UIElementKind_Workspace,
     /** @brief The number of kinds. */
     UIElementKind_Count
 } UIElementKind;
@@ -678,6 +681,42 @@ typedef enum UIWindowPartEnum
     /** @brief The number of a window's values. */
     UIWindowPart_Count
 } UIWindowPart;
+
+/** @brief A workspace's values in a theme: its dock's (its bars are a menu bar's and a status bar's, its windows windows'). */
+typedef enum UIWorkspacePartEnum
+{
+    /** @brief "tab_height": a tab strip's height, UI pixels. */
+    UIWorkspacePart_TabHeight,
+    /** @brief "tab_padding": inside a tab, at its left and right, UI pixels. */
+    UIWorkspacePart_TabPadding,
+    /** @brief "tab_spacing": between two tabs, and before the first, UI pixels. */
+    UIWorkspacePart_TabSpacing,
+    /** @brief "icon_spacing": between a selected tab's icon and its name, UI pixels. */
+    UIWorkspacePart_IconSpacing,
+    /** @brief "tab_max_width": the widest a selected tab gets with its name, UI pixels. */
+    UIWorkspacePart_TabMaxWidth,
+    /** @brief "splitter_thickness": a splitter's thickness between two docking areas, UI pixels. */
+    UIWorkspacePart_SplitterThickness,
+    /** @brief "guide_size": the side of one of the five drop guides a docking area shows under a dragged window, UI pixels. */
+    UIWorkspacePart_GuideSize,
+    /** @brief "background": a box over the dock where no docking area is (an empty dock). */
+    UIWorkspacePart_Background,
+    /** @brief "strip": a box behind a docking area's tabs; focused while its shown window is active. */
+    UIWorkspacePart_Strip,
+    /** @brief "tab": a box, one tab: selected for its area's shown window, hovered under the pointer, pressed while held. */
+    UIWorkspacePart_Tab,
+    /** @brief "tab_text": a colour per state, a tab's icon and name. */
+    UIWorkspacePart_TabText,
+    /** @brief "splitter": a box between two docking areas, hovered under the pointer and pressed while it is dragged. */
+    UIWorkspacePart_Splitter,
+    /** @brief "zone": a box, one of the five drop guides of the docking area under a window being dragged (its centre's, adding a tab, and
+     *  one beside it toward each edge, splitting the area there); hovered for the one under the pointer. */
+    UIWorkspacePart_Zone,
+    /** @brief "drop_preview": a box over where the dragged window would go if let go there. */
+    UIWorkspacePart_DropPreview,
+    /** @brief The number of a workspace's values. */
+    UIWorkspacePart_Count
+} UIWorkspacePart;
 
 /**
  * @brief What a value of an element kind is.

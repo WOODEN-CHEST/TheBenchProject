@@ -385,7 +385,8 @@ edit element being edited: at most one, always the focused one), active (hovered
 and `EntersItself` from their type (`Widget_SetIsFocusable`, `Widget_SetNeedsEntering`, `Widget_SetEntersItself` change them); an
 input-disabled widget is transparent to the pointer and cannot keep focus. A hidden widget (`Widget_SetIsRendered`) is not there for the pointer or the keyboard, with its
 subtree: nothing in it can have the focus (hiding takes it away), navigation passes it, navigation inside it ends, and a press or a held key that began on it is over
-for it. A box of no size holds no point.
+for it. A box of no size holds no point. A widget whose update flag is off (`Widget_SetIsUpdated`) gets no update ticks, and neither does anything it holds,
+whatever their own flags say (a window in a tab that is not selected); layout goes on for it as for any widget.
 
 ## Notifications
 
@@ -508,7 +509,7 @@ stand (two scroll areas, two windows on the screen), in side tables emptied of a
 ## Update order
 
 `UIScreen_Update`: snapshot the attached widgets (pre-order) → route input → advance animations → update the snapshot
-widgets that are still alive, attached and updated → place the open popups (closing those whose owner went) → **Layout** the snapshot widgets that are still alive and attached,
+widgets that are still alive, attached and updated with their ancestors → place the open popups (closing those whose owner went) → **Layout** the snapshot widgets that are still alive and attached,
 parents first (`Layout` hook, with a `UILayoutContext`: a measuring render context for the viewport and the parent's
 absolute size) → deliver notifications → tear down destroyed widgets. Widgets created or attached during the tick (by a
 hook, a handler or input routing) get their first Update and Layout next tick, like frames added during a manager

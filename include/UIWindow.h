@@ -23,8 +23,12 @@
  * the window goes back to. What shows is that box grown to the window's least size and kept reachable on the workspace
  * (UIScreen_GetWorkspaceBox): the title bar's whole height on it, and at least UI_WINDOW_REACHABLE_WIDTH of the title bar's draggable
  * part (the title bar less its buttons). So a game window that shrinks and grows again puts the window back where it was. Dragging the
- * title bar moves it; its edges and corners resize it, within its least size and the workspace, the pointer's shape showing which way. A
- * double click on the title bar maximizes it or restores it.
+ * title bar moves it; its edges and corners resize it, within its least size and the workspace, the pointer's shape showing which way;
+ * Escape during either puts its floating box back where the drag began. A double click on the title bar maximizes it or restores it. A
+ * move observer (UIWindow_SetMoveObserver: a dock) hears every move by the title bar begin, go on and end.
+ *
+ * DOCKS. A dock (UIWorkspace.h) holds windows as its children and places them itself: it marks them docked (UIWindow_SetDock), so they
+ * show no title bar, frame, edges or caption buttons, their tabs standing for their title bars, and maximizes them out of itself.
  *
  * ITS LEAST SIZE, in its own UI pixels (its scale multiplies it), is the largest of the theme's "min_size", its own
  * (UIWindow_SetMinimumSize), what its title bar needs, and, per axis that fits (UIWindowFit_Fit), what its content needs: across, the
@@ -143,6 +147,51 @@ typedef enum UIWindowGrabEnum
     /** @brief An edge's or a corner's: it resizes the window. */
     UIWindowGrab_Resize
 } UIWindowGrab;
+
+/**
+ * @brief Where a window stands with a dock (UIWorkspace.h), which sets it.
+ */
+typedef enum UIWindowDockEnum
+{
+    /** @brief Its own: floating, or placed by another widget with its title bar. */
+    UIWindowDock_None,
+    /** @brief In a dock, which places it: no title bar, frame, edges or caption buttons of its own (its tab stands for its title bar),
+     *  its content filling its box. */
+    UIWindowDock_Docked,
+    /** @brief Maximized out of its dock: a root filling the workspace, with no minimize; restored, its dock takes it back. */
+    UIWindowDock_Maximized
+} UIWindowDock;
+
+/**
+ * @brief What a move of a window by its title bar is doing, as its move observer hears it.
+ */
+typedef enum UIWindowMoveStageEnum
+{
+    /** @brief A press on its title bar (or UIWindow_StartMove) began moving it. */
+    UIWindowMoveStage_Began,
+    /** @brief It moved under the pointer. */
+    UIWindowMoveStage_Moved,
+    /** @brief The press was let go: it stays where it is (unless the observer moves it). */
+    UIWindowMoveStage_Released,
+    /** @brief Escape cancelled it: its floating box is back where the move began. */
+    UIWindowMoveStage_Cancelled,
+    /** @brief The press stopped reaching its title bar (the window hidden or detached, the press handed on, or a state that moves nothing). */
+    UIWindowMoveStage_Lost
+} UIWindowMoveStage;
+
+/**
+ * @brief Hears a window being moved by its title bar: what a dock watches to show where a drop would go and to take the window in.
+ *        Called during the screen's update as a hook is, right after the window did what the stage says: it may move, dock or destroy
+ *        the window and move the focus.
+ * @param screen The window's screen.
+ * @param windowId The window.
+ * @param stage What the move did.
+ * @param screenPosition The pointer, in the screen's normalized [0;1] space (past it off the surface).
+ * @param userData What was given with the observer (its stored copy).
+ * @returns Success, or an error that stops the screen's update.
+ */
+typedef Error (*UIWindowMoveObserver)(UIScreen* screen, uint64_t windowId, UIWindowMoveStage stage, Vector2 screenPosition,
+    const UserData* userData);
 
 /**
  * @brief Asks whether a window may close now (unsaved work). Called when its close button is activated or UIWindow_Close asks, during the
@@ -283,12 +332,18 @@ typedef struct UIWindowCapabilityStruct
     /** @brief Where the shown caption buttons start, from its left, in its own UI pixels: where the title ends. */
     float _buttonsStart;
     /** @brief What the held press on its frame does: moving or resizing (by which edge), where the pointer and the shown box were when it
-     *  began (the screen's UI pixels), and its button. */
+     *  began (the screen's UI pixels), the floating box then (what Escape puts back), and its button. */
     UIWindowGrab _grab;
     UIWindowEdge _grabEdge;
     Vector2 _grabStart;
     Rectangle _grabBox;
+    Rectangle _grabFloatingBox;
     GameKey _grabButton;
+    /** @brief Where it stands with a dock. */
+    UIWindowDock _dock;
+    /** @brief Hears it being moved by its title bar, with its data; NULL for none. */
+    UIWindowMoveObserver _moveObserver;
+    UserData _moveObserverData;
     /** @brief Whether the held press on its title bar is a double click's second: its release maximizes or restores the window, so the
      *  release still lands on the title bar. */
     bool _isToggleOnRelease;
@@ -469,21 +524,21 @@ Error UIWindow_SetButtons(UIScreen* screen, uint64_t windowId, bool canMinimize,
 
 /**
  * @brief Minimizes a window: its content hides (the focus in it is lost, its state is kept) and its frame becomes a title bar. Nothing
- *        happens to one minimized already. A drag of it ends.
+ *        happens to one minimized already. A drag of it ends (a move's observer hears it lost).
  * @param screen The window's screen; must not be NULL.
  * @param windowId The window.
  * @returns Success; ErrorCode_InvalidOperation for a stale id, a widget that is no window, or a window that is not a root of its screen
- *          (another widget places it); otherwise a hook's error.
+ *          (another widget places it) or stands in a dock; otherwise a hook's or the move observer's error.
  */
 Error UIWindow_Minimize(UIScreen* screen, uint64_t windowId);
 
 /**
  * @brief Maximizes a window: it fills the workspace in the Maximized layer, and a window of the screen maximized before is restored. A
- *        minimized window is restored too. A drag of it ends.
+ *        minimized window is restored too. A drag of it ends (a move's observer hears it lost).
  * @param screen The window's screen; must not be NULL.
  * @param windowId The window.
  * @returns Success; ErrorCode_InvalidOperation for a stale id, a widget that is no window, or a window that is not a root of its screen;
- *          otherwise a hook's error.
+ *          otherwise a hook's or the move observer's error.
  */
 Error UIWindow_Maximize(UIScreen* screen, uint64_t windowId);
 
@@ -596,6 +651,51 @@ Error UIWindow_GetType(UIScreen* screen, uint64_t windowId, UIWindowTypes** outT
  */
 Error UIWindow_SetType(UIScreen* screen, uint64_t windowId, UIWindowTypes* types, uint32_t index);
 
+/**
+ * @brief Sets where a window stands with a dock: what a dock calls as it takes a window in, maximizes it out of itself and lets it go
+ *        (UIWorkspace.h). Docked, it shows no title bar, frame, edges or caption buttons, and its content fills the box its parent gives
+ *        it; maximized out of its dock, it has no minimize. In neither does it minimize, and a minimized window docked is restored. Into
+ *        either, a drag of it ends (a move's observer hears it lost).
+ * @param screen The window's screen; must not be NULL.
+ * @param windowId The window.
+ * @param dock Where it stands.
+ * @returns Success; ErrorCode_InvalidOperation for a stale id or a widget that is no window; ErrorCode_ArgumentOutOfRange for an unknown
+ *          value; otherwise a hook's or the move observer's error.
+ */
+Error UIWindow_SetDock(UIScreen* screen, uint64_t windowId, UIWindowDock dock);
+
+/**
+ * @brief Reads where a window stands with a dock.
+ * @param screen The window's screen; must not be NULL.
+ * @param windowId The window.
+ * @param outDock [out] Receives it. Must not be NULL.
+ * @returns Success; ErrorCode_InvalidOperation for a stale id or a widget that is no window.
+ */
+Error UIWindow_GetDock(UIScreen* screen, uint64_t windowId, UIWindowDock* outDock);
+
+/**
+ * @brief Sets what hears a window being moved by its title bar (one observer per window: a dock).
+ * @param screen The window's screen; must not be NULL.
+ * @param windowId The window.
+ * @param observer The observer, or NULL for none.
+ * @param userData Handed to it; copied. May be NULL for none.
+ * @returns Success; ErrorCode_InvalidOperation for a stale id or a widget that is no window.
+ */
+Error UIWindow_SetMoveObserver(UIScreen* screen, uint64_t windowId, UIWindowMoveObserver observer, const UserData* userData);
+
+/**
+ * @brief Hands a held press to a window's title bar (UIScreen_TransferPress) and begins moving the window by it, from the pointer's place
+ *        now, as a press on the title bar would have: a tab dragged out of a dock carries its window on with the same press. The window is
+ *        raised and made active (the focus goes inside), the floating box moves with the press from here, the move observer hears it
+ *        begin, and Escape puts the box back where it is now. Its title bar must show: a window that is not docked.
+ * @param screen The window's screen; must not be NULL.
+ * @param windowId The window: a root of its screen, not docked, not shown maximized.
+ * @param button The press's mouse button: one a widget of the screen holds.
+ * @returns Success; ErrorCode_InvalidOperation for a stale id, a widget that is no window, a window that is not a root, is docked or shows
+ *          maximized, or a button that holds no press; otherwise the hand-over's or the observer's error.
+ */
+Error UIWindow_StartMove(UIScreen* screen, uint64_t windowId, GameKey button);
+
 
 // Behaviour helpers, for looks and the kit.
 /**
@@ -627,6 +727,16 @@ Error UIWindow_Measure(Widget* widget, const UIMeasureContext* context, float av
 static inline bool UIWindowCapability_IsActive(const UIWindowCapability* self)
 {
     return self->_isActive;
+}
+
+/**
+ * @brief Returns where a window stands with a dock, for its look: docked, it draws only its content's background.
+ * @param self The capability; must not be NULL.
+ * @returns Where it stands.
+ */
+static inline UIWindowDock UIWindowCapability_GetDock(const UIWindowCapability* self)
+{
+    return self->_dock;
 }
 
 /**

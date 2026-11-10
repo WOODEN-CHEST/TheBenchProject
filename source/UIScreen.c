@@ -547,13 +547,28 @@ static Error TakeSnapshot(UIScreen* self)
     return Error_CreateSuccess();
 }
 
-/* Updates every snapshot widget that is still alive, attached and updated (widgets added this tick start next tick). */
+/* Whether a widget and every ancestor take updates: a widget with updates off takes its subtree with it. */
+static bool IsUpdatedWithAncestors(const Widget* widget)
+{
+    const Widget* Current = widget;
+    for (size_t Step = 0; (Step <= WIDGET_MAX_TREE_DEPTH) && (Current != NULL); Step++)
+    {
+        if (!Widget_IsUpdated(Current))
+        {
+            return false;
+        }
+        Current = Widget_GetParent(Current);
+    }
+    return true;
+}
+
+/* Updates every snapshot widget that is still alive, attached and updated with its ancestors (widgets added this tick start next tick). */
 static Error UpdateWidgets(UIScreen* self, ProgramTime time)
 {
     for (size_t Index = 0; Index < self->_updateSnapshot._count; Index++)
     {
         Widget* Target = UIScreen_InternalResolve(self, *(uint64_t*)GenericBuffer_GetPointerToElement(&self->_updateSnapshot, Index));
-        if ((Target == NULL) || !Widget_IsUpdated(Target) || !UIScreen_InternalIsAttached(Target))
+        if ((Target == NULL) || !IsUpdatedWithAncestors(Target) || !UIScreen_InternalIsAttached(Target))
         {
             continue;
         }

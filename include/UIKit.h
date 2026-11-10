@@ -33,6 +33,7 @@
 #include "UIValue.h"
 #include "UIVectorRow.h"
 #include "UIWindow.h"
+#include "UIWorkspace.h"
 
 
 /**
@@ -126,6 +127,8 @@ typedef enum UIElementCapabilityEnum
     UIElementCapability_Toolbar,
     /** @brief UIWindowCapability (UIWindow.h). */
     UIElementCapability_Window,
+    /** @brief UIWorkspaceCapability (UIWorkspace.h). */
+    UIElementCapability_Workspace,
     /** @brief The number of capabilities. */
     UIElementCapability_Count
 } UIElementCapability;
@@ -194,6 +197,11 @@ typedef struct UIKitStruct
     uint64_t _windowFrameType;
     uint64_t _windowTitleType;
     uint64_t _windowEdgeType;
+    /** @brief The kit's own widget types a workspace is made of: a docked window's tab, a splitter between two areas, what shows the drop
+     *  zones. */
+    uint64_t _dockTabType;
+    uint64_t _dockSplitterType;
+    uint64_t _dockZonesType;
     /** @brief The registered looks (a private element type): kind, name, widget type, hooks. Owned. */
     GenericBuffer _looks;
     /** @brief Per factory type id less one, the index + 1 of its look in _looks (uint32_t), 0 for a type that is no look. Owned. */
@@ -399,3 +407,14 @@ Error UIKit_CreateToolbar(UIKit* self, UIScreen* screen, uint64_t parentId, cons
  *          not valid (UIWindowOptions_IsValid); otherwise the first error of making it or its parts.
  */
 Error UIKit_CreateWindow(UIKit* self, UIScreen* screen, const UIWindowOptions* options, uint64_t* outId, uint64_t* outContentId);
+/**
+ * @brief Makes a workspace (UIWorkspace.h) as a root of the screen's Background layer over the whole surface: its menu bar and status bar when
+ *        its options ask for them (each of the look the theme names for its kind), an empty dock, and what shows the drop zones (a root of the
+ *        Overlay layer).
+ * @param self The kit; must not be NULL.
+ * @param screen The screen; must not be NULL.
+ * @param options The options; must not be NULL. Read for the call.
+ * @param outId [out] Receives the workspace's id, or WIDGET_ID_INVALID on a failure (nothing stays behind). Must not be NULL.
+ * @returns Success; ErrorCode_IllegalArgument if a pointer is NULL; otherwise the first error of making it or its parts.
+ */
+Error UIKit_CreateWorkspace(UIKit* self, UIScreen* screen, const UIWorkspaceOptions* options, uint64_t* outId);

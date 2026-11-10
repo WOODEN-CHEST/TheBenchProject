@@ -277,6 +277,16 @@ bool UIWindowTypes_Find(UIWindowTypes* self, const unsigned char* key, uint32_t*
     return Registry_FindText(&self->_types, Storage, outIndex);
 }
 
+bool UIWindowTypes_FindByKeyId(UIWindowTypes* self, uint32_t keyId, uint32_t* outIndex)
+{
+    return (self != NULL) && (outIndex != NULL) && (keyId != NAMESPACED_KEY_ID_NONE) && Registry_Find(&self->_types, keyId, outIndex);
+}
+
+uint32_t UIWindowTypes_GetKeyId(const UIWindowTypes* self, uint32_t index)
+{
+    return ((self != NULL) && (index < Registry_GetCount(&self->_types))) ? Registry_GetKey(&self->_types, index) : NAMESPACED_KEY_ID_NONE;
+}
+
 const UIWindowType* UIWindowTypes_Get(const UIWindowTypes* self, uint32_t index)
 {
     return ((self != NULL) && Registry_IsActive(&self->_types, index)) ? Registry_Get(&self->_types, index) : NULL;
@@ -406,7 +416,8 @@ void UIWindowTypes_RememberBox(UIWindowTypes* self, uint32_t index, Rectangle bo
         return;
     }
     UIWindowTypePlace* Place = GenericBuffer_GetPointerToElement(&self->_places, (size_t)index);
-    Place->HasBox = IsFiniteFloat(box.x) && IsFiniteFloat(box.y) && UILayoutLength_IsValid(box.width) && UILayoutLength_IsValid(box.height)
+    Place->HasBox = IsFiniteFloat(box.x) && IsFiniteFloat(box.y) && (Math_AbsFloat(box.x) <= UI_LAYOUT_MAX_LENGTH)
+        && (Math_AbsFloat(box.y) <= UI_LAYOUT_MAX_LENGTH) && UILayoutLength_IsValid(box.width) && UILayoutLength_IsValid(box.height)
         && (box.width > 0.0f) && (box.height > 0.0f);
     Place->Box = box;
 }

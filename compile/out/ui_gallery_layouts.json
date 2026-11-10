@@ -1,0 +1,57 @@
+{
+    "version": 1,
+    "active": "Default",
+    "layouts": [
+        {
+            "name": "Default",
+            "windows": [
+                {
+                    "type": "tbp:gallery_dock_outline",
+                    "box": [38.399993896484375, 24.0, 220.0, 320.0]
+                },
+                {
+                    "type": "tbp:gallery_dock_view",
+                    "box": [273.5999755859375, 467.2000427246094, 480.0, 320.0]
+                },
+                {
+                    "type": "tbp:gallery_dock_log",
+                    "box": [136.8000030517578, 24.0, 420.0, 180.0]
+                },
+                {
+                    "type": "tbp:gallery_dock_notes",
+                    "box": [136.8000030517578, 24.0, 320.0, 200.0]
+                },
+                {
+                    "type": "tbp:gallery_dock_inspector",
+                    "box": [85.5999755859375, 30.400001525878906, 300.0, 205.59999084472656]
+                }
+            ],
+            "dock": {
+                "tabs": [1, 0, 4, 2, 3],
+                "selected": 4
+            },
+            "places": [
+                {
+                    "type": "tbp:gallery_dock_outline",
+                    "box": [76.0, 26.400001525878906, 220.0, 320.0]
+                },
+                {
+                    "type": "tbp:gallery_dock_view",
+                    "box": [273.5999755859375, 467.2000427246094, 480.0, 320.0]
+                },
+                {
+                    "type": "tbp:gallery_dock_inspector",
+                    "box": [846.4000244140625, 188.00001525878906, 300.0, 205.59999084472656]
+                },
+                {
+                    "type": "tbp:gallery_dock_log",
+                    "box": [466.39996337890625, 463.199951171875, 420.0, 180.0]
+                },
+                {
+                    "type": "tbp:gallery_dock_notes",
+                    "box": [431.199951171875, 433.6000061035156, 320.0, 200.0]
+                }
+            ]
+        }
+    ]
+}

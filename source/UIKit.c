@@ -2,6 +2,7 @@
 #include "LabelWidget.h"
 #include "Logger.h"
 #include "UIKitInternal.h"
+#include "UIWorkspaceInternal.h"
 #include "UIMenuInternal.h"
 #include "UIScreen.h"
 #include "UIStandardLooks.h"
@@ -81,6 +82,8 @@ static const UIKindBehaviour* GetBehaviour(UIElementKind kind)
             return UIToolbar_GetKindBehaviour();
         case UIElementKind_Window:
             return UIWindow_GetKindBehaviour();
+        case UIElementKind_Workspace:
+            return UIWorkspace_GetKindBehaviour();
         case UIElementKind_Label:
         case UIElementKind_Tooltip:
         case UIElementKind_Menu:
@@ -405,6 +408,7 @@ static const unsigned char* const KindTypeNames[UIElementKind_Count] =
     [UIElementKind_Toolbar] = u8"Toolbar",
     [UIElementKind_Drag] = u8"DragGhost",
     [UIElementKind_Window] = u8"Window",
+    [UIElementKind_Workspace] = u8"Workspace",
 };
 
 
@@ -496,6 +500,10 @@ static Error RegisterEverything(UIKit* self)
     if (Result.Code == ErrorCode_Success)
     {
         Result = UIWindow_RegisterTypes(self, self->_factory);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIWorkspace_RegisterTypes(self, self->_factory);
     }
     return Result;
 }
@@ -1558,5 +1566,60 @@ Error UIKit_CreateWindow(UIKit* self, UIScreen* screen, const UIWindowOptions* o
     {
         *outContentId = Parts.ContentId;
     }
+    return Error_CreateSuccess();
+}
+
+Error UIKit_CreateWorkspace(UIKit* self, UIScreen* screen, const UIWorkspaceOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL) || (outId == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateWorkspace: self, screen, options and outId must not be NULL.");
+    }
+    *outId = WIDGET_ID_INVALID;
+    UIWorkspaceArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_Workspace, options->Element.Look);
+    uint64_t WorkspaceId = WIDGET_ID_INVALID;
+    Error Result = CreateElement(self, screen, WIDGET_ID_INVALID, TypeId, &Arguments, &WorkspaceId);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    Widget* Workspace = NULL;
+    if (UIScreen_TryGetWidgetById(screen, WorkspaceId, &Workspace))
+    {
+        Result = UIScreen_SetRootLayer(screen, Workspace, UIScreenLayer_Background);
+    }
+    uint64_t MenuBarId = WIDGET_ID_INVALID;
+    uint64_t StatusBarId = WIDGET_ID_INVALID;
+    uint64_t ZonesId = WIDGET_ID_INVALID;
+    if ((Result.Code == ErrorCode_Success) && options->HasMenuBar)
+    {
+        UIMenuBarOptions MenuBar = options->MenuBar;
+        MenuBar.Element.HasPlacement = true; // Placed by the workspace.
+        MenuBar.Element.Placement = UIPlacement_FromTopLeft(0.0f, 0.0f, 0.0f, 0.0f);
+        Result = UIKit_CreateMenuBar(self, screen, WorkspaceId, &MenuBar, &MenuBarId);
+    }
+    if ((Result.Code == ErrorCode_Success) && options->HasStatusBar)
+    {
+        UIStatusBarOptions StatusBar = options->StatusBar;
+        StatusBar.Element.HasPlacement = true;
+        StatusBar.Element.Placement = UIPlacement_FromTopLeft(0.0f, 0.0f, 0.0f, 0.0f);
+        Result = UIKit_CreateStatusBar(self, screen, WorkspaceId, &StatusBar, &StatusBarId);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIWorkspace_InternalCreateZones(screen, WorkspaceId, &ZonesId);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIWorkspace_InternalSetParts(screen, WorkspaceId, MenuBarId, StatusBarId, ZonesId);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        DestroyPartlyMade(screen, ZonesId);
+        DestroyPartlyMade(screen, WorkspaceId);
+        return Result;
+    }
+    *outId = WorkspaceId;
     return Error_CreateSuccess();
 }

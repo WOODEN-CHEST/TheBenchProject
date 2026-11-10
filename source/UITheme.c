@@ -283,6 +283,23 @@ static const UIThemePartDescriptor WindowParts[UIWindowPart_Count] =
     [UIWindowPart_ContentBackground] = BOX_PART("content_background"),
     [UIWindowPart_ResizeEdge] = BOX_PART("resize_edge"),
 };
+static const UIThemePartDescriptor WorkspaceParts[UIWorkspacePart_Count] =
+{
+    [UIWorkspacePart_TabHeight] = NUMBER_PART("tab_height", 22.0f),
+    [UIWorkspacePart_TabPadding] = NUMBER_PART("tab_padding", 6.0f),
+    [UIWorkspacePart_TabSpacing] = NUMBER_PART("tab_spacing", 1.0f),
+    [UIWorkspacePart_IconSpacing] = NUMBER_PART("icon_spacing", 5.0f),
+    [UIWorkspacePart_TabMaxWidth] = NUMBER_PART("tab_max_width", 180.0f),
+    [UIWorkspacePart_SplitterThickness] = NUMBER_PART("splitter_thickness", 4.0f),
+    [UIWorkspacePart_GuideSize] = NUMBER_PART("guide_size", 28.0f),
+    [UIWorkspacePart_Background] = BOX_PART("background"),
+    [UIWorkspacePart_Strip] = BOX_PART("strip"),
+    [UIWorkspacePart_Tab] = BOX_PART("tab"),
+    [UIWorkspacePart_TabText] = COLORS_PART("tab_text"),
+    [UIWorkspacePart_Splitter] = BOX_PART("splitter"),
+    [UIWorkspacePart_Zone] = BOX_PART("zone"),
+    [UIWorkspacePart_DropPreview] = BOX_PART("drop_preview"),
+};
 
 static const struct
 {
@@ -318,6 +335,7 @@ Kinds[UIElementKind_Count] =
     [UIElementKind_Toolbar] = { u8"toolbar", ToolbarParts, UIToolbarPart_Count },
     [UIElementKind_Drag] = { u8"drag", DragParts, UIDragPart_Count },
     [UIElementKind_Window] = { u8"window", WindowParts, UIWindowPart_Count },
+    [UIElementKind_Workspace] = { u8"workspace", WorkspaceParts, UIWorkspacePart_Count },
 };
 
 

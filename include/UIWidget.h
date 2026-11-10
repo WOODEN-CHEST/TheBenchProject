@@ -816,9 +816,9 @@ static inline bool Widget_IsRendered(const Widget* self)
 Error Widget_SetIsRendered(Widget* self, bool isRendered);
 
 /**
- * @brief Returns whether the widget receives update ticks.
+ * @brief Returns whether the widget's own update flag is on (Widget_SetIsUpdated); it is updated while its ancestors' are on too.
  * @param self The widget; must not be NULL.
- * @returns true if updated.
+ * @returns true if its flag is on.
  */
 static inline bool Widget_IsUpdated(const Widget* self)
 {
@@ -826,7 +826,9 @@ static inline bool Widget_IsUpdated(const Widget* self)
 }
 
 /**
- * @brief Enables or disables updates, firing OnUpdateEnable / OnUpdateDisable on a change.
+ * @brief Enables or disables updates for the widget and its subtree, firing OnUpdateEnable / OnUpdateDisable on a change: with the flag
+ *        off, neither it nor anything it holds gets update ticks (a window in a tab that is not selected), whatever their own flags say.
+ *        Layout goes on as for any widget.
  * @param self The widget; must not be NULL.
  * @param isUpdated The new update flag.
  * @returns Success, or a non-success Error propagated from the fired hook.

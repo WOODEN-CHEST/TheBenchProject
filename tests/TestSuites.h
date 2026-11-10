@@ -422,6 +422,25 @@ void UIToolbarTests_Run(TestRun* run);
  *  (UIWindowTests.c). */
 void UIWindowTests_Run(TestRun* run);
 
+/** @brief The dock tree: tabs added, removed, moved and selected, leaves split on each side, empty leaves collapsed, ratios, the limits,
+ *  arranging with minimums at many sizes (whole units, no gaps or overlaps), the ratio a splitter's drag sets, drop zones, broken trees
+ *  refused, random operation sequences keeping it whole (UIDockTreeTests.c). */
+void UIDockTreeTests_Run(TestRun* run);
+
+/** @brief Layouts: names checked and made up, a layout checked whole and compared by meaning, round trips through the document, unknown
+ *  window types and second windows of a single type dropped, bad documents changing nothing, docks deeper or larger than a tree refused,
+ *  thousands of mutated documents never breaking it, the file read, written atomically and put aside when bad, a folder that cannot be
+ *  written keeping its file, saving once the changes settle (UILayoutsTests.c). */
+void UILayoutsTests_Run(TestRun* run);
+
+/** @brief The workspace: its bars and the strips they keep from windows, docking as tabs and splits, a press on a tab selecting it and
+ *  focusing its window, windows in tabs not selected neither shown nor updated, closing tabs, a tab dragged out carrying its window on to a
+ *  drop (the same press), Escape putting it back, reordering along a strip, drop guides and floating elsewhere, an empty dock, a window
+ *  destroyed mid-drag, what a window holds kept through docking, maximizing out of the dock and back, splitters within the windows' least
+ *  sizes and through a surface that changes size, a tab's context menu, its tabs' names and hover text, hiding it, single types
+ *  (UIWorkspaceTests.c). */
+void UIWorkspaceTests_Run(TestRun* run);
+
 /** @brief Window types: registering and finding them (through the root too), refused definitions and keys, withdrawing and reviving,
  *  opening one filled by its type, centred and stepped, a single type opening once (restored, in front, focused, found anywhere), what
  *  cannot open, a closed window's place remembered, the Window menu's items (UIWindowTypesTests.c). */

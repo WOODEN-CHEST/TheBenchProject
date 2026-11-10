@@ -299,11 +299,35 @@ static const GalleryWindowType Types[GALLERY_WINDOW_TYPE_COUNT] =
 
 
 // Static functions: the page.
+/* Whether a type index is one of the page's. */
+static bool IsOwnType(const GalleryWindows* self, uint32_t index)
+{
+    for (size_t Slot = 0U; self->IsRegistered && (Slot < GALLERY_WINDOW_TYPE_COUNT); Slot++)
+    {
+        if (self->TypeIndices[Slot] == index)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Whether a widget is a window of one of the page's types (the gallery's other pages have windows of their own). */
+static bool IsOwnWindow(GalleryWindows* self, uint64_t widgetId)
+{
+    UIWindowTypes* WindowTypes = NULL;
+    uint32_t Index = 0U;
+    Error Result = UIWindow_GetType(self->Screen, widgetId, &WindowTypes, &Index);
+    bool IsOwn = (Result.Code == ErrorCode_Success) && (WindowTypes == self->Types) && (WindowTypes != NULL) && IsOwnType(self, Index);
+    Error_Deconstruct(&Result); // No window, or one of no type: not the page's.
+    return IsOwn;
+}
+
 /* Opens one of the page's windows from the Window menu. */
 static Error OnWindowMenu(UIScreen* screen, const UIMenuActivation* activation, const UserData* userData)
 {
     GalleryWindows* Self = UserData_GetPointer(userData);
-    if ((Self->Types == NULL) || (activation->ItemId < WINDOW_MENU_FIRST_ID))
+    if ((Self->Types == NULL) || (activation->ItemId < WINDOW_MENU_FIRST_ID) || !IsOwnType(Self, activation->ItemId - WINDOW_MENU_FIRST_ID))
     {
         return Error_CreateSuccess();
     }
@@ -421,13 +445,24 @@ Error GalleryWindows_BuildPage(GalleryWindows* self, uint64_t columnId)
     {
         Result = UIWindowTypes_WriteMenuItems(self->Types, WINDOW_MENU_FIRST_ID, Items, WINDOW_MENU_CAPACITY, &Count);
     }
+    // The page's types alone: the workspace page opens its own in its workspace.
+    size_t Kept = 0U;
+    for (size_t Item = 0U; Item < Count; Item++)
+    {
+        if ((Items[Item].Id >= WINDOW_MENU_FIRST_ID) && IsOwnType(self, Items[Item].Id - WINDOW_MENU_FIRST_ID))
+        {
+            Items[Kept] = Items[Item];
+            Kept++;
+        }
+    }
+    Count = Kept;
     if (Result.Code == ErrorCode_Success)
     {
         Result = UIMenuBar_AddEntry(self->Screen, BarId, u8"Window", Items, Count, NULL);
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = UITooltip_Set(self->Screen, BarId, u8"Window opens any type of window there is; one that may be open once comes to the front.");
+        Result = UITooltip_Set(self->Screen, BarId, u8"Window opens each of the page's window types; one that may be open once comes to the front.");
     }
     return Result;
 }
@@ -438,7 +473,7 @@ Error GalleryWindows_SetShown(GalleryWindows* self, bool isShown)
     for (size_t Index = 0U; (Index < UIScreen_GetRootCount(self->Screen)) && (Result.Code == ErrorCode_Success); Index++)
     {
         Widget* Root = UIScreen_GetRootAt(self->Screen, Index);
-        if ((Root != NULL) && UIWindow_IsWindow(self->Screen, Widget_GetId(Root)))
+        if ((Root != NULL) && IsOwnWindow(self, Widget_GetId(Root)))
         {
             Result = Widget_SetIsRendered(Root, isShown);
         }

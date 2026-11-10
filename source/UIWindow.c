@@ -185,15 +185,19 @@ static bool CanTakeFocus(UIScreen* screen, uint64_t widgetId, const Widget* wind
     return IsInWindow && Widget_IsFocusable(Candidate) && Widget_IsInputEnabled(Candidate) && IsShownAndAttached(Candidate);
 }
 
-/* Whether a caption button shows: the minimize one while a root window can minimize (and while minimized, as restore), the maximize one
- * while a root window can maximize and is not minimized, the close one while it can close. A window another widget places neither
- * minimizes nor maximizes. */
+/* Whether a caption button shows: the minimize one while a root window of its own can minimize (and while minimized, as restore), the
+ * maximize one while a root window can maximize and is not minimized, the close one while it can close. A window another widget places
+ * neither minimizes nor maximizes, one maximized out of its dock does not minimize, and a docked one has no title bar to show them in. */
 static bool IsButtonShown(const UIWindowCapability* self, UIWindowButton button, bool isRoot)
 {
+    if (self->_dock == UIWindowDock_Docked)
+    {
+        return false;
+    }
     switch (button)
     {
         case UIWindowButton_Minimize:
-            return (self->_canMinimize && isRoot) || self->_isMinimized;
+            return (self->_canMinimize && isRoot && (self->_dock == UIWindowDock_None)) || self->_isMinimized;
         case UIWindowButton_Maximize:
             return self->_canMaximize && !self->_isMinimized && isRoot;
         case UIWindowButton_Close:
@@ -236,9 +240,25 @@ static float GetButtonsWidth(const UIWindowCapability* self, bool isRoot)
     return Width;
 }
 
-/* What the title bar needs across at least: its padding, the icon and its spacing, a gap before the buttons, and the buttons. */
+/* The title bar's height and the frame's border: none while docked (its tab stands for its title bar, its dock's frame for its own). */
+static float GetTitleHeight(const UIWindowCapability* self)
+{
+    return (self->_dock == UIWindowDock_Docked) ? 0.0f : self->_metrics.TitleHeight;
+}
+
+static float GetBorder(const UIWindowCapability* self)
+{
+    return (self->_dock == UIWindowDock_Docked) ? 0.0f : self->_metrics.Border;
+}
+
+/* What the title bar needs across at least: its padding, the icon and its spacing, a gap before the buttons, and the buttons; nothing while
+ * it has none. */
 static float GetTitleBarNeeds(const UIWindowCapability* self, bool isRoot)
 {
+    if (self->_dock == UIWindowDock_Docked)
+    {
+        return 0.0f;
+    }
     const UIWindowMetrics* Metrics = &self->_metrics;
     float Icon = (Metrics->IconWidth > 0.0f) ? (Metrics->IconWidth + Metrics->IconSpacing) : 0.0f;
     return Metrics->TitlePadding + Icon + Metrics->ButtonSpacing + GetButtonsWidth(self, isRoot);
@@ -438,7 +458,8 @@ static Error SetPartShown(UIScreen* screen, uint64_t partId, bool isShown)
 }
 
 /* Shows the parts the window's state calls for, each found again by id (hiding one can run hooks): the content while it is not
- * minimized, the caption buttons it offers with the letters of its state, the edges while it can be resized. */
+ * minimized, the frame and the title bar unless it is docked, the caption buttons it offers with the letters of its state, the edges while
+ * it can be resized. */
 static Error ApplyParts(UIScreen* screen, uint64_t windowId)
 {
     Widget* Window = NULL;
@@ -450,8 +471,17 @@ static Error ApplyParts(UIScreen* screen, uint64_t windowId)
     // Copied first: a hook run by hiding a part may change the window, or take it away.
     UIWindowCapability State = *Self;
     bool IsRoot = Widget_IsScreenRoot(Window);
-    bool AreEdgesShown = State._isResizable && !State._isMinimized && !State._isMaximized && IsRoot;
+    bool IsDocked = State._dock == UIWindowDock_Docked;
+    bool AreEdgesShown = State._isResizable && !State._isMinimized && !State._isMaximized && IsRoot && !IsDocked;
     Error Result = SetPartShown(screen, State._areaId, !State._isMinimized);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = SetPartShown(screen, State._frameId, !IsDocked);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = SetPartShown(screen, State._titleBarId, !IsDocked);
+    }
     UIKit* Kit = UIKit_FromScreen(screen);
     for (int32_t Button = 0; (Button < (int32_t)UIWindowButton_Count) && (Result.Code == ErrorCode_Success); Button++)
     {
@@ -556,24 +586,45 @@ static Error PlaceFloating(Widget* widget, UIWindowCapability* self)
 
 
 // Static functions: moving and resizing.
-/* A press on the title bar or an edge begins moving or resizing a root window that allows it. */
-static void BeginGrab(UIScreen* screen, uint64_t windowId, UIWindowGrab grab, UIWindowEdge edge, const WidgetMouseInputArgs* args)
+/* Tells a window's move observer what its move by the title bar did. The observer may take the window away. */
+static Error NotifyMove(UIScreen* screen, uint64_t windowId, UIWindowMoveStage stage, Vector2 screenPosition)
+{
+    UIWindowCapability* Self = FindWindow(screen, windowId, NULL);
+    if ((Self == NULL) || (Self->_moveObserver == NULL))
+    {
+        return Error_CreateSuccess();
+    }
+    UserData Data = Self->_moveObserverData; // The observer may take the window away.
+    UIWindowMoveObserver Observer = Self->_moveObserver;
+    return Observer(screen, windowId, stage, screenPosition, &Data);
+}
+
+/* A press on the title bar or an edge begins moving or resizing a root window of its own that allows it, from a box. Whether it began. */
+static bool BeginGrabFrom(UIScreen* screen, uint64_t windowId, UIWindowGrab grab, UIWindowEdge edge, GameKey button, Vector2 screenPosition,
+    bool isFromFloatingBox)
 {
     Widget* Window = NULL;
     UIWindowCapability* Self = FindWindow(screen, windowId, &Window);
-    if ((Self == NULL) || !Widget_IsScreenRoot(Window) || (Self->_isMaximized && !Self->_isMinimized))
+    if ((Self == NULL) || !Widget_IsScreenRoot(Window) || (Self->_isMaximized && !Self->_isMinimized) || (Self->_dock == UIWindowDock_Docked))
     {
-        return;
+        return false;
     }
     if ((grab == UIWindowGrab_Resize) && (!Self->_isResizable || Self->_isMinimized))
     {
-        return;
+        return false;
     }
     Self->_grab = grab;
     Self->_grabEdge = edge;
-    Self->_grabStart = ToScreenUnits(screen, args->ScreenPosition);
-    Self->_grabBox = Self->_shownBox;
-    Self->_grabButton = args->Button;
+    Self->_grabStart = ToScreenUnits(screen, screenPosition);
+    Self->_grabBox = isFromFloatingBox ? Self->_floatingBox : Self->_shownBox;
+    Self->_grabFloatingBox = Self->_floatingBox;
+    Self->_grabButton = button;
+    return true;
+}
+
+static bool BeginGrab(UIScreen* screen, uint64_t windowId, UIWindowGrab grab, UIWindowEdge edge, const WidgetMouseInputArgs* args)
+{
+    return BeginGrabFrom(screen, windowId, grab, edge, args->Button, args->ScreenPosition, false);
 }
 
 /* The pointer holding the window went somewhere: its floating box follows, reachable on the workspace. Moving keeps the floating size (a
@@ -606,7 +657,7 @@ static Error FollowGrab(UIScreen* screen, uint64_t windowId, const WidgetMouseIn
         Moved = UIWindow_KeepReachable(Moved, Workspace, TitleHeight, ButtonsWidth, Reachable);
         Self->_floatingBox.x = Moved.x;
         Self->_floatingBox.y = Moved.y;
-        return Error_CreateSuccess();
+        return NotifyMove(screen, windowId, UIWindowMoveStage_Moved, args->ScreenPosition);
     }
     Vector2 Least = { .x = 0.0f, .y = 0.0f };
     Error Result = MeasureLeast(Window, Self->_grabBox.width, &Least);
@@ -628,13 +679,50 @@ static Error FollowGrab(UIScreen* screen, uint64_t windowId, const WidgetMouseIn
     return Error_CreateSuccess();
 }
 
-static void EndGrab(UIScreen* screen, uint64_t windowId, GameKey button)
+/* Ends the grab of a button's press. Returns what it was doing. */
+static UIWindowGrab EndGrab(UIScreen* screen, uint64_t windowId, GameKey button)
 {
     UIWindowCapability* Self = FindWindow(screen, windowId, NULL);
-    if ((Self != NULL) && (Self->_grabButton == button))
+    if ((Self == NULL) || (Self->_grabButton != button))
     {
-        Self->_grab = UIWindowGrab_None;
+        return UIWindowGrab_None;
     }
+    UIWindowGrab Ended = Self->_grab;
+    Self->_grab = UIWindowGrab_None;
+    return Ended;
+}
+
+/* Ends a move or a resize for a state that allows none (minimized, maximized, docked); the press goes on doing nothing. Whether it was a
+ * move, which its observer hears lost once the state applies (AfterStateStoppedGrab). */
+static bool StopGrabForState(UIWindowCapability* self)
+{
+    bool WasMoving = self->_grab == UIWindowGrab_Move;
+    self->_grab = UIWindowGrab_None;
+    return WasMoving;
+}
+
+static Error AfterStateStoppedGrab(UIScreen* screen, uint64_t windowId, bool wasMoving, Error result)
+{
+    if ((result.Code != ErrorCode_Success) || !wasMoving)
+    {
+        return result;
+    }
+    return NotifyMove(screen, windowId, UIWindowMoveStage_Lost, UIScreen_GetPointerPosition(screen));
+}
+
+/* Escape during a move or a resize puts the floating box back where the drag began; the press goes on doing nothing. */
+static Error CancelGrab(UIScreen* screen, uint64_t windowId)
+{
+    UIWindowCapability* Self = FindWindow(screen, windowId, NULL);
+    if ((Self == NULL) || (Self->_grab == UIWindowGrab_None))
+    {
+        return Error_CreateSuccess();
+    }
+    UIWindowGrab Cancelled = Self->_grab;
+    Self->_grab = UIWindowGrab_None;
+    Self->_floatingBox = Self->_grabFloatingBox;
+    return (Cancelled == UIWindowGrab_Move) ? NotifyMove(screen, windowId, UIWindowMoveStage_Cancelled, UIScreen_GetPointerPosition(screen))
+        : Error_CreateSuccess();
 }
 
 /* Maximizes a window that is not, restores one that is; a minimized one is restored, the focus going back inside. Only a root of its
@@ -727,15 +815,24 @@ static Error TitleBar_OnMouseInput(void* self, const WidgetMouseInputArgs* args)
                 }
                 return Error_CreateSuccess();
             }
-            BeginGrab(Screen, WindowId, UIWindowGrab_Move, UIWindowEdge_Count, args);
-            return Error_CreateSuccess();
+            bool IsMoving = BeginGrab(Screen, WindowId, UIWindowGrab_Move, UIWindowEdge_Count, args);
+            return IsMoving ? NotifyMove(Screen, WindowId, UIWindowMoveStage_Began, args->ScreenPosition) : Error_CreateSuccess();
         }
         case UIMouseInputType_Move:
             return FollowGrab(Screen, WindowId, args);
         case UIMouseInputType_ButtonRelease:
-            EndGrab(Screen, WindowId, args->Button);
+        {
+            if (EndGrab(Screen, WindowId, args->Button) == UIWindowGrab_Move)
+            {
+                Error Result = NotifyMove(Screen, WindowId, UIWindowMoveStage_Released, args->ScreenPosition);
+                if (Result.Code != ErrorCode_Success)
+                {
+                    return Result;
+                }
+            }
             return ((args->Button == GameKey_MouseLeft) && TakeToggleOnRelease(Screen, WindowId)) ? ToggleMaximized(Screen, WindowId)
                 : Error_CreateSuccess();
+        }
         case UIMouseInputType_ReleaseOver:
             return Error_CreateSuccess();
     }
@@ -747,12 +844,12 @@ static Error TitleBar_OnPressLost(void* self, GameKey button)
     UIWindowTitleBar* Bar = self;
     UIScreen* Screen = Widget_GetScreen(&Bar->Base);
     uint64_t WindowId = Bar->WindowId;
-    EndGrab(Screen, WindowId, button);
     if (button == GameKey_MouseLeft)
     {
         (void)TakeToggleOnRelease(Screen, WindowId); // A double click whose press was lost does nothing.
     }
-    return Error_CreateSuccess();
+    bool WasMoving = EndGrab(Screen, WindowId, button) == UIWindowGrab_Move;
+    return WasMoving ? NotifyMove(Screen, WindowId, UIWindowMoveStage_Lost, UIScreen_GetPointerPosition(Screen)) : Error_CreateSuccess();
 }
 
 static Error Edge_Construct(void* widget, void* args)
@@ -783,14 +880,14 @@ static Error Edge_OnMouseInput(void* self, const WidgetMouseInputArgs* args)
             Error Result = ActivateWindow(Screen, WindowId);
             if ((Result.Code == ErrorCode_Success) && (args->Button == GameKey_MouseLeft))
             {
-                BeginGrab(Screen, WindowId, UIWindowGrab_Resize, Side, args);
+                (void)BeginGrab(Screen, WindowId, UIWindowGrab_Resize, Side, args);
             }
             return Result;
         }
         case UIMouseInputType_Move:
             return FollowGrab(Screen, WindowId, args);
         case UIMouseInputType_ButtonRelease:
-            EndGrab(Screen, WindowId, args->Button);
+            (void)EndGrab(Screen, WindowId, args->Button);
             return Error_CreateSuccess();
         case UIMouseInputType_ReleaseOver:
             return Error_CreateSuccess();
@@ -801,7 +898,7 @@ static Error Edge_OnMouseInput(void* self, const WidgetMouseInputArgs* args)
 static Error Edge_OnPressLost(void* self, GameKey button)
 {
     UIWindowEdgeWidget* Edge = self;
-    EndGrab(Widget_GetScreen(&Edge->Base), Edge->WindowId, button);
+    (void)EndGrab(Widget_GetScreen(&Edge->Base), Edge->WindowId, button);
     return Error_CreateSuccess();
 }
 
@@ -914,7 +1011,11 @@ static Error Behaviour_Construct(void* widget, void* args)
     Self->_grabEdge = UIWindowEdge_Count;
     Self->_grabStart = (Vector2){ .x = 0.0f, .y = 0.0f };
     Self->_grabBox = Self->_floatingBox;
+    Self->_grabFloatingBox = Self->_floatingBox;
     Self->_grabButton = GameKey_Unknown;
+    Self->_dock = UIWindowDock_None;
+    Self->_moveObserver = NULL;
+    Self->_moveObserverData = UserData_CreateEmpty();
     Self->_isToggleOnRelease = false;
     Self->_types = NULL;
     Self->_typeIndex = 0U;
@@ -967,7 +1068,7 @@ static Error Behaviour_Update(void* widget, ProgramTime time)
 }
 
 /* The frame under everything, the title bar across the top with the caption buttons at its right, the content inside the border under
- * it, the edges along the frame. */
+ * it, the edges along the frame; docked, the content fills the box. */
 static Error Behaviour_Layout(void* widget, const UILayoutContext* context)
 {
     (void)context;
@@ -979,10 +1080,12 @@ static Error Behaviour_Layout(void* widget, const UILayoutContext* context)
     float Height = Pixels.height / Scale;
     bool IsRoot = Widget_IsScreenRoot(widget);
     const UIWindowMetrics* Metrics = &Self->_metrics;
+    float TitleHeight = GetTitleHeight(Self);
+    float Border = GetBorder(Self);
     Error Result = PlaceAt(Screen, Self->_frameId, (Rectangle){ .x = 0.0f, .y = 0.0f, .width = Width, .height = Height });
     if (Result.Code == ErrorCode_Success)
     {
-        Result = PlaceAt(Screen, Self->_titleBarId, (Rectangle){ .x = 0.0f, .y = 0.0f, .width = Width, .height = Metrics->TitleHeight });
+        Result = PlaceAt(Screen, Self->_titleBarId, (Rectangle){ .x = 0.0f, .y = 0.0f, .width = Width, .height = TitleHeight });
     }
     float X = Width - Metrics->TitlePadding;
     float ButtonY = Math_FloorFloat((Metrics->TitleHeight - Metrics->ButtonSize.y) * 0.5f);
@@ -1001,14 +1104,28 @@ static Error Behaviour_Layout(void* widget, const UILayoutContext* context)
     Self->_buttonsStart = X;
     if (Result.Code == ErrorCode_Success)
     {
-        Result = PlaceAt(Screen, Self->_areaId, (Rectangle){ .x = Metrics->Border, .y = Metrics->TitleHeight,
-            .width = Width - (2.0f * Metrics->Border), .height = Height - Metrics->TitleHeight - Metrics->Border });
+        Result = PlaceAt(Screen, Self->_areaId, (Rectangle){ .x = Border, .y = TitleHeight, .width = Width - (2.0f * Border),
+            .height = Height - TitleHeight - Border });
     }
     for (int32_t Edge = 0; (Edge < (int32_t)UIWindowEdge_Count) && (Result.Code == ErrorCode_Success); Edge++)
     {
         Result = PlaceAt(Screen, Self->_edgeIds[Edge], GetEdgeBand((UIWindowEdge)Edge, Width, Height, Metrics->ResizeMargin));
     }
     return Result;
+}
+
+/* Escape during a move or a resize (the window hears it as the focused widget or as an ancestor of it) puts it back where the drag began. */
+static Error Behaviour_OnKeyboardInput(void* widget, const WidgetKeyboardInputArgs* args, bool* outIsHandled)
+{
+    UIWindowCapability* Self = GetCapability(widget);
+    UIScreen* Screen = Widget_GetScreen(widget);
+    if ((Self->_grab == UIWindowGrab_None) || (args->Type != UIKeyboardInputType_KeyPress) || args->IsHoverDelivery
+        || !UIElement_IsActionPress(Screen, GameAction_UIBack, args->Key))
+    {
+        return Error_CreateSuccess();
+    }
+    *outIsHandled = true;
+    return CancelGrab(Screen, Widget_GetId(widget));
 }
 
 /* What last had the focus inside the window is where a press on its title bar gives it back. */
@@ -1043,6 +1160,7 @@ static const UIKindBehaviour WindowBehaviour =
     .Deconstruct = Behaviour_Deconstruct,
     .Update = Behaviour_Update,
     .Layout = Behaviour_Layout,
+    .OnKeyboardInput = Behaviour_OnKeyboardInput,
     .OnDescendantFocus = Behaviour_OnDescendantFocus
 };
 
@@ -1278,14 +1396,15 @@ Error UIWindow_Minimize(UIScreen* screen, uint64_t windowId)
     {
         return Result;
     }
-    if (!Widget_IsScreenRoot(Target))
+    if (!Widget_IsScreenRoot(Target) || (Self->_dock != UIWindowDock_None))
     {
-        return Error_Construct2(ErrorCode_InvalidOperation, "UIWindow_Minimize: only a window that is a root of its screen minimizes.");
+        return Error_Construct2(ErrorCode_InvalidOperation,
+            "UIWindow_Minimize: only a window that is a root of its screen minimizes, and none from a dock.");
     }
     Self->_isMinimized = true;
-    Self->_grab = UIWindowGrab_None;
+    bool WasMoving = StopGrabForState(Self);
     Widget_InvalidateMeasure(Target); // Its title bar's buttons change.
-    return ApplyState(screen, windowId);
+    return AfterStateStoppedGrab(screen, windowId, WasMoving, ApplyState(screen, windowId));
 }
 
 Error UIWindow_Maximize(UIScreen* screen, uint64_t windowId)
@@ -1307,10 +1426,10 @@ Error UIWindow_Maximize(UIScreen* screen, uint64_t windowId)
     }
     Self->_isMaximized = true;
     Self->_isMinimized = false;
-    Self->_grab = UIWindowGrab_None;
+    bool WasMoving = StopGrabForState(Self);
     Widget_InvalidateMeasure(Target);
     Result = RestoreOtherMaximized(screen, windowId);
-    return (Result.Code == ErrorCode_Success) ? ApplyState(screen, windowId) : Result;
+    return AfterStateStoppedGrab(screen, windowId, WasMoving, (Result.Code == ErrorCode_Success) ? ApplyState(screen, windowId) : Result);
 }
 
 Error UIWindow_Restore(UIScreen* screen, uint64_t windowId)
@@ -1530,6 +1649,99 @@ Error UIWindow_SetType(UIScreen* screen, uint64_t windowId, UIWindowTypes* types
     return Result;
 }
 
+Error UIWindow_SetDock(UIScreen* screen, uint64_t windowId, UIWindowDock dock)
+{
+    Widget* Target = NULL;
+    UIWindowCapability* Self = NULL;
+    Error Result = ResolveWindow(screen, windowId, &Target, &Self);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if ((dock != UIWindowDock_None) && (dock != UIWindowDock_Docked) && (dock != UIWindowDock_Maximized))
+    {
+        return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIWindow_SetDock: an unknown value.");
+    }
+    if (Self->_dock == dock)
+    {
+        return Error_CreateSuccess();
+    }
+    Self->_dock = dock;
+    bool WasMoving = false;
+    if (dock != UIWindowDock_None)
+    {
+        Self->_isMinimized = false; // Nothing from a dock minimizes.
+        WasMoving = StopGrabForState(Self);
+    }
+    if (dock == UIWindowDock_Docked)
+    {
+        Self->_isMaximized = false;
+    }
+    Widget_InvalidateMeasure(Target); // Its title bar and border come or go.
+    return AfterStateStoppedGrab(screen, windowId, WasMoving, ApplyState(screen, windowId));
+}
+
+Error UIWindow_GetDock(UIScreen* screen, uint64_t windowId, UIWindowDock* outDock)
+{
+    Widget* Target = NULL;
+    UIWindowCapability* Self = NULL;
+    Error Result = ResolveWindow(screen, windowId, &Target, &Self);
+    if (Result.Code == ErrorCode_Success)
+    {
+        *outDock = Self->_dock;
+    }
+    return Result;
+}
+
+Error UIWindow_SetMoveObserver(UIScreen* screen, uint64_t windowId, UIWindowMoveObserver observer, const UserData* userData)
+{
+    Widget* Target = NULL;
+    UIWindowCapability* Self = NULL;
+    Error Result = ResolveWindow(screen, windowId, &Target, &Self);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Self->_moveObserver = observer;
+        Self->_moveObserverData = (userData != NULL) ? *userData : UserData_CreateEmpty();
+    }
+    return Result;
+}
+
+Error UIWindow_StartMove(UIScreen* screen, uint64_t windowId, GameKey button)
+{
+    Widget* Target = NULL;
+    UIWindowCapability* Self = NULL;
+    Error Result = ResolveWindow(screen, windowId, &Target, &Self);
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    if (!Widget_IsScreenRoot(Target) || (Self->_isMaximized && !Self->_isMinimized) || (Self->_dock == UIWindowDock_Docked))
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "UIWindow_StartMove: only a root window of its own that is not maximized moves.");
+    }
+    uint64_t TitleBarId = Self->_titleBarId;
+    Result = UIScreen_TransferPress(screen, button, TitleBarId);
+    // On top and active, as a press on its title bar makes it: Escape reaches it through the focus.
+    if ((Result.Code == ErrorCode_Success) && UIScreen_TryGetWidgetById(screen, windowId, &Target))
+    {
+        Result = UIScreen_BringToTop(screen, Target);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = ActivateWindow(screen, windowId);
+    }
+    if (Result.Code != ErrorCode_Success)
+    {
+        return Result;
+    }
+    bool IsMoving = BeginGrabFrom(screen, windowId, UIWindowGrab_Move, UIWindowEdge_Count, button, UIScreen_GetPointerPosition(screen), true);
+    if (!IsMoving)
+    {
+        return Error_Construct2(ErrorCode_InvalidOperation, "UIWindow_StartMove: handing the press on changed the window: it does not move.");
+    }
+    return NotifyMove(screen, windowId, UIWindowMoveStage_Began, UIScreen_GetPointerPosition(screen));
+}
+
 
 // Public functions: behaviour helpers.
 void UIWindowCapability_SetMetrics(UIWindowCapability* self, Widget* widget, const UIWindowMetrics* metrics)
@@ -1566,6 +1778,8 @@ Error UIWindow_Measure(Widget* widget, const UIMeasureContext* context, float av
     UIScreen* Screen = Widget_GetScreen(widget);
     const UIWindowMetrics* Metrics = &Self->_metrics;
     float TitleNeeds = GetTitleBarNeeds(Self, Widget_IsScreenRoot(widget));
+    float TitleHeight = GetTitleHeight(Self);
+    float Border = GetBorder(Self);
     if (Self->_isMinimized)
     {
         *outSize = (Vector2){ .x = Math_MaxFloat(Metrics->MinimizedWidth, TitleNeeds), .y = Metrics->TitleHeight };
@@ -1574,7 +1788,7 @@ Error UIWindow_Measure(Widget* widget, const UIMeasureContext* context, float av
     Vector2 Least =
     {
         .x = Math_MaxFloat(Math_MaxFloat(Metrics->MinSize.x, Self->_minimumSize.x), TitleNeeds),
-        .y = Math_MaxFloat(Math_MaxFloat(Metrics->MinSize.y, Self->_minimumSize.y), Metrics->TitleHeight + Metrics->Border)
+        .y = Math_MaxFloat(Math_MaxFloat(Metrics->MinSize.y, Self->_minimumSize.y), TitleHeight + Border)
     };
     Widget* Content = NULL;
     if (!UIScreen_TryGetWidgetById(Screen, Self->_contentId, &Content) || !Widget_IsRendered(Content))
@@ -1589,16 +1803,16 @@ Error UIWindow_Measure(Widget* widget, const UIMeasureContext* context, float av
         Vector2 Narrowest = { .x = 0.0f, .y = 0.0f };
         Result = Widget_Measure(Content, context, 0.0f, &Narrowest);
         float Bar = (Self->_fitDown == UIWindowFit_Scroll) ? MeasureBar(Screen, Self->_areaId, UIScrollAxis_Vertical, context) : 0.0f;
-        Least.x = Math_MaxFloat(Least.x, Narrowest.x + (2.0f * Metrics->Border) + Bar);
+        Least.x = Math_MaxFloat(Least.x, Narrowest.x + (2.0f * Border) + Bar);
     }
     if ((Result.Code == ErrorCode_Success) && (Self->_fitDown == UIWindowFit_Fit))
     {
         bool IsAcrossFitted = Self->_fitAcross == UIWindowFit_Fit;
-        float Inner = IsAcrossFitted ? Math_MaxFloat(0.0f, Math_MaxFloat(availableWidth, Least.x) - (2.0f * Metrics->Border)) : UI_MEASURE_UNBOUNDED_WIDTH;
+        float Inner = IsAcrossFitted ? Math_MaxFloat(0.0f, Math_MaxFloat(availableWidth, Least.x) - (2.0f * Border)) : UI_MEASURE_UNBOUNDED_WIDTH;
         Vector2 AtWidth = { .x = 0.0f, .y = 0.0f };
         Result = Widget_Measure(Content, context, Inner, &AtWidth);
         float Bar = IsAcrossFitted ? 0.0f : MeasureBar(Screen, Self->_areaId, UIScrollAxis_Horizontal, context);
-        Least.y = Math_MaxFloat(Least.y, AtWidth.y + Metrics->TitleHeight + Metrics->Border + Bar);
+        Least.y = Math_MaxFloat(Least.y, AtWidth.y + TitleHeight + Border + Bar);
     }
     *outSize = Least;
     return Result;
