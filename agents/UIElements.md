@@ -2,8 +2,8 @@
 
 The elements calling code builds a UI from: panels, labels, buttons, toggles, sliders, stacks, scroll areas and scroll bars,
 dropdowns, menus, menu bars, status bars, text boxes, property boxes, the compounds final screens use (labelled rows, forms, compound
-sliders, rows of fields), what an editor's windows are built from (lists, trees, modal dialogs, colour pickers, tool bars, drag and drop) and
-the windows themselves with their types, sized in UI pixels and drawn through a theme. They stand on the framework in [UIFramework.md](UIFramework.md) (screens, widgets, input routing,
+sliders, rows of fields), what an editor's windows are built from (lists, trees, modal dialogs, colour pickers, tool bars, drag and drop), the
+windows themselves with their types, and render views (a picture its host draws: the editor's world), sized in UI pixels and drawn through a theme. They stand on the framework in [UIFramework.md](UIFramework.md) (screens, widgets, input routing,
 notifications).
 
 | Module | Files | What it is |
@@ -42,6 +42,7 @@ notifications).
 | UIDockTree | `include/UIDockTree.h`, `source/UIDockTree.c` | Pure: a workspace's docking areas as a split tree with tabs in its leaves, its operations and limits, its arrangement in whole pixels with least sizes, and where a drop over it would go. |
 | UIWorkspace | `include/UIWorkspace.h`, `source/UIWorkspace.c`, `source/UIWorkspaceParts.c` (tabs, splitters, the drop guides), `source/UIWorkspaceLayouts.c` (layouts and the switcher), private `source/UIWorkspaceInternal.h` | The root of a screen that uses windows: its bars, a dock where windows tab and split, floating and maximized windows, dragging between them, layouts shown and kept. |
 | UILayouts | `include/UILayouts.h`, `source/UILayouts.c` | Named layouts as pure data, and the file that keeps them across restarts: read with limits, put aside when bad, written atomically once changes settle. |
+| UIRenderView | `include/UIRenderView.h`, `source/UIRenderView.c` | A picture its host draws, shown in its box; an edit element that keeps its keys, and a record of the pointer, the buttons and the wheel in its box its host takes once a tick. |
 | UIGalleryFrame | `include/UIGalleryFrame.h`, `source/UIGalleryFrame.c`, private `source/UIGalleryWindows.{h,c}` (the windows page) and `source/UIGalleryWorkspace.{h,c}` (the workspace page) | Every element in every state, on eight pages: `--ui-gallery`. |
 
 ## Using it
@@ -100,7 +101,8 @@ A variant costs, from cheapest:
 **Looks.** A look is a struct that starts with its kind's look base (`UIPanelLookBase`, `UIButtonLookBase`, `UIToggleLookBase`,
 `UISliderLookBase`, `UIScrollbarLookBase`, `UIScrollAreaLookBase`, `UIDropdownLookBase`, `UIMenuBarLookBase`, `UIStatusBarLookBase`, `UITextBoxLookBase`,
 `UIPropertyBoxLookBase`, `UILabelledLookBase`, `UIFormLookBase`, `UICompoundSliderLookBase`, `UIVectorRowLookBase`, `UIListLookBase`, `UITreeLookBase`,
-`UIDialogLookBase`, `UIColorPickerLookBase`, `UIToolbarLookBase`, `UIWindowLookBase`: the `Widget`, then the capability) and a `UILookVTable`:
+`UIDialogLookBase`, `UIColorPickerLookBase`, `UIToolbarLookBase`, `UIWindowLookBase`, `UIWorkspaceLookBase`, `UIRenderViewLookBase`: the `Widget`, then the
+capability) and a `UILookVTable`:
 
 | Slot | | What it does |
 |---|---|---|
@@ -353,8 +355,8 @@ handler (`UIMenuBarOptions.Handler`, `UIMenuBar_SetHandler`). Alt alone does not
 
 **Status bar** (`UIStatusBar.h`, kind `status_bar`). A strip with left, centre and right sections, each a row stack made with it by
 `UIKit_CreateStatusBar` (`UIStatusBar_GetSection` for calling code to add to): the left and right ones as wide as what they hold, the centre one
-filling what is between; the bar is as tall as a line of text or as what its sections hold, whichever is more. Its line of text, at the start
-of the centre section and cut where the right one begins, is a message
+filling what is between, the bar's spacing on either side of it; the bar is as tall as a line of text or as what its sections hold, whichever is
+more. Its line of text, in the centre section's span (so the spacing keeps it off what the left and right sections hold), is a message
 (`UIStatusBar_SetMessage(screen, id, text, seconds)`, 0 seconds for until it is replaced or cleared), else the hover text where the pointer rests
 (`UITooltip_GetCurrent`, before the delay too) while it shows hover text (`UIStatusBar_SetShowsHoverText`). For now it is placed like any element.
 
@@ -556,7 +558,8 @@ ray on the picture as any held press does.
   where it is on a press (`Widget_SetKeepsFocusOnPress`, [UIFramework.md](UIFramework.md)), so an element being edited inside stays entered in the
   same visit, and the window then takes the focus itself unless it is inside already: from elsewhere or from the window itself, back to what last
   had it inside, entered again if it was (on a screen that has the keyboard), else to its default target (`UIWindow_SetDefaultFocus`, entered if
-  asked: a world view), else the window itself. A double click on the title bar acts when its second press is let go, so the release lands on
+  asked: a world view), else the window itself. Whether what had the focus was entered, the window sees at its updates; a default target asked
+  to be entered that was focused and left between two of them (as a layout is built) counts as entered. A double click on the title bar acts when its second press is let go, so the release lands on
   the title bar, never on what the window shows there afterwards. `UIWindow_Focus` does the same from code and brings
   it to the front. It is active (`UIWindow_IsActive`) while the focus is in it, or in a popup whose owner is in it (its dropdown's list, a menu it
   opened, a popup opened from those: `UIScreen_GetPopupOwner`); its look shows the `focused` state then. What had the focus in a popup is not
@@ -581,8 +584,10 @@ ray on the picture as any held press does.
   does not restore it.
 
 **Window types** (`UIWindowTypes.h`). The windows a UI opens by key (`tbp:editor_outliner`): each registered with a display name, an icon, a
-function that fills a new window's content (`UIWindowTypeFill`), its windows' fits, default size and least size, and whether only one may be open on
-a screen (`IsSingle`). `UIWindowTypes` keeps them in a `Registry` under `tbp:ui_window_type` ([Registry.md](Registry.md)), added to the program's
+function that fills a new window's content (`UIWindowTypeFill`), its windows' fits, default size and least size, whether only one may be open on
+a screen (`IsSingle`), and the window theme's variant its windows use (`Variant`: the content's padding and spacing are read from it when a window
+is made, so the shipped themes' `view` variant, with none, lets a world's view fill its window edge to edge; a theme variant's name, checked when the
+type registers). `UIWindowTypes` keeps them in a `Registry` under `tbp:ui_window_type` ([Registry.md](Registry.md)), added to the program's
 root registry; `main.c` makes the program's one and `Services.WindowTypes` carries it. A frame registers the types it offers under a source key of
 its own while it runs and withdraws them together (`UIWindowTypes_WithdrawSource`) when it goes.
 - `UIWindowTypes_Open(types, screen, key, &windowId)`, or `_OpenAt` by index: a single type's window that is open on the screen already (found
@@ -667,6 +672,38 @@ it.
   update.
 - A layout fits any surface: ratios are fractions, and floating windows are kept reachable as any window is, their saved boxes untouched.
 - **Not built:** tabs on a floating window, docking by the keys, keeping scroll positions in a layout.
+
+## Render views
+
+**Render view** (`UIRenderView.h`, kind `render_view`, `UIKit_CreateRenderView`). A picture its host draws, shown in its box: the editor's world, a
+model's preview, the gallery's test pattern; the view knows nothing of what it shows. It works on any screen.
+- **Its host's rule.** Keep a render target the view's size in surface pixels (`UIRenderView_GetPixelSize`), made again whenever the size differs, also
+  while a window edge or a splitter is dragged (a new size each frame: the picture stays real throughout); draw nothing while the view does not show
+  (`UIRenderView_IsShown`: it and everything above it shown, attached, a box of some size; a window hidden, minimized or in a tab that is not selected
+  hides it); hand the texture over on the update side (`UIRenderView_SetTexture`, saying its rows run bottom-up as a render target's do; the frame's
+  PrepareRender is the place, once per shown frame) and draw into it in the frame's Render before the screen renders. The texture is borrowed: clear it
+  (`UIRenderView_ClearTexture`) or hand over another before unloading it, also when the next one cannot be made (the view then shows its background).
+  The look draws it stretched to the view's box, 1:1 when the sizes match.
+- **Input.** A press of any button on the view goes to it like any widget's, consumed for the game; the wheel over it is its own, focused or not, and goes
+  no further up. Its host reads them through `UIRenderView_TakeInput(screen, id, &input)`, once per tick right after `UIScreen_Update`, whether the view
+  shows or not: what happened since the last take is told once (per button `WasPressed` with its `Modifiers`, `ClickCount` and `PressPosition`,
+  `WasReleased`, `WasLost` for a press that stopped reaching it, `DeltaPixels` summed over the ticks; the wheel's notches and modifiers), and what is
+  as it is now (`IsDown`, `IsShown`, `IsHovered`, `IsFocused`, `IsEntered`, the pointer's place in [0;1] of the box and in pixels while it is over the
+  view or a press of its holds it, the box's size, whether a hidden-cursor drag of its runs). A press handed to it (`UIScreen_TransferPress`) is held
+  from then on: no `WasPressed`, its `PressPosition` where it began (maybe past the box), no modifiers. A drag of something onto it is no press of its
+  own: it is a drop target like any widget (`UIDragDrop_SetTarget`).
+- **A hidden-cursor drag on demand.** `UIRenderView_CaptureOnPress(screen, id, buttons)` (or the options' `CapturedButtons`) names the buttons whose
+  press asks for one (`UIScreen_CapturePointer`): a button whose drag looks around. The cursor hides, its raw motion comes in `DeltaPixels` while the
+  pointer stands still, and it comes back where it was when the last press that asked for it ends. A press of another button during the drag lands on
+  the view (the pointer stands still over it) and does not keep the cursor hidden after it.
+- **Keys.** It is an edit element that keeps its keys (`Widget_SetKeepsKeysWhenEntered`): any press on it enters it (the first press on a view that has
+  not the focus acts at once), Enter enters it once the keys focused it, and Tab onto it only focuses it, also from an entered element (entered, no key
+  could leave it again). While it is entered, navigation and leaving
+  by a key do nothing, so Tab, the arrows, Enter and Escape stay unconsumed in `GameInput` for its host's tools; a press elsewhere, focus moving or code
+  (`UIScreen_LeaveWidget`) leaves it. The view handles no key: its host reads them through `GameInput`, and only while the record says it is entered. A
+  press on its window's title bar or tab gives it the focus back entered (`UIWindow_SetDefaultFocus` asked for entered) and reaches no record.
+- **Its look** (a struct starting with `UIRenderViewLookBase`) draws the texture (`UIRenderViewCapability_GetTexture`), else the theme's `background`,
+  and the `frame` box over the picture's edge: entered shows over focused, focused over hovered. It measures as the theme's `min_size`.
 
 ## Events
 
@@ -818,8 +855,10 @@ a Window menu that lists them and opens them (a single one comes to the front, r
 runs from under the menu bar to the status line, so a maximized window leaves both.
 
 The eighth page: a workspace with a menu bar and a status bar, and five window types the gallery registers while it runs
-(`source/UIGalleryWorkspace.c`): Outline (a column of buttons that scrolls), View (what to try), Inspector (a form), Log (read-only lines) and
-Notes (a text box; several at once). The default layout docks them all: the view in the middle, the outline at its left, the inspector at its
+(`source/UIGalleryWorkspace.c`): Outline (a column of buttons that scrolls), View (what to try, and a render view the gallery is the host of: a
+pattern drawn each frame at the view's size, stripes running at a speed the wheel sets, a grid the right button pans with the cursor hidden, a
+marker the left button puts down, the picture's size written in it; Escape, which the entered view keeps, lets go of it; what the record says is
+reported), Inspector (a form), Log (read-only lines) and Notes (a text box; several at once). The default layout docks them all: the view in the middle, the outline at its left, the inspector at its
 right, the log under it with the notes as a second tab. The Window menu opens each type through the workspace, the Layout menu makes, renames
 (a dialog), deletes and resets layouts, and the switcher in the status bar changes between them. The layouts are kept in
 `ui_gallery_layouts.json` in the game's folder: arranged things are there at the next start, and a broken file is put aside as

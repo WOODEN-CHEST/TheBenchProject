@@ -84,6 +84,8 @@ static const UIKindBehaviour* GetBehaviour(UIElementKind kind)
             return UIWindow_GetKindBehaviour();
         case UIElementKind_Workspace:
             return UIWorkspace_GetKindBehaviour();
+        case UIElementKind_RenderView:
+            return UIRenderView_GetKindBehaviour();
         case UIElementKind_Label:
         case UIElementKind_Tooltip:
         case UIElementKind_Menu:
@@ -409,6 +411,7 @@ static const unsigned char* const KindTypeNames[UIElementKind_Count] =
     [UIElementKind_Drag] = u8"DragGhost",
     [UIElementKind_Window] = u8"Window",
     [UIElementKind_Workspace] = u8"Workspace",
+    [UIElementKind_RenderView] = u8"RenderView",
 };
 
 
@@ -1622,4 +1625,15 @@ Error UIKit_CreateWorkspace(UIKit* self, UIScreen* screen, const UIWorkspaceOpti
     }
     *outId = WorkspaceId;
     return Error_CreateSuccess();
+}
+
+Error UIKit_CreateRenderView(UIKit* self, UIScreen* screen, uint64_t parentId, const UIRenderViewOptions* options, uint64_t* outId)
+{
+    if ((self == NULL) || (options == NULL) || (screen == NULL))
+    {
+        return Error_Construct2(ErrorCode_IllegalArgument, "UIKit_CreateRenderView: self, screen and options must not be NULL.");
+    }
+    UIRenderViewArgs Arguments = { .Kit = self, .Options = options };
+    uint64_t TypeId = ResolveLookType(self, screen, UIElementKind_RenderView, options->Element.Look);
+    return CreateElement(self, screen, parentId, TypeId, &Arguments, outId);
 }

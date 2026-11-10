@@ -300,6 +300,12 @@ static const UIThemePartDescriptor WorkspaceParts[UIWorkspacePart_Count] =
     [UIWorkspacePart_Zone] = BOX_PART("zone"),
     [UIWorkspacePart_DropPreview] = BOX_PART("drop_preview"),
 };
+static const UIThemePartDescriptor RenderViewParts[UIRenderViewPart_Count] =
+{
+    [UIRenderViewPart_MinSize] = VECTOR_PART("min_size", 64.0f, 48.0f),
+    [UIRenderViewPart_Background] = BOX_PART("background"),
+    [UIRenderViewPart_Frame] = BOX_PART("frame"),
+};
 
 static const struct
 {
@@ -336,6 +342,7 @@ Kinds[UIElementKind_Count] =
     [UIElementKind_Drag] = { u8"drag", DragParts, UIDragPart_Count },
     [UIElementKind_Window] = { u8"window", WindowParts, UIWindowPart_Count },
     [UIElementKind_Workspace] = { u8"workspace", WorkspaceParts, UIWorkspacePart_Count },
+    [UIElementKind_RenderView] = { u8"render_view", RenderViewParts, UIRenderViewPart_Count },
 };
 
 

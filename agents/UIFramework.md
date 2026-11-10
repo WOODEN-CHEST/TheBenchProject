@@ -331,8 +331,8 @@ button can still take what the element leaves. What both leave is the screen's, 
 - **Enter** (`ui_accept`): leaves with `UILeaveReason_Keep`.
 - **Tab and Shift+Tab** (`ui_next`, `ui_previous`): leave with `Keep` and move to the next or previous candidate at once, starting navigation
   if it was not running (no first press that only shows the outlines); the element they land on is entered if it is an edit element
-  (`UIEnterCause_Key`), and a button or a group is only focused. While the key is held, navigation follows its repeats and each step enters
-  the edit element it lands on, past buttons too; no element hears those repeats.
+  (`UIEnterCause_Key`), and a button, a group or an element that keeps its keys (below) is only focused. While the key is held, navigation
+  follows its repeats and each step enters the edit element it lands on, past buttons too; no element hears those repeats.
 - **The arrows** (`ui_up` and the rest): consumed, and nothing happens. They never throw you out of an element, nor reach the game while you
   edit.
 
@@ -345,7 +345,8 @@ back to its text at entering).
 
 **Kept keys.** `Widget_SetKeepsKeysWhenEntered(widget, true)` (a world view's tools read the keys): while it is entered the screen neither
 navigates nor leaves it by a key, and Tab, the arrows, Enter and Escape stay unconsumed in `GameInput` for their reader. Only focus moving,
-code or a world screen let go leave it.
+code or a world screen let go leave it. Tab going on from another entered element only focuses it: entered, nothing but a press elsewhere or code
+would let the keys out.
 
 **A held press.** It owns the pointer. Its `Move`s and its `ButtonRelease` go to the widget that took it, wherever the pointer is, past the surface too (positions past
 `[0;1]`, unclamped), for as long as the widget stays attached, takes input and shows. One `Move` comes per tick the pointer moved or came or went, for every button held; a pointer

@@ -3,7 +3,9 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "wr/WRError.h"
+#include "wr/WRInt32Vector.h"
 #include "UILayouts.h"
+#include "raylib/raylib.h"
 
 
 /*
@@ -11,6 +13,10 @@
  * types it registers with the program's window types while the gallery runs (an outline, a view, an inspector, a log and notes), their
  * layouts kept in the gallery's own file in the game's folder (GALLERY_WORKSPACE_FILE_NAME), the default one docking them all; a Window
  * menu opening each type, a Layout menu (new, rename, delete, reset) and the layout switcher in the status bar.
+ *
+ * The view's window holds a render view the gallery is the host of, as a world's editor is: a moving pattern drawn each frame at the view's
+ * size (made again at every new size), nothing while the view does not show, and the view's record read once a tick (the left button puts
+ * a marker, the right button pans the pattern with the cursor hidden, the wheel sets the stripes' speed), each thing it does reported.
  */
 
 
@@ -20,6 +26,7 @@ typedef struct UIScreenStruct UIScreen;
 typedef struct UIWindowTypesStruct UIWindowTypes;
 typedef struct KeyRegistryStruct KeyRegistry;
 typedef struct LoggerStruct Logger;
+typedef struct GameInputStruct GameInput;
 
 
 // Macros.
@@ -32,6 +39,28 @@ typedef struct LoggerStruct Logger;
 // Types.
 /** Tells the gallery what happened, for its log. */
 typedef Error (*GalleryWorkspaceReport)(void* context, const char* text);
+
+/** The picture the page's render view shows, and what moves it. */
+typedef struct GalleryPictureStruct
+{
+    /** The view (WIDGET_ID_INVALID while its window is closed), the picture its size, the view it was handed to, whether it shows. */
+    uint64_t ViewId;
+    RenderTexture2D Target;
+    bool HasTarget;
+    uint64_t TargetViewId;
+    bool IsShown;
+    /** The size a picture could not be made at, while HasFailedSize: not tried again until the view's size changes. */
+    bool HasFailedSize;
+    Int32Vector FailedSize;
+    /** The pattern's clock and the stripes' speed (the wheel's), in pixels a second. */
+    double Seconds;
+    float Speed;
+    /** How far the right button's drag panned the pattern, in pixels. */
+    Vector2 Pan;
+    /** Where the left button put the marker, in [0;1] of the view, once it did. */
+    Vector2 Marker;
+    bool HasMarker;
+} GalleryPicture;
 
 /** The page's state. */
 typedef struct GalleryWorkspaceStruct
@@ -58,6 +87,8 @@ typedef struct GalleryWorkspaceStruct
     /** The rename dialog and its name box while one asks; WIDGET_ID_INVALID otherwise. */
     uint64_t RenameDialogId;
     uint64_t RenameBoxId;
+    /** The view's picture. */
+    GalleryPicture Picture;
 } GalleryWorkspace;
 
 
@@ -82,3 +113,18 @@ Error GalleryWorkspace_SetShown(GalleryWorkspace* self, bool isShown);
 
 /** Shows a status in the workspace's status bar. */
 Error GalleryWorkspace_SetStatus(GalleryWorkspace* self, const char* text);
+
+/** Reads the view's record (once a tick, after the screen's update) and moves the pattern by it, reporting what it did; while the view is
+ *  entered, Escape (which the view keeps) lets go of it and is consumed. */
+Error GalleryWorkspace_UpdatePicture(GalleryWorkspace* self, GameInput* input, double passedSeconds);
+
+/** The update side's last step before a render: the picture the view's size (made again at every new size; the view lets go of the old one
+ *  first), handed to the view; none drawn while the view does not show. A size no picture could be made at is not tried again until the
+ *  view's size changes. */
+void GalleryWorkspace_PreparePicture(GalleryWorkspace* self);
+
+/** Draws the pattern into the picture, before the screen renders; nothing while the view does not show. */
+void GalleryWorkspace_RenderPicture(const GalleryWorkspace* self);
+
+/** Unloads the picture. Call once the screen (and the view) are gone. */
+void GalleryWorkspace_ReleasePicture(GalleryWorkspace* self);

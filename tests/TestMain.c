@@ -133,6 +133,9 @@ int main(void)
     UIWindowTypesTests_Run(&Run);
     UIDockTreeTests_Run(&Run);
     UIWorkspaceTests_Run(&Run);
+    UIRenderViewTests_Run(&Run);
+    EditorCameraTests_Run(&Run);
+    EditorFrameTests_Run(&Run);
     UILayoutsTests_Run(&Run);
     GameWindowStateTests_Run(&Run);
     GameWindowTests_Run(&Run);

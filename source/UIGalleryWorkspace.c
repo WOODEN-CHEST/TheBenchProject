@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <string.h>
 #include "UIGalleryWorkspace.h"
+#include "GameInput.h"
 #include "NamespacedKey.h"
+#include "UIRenderView.h"
 #include "UIChoice.h"
 #include "UIDialog.h"
 #include "UIKit.h"
@@ -13,9 +15,12 @@
 #include "UIWindow.h"
 #include "UIWindowTypes.h"
 #include "UIWorkspace.h"
+#include "wr/WRMath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRPath.h"
 #include "wr/WRUserData.h"
+#include "raylib/rlgl.h"
+#include <math.h>
 
 
 // Macros.
@@ -42,6 +47,16 @@
 #define OUTLINE_SHARE 0.2f
 #define INSPECTOR_SHARE 0.3f
 #define LOG_SHARE 0.3f
+/** The picture's stripes: their width, their speed at first and its limits (pixels a second), and how much a wheel notch changes it. */
+#define STRIPE_WIDTH 24
+#define PICTURE_START_SPEED 60.0f
+#define PICTURE_MIN_SPEED 5.0f
+#define PICTURE_MAX_SPEED 2000.0f
+#define PICTURE_WHEEL_FACTOR 1.25f
+/** The picture's grid spacing and the orbiting dot's radius and period, in pixels and seconds. */
+#define GRID_SPACING 64
+#define ORBIT_PERIOD_SECONDS 4.0
+#define DOT_RADIUS 10.0f
 
 
 // Types.
@@ -116,26 +131,36 @@ static Error FillOutline(UIScreen* screen, uint64_t windowId, uint64_t contentId
     return Result;
 }
 
-/* The view: where a world will show; meanwhile what to try. */
+/* The view: what to try, and a render view the gallery draws a moving pattern into, as the editor draws its world. */
 static Error FillView(UIScreen* screen, uint64_t windowId, uint64_t contentId, const UserData* userData)
 {
-    (void)windowId;
-    (void)userData;
+    GalleryWorkspace* Self = UserData_GetPointer(userData);
     UIKit* Kit = UIKit_FromScreen(screen);
-    Error Result = AddLabel(Kit, screen, contentId, u8"UI gallery: the workspace", u8"heading", false);
+    Error Result = AddLabel(Kit, screen, contentId, u8"N the next page. Drag a tab out of its strip: its window floats under the pointer. Let it go "
+        u8"on a guide to dock it there, on a tab strip to add a tab, anywhere else to leave it floating; Escape mid-drag puts it back. Drag the "
+        u8"splitters, double click a tab to maximize its window, right click it to undock it. The Layout menu keeps arrangements (in "
+        u8"ui_gallery_layouts.json next to the game).", u8"hint", true);
     if (Result.Code == ErrorCode_Success)
     {
-        Result = AddLabel(Kit, screen, contentId, u8"N the next page. Drag a tab out of its strip: its window floats under the pointer. Let "
-            u8"it go on a guide to dock it there (the middle one adds a tab, the others split the area), on a tab strip to add a tab, anywhere "
-            u8"else to leave it floating; Escape mid-drag puts it back. A floating window's title bar drags it over the dock the same way. Drag "
-            u8"a tab along its strip to reorder it; double click it to maximize its window; right click it to undock, maximize or close it; "
-            u8"the wheel over a strip steps through its tabs. Drag the splitters between areas, and shrink the game's window.", u8"hint", true);
+        Result = AddLabel(Kit, screen, contentId, u8"The picture is a render view: the gallery draws it at the view's size each frame, also while "
+            u8"you drag an edge or a splitter. A press enters it (it keeps Tab, the arrows and Enter for its host; Escape lets go of it); the left "
+            u8"button puts the marker, the right button pans with the cursor hidden, the wheel changes the stripes' speed.", u8"hint", true);
+    }
+    UIRenderViewOptions Options = UIRenderViewOptions_Create();
+    Options.Element.Hint = UIStackHint_Fill(1.0f);
+    Options.CapturedButtons = UI_BUTTON_BIT(GameKey_MouseRight);
+    uint64_t ViewId = WIDGET_ID_INVALID;
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIKit_CreateRenderView(Kit, screen, contentId, &Options, &ViewId);
     }
     if (Result.Code == ErrorCode_Success)
     {
-        Result = AddLabel(Kit, screen, contentId, u8"The Layout menu makes, renames, deletes and resets layouts; the switcher at the bottom "
-            u8"right changes between them. They are kept in ui_gallery_layouts.json next to the game, and come back at the next start; a "
-            u8"broken file is put aside as ui_gallery_layouts.json.bad, and the default layout shows.", u8"hint", true);
+        Result = UIWindow_SetDefaultFocus(screen, windowId, ViewId, true);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Self->Picture.ViewId = ViewId;
     }
     return Result;
 }
@@ -244,7 +269,7 @@ static const GalleryDockType Types[GALLERY_WORKSPACE_TYPE_COUNT] =
     [GalleryDockSlot_Outline] = { .Key = u8"tbp:gallery_dock_outline", .Name = u8"Outline", .Letter = (uint32_t)'O', .Across = UIWindowFit_Fit,
         .Down = UIWindowFit_Scroll, .Size = { 220.0f, 320.0f }, .IsSingle = true, .Fill = FillOutline },
     [GalleryDockSlot_View] = { .Key = u8"tbp:gallery_dock_view", .Name = u8"View", .Letter = (uint32_t)'V', .Across = UIWindowFit_Fit,
-        .Down = UIWindowFit_Scroll, .Size = { 480.0f, 320.0f }, .IsSingle = true, .Fill = FillView },
+        .Down = UIWindowFit_Fit, .Size = { 480.0f, 360.0f }, .IsSingle = true, .Fill = FillView },
     [GalleryDockSlot_Inspector] = { .Key = u8"tbp:gallery_dock_inspector", .Name = u8"Inspector", .Letter = (uint32_t)'I',
         .Across = UIWindowFit_Fit, .Down = UIWindowFit_Scroll, .Size = { 300.0f, 240.0f }, .IsSingle = true, .Fill = FillInspector },
     [GalleryDockSlot_Log] = { .Key = u8"tbp:gallery_dock_log", .Name = u8"Log", .Letter = (uint32_t)'L', .Across = UIWindowFit_Scroll,
@@ -520,6 +545,9 @@ Error GalleryWorkspace_Construct(GalleryWorkspace* self, UIWindowTypes* types, K
     self->SwitcherId = WIDGET_ID_INVALID;
     self->RenameDialogId = WIDGET_ID_INVALID;
     self->RenameBoxId = WIDGET_ID_INVALID;
+    self->Picture.ViewId = WIDGET_ID_INVALID;
+    self->Picture.TargetViewId = WIDGET_ID_INVALID;
+    self->Picture.Speed = PICTURE_START_SPEED;
     if ((types == NULL) || (keys == NULL))
     {
         return Error_CreateSuccess();
@@ -656,4 +684,198 @@ Error GalleryWorkspace_SetStatus(GalleryWorkspace* self, const char* text)
         return Error_CreateSuccess();
     }
     return UIStatusBar_SetMessage(self->Screen, self->StatusBarId, (const unsigned char*)text, 0.0);
+}
+
+
+// Public functions: the picture.
+Error GalleryWorkspace_UpdatePicture(GalleryWorkspace* self, GameInput* input, double passedSeconds)
+{
+    GalleryPicture* Picture = &self->Picture;
+    if ((Picture->ViewId == WIDGET_ID_INVALID) || !UIScreen_IsWidgetAlive(self->Screen, Picture->ViewId))
+    {
+        Picture->ViewId = WIDGET_ID_INVALID;
+        return Error_CreateSuccess();
+    }
+    UIRenderViewInput View;
+    Error Result = UIRenderView_TakeInput(self->Screen, Picture->ViewId, &View);
+    if ((Result.Code != ErrorCode_Success) || !View.IsShown)
+    {
+        return Result;
+    }
+    Picture->Seconds += passedSeconds;
+    char Text[REPORT_CAPACITY];
+    Text[0] = 0;
+    if (View.Wheel.y != 0.0f)
+    {
+        Picture->Speed = Math_ClampFloat(Picture->Speed * powf(PICTURE_WHEEL_FACTOR, View.Wheel.y), PICTURE_MIN_SPEED, PICTURE_MAX_SPEED);
+        snprintf(Text, sizeof(Text), "the picture: the wheel, %s; the stripes run at %.0f pixels a second", View.IsFocused ? "focused" : "not focused",
+            (double)Picture->Speed);
+    }
+    const UIRenderViewButton* Left = &View.Buttons[(int32_t)GameKey_MouseLeft - (int32_t)GameKey_MouseLeft];
+    const UIRenderViewButton* Right = &View.Buttons[(int32_t)GameKey_MouseRight - (int32_t)GameKey_MouseLeft];
+    if (Left->IsDown && View.HasPointer)
+    {
+        Picture->Marker = View.Pointer;
+        Picture->HasMarker = true;
+    }
+    if (Right->IsDown)
+    {
+        Picture->Pan.x += Right->DeltaPixels.x;
+        Picture->Pan.y += Right->DeltaPixels.y;
+    }
+    if (Left->WasPressed)
+    {
+        snprintf(Text, sizeof(Text), "the picture: a left press at %.2f, %.2f of %d x %d pixels (click %u): the marker follows it", (double)Left->PressPosition.x,
+            (double)Left->PressPosition.y, (int)View.PixelSize.X, (int)View.PixelSize.Y, (unsigned)Left->ClickCount);
+    }
+    if (Right->WasPressed)
+    {
+        snprintf(Text, sizeof(Text), "%s", "the picture: a right press, the cursor hidden: drag to pan, let go and it comes back where it was");
+    }
+    if (Left->WasLost || Right->WasLost)
+    {
+        snprintf(Text, sizeof(Text), "%s", "the picture: a press was lost");
+    }
+    // Its host reads the keys it keeps while it is entered: Tab and Enter are told, Escape lets go of it (and quits nothing).
+    if (View.IsEntered && (input != NULL))
+    {
+        if (GameInput_IsActionPressed(input, GameAction_UIBack))
+        {
+            GameInput_ConsumeAction(input, GameAction_UIBack);
+            Result = UIScreen_LeaveWidget(self->Screen, UILeaveReason_Keep);
+            snprintf(Text, sizeof(Text), "%s", "the picture: Escape reached its host, which let go of the keys");
+        }
+        else if (GameInput_IsActionPressed(input, GameAction_UINext) || GameInput_IsActionPressed(input, GameAction_UIAccept))
+        {
+            snprintf(Text, sizeof(Text), "%s", "the picture: a key it keeps (Tab or Enter) reached its host: navigation left it alone");
+        }
+    }
+    if ((Result.Code == ErrorCode_Success) && (Text[0] != 0))
+    {
+        Report(self, Text);
+    }
+    return Result;
+}
+
+void GalleryWorkspace_PreparePicture(GalleryWorkspace* self)
+{
+    GalleryPicture* Picture = &self->Picture;
+    Picture->IsShown = false;
+    if ((Picture->ViewId == WIDGET_ID_INVALID) || !UIScreen_IsWidgetAlive(self->Screen, Picture->ViewId))
+    {
+        GalleryWorkspace_ReleasePicture(self);
+        Picture->HasFailedSize = false;
+        return;
+    }
+    bool IsShown = false;
+    Int32Vector Size = { .X = 0, .Y = 0 };
+    Error Result = UIRenderView_IsShown(self->Screen, Picture->ViewId, &IsShown);
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIRenderView_GetPixelSize(self->Screen, Picture->ViewId, &Size);
+    }
+    if ((Result.Code != ErrorCode_Success) || !IsShown)
+    {
+        Error_Deconstruct(&Result);
+        return;
+    }
+    if (!Picture->HasTarget || (Picture->Target.texture.width != Size.X) || (Picture->Target.texture.height != Size.Y))
+    {
+        if (Picture->HasFailedSize && (Picture->FailedSize.X == Size.X) && (Picture->FailedSize.Y == Size.Y))
+        {
+            return; // Not tried again until the view's size changes.
+        }
+        if ((Picture->TargetViewId != WIDGET_ID_INVALID) && UIScreen_IsWidgetAlive(self->Screen, Picture->TargetViewId))
+        {
+            Result = UIRenderView_ClearTexture(self->Screen, Picture->TargetViewId); // The view lets go of the picture before it is unloaded.
+            Error_Deconstruct(&Result);
+        }
+        GalleryWorkspace_ReleasePicture(self);
+        Picture->Target = LoadRenderTexture(Size.X, Size.Y);
+        bool IsComplete = (Picture->Target.id != 0U) && (Picture->Target.texture.id != 0U) && rlFramebufferComplete(Picture->Target.id);
+        if (!IsComplete)
+        {
+            if (Picture->Target.id != 0U)
+            {
+                UnloadRenderTexture(Picture->Target);
+            }
+            Picture->HasFailedSize = true;
+            Picture->FailedSize = Size;
+            return;
+        }
+        Picture->HasTarget = true;
+        Picture->HasFailedSize = false;
+    }
+    if (Picture->TargetViewId != Picture->ViewId)
+    {
+        Result = UIRenderView_SetTexture(self->Screen, Picture->ViewId, Picture->Target.texture, true);
+        if (Result.Code != ErrorCode_Success)
+        {
+            Error_Deconstruct(&Result);
+            return;
+        }
+        Picture->TargetViewId = Picture->ViewId;
+    }
+    Picture->IsShown = true;
+}
+
+/* Stripes running across, a grid the right button pans, a dot going round, the marker, and the picture's size: each frame drawn anew at the
+ * view's size, so a resize shows at once whether the picture follows. */
+void GalleryWorkspace_RenderPicture(const GalleryWorkspace* self)
+{
+    const GalleryPicture* Picture = &self->Picture;
+    if (!Picture->IsShown || !Picture->HasTarget)
+    {
+        return;
+    }
+    int Width = Picture->Target.texture.width;
+    int Height = Picture->Target.texture.height;
+    BeginTextureMode(Picture->Target);
+    ClearBackground((Color){ 30, 34, 44, 255 });
+    int Offset = (int)fmod(Picture->Seconds * (double)Picture->Speed, (double)(2 * STRIPE_WIDTH));
+    for (int X = -2 * STRIPE_WIDTH; X < (Width + Height + (2 * STRIPE_WIDTH)); X += 2 * STRIPE_WIDTH)
+    {
+        // A stripe leaning right: a quad from the top edge to the bottom edge.
+        Vector2 TopLeft = { .x = (float)(X + Offset), .y = 0.0f };
+        Vector2 TopRight = { .x = (float)(X + Offset + STRIPE_WIDTH), .y = 0.0f };
+        Vector2 BottomLeft = { .x = (float)(X + Offset - Height), .y = (float)Height };
+        Vector2 BottomRight = { .x = (float)(X + Offset + STRIPE_WIDTH - Height), .y = (float)Height };
+        DrawTriangle(TopLeft, BottomLeft, TopRight, (Color){ 44, 52, 70, 255 });
+        DrawTriangle(TopRight, BottomLeft, BottomRight, (Color){ 44, 52, 70, 255 });
+    }
+    int PanX = ((int)Picture->Pan.x % GRID_SPACING + GRID_SPACING) % GRID_SPACING;
+    int PanY = ((int)Picture->Pan.y % GRID_SPACING + GRID_SPACING) % GRID_SPACING;
+    for (int X = PanX; X < Width; X += GRID_SPACING)
+    {
+        DrawRectangle(X, 0, 1, Height, (Color){ 90, 110, 150, 255 });
+    }
+    for (int Y = PanY; Y < Height; Y += GRID_SPACING)
+    {
+        DrawRectangle(0, Y, Width, 1, (Color){ 90, 110, 150, 255 });
+    }
+    double Turn = (2.0 * 3.14159265358979 * Picture->Seconds) / ORBIT_PERIOD_SECONDS;
+    float Radius = 0.35f * (float)((Width < Height) ? Width : Height);
+    DrawCircle((int)((float)Width * 0.5f + (Radius * (float)cos(Turn))), (int)((float)Height * 0.5f + (Radius * (float)sin(Turn))), DOT_RADIUS,
+        (Color){ 230, 180, 90, 255 });
+    if (Picture->HasMarker)
+    {
+        int MarkerX = (int)(Picture->Marker.x * (float)Width);
+        int MarkerY = (int)(Picture->Marker.y * (float)Height);
+        DrawRectangle(MarkerX - 12, MarkerY - 1, 25, 3, (Color){ 240, 90, 90, 255 });
+        DrawRectangle(MarkerX - 1, MarkerY - 12, 3, 25, (Color){ 240, 90, 90, 255 });
+    }
+    DrawRectangleLines(0, 0, Width, Height, (Color){ 140, 160, 200, 255 });
+    DrawText(TextFormat("%d x %d", Width, Height), 8, 8, 20, (Color){ 220, 225, 235, 255 });
+    EndTextureMode();
+}
+
+void GalleryWorkspace_ReleasePicture(GalleryWorkspace* self)
+{
+    GalleryPicture* Picture = &self->Picture;
+    if (Picture->HasTarget)
+    {
+        UnloadRenderTexture(Picture->Target);
+        Picture->HasTarget = false;
+    }
+    Picture->TargetViewId = WIDGET_ID_INVALID;
 }

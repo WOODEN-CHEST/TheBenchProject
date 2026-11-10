@@ -820,8 +820,9 @@ Current module list:
     never changed by that; a press on its frame acts on nothing inside and gives the focus back where it was (entered again), else to its default target;
     its arithmetic pure. Works on any screen.
   * UIWindowTypes - The windows a UI opens by key: a Registry of types (`tbp:ui_window_type`, in the root; main.c makes the program's, Services carries it)
-    with a display name, icon, fill function, fits, sizes and whether only one opens; opening one (a single one restored, brought to the front and
-    focused), where the type's last window closed, the items of a Window menu.
+    with a display name, icon, fill function, fits, sizes, whether only one opens and the window theme's variant its windows use (a world's view
+    edge to edge); opening one (a single one restored, brought to the front and focused), where the type's last window closed, the items of a
+    Window menu.
   * UIDockTree - Pure: a workspace's docking areas as a split tree with tabs in its leaves (limited in leaves, tabs and depth for hostile files),
     its operations, its arrangement in whole pixels keeping least sizes while there is room, the ratio a splitter's drag sets, and the drop zones
     (tab strips, a middle guide and four edge guides per area).
@@ -832,7 +833,22 @@ Current module list:
   * UILayouts - Named layouts as pure data (windows by type key, the dock tree, each type's last place) and their file
     (references/layouts_structure.md): read with limits as hostile (a bad file put aside as `.bad`, an unreadable one left alone and never
     saved over, unknown types dropped with one log line), written atomically.
-  * UIGalleryFrame - A game frame on eight pages, each scrolling, started with --ui-gallery: every element in every state, the routing and the keyboard (a box to go into, whose sliders Enter enters); the scale rows, a turning panel, a panel sliding in, a second look of the button, icons; a menu bar, dropdowns near the window's edges and in the page (three options, a thousand from a provider), context menus with submenus, a modal dialog, scroll areas, a long end and a status bar; text boxes of every kind and a form; sliders of every conversion and upright, property boxes of every kind, compound sliders, a form of labelled rows and rows of fields; tool bars, a list of a hundred thousand rows, a tree twelve deep, a drag between two lists, colour pickers and dialogs; floating windows of four types it registers while it runs (fitting, scrolling, fixed, notes that ask before closing) and a Window menu (the private source/UIGalleryWindows.{h,c}); a workspace with five window types docked as a default layout, Window and Layout menus and the layout switcher, its layouts kept in ui_gallery_layouts.json (the private source/UIGalleryWorkspace.{h,c}); hover text on everything. N the page, T the theme (three: flat, nine-slice, another palette), + and - the scale, P the scale policy, L the event log.
+  * UIRenderView - A picture its host draws (a world, a preview), shown in its box (kind render_view): an edit element that keeps its keys while
+    entered (Tab, the arrows, Enter and Escape stay unconsumed for its host's tools), the wheel over it its own focused or not, a hidden-cursor drag
+    on the presses it names, and a record its host takes once a tick (each button's presses, releases and losses told once with their modifiers,
+    click counts and motion; the wheel; hover, focus, entering and the pointer's place as they are), its size in pixels and whether it shows (its
+    window not hidden, minimized or in a tab that is not selected).
+  * UIGalleryFrame - A game frame on eight pages, each scrolling, started with --ui-gallery: every element in every state, the routing and the keyboard (a box to go into, whose sliders Enter enters); the scale rows, a turning panel, a panel sliding in, a second look of the button, icons; a menu bar, dropdowns near the window's edges and in the page (three options, a thousand from a provider), context menus with submenus, a modal dialog, scroll areas, a long end and a status bar; text boxes of every kind and a form; sliders of every conversion and upright, property boxes of every kind, compound sliders, a form of labelled rows and rows of fields; tool bars, a list of a hundred thousand rows, a tree twelve deep, a drag between two lists, colour pickers and dialogs; floating windows of four types it registers while it runs (fitting, scrolling, fixed, notes that ask before closing) and a Window menu (the private source/UIGalleryWindows.{h,c}); a workspace with five window types docked as a default layout (its view a render view the gallery draws a moving pattern into, as the editor draws
+    its world), Window and Layout menus and the layout switcher, its layouts kept in ui_gallery_layouts.json (the private source/UIGalleryWorkspace.{h,c}); hover text on everything. N the page, T the theme (three: flat, nine-slice, another palette), + and - the scale, P the scale policy, L the event log.
+* Editor (Editor.md) - The world editor, run alone with `--editor [world name]`. Covers:
+  * EditorFrame - The frame: the world opened by name from worlds/ (an empty one without a name or for a bad one), a collision world that
+    places rather than moves, the generators that build what prefabs and path objects make, a renderer, the camera, and its shell: a workspace
+    with File, Window and Layout menus and a status bar, its window types (`tbp:editor_world`, the world's window: a render view the frame is the
+    host of; two plain ones), its layouts in editor_layouts.json. Each tick the UI, the view's record, the camera, then the generators, the
+    world matrices and the collision world; nothing simulates. The world's picture is drawn at the view's size, made again at every new size,
+    nothing while the view does not show (source/EditorFrame.c, the shell in source/EditorShell.c, private source/EditorInternal.h).
+  * EditorCamera - The fly camera as pure maths: while the right button is held on the entered view, the pointer's raw motion turns it and the
+    editor's fly actions (input_actions/editor.json) move it along where it looks, across and up; the wheel steps its speed in doublings.
 * Text components (TextComponents.md) - Renderer-independent, Minecraft-style rich text as a STRICT TREE: a parent owns
   its children, a tree has at most 64 levels, components own copies of their strings, and fonts and sprite animations
   are named, never held. Every change gives the component and its ancestors a new revision. Covers three modules (plus

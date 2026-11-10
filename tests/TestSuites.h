@@ -441,6 +441,20 @@ void UILayoutsTests_Run(TestRun* run);
  *  (UIWorkspaceTests.c). */
 void UIWorkspaceTests_Run(TestRun* run);
 
+/** @brief The render view: its record through a tick (presses and releases told once, the wheel focused or not, hover and the pointer's
+ *  place, a lost press, a hidden-cursor drag), its kept keys, Tab and Enter, its size following a splitter and an edge, shown only while its
+ *  window shows, a title bar press reaching no record, a drop, its texture, what is refused (UIRenderViewTests.c). */
+void UIRenderViewTests_Run(TestRun* run);
+
+/** @brief The editor's fly camera as pure maths: the speed's steps by the wheel, looking, flying along where it looks, across and up, the
+ *  fast key, nothing without flying or time, far away in double (EditorCameraTests.c). */
+void EditorCameraTests_Run(TestRun* run);
+
+/** @brief The editor frame with no window: an empty world without a name, a named world and bad names, a tick syncing what moved and
+ *  flying, the keys only while flying in the entered view, looking, the wheel, the world's window closed and reopened, the layout kept
+ *  across a restart, its services (EditorFrameTests.c). */
+void EditorFrameTests_Run(TestRun* run);
+
 /** @brief Window types: registering and finding them (through the root too), refused definitions and keys, withdrawing and reviving,
  *  opening one filled by its type, centred and stepped, a single type opening once (restored, in front, focused, found anywhere), what
  *  cannot open, a closed window's place remembered, the Window menu's items (UIWindowTypesTests.c). */

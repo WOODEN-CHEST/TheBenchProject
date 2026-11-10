@@ -122,6 +122,8 @@ const UIKindBehaviour* UIToolbar_GetKindBehaviour(void);
 const UIKindBehaviour* UIWindow_GetKindBehaviour(void);
 /** The workspace's: its windows and its dock, its bars and its dock laid out, the drag over it, its layouts. */
 const UIKindBehaviour* UIWorkspace_GetKindBehaviour(void);
+/** The render view's: its record of the pointer, the buttons and the wheel, a hidden-cursor drag on the presses it names. */
+const UIKindBehaviour* UIRenderView_GetKindBehaviour(void);
 
 /** The parts UIKit_CreateWindow made a window of, by id: its frame, its title bar, its caption buttons (by UIWindowButton), its scroll
  *  area, its content's column and its edges (by UIWindowEdge). */

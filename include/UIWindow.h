@@ -604,7 +604,8 @@ Error UIWindow_Focus(UIScreen* screen, uint64_t windowId);
  * @param screen The window's screen; must not be NULL.
  * @param windowId The window.
  * @param focusId A focusable widget inside the window, or WIDGET_ID_INVALID for none (the window itself takes the focus then).
- * @param isEntered Whether it is entered as it gets the focus (an edit element: a world view).
+ * @param isEntered Whether it is entered as it gets the focus (an edit element: a world view), and taken for entered when it had the focus
+ *        last but the window never saw it otherwise (focused, entered and left within one tick, as a layout is built).
  * @returns Success; ErrorCode_InvalidOperation for a stale id, a widget that is no window, or a focus target that is not inside it.
  */
 Error UIWindow_SetDefaultFocus(UIScreen* screen, uint64_t windowId, uint64_t focusId, bool isEntered);

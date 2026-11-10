@@ -297,15 +297,13 @@ void UIStatusBar_GetTextSpan(const Widget* widget, float* outStart, float* outEn
     UIScreen* Screen = Widget_GetScreen(widget);
     *outStart = 0.0f;
     *outEnd = 1.0f;
-    Widget* Left = NULL;
-    Widget* Right = NULL;
-    if (UIScreen_TryGetWidgetById(Screen, Self->_sectionIds[UIStatusBarSection_Left], &Left))
+    // The centre section stands between the others with the bar's spacing on either side of it: the text keeps the same gaps. (Calling code
+    // that destroyed it leaves the text the whole bar.)
+    Widget* Centre = NULL;
+    if (UIScreen_TryGetWidgetById(Screen, Self->_sectionIds[UIStatusBarSection_Centre], &Centre))
     {
-        *outStart = Widget_GetPosition(Left).x + Widget_GetSize(Left).x;
-    }
-    if (UIScreen_TryGetWidgetById(Screen, Self->_sectionIds[UIStatusBarSection_Right], &Right) && (Widget_GetSize(Right).x > 0.0f))
-    {
-        *outEnd = Widget_GetPosition(Right).x;
+        *outStart = Widget_GetPosition(Centre).x;
+        *outEnd = Widget_GetPosition(Centre).x + Widget_GetSize(Centre).x;
     }
 }
 

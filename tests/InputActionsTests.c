@@ -449,7 +449,7 @@ static void RegisteringOneDefinitionIsAllOrNothing(TestRun* run)
 }
 
 /* The base game's own definitions (compile/out/asset/input_actions) read without a failure and register: the test
- * frame's wave is an action from data. */
+ * frame's wave and the editor's fly keys are actions from data. */
 static void TheShippedTestFrameActionsRegister(TestRun* run)
 {
     GenericBuffer Root;
@@ -481,6 +481,19 @@ static void TheShippedTestFrameActionsRegister(TestRun* run)
             && AreTextsEqual(GameInput_GetCategoryKeyText(&Input, Info.Category), "tbp:test_frame"));
         TEST_CHECK(run, KeyRegistry_TryFind(&Keys, (const unsigned char*)u8"tbp:test_frame", &Source)
             && (GameInput_GetActionSource(&Input, WaveAction) == Source));
+        // The editor's fly keys.
+        static const char* const EditorKeys[] = { "tbp:editor_fly_forward", "tbp:editor_fly_back", "tbp:editor_fly_left", "tbp:editor_fly_right",
+            "tbp:editor_fly_up", "tbp:editor_fly_down", "tbp:editor_fly_fast" };
+        static const GameKey EditorBindings[] = { GameKey_W, GameKey_S, GameKey_A, GameKey_D, GameKey_E, GameKey_Q, GameKey_LeftShift };
+        for (size_t Index = 0U; Index < (sizeof(EditorKeys) / sizeof(EditorKeys[0])); Index++)
+        {
+            GameActionId Action = UINT32_MAX;
+            TEST_CHECK(run, GameInput_FindActionText(&Input, (const unsigned char*)EditorKeys[Index], &Action)
+                && GameInput_TryGetActionInfo(&Input, Action, &Info) && (Info.DefaultBindingCount == 1U)
+                && (Info.DefaultBindings[0].Key == EditorBindings[Index]) && (Info.DefaultBindings[0].Modifiers == GAME_KEY_MODIFIER_NONE)
+                && GameInput_TryGetCategoryInfo(&Input, Info.Category, &Category)
+                && AreTextsEqual(GameInput_GetCategoryKeyText(&Input, Info.Category), "tbp:editor"));
+        }
     }
     if (Manager != NULL)
     {
@@ -505,7 +518,7 @@ void InputActionsTests_Run(TestRun* run)
         { "the_reader_refuses_every_broken_rule", TheReaderRefusesEveryBrokenRule },
         { "definitions_register_all_or_nothing", DefinitionsRegisterAllOrNothing },
         { "registering_one_definition_is_all_or_nothing", RegisteringOneDefinitionIsAllOrNothing },
-        { "the_shipped_test_frame_actions_register", TheShippedTestFrameActionsRegister },
+        { "the_shipped_actions_register", TheShippedTestFrameActionsRegister },
     };
     TestRun_RunSuite(run, "InputActions", Cases, sizeof(Cases) / sizeof(Cases[0]));
 }

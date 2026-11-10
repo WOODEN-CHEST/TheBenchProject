@@ -717,11 +717,24 @@ static void AStatusBarShowsMessagesAndHoverText(TestRun* run)
         Button.Element.Hint = UIStackHint_Fixed(60.0f);
         uint64_t ButtonId = WIDGET_ID_INVALID;
         TEST_CHECK_SUCCESS(run, UIKit_CreateButton(&Fixture.Kit, &Fixture.Screen, Sections[UIStatusBarSection_Right], &Button, &ButtonId));
+        UIButtonOptions LeftButton = UIButtonOptions_Create(u8"x");
+        LeftButton.Element.Hint = UIStackHint_Fixed(50.0f);
+        uint64_t LeftButtonId = WIDGET_ID_INVALID;
+        TEST_CHECK_SUCCESS(run, UIKit_CreateButton(&Fixture.Kit, &Fixture.Screen, Sections[UIStatusBarSection_Left], &LeftButton, &LeftButtonId));
         uint64_t HoverId = AddButtonAt(run, &Fixture, WIDGET_ID_INVALID, 100.0f, 100.0f);
         TEST_CHECK_SUCCESS(run, UITooltip_Set(&Fixture.Screen, HoverId, u8"what it does"));
         TestUI_Ticks(run, &Fixture, 4U);
         Rectangle Right = TestUI_GetPixelBox(run, &Fixture, ButtonId);
         TEST_CHECK(run, fabsf((Right.x + Right.width) - (1000.0f - 6.0f)) < 0.01f);
+        // The text keeps the bar's spacing from what stands at either end: from 6 + 50 + 8 to 1000 - 6 - 60 - 8.
+        Widget* Spanned = NULL;
+        if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, BarId, &Spanned)))
+        {
+            float Start = 0.0f;
+            float End = 0.0f;
+            UIStatusBar_GetTextSpan(Spanned, &Start, &End);
+            TEST_CHECK(run, (fabsf((Start * 1000.0f) - 64.0f) < 0.01f) && (fabsf((End * 1000.0f) - 926.0f) < 0.01f));
+        }
         // The bar asks to be as tall as what its sections hold: the 24 pixel button and the padding, more than one line of text.
         Widget* Measured = NULL;
         if (TEST_CHECK(run, UIScreen_TryGetWidgetById(&Fixture.Screen, BarId, &Measured)))

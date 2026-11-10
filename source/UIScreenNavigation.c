@@ -496,7 +496,8 @@ static Error NavigateSequentialAtOnce(UIScreen* self, bool isForward, bool* outI
 }
 
 /* Tab going on from an entered element, or a held Tab that did: leaves it keeping what was done, moves on at once and enters
- * the element it lands on if that is an edit element. Every hook may change the tree, so focus is read again after each. */
+ * the element it lands on if that is an edit element, unless it keeps its keys: entered, it would keep Tab and Escape too, and
+ * no key could leave it again, so it is only focused. Every hook may change the tree, so focus is read again after each. */
 static Error TabOn(UIScreen* self, bool isForward, bool* outIsActed)
 {
     *outIsActed = false;
@@ -509,6 +510,11 @@ static Error TabOn(UIScreen* self, bool isForward, bool* outIsActed)
     if ((Result.Code != ErrorCode_Success) || !*outIsActed)
     {
         return Result;
+    }
+    const Widget* Landed = UIScreen_InternalResolve(self, self->_focusedWidgetId);
+    if ((Landed == NULL) || Landed->_keepsKeysWhenEntered)
+    {
+        return Error_CreateSuccess();
     }
     return UIScreen_InternalEnter(self, self->_focusedWidgetId, UIEnterCause_Key); // Nothing for what is no edit element.
 }

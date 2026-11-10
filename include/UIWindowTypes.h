@@ -18,7 +18,7 @@
  *        them, a layout can open them again, and packs and scripts can add their own.
  *
  * A TYPE is a namespaced key, a display name, an icon, a function that fills a new window's content, the window's fits, its default size
- * and its least size, and whether only one of it may be open on a screen. UIWindowTypes holds them in a Registry under
+ * and its least size, whether only one of it may be open on a screen, and the theme variant its windows use. UIWindowTypes holds them in a Registry under
  * UI_WINDOW_TYPES_REGISTRY_KEY (Registry.md: stable indices, a source per entry, withdrawn entries keeping their slots), added to the
  * program's root registry, where tools find it. The program makes one (main.c) and Services carries it; a frame registers the types it
  * offers while it runs, and withdraws them (by its source) when it goes.
@@ -83,6 +83,10 @@ typedef struct UIWindowTypeDefinitionStruct
     Vector2 MinimumSize;
     /** @brief Whether only one of it may be open on a screen: opening it again brings that one to the front. */
     bool IsSingle;
+    /** @brief The window kind's theme variant its windows use (their content's padding and spacing, their frame), or NULL for the kind's own
+     *  values: a window whose content fills it edge to edge, a world's view, names one with no padding. A theme's variant name: 1 to
+     *  UI_THEME_VARIANT_NAME_CAPACITY - 1 of a-z, 0-9, _, . and -, starting with a letter (NamespacedKey_IsValidLocalName). Copied. */
+    const unsigned char* Variant;
 } UIWindowTypeDefinition;
 
 /**
@@ -105,6 +109,10 @@ typedef struct UIWindowTypeStruct
     Vector2 _minimumSize;
     /** @brief Whether only one may be open on a screen. */
     bool _isSingle;
+    /** @brief Whether its windows use a theme variant. */
+    bool _hasVariant;
+    /** @brief The variant's name, NUL-terminated; meaningful while _hasVariant. */
+    unsigned char _variant[UI_THEME_VARIANT_NAME_CAPACITY];
 } UIWindowType;
 
 /**
@@ -138,7 +146,7 @@ typedef struct UIWindowTypesStruct
 // Helpers.
 /**
  * @brief A definition with a name and what fills its windows: no icon, no data, fitting across and scrolling down, 360 x 260 UI pixels, no
- *        least size of its own, any number open.
+ *        least size of its own, any number open, the window kind's own theme values.
  * @param displayName The name (borrowed until it is registered).
  * @param fill What fills a new window.
  * @returns The definition.
@@ -154,7 +162,8 @@ static inline UIWindowTypeDefinition UIWindowTypeDefinition_Create(const unsigne
         .FitDown = UIWindowFit_Scroll,
         .DefaultSize = { .x = 360.0f, .y = 260.0f },
         .MinimumSize = { .x = 0.0f, .y = 0.0f },
-        .IsSingle = false
+        .IsSingle = false,
+        .Variant = NULL
     };
     Definition.Icon = UIElementIcon_None();
     return Definition;
@@ -194,13 +203,13 @@ static inline const Registry* UIWindowTypes_AsRegistry(const UIWindowTypes* self
  * @brief Registers a window type.
  * @param self The registry; must not be NULL.
  * @param key Its key as people write it (`tbp:editor_outliner`; one without a namespace is tbp's); must not be NULL.
- * @param definition What it is; must not be NULL. Read for the call (its name is copied).
+ * @param definition What it is; must not be NULL. Read for the call (its name and its variant are copied).
  * @param sourceKeyId Who registers it (UIWindowTypes_WithdrawSource withdraws them together): NAMESPACED_KEY_ID_NONE for the engine, or a
  *        key id of the registry's key registry.
  * @param outIndex [out] Receives its index; may be NULL.
  * @returns Success; ErrorCode_IllegalArgument if a pointer is NULL; ErrorCode_ArgumentOutOfRange for a key or a definition that is not
  *          valid (an empty or too long name, no Fill, an unknown fit, a size not above 0, a least size below 0, a number not finite, an icon
- *          not valid); ErrorCode_InvalidOperation for a key that is registered and active already, or a full registry; otherwise the key
+ *          not valid, a variant that is no theme variant's name); ErrorCode_InvalidOperation for a key that is registered and active already, or a full registry; otherwise the key
  *          registry's error.
  */
 Error UIWindowTypes_Register(UIWindowTypes* self, const unsigned char* key, const UIWindowTypeDefinition* definition, uint32_t sourceKeyId,

@@ -1128,14 +1128,16 @@ static Error Behaviour_OnKeyboardInput(void* widget, const WidgetKeyboardInputAr
     return CancelGrab(Screen, Widget_GetId(widget));
 }
 
-/* What last had the focus inside the window is where a press on its title bar gives it back. */
+/* What last had the focus inside the window is where a press on its title bar gives it back. Entered or not, the window's next update
+ * tells; until then the default target counts as entered when it asked to be, so one focused, entered and left within one tick (a layout being
+ * built) is given back as it asked. */
 static Error Behaviour_OnDescendantFocus(void* widget, uint64_t widgetId)
 {
     UIWindowCapability* Self = GetCapability(widget);
     if (Self->_lastFocusId != widgetId)
     {
         Self->_lastFocusId = widgetId;
-        Self->_wasLastFocusEntered = false; // Entered or not, its next update tells.
+        Self->_wasLastFocusEntered = (widgetId == Self->_defaultFocusId) && Self->_isDefaultFocusEntered;
     }
     return Error_CreateSuccess();
 }

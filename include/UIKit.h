@@ -20,6 +20,7 @@
 #include "UIMenuBar.h"
 #include "UIPanel.h"
 #include "UIPropertyBox.h"
+#include "UIRenderView.h"
 #include "UIScrollArea.h"
 #include "UIScrollbar.h"
 #include "UIScrollable.h"
@@ -129,6 +130,8 @@ typedef enum UIElementCapabilityEnum
     UIElementCapability_Window,
     /** @brief UIWorkspaceCapability (UIWorkspace.h). */
     UIElementCapability_Workspace,
+    /** @brief UIRenderViewCapability (UIRenderView.h). */
+    UIElementCapability_RenderView,
     /** @brief The number of capabilities. */
     UIElementCapability_Count
 } UIElementCapability;
@@ -418,3 +421,6 @@ Error UIKit_CreateWindow(UIKit* self, UIScreen* screen, const UIWindowOptions* o
  * @returns Success; ErrorCode_IllegalArgument if a pointer is NULL; otherwise the first error of making it or its parts.
  */
 Error UIKit_CreateWorkspace(UIKit* self, UIScreen* screen, const UIWorkspaceOptions* options, uint64_t* outId);
+/** @brief Makes a render view (UIRenderView.h): an edit element that keeps its keys, showing no picture until its host hands one over. See
+ *  the comment above for the parameters and the result. */
+Error UIKit_CreateRenderView(UIKit* self, UIScreen* screen, uint64_t parentId, const UIRenderViewOptions* options, uint64_t* outId);

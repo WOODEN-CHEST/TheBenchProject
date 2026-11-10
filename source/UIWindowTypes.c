@@ -1,6 +1,7 @@
 #include "UIWindowTypes.h"
 #include "UIKit.h"
 #include "UIScreen.h"
+#include "NamespacedKey.h"
 #include "wr/WRMath.h"
 #include "wr/WRMemory.h"
 #include "wr/WRString.h"
@@ -41,7 +42,11 @@ static bool IsDefinitionValid(const UIWindowTypeDefinition* definition)
     bool IsSizeValid = UILayoutLength_IsValid(definition->DefaultSize.x) && UILayoutLength_IsValid(definition->DefaultSize.y)
         && (definition->DefaultSize.x > 0.0f) && (definition->DefaultSize.y > 0.0f);
     bool IsMinimumValid = UILayoutLength_IsValid(definition->MinimumSize.x) && UILayoutLength_IsValid(definition->MinimumSize.y);
-    return IsNameValid && IsIconValid && AreFitsValid && IsSizeValid && IsMinimumValid;
+    // A variant's name as the theme writes it, the rule its windows are created with (a name they refuse would fail every opening).
+    size_t VariantBytes = (definition->Variant != NULL) ? StringUTF8_GetByteLength(definition->Variant) : 0U;
+    bool IsVariantValid = (definition->Variant == NULL)
+        || ((VariantBytes < UI_THEME_VARIANT_NAME_CAPACITY) && NamespacedKey_IsValidLocalName(definition->Variant));
+    return IsNameValid && IsIconValid && AreFitsValid && IsSizeValid && IsMinimumValid && IsVariantValid;
 }
 
 /* Each slot of the registry has a place: new slots get an empty one. */
@@ -202,7 +207,8 @@ Error UIWindowTypes_Register(UIWindowTypes* self, const unsigned char* key, cons
     if (!IsDefinitionValid(definition))
     {
         return Error_Construct2(ErrorCode_ArgumentOutOfRange, "UIWindowTypes_Register: the definition needs a name of 1 to "
-            "UI_WINDOW_TYPES_MAX_NAME_BYTES bytes of UTF-8, a Fill, known fits, a size above 0, a least size >= 0 and a valid icon.");
+            "UI_WINDOW_TYPES_MAX_NAME_BYTES bytes of UTF-8, a Fill, known fits, a size above 0, a least size >= 0, a valid icon and no variant "
+            "or one of 1 to 31 of a-z, 0-9, _, . and -, starting with a letter.");
     }
     uint32_t KeyId = NAMESPACED_KEY_ID_NONE;
     Error Result = KeyRegistry_InternText(self->_keys, key, StringUTF8_GetByteLength(key), NULL, &KeyId);
@@ -221,9 +227,14 @@ Error UIWindowTypes_Register(UIWindowTypes* self, const unsigned char* key, cons
         ._fitDown = definition->FitDown,
         ._defaultSize = definition->DefaultSize,
         ._minimumSize = definition->MinimumSize,
-        ._isSingle = definition->IsSingle
+        ._isSingle = definition->IsSingle,
+        ._hasVariant = definition->Variant != NULL
     };
     Memory_Copy(definition->DisplayName, Type._displayName, NameBytes);
+    if (Type._hasVariant)
+    {
+        Memory_Copy(definition->Variant, Type._variant, StringUTF8_GetByteLength(definition->Variant) + 1U);
+    }
     uint32_t Index = REGISTRY_INDEX_NONE;
     Result = Registry_Register(&self->_types, KeyId, &Type, sourceKeyId, &Index);
     if (Result.Code != ErrorCode_Success)
@@ -342,6 +353,9 @@ Error UIWindowTypes_OpenAt(UIWindowTypes* self, UIScreen* screen, uint32_t index
     UIWindowTypeFill Fill = Type->_fill;
     UserData Data = Type->_data;
     UIWindowOptions Options = UIWindowOptions_Create(Type->_displayName);
+    unsigned char Variant[UI_THEME_VARIANT_NAME_CAPACITY];
+    Memory_Copy(Type->_variant, Variant, sizeof(Variant));
+    Options.Element.Variant = Type->_hasVariant ? Variant : NULL;
     Options.Icon = Type->_icon;
     Options.FitAcross = Type->_fitAcross;
     Options.FitDown = Type->_fitDown;

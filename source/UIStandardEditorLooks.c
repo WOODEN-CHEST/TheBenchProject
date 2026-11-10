@@ -18,8 +18,9 @@
  * widgets), the dialog (a background; its parts are a label's, a column's and buttons), the colour picker's swatch (its popup is the kit's
  * own widgets), the tool bar (a background and its separators; its buttons are buttons), the window (its frame, its title bar with the icon
  * and the title, its content's background and an edge's highlight; its caption buttons are buttons), the workspace (its dock's background and
- * its areas' strips; its tabs, splitters and drop zones are the kit's own widgets), and the widget that shows a drag (the dragged item beside
- * the pointer, and a frame over the target that would take it). Every value comes from the screen's theme.
+ * its areas' strips; its tabs, splitters and drop zones are the kit's own widgets), the render view (its host's picture, or its background
+ * while there is none, and a frame over its edge), and the widget that shows a drag (the dragged item beside the pointer, and a frame over
+ * the target that would take it). Every value comes from the screen's theme.
  */
 
 
@@ -77,6 +78,14 @@ typedef struct WorkspaceBoxStruct
     UIWorkspaceLookBase Base;
     UIElementLook Look;
 } WorkspaceBox;
+
+/* The standard render view: its host's picture stretched to its box (its background while there is none) and a frame over its edge, hovered,
+ * focused or entered. */
+typedef struct RenderViewBoxStruct
+{
+    UIRenderViewLookBase Base;
+    UIElementLook Look;
+} RenderViewBox;
 
 /* What shows a drag: a root of the overlay layer over the whole surface, drawing the dragged item beside the pointer and a frame over the
  * target that would take it, clipped as the target is. A plain widget type, made by the screen (UIDragDrop.h) with no arguments. */
@@ -668,6 +677,69 @@ static UIElementLook* WorkspaceBox_GetThemeLook(void* self)
 }
 
 
+// Static functions: the render view.
+static Error RenderViewBox_Construct(void* self, void* args)
+{
+    return UIElementLook_Construct(&((RenderViewBox*)self)->Look, UIElementKind_RenderView,
+        ((const UIRenderViewArgs*)args)->Options->Element.Variant);
+}
+
+/* Entered shows over focused, focused over hovered: whether the keys are its host's is what matters most, and the pointer passing over a
+ * focused view does not hide that it has the focus. */
+static Error RenderViewBox_Update(void* self, ProgramTime time)
+{
+    RenderViewBox* Box = self;
+    Widget* Base = &Box->Base.Base;
+    UIElementState State = Widget_IsEntered(Base) ? UIElementState_Entered
+        : (Widget_IsFocused(Base) ? UIElementState_Focused : (Widget_IsHovered(Base) ? UIElementState_Hovered : UIElementState_Normal));
+    UIElementLook_Update(&Box->Look, Widget_GetScreen(Base), State, time.PassedTime);
+    return Error_CreateSuccess();
+}
+
+static Error RenderViewBox_Measure(void* self, const UIMeasureContext* context, float availableWidth, Vector2* outSize)
+{
+    (void)context;
+    (void)availableWidth;
+    RenderViewBox* Box = self;
+    const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Widget_GetScreen(&Box->Base.Base));
+    *outSize = UIThemeStyle_GetVector(Style, UIElementKind_RenderView, UIRenderViewPart_MinSize);
+    return Error_CreateSuccess();
+}
+
+/* The picture over the whole box, upright (a render target's rows run bottom-up), else the background; the frame on top. */
+static Error RenderViewBox_Render(void* self, UIRenderContext* context)
+{
+    RenderViewBox* Box = self;
+    Rectangle Pixels = UIRenderContext_GetPixelBox(context);
+    if (UIElement_IsBoxEmpty(Pixels))
+    {
+        return Error_CreateSuccess();
+    }
+    const UIThemeStyle* Style = UIElementLook_GetStyle(&Box->Look, Widget_GetScreen(&Box->Base.Base));
+    float Scale = Widget_GetEffectiveScale(&Box->Base.Base);
+    Texture2D Picture;
+    bool IsBottomUp = false;
+    Error Result = Error_CreateSuccess();
+    if (UIRenderViewCapability_GetTexture(&Box->Base.View, &Picture, &IsBottomUp) && (Picture.width > 0) && (Picture.height > 0))
+    {
+        float Height = (float)Picture.height;
+        Rectangle Source = { .x = 0.0f, .y = 0.0f, .width = (float)Picture.width, .height = IsBottomUp ? -Height : Height };
+        UIRenderContext_RenderPixelTexture(context, Picture, Source, Pixels, WHITE);
+    }
+    else
+    {
+        Result = UIElementLook_DrawBox(&Box->Look, Style, UIRenderViewPart_Background, context, Pixels, Scale);
+    }
+    return (Result.Code == ErrorCode_Success) ? UIElementLook_DrawBox(&Box->Look, Style, UIRenderViewPart_Frame, context, Pixels, Scale)
+        : Result;
+}
+
+static UIElementLook* RenderViewBox_GetThemeLook(void* self)
+{
+    return &((RenderViewBox*)self)->Look;
+}
+
+
 // Static functions: what shows a drag.
 static Error DragGhost_Construct(void* widget, void* args)
 {
@@ -882,6 +954,15 @@ static const UILookVTable WorkspaceBoxLook =
     .GetThemeLook = WorkspaceBox_GetThemeLook
 };
 
+static const UILookVTable RenderViewBoxLook =
+{
+    .Construct = RenderViewBox_Construct,
+    .Update = RenderViewBox_Update,
+    .Render = RenderViewBox_Render,
+    .Measure = RenderViewBox_Measure,
+    .GetThemeLook = RenderViewBox_GetThemeLook
+};
+
 static const WidgetVTable DragGhostVTable =
 {
     .OnDeconstruct = DragGhost_OnDeconstruct,
@@ -918,6 +999,10 @@ Error UIStandardEditorLooks_Register(UIKit* kit)
     if (Result.Code == ErrorCode_Success)
     {
         Result = UIKit_RegisterLook(kit, UIElementKind_Workspace, UI_KIT_STANDARD_LOOK, sizeof(WorkspaceBox), &WorkspaceBoxLook, NULL);
+    }
+    if (Result.Code == ErrorCode_Success)
+    {
+        Result = UIKit_RegisterLook(kit, UIElementKind_RenderView, UI_KIT_STANDARD_LOOK, sizeof(RenderViewBox), &RenderViewBoxLook, NULL);
     }
     return Result;
 }

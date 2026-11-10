@@ -136,6 +136,9 @@ typedef enum UIElementKindEnum
     /** @brief A workspace: its docking areas' tab strips and tabs, the splitters between them, the dock's background, and the zones a
      *  window dragged over the dock shows. */
     UIElementKind_Workspace,
+    /** @brief A render view: a picture its host draws (a world, a preview), its background where there is none, and a frame over its
+     *  edge. */
+    UIElementKind_RenderView,
     /** @brief The number of kinds. */
     UIElementKind_Count
 } UIElementKind;
@@ -717,6 +720,20 @@ typedef enum UIWorkspacePartEnum
     /** @brief The number of a workspace's values. */
     UIWorkspacePart_Count
 } UIWorkspacePart;
+
+/** @brief A render view's values in a theme. */
+typedef enum UIRenderViewPartEnum
+{
+    /** @brief "min_size": the least size of a view, UI pixels. */
+    UIRenderViewPart_MinSize,
+    /** @brief "background": a box filling the view while its host shows no picture in it. */
+    UIRenderViewPart_Background,
+    /** @brief "frame": a box drawn over the picture's edge: hovered under the pointer, focused while the view has the focus, entered
+     *  while its host has the keys. */
+    UIRenderViewPart_Frame,
+    /** @brief The number of a render view's values. */
+    UIRenderViewPart_Count
+} UIRenderViewPart;
 
 /**
  * @brief What a value of an element kind is.

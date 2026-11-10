@@ -1,0 +1,43 @@
+{
+    "name": "tbp:editor",
+    "display_name": "Editor",
+    "description": "The world editor's controls.",
+    "order": 800,
+    "actions": {
+        "editor_fly_forward": {
+            "display_name": "Fly Forward",
+            "description": "While the right mouse button is held in the world's view, the camera flies forward.",
+            "default_bindings": ["w"]
+        },
+        "editor_fly_back": {
+            "display_name": "Fly Back",
+            "description": "While the right mouse button is held in the world's view, the camera flies back.",
+            "default_bindings": ["s"]
+        },
+        "editor_fly_left": {
+            "display_name": "Fly Left",
+            "description": "While the right mouse button is held in the world's view, the camera flies to the left.",
+            "default_bindings": ["a"]
+        },
+        "editor_fly_right": {
+            "display_name": "Fly Right",
+            "description": "While the right mouse button is held in the world's view, the camera flies to the right.",
+            "default_bindings": ["d"]
+        },
+        "editor_fly_up": {
+            "display_name": "Fly Up",
+            "description": "While the right mouse button is held in the world's view, the camera rises.",
+            "default_bindings": ["e"]
+        },
+        "editor_fly_down": {
+            "display_name": "Fly Down",
+            "description": "While the right mouse button is held in the world's view, the camera sinks.",
+            "default_bindings": ["q"]
+        },
+        "editor_fly_fast": {
+            "display_name": "Fly Fast",
+            "description": "Held while flying, the camera flies at three times its speed.",
+            "default_bindings": ["left_shift"]
+        }
+    }
+}

@@ -407,7 +407,10 @@
             "title_bar": { "kind": "flat", "colors": { "normal": "@raised_disabled", "focused": "@selected" } },
             "title_text": { "normal": "@text_dim", "focused": "@text" },
             "content_background": { "kind": "flat", "colors": { "normal": "@surface" } },
-            "resize_edge": { "kind": "flat", "colors": { "normal": "#00000000", "hovered": "@edge_hover", "pressed": "@edge_pressed" } }
+            "resize_edge": { "kind": "flat", "colors": { "normal": "#00000000", "hovered": "@edge_hover", "pressed": "@edge_pressed" } },
+            "variants": {
+                "view": { "content_padding": [ 0, 0 ], "content_spacing": 0 }
+            }
         },
         "workspace": {
             "tab_height": 22,
@@ -431,6 +434,15 @@
                 "kind": "flat",
                 "colors": { "normal": "@zone_hover" },
                 "outline": { "thickness": 2, "colors": { "normal": "@accent" } }
+            }
+        },
+        "render_view": {
+            "min_size": [ 64, 48 ],
+            "background": { "kind": "flat", "colors": { "normal": "@surface_sunken" } },
+            "frame": {
+                "kind": "flat",
+                "colors": { "normal": "#00000000" },
+                "outline": { "thickness": 1, "colors": { "normal": "#00000000", "hovered": "@outline", "focused": "@accent", "entered": "@editing_outline" } }
             }
         }
     }

@@ -59,10 +59,11 @@
  * (unless it enters itself, and only while the screen has the keyboard) or UIScreen_EnterWidget enters it. Entered, it hears every key first, then its ancestors; what
  * both leave is the screen's in place of navigation's: the back action leaves it with a cancel, the accept action leaves it
  * keeping what was done, Tab and Shift+Tab leave it and move on at once (entering the next element if that is an edit
- * element, also on each repeat of the held key), and the arrows do nothing. Every one of them pressed in a tick is consumed, also
+ * element that does not keep its keys, also on each repeat of the held key), and the arrows do nothing. Every one of them pressed in a tick is consumed, also
  * when another acts first, and the keys that leave it stay consumed until they are released. Focus moving anywhere leaves it (keeping), and a destroyed one is left silently. At most one widget is
  * entered, and it is always the focused one; pointer movement ends navigation but not the edit. An element that keeps the
- * keys (Widget_SetKeepsKeysWhenEntered) is left only by focus moving and code, and those keys stay unconsumed for its reader.
+ * keys (Widget_SetKeepsKeysWhenEntered) is left only by focus moving and code, and those keys stay unconsumed for its reader; Tab
+ * going on from another entered element only focuses it.
  *
  * LAYERS. Every root stands in a layer (UIScreenLayer, UIScreen_SetRootLayer): drawing and hit testing go by layer, then by z,
  * then by insertion. A press raises its root within a Normal or Floating layer, and in no other. Windows use the workspace: the

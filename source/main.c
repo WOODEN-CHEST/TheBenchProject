@@ -23,6 +23,7 @@
 #include "AssetManager.h"
 #include "Services.h"
 #include "WorldTestFrame.h"
+#include "EditorFrame.h"
 #include "UIGalleryFrame.h"
 #include "UITestFrame.h"
 #include "UIWindowTypes.h"
@@ -60,6 +61,10 @@
 #define TARGET_ASPECT_RATIO (16.0f / 9.0f)
 /** The command-line argument that runs the UI gallery instead of the world test. */
 #define ARGUMENT_UI_GALLERY "--ui-gallery"
+/** The command-line argument that runs the world editor instead of the world test, alone; a world's name may follow it. */
+#define ARGUMENT_EDITOR "--editor"
+/** What starts a command-line option: an argument starting so after --editor is no world's name. */
+#define ARGUMENT_OPTION_PREFIX "--"
 /** Idle threshold in seconds: while the next update tick and the next paced render are both at least this
  *  far away, the loop sleeps instead of spinning. Matches IDLE_SLEEP_MILLISECONDS. */
 #define IDLE_SLEEP_THRESHOLD_SECONDS 0.001
@@ -394,25 +399,62 @@ static Error SetUpAssetManager(Logger* logger, const unsigned char* baseDirector
 }
 
 
-/* What the command line asked for: the UI gallery instead of the world test. Anything else is warned about and ignored.
- * TODO: until a main menu exists the command line is how the game's other modes start. */
-static bool ReadArguments(int argc, char** argv, Logger* logger)
+/* What the command line asks the game to run. */
+typedef enum ProgramModeEnum
 {
-    bool IsGalleryWanted = false;
+    ProgramMode_WorldTest,
+    ProgramMode_Gallery,
+    ProgramMode_Editor
+} ProgramMode;
+
+/* Whether an argument is an option (starts with "--"): after --editor, it is no world's name. Text that is no UTF-8 is no option either. */
+static bool IsOption(const char* argument)
+{
+    bool IsPrefixed = false;
+    Error Result = StringUTF8_StartsWith((const unsigned char*)argument, (const unsigned char*)ARGUMENT_OPTION_PREFIX, StringCaseRule_MatchCase,
+        NULL, &IsPrefixed);
+    Error_Deconstruct(&Result);
+    return IsPrefixed;
+}
+
+static bool IsArgument(const char* argument, const char* expected)
+{
+    bool IsSame = false;
+    Error Compare = StringUTF8_EqualsExact((const unsigned char*)argument, (const unsigned char*)expected, &IsSame);
+    Error_Deconstruct(&Compare);
+    return IsSame;
+}
+
+/* What the command line asked for: the UI gallery, or the editor with the world's name after it (none: an empty world), instead of the world
+ * test. The last of the two asked for wins; anything else is warned about and ignored.
+ * TODO: until a main menu exists the command line is how the game's other modes start. */
+static ProgramMode ReadArguments(int argc, char** argv, Logger* logger, const unsigned char** outWorldName)
+{
+    ProgramMode Mode = ProgramMode_WorldTest;
+    *outWorldName = NULL;
     for (int Index = 1; Index < argc; Index++)
     {
-        bool IsSame = false;
-        Error Compare = StringUTF8_EqualsExact((const unsigned char*)argv[Index], (const unsigned char*)ARGUMENT_UI_GALLERY, &IsSame);
-        Error_Deconstruct(&Compare);
-        if (IsSame)
+        if (IsArgument(argv[Index], ARGUMENT_UI_GALLERY))
         {
-            IsGalleryWanted = true;
+            Mode = ProgramMode_Gallery;
+            continue;
+        }
+        if (IsArgument(argv[Index], ARGUMENT_EDITOR))
+        {
+            Mode = ProgramMode_Editor;
+            *outWorldName = NULL;
+            bool HasName = ((Index + 1) < argc) && !IsOption(argv[Index + 1]);
+            if (HasName)
+            {
+                Index++;
+                *outWorldName = (const unsigned char*)argv[Index];
+            }
             continue;
         }
         Error LogResult = Logger_LogWarningFormatted(logger, (const unsigned char*)u8"Ignored the command-line argument \"%s\".", argv[Index]);
         Error_Deconstruct(&LogResult);
     }
-    return IsGalleryWanted;
+    return Mode;
 }
 
 /* Adds a frame the factory made, warning (and carrying on) when either fails. */
@@ -476,7 +518,8 @@ int main(int argc, char** argv)
         GenericBuffer_NullTerminate(&BaseDirectory);
     }
 
-    bool IsGalleryWanted = ReadArguments(argc, argv, &Log);
+    const unsigned char* EditorWorldName = NULL;
+    ProgramMode Mode = ReadArguments(argc, argv, &Log, &EditorWorldName);
 
     GameConfig Config;
     LoadConfig(&Log, BaseDirectory._data, &Config);
@@ -638,12 +681,19 @@ int main(int argc, char** argv)
     GameServices.WindowTypes = HasWindowTypes ? &WindowTypes : NULL;
     GameServices.BaseDirectory = BaseDirectory._data;
 
-    // Both need the asset manager; only add a frame if it came up.
-    if ((Assets != NULL) && IsGalleryWanted)
+    // Each needs the asset manager; only add a frame if it came up.
+    if ((Assets != NULL) && (Mode == ProgramMode_Gallery))
     {
         GameFrame* GalleryFrame = NULL;
         Error GalleryResult = UIGalleryFrame_Create(&GameServices, &GalleryFrame);
         AddFrameOrWarn(&FrameManager, &Log, "UI gallery", GalleryResult, GalleryFrame);
+    }
+    else if ((Assets != NULL) && (Mode == ProgramMode_Editor))
+    {
+        // The editor runs alone: no test frame beside it.
+        GameFrame* EditorFrame = NULL;
+        Error EditorResult = EditorFrame_Create(&GameServices, EditorWorldName, &EditorFrame);
+        AddFrameOrWarn(&FrameManager, &Log, "editor", EditorResult, EditorFrame);
     }
     else if (Assets != NULL)
     {

@@ -183,8 +183,8 @@ Error UIStatusBar_ArrangeSections(Widget* widget, const UILayoutContext* context
 Error UIStatusBar_MeasureSections(Widget* widget, const UIMeasureContext* context, Vector2 padding, float spacing, Vector2* outSize);
 
 /**
- * @brief Where the text shows, as a share of the bar's box: from the end of the left section to the start of the right one, as last laid
- *        out; for a look's Render.
+ * @brief Where the text shows, as a share of the bar's box: the centre section's span as last laid out, which keeps the bar's spacing from
+ *        the left section and from the right one; for a look's Render.
  * @param widget The bar's widget; must not be NULL.
  * @param outStart [out] Receives the start, in [0;1] of the bar's width. Must not be NULL.
  * @param outEnd [out] Receives the end. Must not be NULL.

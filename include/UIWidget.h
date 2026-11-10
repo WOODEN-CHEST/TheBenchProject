@@ -950,7 +950,8 @@ static inline bool Widget_KeepsKeysWhenEntered(const Widget* self)
 /**
  * @brief Sets whether the edit element keeps the screen's keys while it is entered: the screen then neither navigates nor leaves
  *        it by a key, and Tab, the arrows, Enter and Escape stay unconsumed in the input for whoever reads them (a world view's
- *        tools). Only focus moving, code or a world screen let go leave it. Takes effect at the next key.
+ *        tools). Only focus moving, code or a world screen let go leave it, and Tab going on from another entered element only
+ *        focuses it (entered, nothing but a press elsewhere or code would let the keys out). Takes effect at the next key.
  * @param self The widget; must not be NULL.
  * @param keepsKeys The new flag.
  * @returns Success; ErrorCode_IllegalArgument if @p self is NULL.

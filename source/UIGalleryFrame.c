@@ -3358,6 +3358,11 @@ static Error UIGalleryFrame_Update(void* self, ProgramTime time)
     {
         Result = UIWindowHost_Update(&Frame->_host, &Frame->_screen, time, Input);
     }
+    if (Result.Code == ErrorCode_Success)
+    {
+        // The workspace page's picture reads its view's record (and Escape while the view keeps the keys) before the gallery's own keys.
+        Result = GalleryWorkspace_UpdatePicture(&Frame->_workspace, Input, time.PassedTime);
+    }
     if ((Result.Code == ErrorCode_Success) && (Input != NULL))
     {
         Result = HandleKeys(Frame, Input);
@@ -3377,9 +3382,19 @@ static bool UIGalleryFrame_IsDone(void* self)
     return true;
 }
 
+/* The workspace page's picture the size of its view, before the render (the update side's last step). */
+static Error UIGalleryFrame_PrepareRender(void* self, ProgramTime time)
+{
+    UNUSED(time);
+    UIGalleryFrame* Frame = self;
+    GalleryWorkspace_PreparePicture(&Frame->_workspace);
+    return Error_CreateSuccess();
+}
+
 static Error UIGalleryFrame_Render(void* self, const FrameRenderContext* context, RenderTexture2D target)
 {
     UIGalleryFrame* Frame = self;
+    GalleryWorkspace_RenderPicture(&Frame->_workspace); // Into its own target, before the UI that shows it.
     RenderContext Context;
     RenderContext_Create(&Context, &target, context->TargetAspectRatio, context->TargetAreaPosition);
     RenderContext_BeginRendering(&Context);
@@ -3416,6 +3431,7 @@ static void DestroyFrameContents(UIGalleryFrame* frame)
     }
     if (frame->_isWorkspaceConstructed)
     {
+        GalleryWorkspace_ReleasePicture(&frame->_workspace); // Its view is gone with the screen.
         GalleryWorkspace_Deconstruct(&frame->_workspace);
     }
     if (frame->_isKitConstructed)
@@ -3456,7 +3472,7 @@ static const GameFrameVTable UIGalleryFrameVTable =
     .BeginUnload = UIGalleryFrame_NoStep,
     .UnloadStep = UIGalleryFrame_NoStep,
     .IsUnloaded = UIGalleryFrame_IsDone,
-    .PrepareRender = NULL,
+    .PrepareRender = UIGalleryFrame_PrepareRender,
     .Render = UIGalleryFrame_Render,
     .GetLoadProgress = NULL,
     .OnResize = NULL,

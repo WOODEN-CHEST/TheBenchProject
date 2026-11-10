@@ -1,0 +1,24 @@
+{
+    "version": 1,
+    "active": "Default",
+    "layouts": [
+        {
+            "name": "Default",
+            "windows": [],
+            "places": [
+                {
+                    "type": "tbp:editor_world",
+                    "box": [647.0, 225.99996948242188, 732.0, 632.0]
+                },
+                {
+                    "type": "tbp:editor_controls",
+                    "box": [396.0, 233.0, 280.0, 300.0]
+                },
+                {
+                    "type": "tbp:editor_notes",
+                    "box": [386.0, 203.0, 360.0, 200.0]
+                }
+            ]
+        }
+    ]
+}
